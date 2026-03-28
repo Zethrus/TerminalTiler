@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream \
+            build-essential \
+            libadwaita-1-dev \
+            libgraphene-1.0-dev \
+            libgtk-4-dev \
+            libvte-2.91-gtk4-dev \
+            pkg-config \
+            shellcheck \
+            wget \
+            xvfb
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Install appimagetool
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O "$HOME/.local/bin/appimagetool"
+          chmod +x "$HOME/.local/bin/appimagetool"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run cargo audit
+        run: cargo audit
+
+      - name: Lint packaging scripts
+        run: |
+          shellcheck -x \
+            packaging/build-appimage.sh \
+            packaging/build-deb.sh \
+            packaging/build-in-container.sh \
+            packaging/release-smoke-test.sh \
+            packaging/release-verify.sh \
+            packaging/run-bundled.sh \
+            packaging/versioning.sh
+
+      - name: Verify containerized release build
+        run: bash packaging/release-verify.sh
+
+      - name: Run headless release smoke test
+        run: bash packaging/release-smoke-test.sh

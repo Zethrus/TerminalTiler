@@ -1,0 +1,11 @@
+Package: terminaltiler
+Version: 0.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Zethrus
+Depends: libc6 (>= @GLIBC_FLOOR@)
+Description: Native tiling terminal workspace launcher
+ TerminalTiler launches polished split-terminal workspaces with preset
+ layouts, startup commands, and project-aware working directories.
+ Runtime GTK, libadwaita, and VTE libraries are bundled inside the package.

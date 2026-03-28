@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TerminalTiler
+Comment=Launch tiling terminal workspaces with per-tile commands
+Exec=terminaltiler
+Icon=terminaltiler
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true

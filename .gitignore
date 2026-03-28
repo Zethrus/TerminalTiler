@@ -1,0 +1,48 @@
+# Rust build artifacts
+/target
+/Cargo.lock
+
+# Packaging and build artifacts
+/packaging/.build
+/dist
+/*.deb
+*.deb
+*.AppImage
+*.AppImage.*
+*.zsync
+/squashfs-root
+/packaging/appimage/TerminalTiler.AppDir
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+.DS_Store
+
+# Build and development files
+*.o
+*.so
+*.a
+.cargo/
+flycheck0/
+.flycheck/
+
+# Debug and temporary files
+debug/
+*.log
+*.tmp
+/tmp/
+
+# OS-specific files
+Thumbs.db
+.gitkeep
+
+# Backups
+*.bak
+*.orig
+
+# Version-specific AppImages (keep only latest)
+TerminalTiler-*.AppImage

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.zethrus.terminaltiler</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>TerminalTiler</name>
+  <summary>Launch polished multi-terminal workspaces from reusable layouts</summary>
+  <developer id="dev.zethrus">
+    <name>Zethrus</name>
+  </developer>
+  <url type="homepage">https://github.com/zethrus/TerminalTiler</url>
+  <launchable type="desktop-id">dev.zethrus.terminaltiler.desktop</launchable>
+  <provides>
+    <binary>terminaltiler</binary>
+  </provides>
+  <description>
+    <p>
+      TerminalTiler is a native Ubuntu and Debian desktop application for launching
+      split-terminal workspaces with per-tile startup commands, working directories,
+      and reusable launch profiles.
+    </p>
+    <p>
+      It is designed for operator workflows that need multiple coordinated terminals
+      in one polished window without rebuilding the layout every time.
+    </p>
+    <ul>
+      <li>Reusable launch presets with customizable split layouts</li>
+      <li>Per-tile startup commands and working-directory routing</li>
+      <li>Bundled GTK, libadwaita, and VTE runtime for distribution artifacts</li>
+    </ul>
+  </description>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <keywords>
+    <keyword>terminal</keyword>
+    <keyword>tiling</keyword>
+    <keyword>workspace</keyword>
+    <keyword>vte</keyword>
+  </keywords>
+  <releases>
+    <release version="0.1.0" date="2026-03-27"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>
