@@ -60,6 +60,185 @@ window.profile-compact .app-tab-shell {
   border-radius: 8px 8px 0 0;
 }
 
+window.profile-compact button.app-tab-select {
+  min-height: 24px;
+  padding: 1px 5px 1px 8px;
+  border-radius: 8px 8px 0 0;
+}
+
+window.profile-compact .app-tab-icon {
+  -gtk-icon-size: 11px;
+}
+
+window.profile-compact .app-tab-title {
+  font-size: 10px;
+}
+
+window.profile-compact .app-tab-badge {
+  min-width: 12px;
+  min-height: 12px;
+  padding: 0 3px;
+  font-size: 8px;
+}
+
+window.profile-compact button.app-tab-close {
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0 2px 0 0;
+  border-radius: 5px;
+  -gtk-icon-size: 11px;
+}
+
+window.profile-compact button.app-tab-add {
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 6px;
+}
+
+window.profile-compact .launch-header {
+  margin-bottom: 2px;
+}
+
+window.profile-compact .hero-title {
+  font-size: 24px;
+}
+
+window.profile-compact .launch-stage {
+  margin-top: 18px;
+  margin-bottom: 18px;
+  margin-left: 18px;
+  margin-right: 18px;
+}
+
+window.profile-compact .config-panel,
+window.profile-compact .preview-card,
+window.profile-compact .selection-summary,
+window.profile-compact .tile-editor-panel,
+window.profile-compact .workspace-summary,
+window.profile-compact .terminal-card {
+  border-radius: 14px;
+}
+
+window.profile-compact .config-panel,
+window.profile-compact .preview-card {
+  padding: 14px;
+}
+
+window.profile-compact .directory-panel {
+  padding: 12px;
+}
+
+window.profile-compact .workspace-path entry,
+window.profile-compact entry.workspace-path {
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+window.profile-compact .path-bar {
+  padding: 8px;
+  border-radius: 12px;
+}
+
+window.profile-compact .control-strip {
+  padding: 6px 8px;
+  border-radius: 12px;
+}
+
+window.profile-compact button.pill-button {
+  padding: 8px 14px;
+}
+
+window.profile-compact button.preset-card {
+  padding: 12px 10px 10px;
+}
+
+window.profile-compact button.template-button {
+  padding: 10px 7px;
+  min-height: 70px;
+}
+
+window.profile-compact .template-icon-grid {
+  padding: 6px;
+}
+
+window.profile-compact .selection-summary {
+  padding: 10px 12px;
+}
+
+window.profile-compact .selection-summary-name,
+window.profile-compact .card-title,
+window.profile-compact .workspace-summary-name {
+  font-size: 12px;
+}
+
+window.profile-compact .selection-summary-subtitle,
+window.profile-compact .workspace-summary-subtitle,
+window.profile-compact .card-meta,
+window.profile-compact .tile-meta,
+window.profile-compact .field-hint,
+window.profile-compact .workspace-summary-path {
+  font-size: 10px;
+}
+
+window.profile-compact .status-chip,
+window.profile-compact .agent-badge {
+  padding: 2px 7px;
+  font-size: 7px;
+}
+
+window.profile-compact button.preset-card-compact {
+  padding: 8px 12px;
+  min-width: 148px;
+  min-height: 56px;
+  border-radius: 12px;
+}
+
+window.profile-compact button.new-preset-button {
+  padding: 8px 14px;
+  min-width: 110px;
+  min-height: 56px;
+  border-radius: 12px;
+  font-size: 10px;
+}
+
+window.profile-compact .presets-scroll {
+  min-height: 64px;
+}
+
+window.profile-compact spinbutton.tile-count-input,
+window.profile-compact entry.tile-editor-input {
+  min-height: 34px;
+  border-radius: 10px;
+}
+
+window.profile-compact .tile-editor-row {
+  padding: 10px;
+  border-radius: 12px;
+}
+
+window.profile-compact .action-bar-bottom {
+  padding: 10px 0 0;
+  margin-top: 6px;
+}
+
+window.profile-compact .workspace-summary {
+  padding: 8px 10px;
+  margin-bottom: 2px;
+}
+
+window.profile-compact .terminal-header {
+  padding: 6px 8px;
+}
+
+window.profile-compact .tile-title {
+  font-size: 11px;
+}
+
+window.profile-compact .split-pane separator {
+  min-width: 3px;
+  min-height: 3px;
+}
+
 window.profile-standard headerbar.app-headerbar {
   min-height: 42px;
   padding: 4px 10px;

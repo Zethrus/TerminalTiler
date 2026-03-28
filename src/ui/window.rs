@@ -6,7 +6,7 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 
 use crate::app::logging;
-use crate::model::preset::{ThemeMode, WindowChrome, WorkspacePreset};
+use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::ui::{launch_screen, workspace_view};
@@ -35,14 +35,14 @@ fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     });
 }
 
-fn apply_window_chrome(window: &adw::ApplicationWindow, chrome: Option<WindowChrome>) {
+fn apply_window_density(window: &adw::ApplicationWindow, density: Option<ApplicationDensity>) {
     window.remove_css_class("profile-standard");
     window.remove_css_class("profile-compact");
 
-    if let Some(chrome) = chrome {
-        window.add_css_class(match chrome {
-            WindowChrome::Standard => "profile-standard",
-            WindowChrome::Compact => "profile-compact",
+    if let Some(density) = density {
+        window.add_css_class(match density {
+            ApplicationDensity::Standard => "profile-standard",
+            ApplicationDensity::Compact => "profile-compact",
         });
     }
 }
@@ -851,7 +851,7 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let refresh_handle = context.refresh_launch_tabs.clone();
 
     let theme_preview_window = window.clone();
-    let chrome_preview_window = window.clone();
+    let density_preview_window = window.clone();
 
     let launch_surface = launch_screen::build(
         load_outcome.warning,
@@ -861,8 +861,8 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
             apply_theme_mode(&theme_preview_window, &theme);
         },
         {
-            move |chrome| {
-                apply_window_chrome(&chrome_preview_window, Some(chrome));
+            move |density| {
+                apply_window_density(&density_preview_window, Some(density));
             }
         },
         move |preset, workspace_root| {
@@ -1246,22 +1246,22 @@ fn apply_shell_profile(
     configure_window_controls(header);
 
     logging::info(format!(
-        "applying shell profile preset='{}' theme={} chrome={}",
+        "applying shell profile preset='{}' theme={} density={}",
         preset.name,
         preset.theme.label(),
-        preset.chrome.label()
+        preset.density.label()
     ));
 
     apply_theme_mode(window, &preset.theme);
 
-    apply_window_chrome(window, Some(preset.chrome));
+    apply_window_density(window, Some(preset.density));
 }
 
 fn reset_shell_profile(header: &adw::HeaderBar, window: &adw::ApplicationWindow) {
     configure_window_controls(header);
-    logging::info("resetting shell chrome for launch deck");
+    logging::info("resetting shell density for launch deck");
     apply_theme_mode(window, &ThemeMode::System);
-    apply_window_chrome(window, None);
+    apply_window_density(window, None);
 }
 
 fn active_tab_is_workspace(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>, active_tab_id: usize) -> bool {

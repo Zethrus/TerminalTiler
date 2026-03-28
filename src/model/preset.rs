@@ -12,7 +12,7 @@ pub enum ThemeMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WindowChrome {
+pub enum ApplicationDensity {
     Standard,
     Compact,
 }
@@ -27,7 +27,7 @@ impl ThemeMode {
     }
 }
 
-impl WindowChrome {
+impl ApplicationDensity {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Standard => "Standard",
@@ -44,7 +44,8 @@ pub struct WorkspacePreset {
     pub tags: Vec<String>,
     pub root_label: String,
     pub theme: ThemeMode,
-    pub chrome: WindowChrome,
+    #[serde(alias = "chrome")]
+    pub density: ApplicationDensity,
     pub layout: LayoutNode,
 }
 
@@ -82,7 +83,7 @@ fn solo_operator() -> WorkspacePreset {
         tags: vec!["focused".into(), "codex".into()],
         root_label: "Workspace root".into(),
         theme: ThemeMode::Dark,
-        chrome: WindowChrome::Compact,
+        density: ApplicationDensity::Compact,
         layout: tile(
             "primary",
             "Primary Agent",
@@ -102,7 +103,7 @@ fn review_pair() -> WorkspacePreset {
         tags: vec!["pairing".into(), "review".into()],
         root_label: "Project directory".into(),
         theme: ThemeMode::System,
-        chrome: WindowChrome::Standard,
+        density: ApplicationDensity::Standard,
         layout: split(
             SplitAxis::Horizontal,
             0.56,
@@ -134,7 +135,7 @@ fn delivery_fleet() -> WorkspacePreset {
         tags: vec!["fleet".into(), "release".into(), "premium".into()],
         root_label: "Delivery workspace".into(),
         theme: ThemeMode::Dark,
-        chrome: WindowChrome::Compact,
+        density: ApplicationDensity::Compact,
         layout: split(
             SplitAxis::Horizontal,
             0.36,

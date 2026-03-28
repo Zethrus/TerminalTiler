@@ -217,7 +217,7 @@ impl SessionStore {
 mod tests {
     use super::{SESSION_VERSION, SavedTab, SessionDocument, SessionStore};
     use crate::model::layout::{WorkingDirectory, tile};
-    use crate::model::preset::{ThemeMode, WindowChrome, WorkspacePreset};
+    use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -236,7 +236,7 @@ mod tests {
             tags: Vec::new(),
             root_label: "Workspace root".into(),
             theme: ThemeMode::System,
-            chrome: WindowChrome::Compact,
+            density: ApplicationDensity::Compact,
             layout: tile(
                 "tile-1",
                 "Primary",

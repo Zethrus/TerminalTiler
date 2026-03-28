@@ -10,7 +10,9 @@ use crate::app::logging;
 use crate::model::layout::{
     LayoutNode, LayoutTemplate, TileSpec, builtin_templates, generate_layout,
 };
-use crate::model::preset::{ThemeMode, WindowChrome, WorkspacePreset, is_builtin_preset_id};
+use crate::model::preset::{
+    ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
+};
 use crate::storage::fs_utils::canonicalize_existing_dir;
 use crate::storage::preset_store::PresetStore;
 
@@ -33,7 +35,7 @@ pub fn build<F, G, H, I, C>(
     presets: &[WorkspacePreset],
     preset_store: PresetStore,
     on_theme_preview: H,
-    on_chrome_preview: I,
+    on_density_preview: I,
     on_launch: F,
     on_cancel: C,
     on_presets_changed: G,
@@ -42,7 +44,7 @@ where
     F: Fn(WorkspacePreset, PathBuf) + 'static,
     G: Fn() + 'static,
     H: Fn(ThemeMode) + 'static,
-    I: Fn(WindowChrome) + 'static,
+    I: Fn(ApplicationDensity) + 'static,
     C: Fn() + 'static,
 {
     let current_dir = std::env::current_dir()
@@ -53,12 +55,13 @@ where
     let presets = Rc::new(presets.to_vec());
     let launch_callback = Rc::new(on_launch);
     let theme_preview_callback = Rc::new(on_theme_preview);
-    let chrome_preview_callback = Rc::new(on_chrome_preview);
+    let density_preview_callback = Rc::new(on_density_preview);
     let preset_store = Rc::new(preset_store);
     let on_presets_changed: Rc<dyn Fn()> = Rc::new(on_presets_changed);
     let selected: Rc<Cell<Selection>> = Rc::new(Cell::new(Selection::Template(0)));
     let chosen_theme: Rc<Cell<ThemeMode>> = Rc::new(Cell::new(ThemeMode::System));
-    let chosen_chrome: Rc<Cell<WindowChrome>> = Rc::new(Cell::new(WindowChrome::Compact));
+    let chosen_density: Rc<Cell<ApplicationDensity>> =
+        Rc::new(Cell::new(ApplicationDensity::Compact));
     let active_layout = Rc::new(RefCell::new(generate_layout(
         templates
             .first()
@@ -340,61 +343,61 @@ where
         options_panel.append(&theme_row);
     }
 
-    // Chrome toggle
+    // Application density toggle
     {
-        let chrome_row = gtk::Box::builder()
+        let density_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(8)
             .build();
 
-        let chrome_label = gtk::Label::builder()
-            .label("Chrome")
+        let density_label = gtk::Label::builder()
+            .label("Application Density")
             .halign(gtk::Align::Start)
             .hexpand(true)
             .css_classes(["eyebrow"])
             .build();
-        chrome_row.append(&chrome_label);
+        density_row.append(&density_label);
 
-        let chrome_hint = gtk::Label::builder()
-            .label("Adjusts the workspace titlebar density.")
+        let density_hint = gtk::Label::builder()
+            .label("Adjusts titlebars, panels, controls, and terminal shell spacing.")
             .halign(gtk::Align::Start)
             .css_classes(["field-hint"])
             .build();
 
-        let chrome_strip = gtk::Box::builder()
+        let density_strip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(0)
             .css_classes(["control-strip"])
             .build();
 
-        for (chrome, label) in [
-            (WindowChrome::Standard, "Standard"),
-            (WindowChrome::Compact, "Compact"),
+        for (density, label) in [
+            (ApplicationDensity::Standard, "Standard"),
+            (ApplicationDensity::Compact, "Compact"),
         ] {
             let btn = gtk::Button::with_label(label);
             btn.add_css_class("flat");
-            if chrome == WindowChrome::Compact {
+            if density == ApplicationDensity::Compact {
                 btn.add_css_class("is-active");
             }
 
-            let chosen_chrome = chosen_chrome.clone();
-            let chrome_strip_ref = chrome_strip.clone();
-            let chrome_preview_callback = chrome_preview_callback.clone();
+            let chosen_density = chosen_density.clone();
+            let density_strip_ref = density_strip.clone();
+            let density_preview_callback = density_preview_callback.clone();
             btn.connect_clicked(move |clicked| {
-                chosen_chrome.set(chrome);
-                chrome_preview_callback(chrome);
-                let mut child = chrome_strip_ref.first_child();
+                chosen_density.set(density);
+                density_preview_callback(density);
+                let mut child = density_strip_ref.first_child();
                 while let Some(sibling) = child {
                     sibling.remove_css_class("is-active");
                     child = sibling.next_sibling();
                 }
                 clicked.add_css_class("is-active");
             });
-            chrome_strip.append(&btn);
+            density_strip.append(&btn);
         }
-        chrome_row.append(&chrome_strip);
-        options_panel.append(&chrome_row);
-        options_panel.append(&chrome_hint);
+        density_row.append(&density_strip);
+        options_panel.append(&density_row);
+        options_panel.append(&density_hint);
     }
 
     // ── Right: Layout Templates grid ────────────────────────
@@ -456,9 +459,9 @@ where
             let theme_preview_callback = theme_preview_callback.clone();
             let session_name_entry = session_name_entry.clone();
             let chosen_theme = chosen_theme.clone();
-            let chosen_chrome = chosen_chrome.clone();
+            let chosen_density = chosen_density.clone();
             let edit_preset_button_handle = edit_preset_button_handle.clone();
-            let chrome_preview_callback = chrome_preview_callback.clone();
+            let density_preview_callback = density_preview_callback.clone();
             let label = template.label;
             let subtitle = template.subtitle;
             let tile_count = template.tile_count;
@@ -469,9 +472,9 @@ where
                 summary.subtitle_label.set_text(subtitle);
                 session_name_entry.set_text(label);
                 chosen_theme.set(ThemeMode::System);
-                chosen_chrome.set(WindowChrome::Compact);
+                chosen_density.set(ApplicationDensity::Compact);
                 theme_preview_callback(ThemeMode::System);
-                chrome_preview_callback(WindowChrome::Compact);
+                density_preview_callback(ApplicationDensity::Compact);
                 *active_layout.borrow_mut() = generate_layout(tile_count);
                 tile_editor.tile_count.set_value(tile_count as f64);
                 refresh_tile_editor(&tile_editor, &active_layout);
@@ -552,9 +555,9 @@ where
                     let theme_preview_callback = theme_preview_callback.clone();
                     let session_name_entry = session_name_entry.clone();
                     let chosen_theme = chosen_theme.clone();
-                    let chosen_chrome = chosen_chrome.clone();
+                    let chosen_density = chosen_density.clone();
                     let edit_preset_button_handle = edit_preset_button_handle.clone();
-                    let chrome_preview_callback = chrome_preview_callback.clone();
+                    let density_preview_callback = density_preview_callback.clone();
 
                     move |idx| {
                         selected.set(Selection::Preset(idx));
@@ -567,9 +570,9 @@ where
                         ));
                         session_name_entry.set_text(&p.name);
                         chosen_theme.set(p.theme);
-                        chosen_chrome.set(p.chrome);
+                        chosen_density.set(p.density);
                         theme_preview_callback(p.theme);
-                        chrome_preview_callback(p.chrome);
+                        density_preview_callback(p.density);
                         *active_layout.borrow_mut() = p.layout.clone();
                         tile_editor.tile_count.set_value(p.tile_count() as f64);
                         refresh_tile_editor(&tile_editor, &active_layout);
@@ -620,7 +623,7 @@ where
             let on_presets_changed = on_presets_changed.clone();
             let session_name_entry = session_name_entry.clone();
             let chosen_theme = chosen_theme.clone();
-            let chosen_chrome = chosen_chrome.clone();
+            let chosen_density = chosen_density.clone();
             let active_layout = active_layout.clone();
 
             save_preset_button.connect_clicked(move |button| {
@@ -631,7 +634,7 @@ where
                 let on_presets_changed = on_presets_changed.clone();
                 let session_name = session_name_entry.text().to_string();
                 let theme = chosen_theme.get();
-                let chrome = chosen_chrome.get();
+                let density = chosen_density.get();
                 let layout = active_layout.borrow().clone();
 
                 let default_name = if session_name.trim().is_empty() {
@@ -659,7 +662,7 @@ where
                         &layout,
                         &session_name,
                         theme,
-                        chrome,
+                        density,
                     );
                     preset.id = unique_preset_id(&name);
                     preset.name = name;
@@ -687,7 +690,7 @@ where
             let on_presets_changed = on_presets_changed.clone();
             let session_name_entry = session_name_entry.clone();
             let chosen_theme = chosen_theme.clone();
-            let chosen_chrome = chosen_chrome.clone();
+            let chosen_density = chosen_density.clone();
             let active_layout = active_layout.clone();
 
             edit_preset_button.connect_clicked(move |button| {
@@ -702,7 +705,7 @@ where
                 let layout = active_layout.borrow().clone();
                 let session_name = session_name_entry.text().to_string();
                 let theme = chosen_theme.get();
-                let chrome = chosen_chrome.get();
+                let density = chosen_density.get();
 
                 if is_builtin_preset_id(&existing.id) {
                     let default_name = if session_name.trim().is_empty() {
@@ -726,7 +729,7 @@ where
                             &layout,
                             &session_name,
                             theme,
-                            chrome,
+                            density,
                         );
                         preset.id = unique_preset_id(&name);
                         preset.name = name;
@@ -745,7 +748,7 @@ where
                         &layout,
                         &session_name,
                         theme,
-                        chrome,
+                        density,
                     );
                     preset.id = existing.id.clone();
 
@@ -793,7 +796,7 @@ where
         let templates_ref = builtin_templates();
         let session_name_entry = session_name_entry.clone();
         let chosen_theme = chosen_theme.clone();
-        let chosen_chrome = chosen_chrome.clone();
+        let chosen_density = chosen_density.clone();
         let active_layout = active_layout.clone();
 
         configure_button.connect_clicked(move |_| match validate_workspace_path(&path_entry) {
@@ -806,7 +809,7 @@ where
                     &active_layout.borrow().clone(),
                     &session_name,
                     chosen_theme.get(),
-                    chosen_chrome.get(),
+                    chosen_density.get(),
                 );
                 logging::info(format!(
                     "launching preset '{}' with {} tiles",
@@ -843,7 +846,7 @@ fn build_launch_preset(
     layout: &LayoutNode,
     session_name: &str,
     theme: ThemeMode,
-    chrome: WindowChrome,
+    density: ApplicationDensity,
 ) -> WorkspacePreset {
     let custom_name = if session_name.is_empty() {
         None
@@ -861,7 +864,7 @@ fn build_launch_preset(
                 tags: Vec::new(),
                 root_label: "Workspace root".into(),
                 theme,
-                chrome,
+                density,
                 layout: layout.clone(),
             }
         }
@@ -871,7 +874,7 @@ fn build_launch_preset(
                 preset.name = name;
             }
             preset.theme = theme;
-            preset.chrome = chrome;
+            preset.density = density;
             preset.layout = layout.clone();
             preset
         }
