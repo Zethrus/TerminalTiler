@@ -35,6 +35,18 @@ fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     });
 }
 
+fn apply_window_chrome(window: &adw::ApplicationWindow, chrome: Option<WindowChrome>) {
+    window.remove_css_class("profile-standard");
+    window.remove_css_class("profile-compact");
+
+    if let Some(chrome) = chrome {
+        window.add_css_class(match chrome {
+            WindowChrome::Standard => "profile-standard",
+            WindowChrome::Compact => "profile-compact",
+        });
+    }
+}
+
 #[derive(Clone)]
 struct WorkspaceTab {
     id: usize,
@@ -838,12 +850,20 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let close_tab_handle = context.close_tab_handle.clone();
     let refresh_handle = context.refresh_launch_tabs.clone();
 
+    let theme_preview_window = window.clone();
+    let chrome_preview_window = window.clone();
+
     let launch_surface = launch_screen::build(
         load_outcome.warning,
         &presets,
         preset_store,
         move |theme| {
-            apply_theme_mode(&window, &theme);
+            apply_theme_mode(&theme_preview_window, &theme);
+        },
+        {
+            move |chrome| {
+                apply_window_chrome(&chrome_preview_window, Some(chrome));
+            }
         },
         move |preset, workspace_root| {
             if let Some(show_workspace) = show_workspace_handle.borrow().as_ref() {
@@ -1234,20 +1254,14 @@ fn apply_shell_profile(
 
     apply_theme_mode(window, &preset.theme);
 
-    window.remove_css_class("profile-standard");
-    window.remove_css_class("profile-compact");
-    window.add_css_class(match preset.chrome {
-        WindowChrome::Standard => "profile-standard",
-        WindowChrome::Compact => "profile-compact",
-    });
+    apply_window_chrome(window, Some(preset.chrome));
 }
 
 fn reset_shell_profile(header: &adw::HeaderBar, window: &adw::ApplicationWindow) {
     configure_window_controls(header);
     logging::info("resetting shell chrome for launch deck");
     apply_theme_mode(window, &ThemeMode::System);
-    window.remove_css_class("profile-standard");
-    window.remove_css_class("profile-compact");
+    apply_window_chrome(window, None);
 }
 
 fn active_tab_is_workspace(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>, active_tab_id: usize) -> bool {

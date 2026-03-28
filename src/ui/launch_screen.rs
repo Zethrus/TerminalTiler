@@ -28,11 +28,12 @@ struct TileEditorPanel {
     rows: gtk::Box,
 }
 
-pub fn build<F, G, H, C>(
+pub fn build<F, G, H, I, C>(
     load_warning: Option<String>,
     presets: &[WorkspacePreset],
     preset_store: PresetStore,
     on_theme_preview: H,
+    on_chrome_preview: I,
     on_launch: F,
     on_cancel: C,
     on_presets_changed: G,
@@ -41,6 +42,7 @@ where
     F: Fn(WorkspacePreset, PathBuf) + 'static,
     G: Fn() + 'static,
     H: Fn(ThemeMode) + 'static,
+    I: Fn(WindowChrome) + 'static,
     C: Fn() + 'static,
 {
     let current_dir = std::env::current_dir()
@@ -51,6 +53,7 @@ where
     let presets = Rc::new(presets.to_vec());
     let launch_callback = Rc::new(on_launch);
     let theme_preview_callback = Rc::new(on_theme_preview);
+    let chrome_preview_callback = Rc::new(on_chrome_preview);
     let preset_store = Rc::new(preset_store);
     let on_presets_changed: Rc<dyn Fn()> = Rc::new(on_presets_changed);
     let selected: Rc<Cell<Selection>> = Rc::new(Cell::new(Selection::Template(0)));
@@ -352,6 +355,12 @@ where
             .build();
         chrome_row.append(&chrome_label);
 
+        let chrome_hint = gtk::Label::builder()
+            .label("Adjusts the workspace titlebar density.")
+            .halign(gtk::Align::Start)
+            .css_classes(["field-hint"])
+            .build();
+
         let chrome_strip = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(0)
@@ -370,8 +379,10 @@ where
 
             let chosen_chrome = chosen_chrome.clone();
             let chrome_strip_ref = chrome_strip.clone();
+            let chrome_preview_callback = chrome_preview_callback.clone();
             btn.connect_clicked(move |clicked| {
                 chosen_chrome.set(chrome);
+                chrome_preview_callback(chrome);
                 let mut child = chrome_strip_ref.first_child();
                 while let Some(sibling) = child {
                     sibling.remove_css_class("is-active");
@@ -383,6 +394,7 @@ where
         }
         chrome_row.append(&chrome_strip);
         options_panel.append(&chrome_row);
+        options_panel.append(&chrome_hint);
     }
 
     // ── Right: Layout Templates grid ────────────────────────
@@ -446,6 +458,7 @@ where
             let chosen_theme = chosen_theme.clone();
             let chosen_chrome = chosen_chrome.clone();
             let edit_preset_button_handle = edit_preset_button_handle.clone();
+            let chrome_preview_callback = chrome_preview_callback.clone();
             let label = template.label;
             let subtitle = template.subtitle;
             let tile_count = template.tile_count;
@@ -458,6 +471,7 @@ where
                 chosen_theme.set(ThemeMode::System);
                 chosen_chrome.set(WindowChrome::Compact);
                 theme_preview_callback(ThemeMode::System);
+                chrome_preview_callback(WindowChrome::Compact);
                 *active_layout.borrow_mut() = generate_layout(tile_count);
                 tile_editor.tile_count.set_value(tile_count as f64);
                 refresh_tile_editor(&tile_editor, &active_layout);
@@ -540,6 +554,7 @@ where
                     let chosen_theme = chosen_theme.clone();
                     let chosen_chrome = chosen_chrome.clone();
                     let edit_preset_button_handle = edit_preset_button_handle.clone();
+                    let chrome_preview_callback = chrome_preview_callback.clone();
 
                     move |idx| {
                         selected.set(Selection::Preset(idx));
@@ -554,6 +569,7 @@ where
                         chosen_theme.set(p.theme);
                         chosen_chrome.set(p.chrome);
                         theme_preview_callback(p.theme);
+                        chrome_preview_callback(p.chrome);
                         *active_layout.borrow_mut() = p.layout.clone();
                         tile_editor.tile_count.set_value(p.tile_count() as f64);
                         refresh_tile_editor(&tile_editor, &active_layout);

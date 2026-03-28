@@ -34,6 +34,57 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+window.profile-compact headerbar.app-headerbar {
+  min-height: 32px;
+  padding: 1px 6px;
+}
+
+window.profile-compact headerbar.app-headerbar button {
+  min-height: 24px;
+  min-width: 24px;
+  border-radius: 7px;
+}
+
+window.profile-compact headerbar.app-headerbar button.titlebar-action-button {
+  padding: 0 8px;
+  font-size: 9px;
+}
+
+window.profile-compact .app-tab-strip {
+  margin: 0 2px;
+}
+
+window.profile-compact .app-tab-shell {
+  min-width: 124px;
+  min-height: 24px;
+  border-radius: 8px 8px 0 0;
+}
+
+window.profile-standard headerbar.app-headerbar {
+  min-height: 42px;
+  padding: 4px 10px;
+}
+
+window.profile-standard headerbar.app-headerbar button {
+  min-height: 30px;
+  min-width: 30px;
+  border-radius: 9px;
+}
+
+window.profile-standard headerbar.app-headerbar button.titlebar-action-button {
+  padding: 0 12px;
+}
+
+window.profile-standard .app-tab-strip {
+  margin: 0 6px;
+}
+
+window.profile-standard .app-tab-shell {
+  min-width: 148px;
+  min-height: 32px;
+  border-radius: 11px 11px 0 0;
+}
+
 .app-tab-strip {
   margin: 0 4px;
 }
