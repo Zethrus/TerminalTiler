@@ -9,6 +9,7 @@ use vte4::prelude::*;
 
 use crate::app::logging;
 use crate::model::layout::TileSpec;
+use crate::model::preset::ApplicationDensity;
 
 #[derive(Clone)]
 pub struct TerminalSession {
@@ -34,7 +35,7 @@ impl TerminalSessionState {
 }
 
 impl TerminalSession {
-    pub fn spawn(tile: &TileSpec, workspace_root: &Path) -> Self {
+    pub fn spawn(tile: &TileSpec, workspace_root: &Path, density: ApplicationDensity) -> Self {
         let terminal = vte4::Terminal::new();
         terminal.set_hexpand(true);
         terminal.set_vexpand(true);
@@ -42,9 +43,10 @@ impl TerminalSession {
         terminal.set_mouse_autohide(true);
         terminal.set_clear_background(false);
         terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
-        terminal.set_font(Some(&pango::FontDescription::from_string(
-            "JetBrains Mono 10",
-        )));
+        terminal.set_font(Some(&pango::FontDescription::from_string(&format!(
+            "JetBrains Mono {}",
+            density.terminal_font_points()
+        ))));
 
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));

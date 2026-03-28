@@ -36,14 +36,12 @@ fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
 }
 
 fn apply_window_density(window: &adw::ApplicationWindow, density: Option<ApplicationDensity>) {
+    window.remove_css_class("profile-comfortable");
     window.remove_css_class("profile-standard");
     window.remove_css_class("profile-compact");
 
     if let Some(density) = density {
-        window.add_css_class(match density {
-            ApplicationDensity::Standard => "profile-standard",
-            ApplicationDensity::Compact => "profile-compact",
-        });
+        window.add_css_class(density.css_class());
     }
 }
 

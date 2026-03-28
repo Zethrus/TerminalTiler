@@ -13,6 +13,7 @@ pub enum ThemeMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApplicationDensity {
+    Comfortable,
     Standard,
     Compact,
 }
@@ -30,8 +31,25 @@ impl ThemeMode {
 impl ApplicationDensity {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::Comfortable => "Comfortable",
             Self::Standard => "Standard",
             Self::Compact => "Compact",
+        }
+    }
+
+    pub fn css_class(&self) -> &'static str {
+        match self {
+            Self::Comfortable => "profile-comfortable",
+            Self::Standard => "profile-standard",
+            Self::Compact => "profile-compact",
+        }
+    }
+
+    pub fn terminal_font_points(&self) -> i32 {
+        match self {
+            Self::Comfortable => 11,
+            Self::Standard => 10,
+            Self::Compact => 9,
         }
     }
 }

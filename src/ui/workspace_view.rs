@@ -75,7 +75,7 @@ pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
     summary.append(&path_label);
     shell.append(&summary);
 
-    let layout = layout_tree::build(&preset.layout, workspace_root);
+    let layout = layout_tree::build(&preset.layout, workspace_root, preset.density);
     layout.widget.set_hexpand(true);
     layout.widget.set_vexpand(true);
     shell.append(&layout.widget);

@@ -371,6 +371,7 @@ where
             .build();
 
         for (density, label) in [
+            (ApplicationDensity::Comfortable, "Comfortable"),
             (ApplicationDensity::Standard, "Standard"),
             (ApplicationDensity::Compact, "Compact"),
         ] {

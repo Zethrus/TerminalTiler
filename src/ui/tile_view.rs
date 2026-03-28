@@ -6,6 +6,7 @@ use gtk::prelude::*;
 use vte4::prelude::*;
 
 use crate::model::layout::TileSpec;
+use crate::model::preset::ApplicationDensity;
 use crate::terminal::session::TerminalSession;
 
 pub struct TileView {
@@ -13,8 +14,8 @@ pub struct TileView {
     pub session: TerminalSession,
 }
 
-pub fn build(tile: &TileSpec, workspace_root: &Path) -> TileView {
-    let session = TerminalSession::spawn(tile, workspace_root);
+pub fn build(tile: &TileSpec, workspace_root: &Path, density: ApplicationDensity) -> TileView {
+    let session = TerminalSession::spawn(tile, workspace_root, density);
     let resolved_dir = tile.working_directory.resolve(workspace_root);
 
     let shell = gtk::Box::builder()
@@ -67,9 +68,18 @@ pub fn build(tile: &TileSpec, workspace_root: &Path) -> TileView {
     header.append(&status);
     shell.append(&header);
 
+    let terminal_frame = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .hexpand(true)
+        .vexpand(true)
+        .css_classes(["terminal-frame"])
+        .build();
+
     let terminal = session.widget();
     terminal.add_css_class("terminal-surface");
-    shell.append(&terminal);
+    terminal_frame.append(&terminal);
+    shell.append(&terminal_frame);
 
     {
         let title_label = title.clone();

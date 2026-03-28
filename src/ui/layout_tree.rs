@@ -6,6 +6,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use crate::model::layout::LayoutNode;
+use crate::model::preset::ApplicationDensity;
 use crate::terminal::session::TerminalSession;
 use crate::ui::tile_view;
 
@@ -14,10 +15,14 @@ pub struct LayoutView {
     pub sessions: Vec<TerminalSession>,
 }
 
-pub fn build(node: &LayoutNode, workspace_root: &Path) -> LayoutView {
+pub fn build(
+    node: &LayoutNode,
+    workspace_root: &Path,
+    density: ApplicationDensity,
+) -> LayoutView {
     match node {
         LayoutNode::Tile(tile) => {
-            let tile = tile_view::build(tile, workspace_root);
+            let tile = tile_view::build(tile, workspace_root, density);
             LayoutView {
                 widget: tile.widget,
                 sessions: vec![tile.session],
@@ -36,8 +41,8 @@ pub fn build(node: &LayoutNode, workspace_root: &Path) -> LayoutView {
                 .shrink_end_child(true)
                 .build();
 
-            let first_child = build(first, workspace_root);
-            let second_child = build(second, workspace_root);
+            let first_child = build(first, workspace_root, density);
+            let second_child = build(second, workspace_root, density);
             paned.set_start_child(Some(&first_child.widget));
             paned.set_end_child(Some(&second_child.widget));
 

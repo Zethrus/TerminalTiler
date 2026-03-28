@@ -34,6 +34,157 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+window.profile-comfortable headerbar.app-headerbar {
+  min-height: 48px;
+  padding: 5px 12px;
+}
+
+window.profile-comfortable headerbar.app-headerbar button {
+  min-height: 34px;
+  min-width: 34px;
+  border-radius: 10px;
+}
+
+window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button {
+  padding: 0 14px;
+  font-size: 11px;
+}
+
+window.profile-comfortable .app-tab-strip {
+  margin: 0 8px;
+}
+
+window.profile-comfortable .app-tab-shell {
+  min-width: 160px;
+  min-height: 34px;
+  border-radius: 12px 12px 0 0;
+}
+
+window.profile-comfortable button.app-tab-select {
+  min-height: 34px;
+  padding: 3px 8px 3px 12px;
+  border-radius: 12px 12px 0 0;
+}
+
+window.profile-comfortable .app-tab-title {
+  font-size: 12px;
+}
+
+window.profile-comfortable .app-tab-badge {
+  min-width: 15px;
+  min-height: 15px;
+  padding: 0 5px;
+  font-size: 9px;
+}
+
+window.profile-comfortable button.app-tab-close {
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 7px;
+}
+
+window.profile-comfortable button.app-tab-add {
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 8px;
+}
+
+window.profile-comfortable .launch-stage {
+  margin-top: 34px;
+  margin-bottom: 34px;
+  margin-left: 34px;
+  margin-right: 34px;
+}
+
+window.profile-comfortable .hero-title {
+  font-size: 30px;
+}
+
+window.profile-comfortable .config-panel,
+window.profile-comfortable .preview-card {
+  padding: 22px;
+}
+
+window.profile-comfortable .directory-panel {
+  padding: 20px;
+}
+
+window.profile-comfortable .workspace-path entry,
+window.profile-comfortable entry.workspace-path {
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+window.profile-comfortable .path-bar {
+  padding: 12px;
+  border-radius: 16px;
+}
+
+window.profile-comfortable .control-strip {
+  padding: 10px 12px;
+  border-radius: 16px;
+}
+
+window.profile-comfortable button.pill-button {
+  padding: 11px 20px;
+}
+
+window.profile-comfortable .selection-summary {
+  padding: 14px 16px;
+}
+
+window.profile-comfortable .selection-summary-name,
+window.profile-comfortable .card-title,
+window.profile-comfortable .workspace-summary-name {
+  font-size: 14px;
+}
+
+window.profile-comfortable .selection-summary-subtitle,
+window.profile-comfortable .workspace-summary-subtitle,
+window.profile-comfortable .card-meta,
+window.profile-comfortable .tile-meta,
+window.profile-comfortable .field-hint,
+window.profile-comfortable .workspace-summary-path {
+  font-size: 11px;
+}
+
+window.profile-comfortable .workspace-summary {
+  padding: 12px 14px;
+  margin-bottom: 6px;
+}
+
+window.profile-comfortable .terminal-header {
+  padding: 10px 12px;
+}
+
+window.profile-comfortable .tile-title {
+  font-size: 13px;
+}
+
+window.profile-comfortable .status-chip,
+window.profile-comfortable .agent-badge {
+  padding: 4px 9px;
+}
+
+window.profile-comfortable button.preset-card-compact,
+window.profile-comfortable button.new-preset-button {
+  min-height: 68px;
+}
+
+window.profile-comfortable spinbutton.tile-count-input,
+window.profile-comfortable entry.tile-editor-input {
+  min-height: 40px;
+}
+
+window.profile-comfortable .tile-editor-row {
+  padding: 14px;
+}
+
+window.profile-comfortable .split-pane separator {
+  min-width: 5px;
+  min-height: 5px;
+}
+
 window.profile-compact headerbar.app-headerbar {
   min-height: 32px;
   padding: 1px 6px;
@@ -230,6 +381,10 @@ window.profile-compact .terminal-header {
   padding: 6px 8px;
 }
 
+window.profile-compact .terminal-frame {
+  padding: 5px;
+}
+
 window.profile-compact .tile-title {
   font-size: 11px;
 }
@@ -377,6 +532,10 @@ button.app-tab-add {
   background: transparent;
   color: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.terminal-frame {
+  padding: 8px;
 }
 
 .launch-shell {
@@ -816,9 +975,17 @@ button.destructive-button:hover {
   min-height: 4px;
 }
 
+window.profile-comfortable .terminal-frame {
+  padding: 12px;
+}
+
 window.profile-compact headerbar {
   background: rgba(6, 6, 8, 0.9);
   box-shadow: inset 0 -1px rgba(255, 255, 255, 0.03);
+}
+
+window.profile-comfortable headerbar {
+  background: rgba(9, 10, 14, 0.98);
 }
 
 window.profile-standard headerbar {
@@ -1060,6 +1227,10 @@ window.window-shell.theme-light .split-pane separator {
 window.theme-light.profile-compact headerbar {
   background: rgba(247, 249, 252, 0.92);
   box-shadow: inset 0 -1px rgba(255, 255, 255, 0.70);
+}
+
+window.theme-light.profile-comfortable headerbar {
+  background: rgba(244, 247, 252, 0.99);
 }
 
 window.theme-light.profile-standard headerbar {
