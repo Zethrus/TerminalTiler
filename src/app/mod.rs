@@ -2,6 +2,7 @@ pub mod logging;
 
 use adw::prelude::*;
 
+use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::SessionStore;
 use crate::ui::window;
@@ -17,12 +18,14 @@ pub fn run() -> adw::glib::ExitCode {
     app.connect_startup(|_| load_css());
     app.connect_activate(|app| {
         logging::info("application activated");
+        let preference_store = PreferenceStore::new();
         let preset_store = PresetStore::new();
         preset_store.ensure_seeded();
         let session_store = SessionStore::new();
         let session_outcome = session_store.load_with_status();
         window::present(
             app,
+            preference_store,
             preset_store,
             session_store,
             session_outcome.session,

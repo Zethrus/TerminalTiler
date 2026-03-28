@@ -7,6 +7,7 @@ use gtk::{gdk, glib};
 
 use crate::app::logging;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::ui::{launch_screen, workspace_view};
@@ -80,6 +81,7 @@ struct LaunchTabContext {
     tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
     stack: gtk::Stack,
     window: adw::ApplicationWindow,
+    preference_store: Rc<PreferenceStore>,
     preset_store: Rc<PresetStore>,
     show_workspace_handle: ShowWorkspaceHandle,
     close_tab_handle: TabActionHandle,
@@ -88,11 +90,13 @@ struct LaunchTabContext {
 
 pub fn present(
     app: &adw::Application,
+    preference_store: PreferenceStore,
     preset_store: PresetStore,
     session_store: SessionStore,
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
 ) {
+    let preference_store = Rc::new(preference_store);
     let preset_store = Rc::new(preset_store);
     let session_store = Rc::new(session_store);
 
@@ -394,6 +398,7 @@ pub fn present(
         let tabs_for_refresh = tabs.clone();
         let stack_for_refresh = stack.clone();
         let window_for_refresh = window.clone();
+        let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
         let close_tab_for_refresh = close_tab.clone();
@@ -416,6 +421,7 @@ pub fn present(
                         tabs: tabs_for_refresh.clone(),
                         stack: stack_for_refresh.clone(),
                         window: window_for_refresh.clone(),
+                        preference_store: preference_store.clone(),
                         preset_store: preset_store.clone(),
                         show_workspace_handle: show_workspace_handle.clone(),
                         close_tab_handle: close_tab_for_refresh.clone(),
@@ -575,6 +581,7 @@ pub fn present(
         let next_tab_id = next_tab_id.clone();
         let stack_for_add = stack.clone();
         let window_for_add = window.clone();
+        let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
         let close_tab_for_add = close_tab.clone();
@@ -602,6 +609,7 @@ pub fn present(
                     tabs: tabs_for_add.clone(),
                     stack: stack_for_add.clone(),
                     window: window_for_add.clone(),
+                    preference_store: preference_store.clone(),
                     preset_store: preset_store.clone(),
                     show_workspace_handle: show_workspace_handle.clone(),
                     close_tab_handle: close_tab_for_add.clone(),
@@ -633,6 +641,7 @@ pub fn present(
     let tabs_for_back = tabs.clone();
     let stack_for_back = stack.clone();
     let window_for_back = window.clone();
+    let preference_store_for_back = preference_store.clone();
     let preset_store_for_back = preset_store.clone();
     let show_workspace_for_back = show_workspace_in_tab.clone();
     let close_tab_for_back = close_tab.clone();
@@ -657,6 +666,7 @@ pub fn present(
             let tabs_for_back = tabs_for_back.clone();
             let stack_for_back = stack_for_back.clone();
             let window_for_back = window_for_back.clone();
+            let preference_store_for_back = preference_store_for_back.clone();
             let preset_store_for_back = preset_store_for_back.clone();
             let show_workspace_for_back = show_workspace_for_back.clone();
             let close_tab_for_back = close_tab_for_back.clone();
@@ -691,6 +701,7 @@ pub fn present(
                         tabs: tabs_for_back.clone(),
                         stack: stack_for_back.clone(),
                         window: window_for_back.clone(),
+                        preference_store: preference_store_for_back.clone(),
                         preset_store: preset_store_for_back.clone(),
                         show_workspace_handle: show_workspace_for_back.clone(),
                         close_tab_handle: close_tab_for_back.clone(),
@@ -842,6 +853,8 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
 
     let load_outcome = context.preset_store.load_presets_with_status();
     let presets = load_outcome.presets;
+    let default_density = context.preference_store.load_last_density();
+    let preference_store = context.preference_store.clone();
     let preset_store = context.preset_store.as_ref().clone();
     let window = context.window.clone();
     let show_workspace_handle = context.show_workspace_handle.clone();
@@ -854,12 +867,15 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let launch_surface = launch_screen::build(
         load_outcome.warning,
         &presets,
+        default_density,
         preset_store,
         move |theme| {
             apply_theme_mode(&theme_preview_window, &theme);
         },
         {
+            let preference_store = preference_store.clone();
             move |density| {
+                preference_store.save_last_density(density);
                 apply_window_density(&density_preview_window, Some(density));
             }
         },

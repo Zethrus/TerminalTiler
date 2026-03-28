@@ -52,6 +52,14 @@ impl ApplicationDensity {
             Self::Compact => 9,
         }
     }
+
+    pub fn terminal_line_height_scale(&self) -> f64 {
+        match self {
+            Self::Comfortable => 1.10,
+            Self::Standard => 1.0,
+            Self::Compact => 0.94,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

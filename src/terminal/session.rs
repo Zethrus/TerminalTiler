@@ -47,6 +47,7 @@ impl TerminalSession {
             "JetBrains Mono {}",
             density.terminal_font_points()
         ))));
+        terminal.set_cell_height_scale(density.terminal_line_height_scale());
 
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));
