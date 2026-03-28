@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.1.60
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release tag
+        id: release_meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$REF_NAME"
+          fi
+
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Release tags must look like v0.1.60" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "deb=dist/terminaltiler_${version}_amd64.deb"
+            echo "appimage=dist/TerminalTiler-${version}-x86_64.AppImage"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out repository at release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_meta.outputs.tag }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream \
+            build-essential \
+            dpkg-dev \
+            libadwaita-1-dev \
+            libgraphene-1.0-dev \
+            libgtk-4-dev \
+            libvte-2.91-gtk4-dev \
+            pkg-config \
+            wget \
+            xvfb
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install appimagetool
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O "$HOME/.local/bin/appimagetool"
+          chmod +x "$HOME/.local/bin/appimagetool"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build and smoke-test release artifacts
+        env:
+          PACKAGE_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: bash packaging/release-smoke-test.sh
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.release_meta.outputs.deb }}
+            ${{ steps.release_meta.outputs.appimage }}
+          fail_on_unmatched_files: true

@@ -92,3 +92,17 @@ The preferred release path is now:
 ```bash
 bash packaging/release-verify.sh
 ```
+
+GitHub Actions also publishes tagged releases automatically. Push a semver tag in the form `vX.Y.Z`, for example `v0.1.60`, and the `Release` workflow will:
+
+- set `PACKAGE_VERSION` from the tag value
+- build the versioned `.deb` and AppImage artifacts
+- run the existing headless release smoke test
+- attach `dist/terminaltiler_X.Y.Z_amd64.deb` and `dist/TerminalTiler-X.Y.Z-x86_64.AppImage` to the GitHub Release for that tag
+
+Example:
+
+```bash
+git tag v0.1.60
+git push origin v0.1.60
+```
