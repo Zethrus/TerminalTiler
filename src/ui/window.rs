@@ -116,12 +116,15 @@ pub fn present(
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
 
+    let toast_overlay = adw::ToastOverlay::new();
+    toast_overlay.set_child(Some(&stack));
+
     let window_shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
     window_shell.append(&header);
-    window_shell.append(&stack);
+    window_shell.append(&toast_overlay);
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -676,6 +679,7 @@ pub fn present(
         let window_for_settings = window.clone();
         let preference_store_for_settings = preference_store.clone();
         let refresh_for_settings = refresh_launch_tabs.clone();
+        let toast_overlay_for_settings = toast_overlay.clone();
 
         settings_button.connect_clicked(move |_| {
             let preferences = preference_store_for_settings.load();
@@ -686,20 +690,26 @@ pub fn present(
                 {
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
                     move |theme| {
                         preference_store.save_default_theme(theme);
                         logging::info(format!(
-                            "updated application settings default_theme={} ",
+                            "updated application settings default_theme={}",
                             theme.label()
                         ));
                         if let Some(refresh) = refresh_handle.borrow().as_ref() {
                             refresh();
                         }
+                        show_toast(
+                            &toast_overlay,
+                            &format!("Default theme set to {}", theme.label()),
+                        );
                     }
                 },
                 {
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
                     move |density| {
                         preference_store.save_default_density(density);
                         logging::info(format!(
@@ -709,6 +719,24 @@ pub fn present(
                         if let Some(refresh) = refresh_handle.borrow().as_ref() {
                             refresh();
                         }
+                        show_toast(
+                            &toast_overlay,
+                            &format!("Default density set to {}", density.label()),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let refresh_handle = refresh_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    move || {
+                        let defaults = AppPreferences::default();
+                        preference_store.save(&defaults);
+                        logging::info("reset application settings to defaults");
+                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                            refresh();
+                        }
+                        show_toast(&toast_overlay, "Application defaults reset");
                     }
                 },
             );
@@ -1439,6 +1467,12 @@ fn sync_fullscreen_chrome(
         fullscreen_button.set_label("Fullscreen");
         fullscreen_button.set_tooltip_text(Some("Enter fullscreen"));
     }
+}
+
+fn show_toast(overlay: &adw::ToastOverlay, title: &str) {
+    let toast = adw::Toast::new(title);
+    toast.set_timeout(2);
+    overlay.add_toast(toast);
 }
 
 fn configure_window_controls(header: &adw::HeaderBar) {

@@ -1,40 +1,47 @@
 use std::rc::Rc;
 
 use adw::prelude::*;
+use std::cell::Cell;
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::storage::preference_store::AppPreferences;
 
 #[allow(deprecated)]
-pub fn present<F, G>(
+pub fn present<F, G, H>(
     window: &adw::ApplicationWindow,
     default_theme: ThemeMode,
     default_density: ApplicationDensity,
     on_theme_changed: F,
     on_density_changed: G,
+    on_reset_defaults: H,
 ) where
     F: Fn(ThemeMode) + 'static,
     G: Fn(ApplicationDensity) + 'static,
+    H: Fn() + 'static,
 {
     let dialog = gtk::Dialog::builder()
         .modal(true)
         .transient_for(window)
         .title("Application Settings")
-        .default_width(560)
+        .default_width(528)
         .build();
     dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.set_default_response(gtk::ResponseType::Close);
 
     let content = dialog.content_area();
-    content.set_spacing(18);
-    content.set_margin_top(20);
-    content.set_margin_bottom(20);
-    content.set_margin_start(20);
-    content.set_margin_end(20);
+    content.set_spacing(12);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
     content.add_css_class("settings-dialog-content");
+
+    let current_theme = Rc::new(Cell::new(default_theme));
+    let current_density = Rc::new(Cell::new(default_density));
 
     let intro = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(14)
+        .spacing(12)
         .css_classes(["config-panel", "settings-section", "settings-hero"])
         .build();
 
@@ -49,7 +56,7 @@ pub fn present<F, G>(
 
     let intro_body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
+        .spacing(6)
         .hexpand(true)
         .build();
     intro.append(&intro_body);
@@ -79,7 +86,6 @@ pub fn present<F, G>(
     let intro_note = gtk::Label::builder()
         .label("Launch defaults are immediate. Workspace presets still take over after a workspace starts.")
         .halign(gtk::Align::Start)
-        .wrap(true)
         .css_classes(["settings-inline-note"])
         .build();
     intro_body.append(&intro_note);
@@ -87,10 +93,11 @@ pub fn present<F, G>(
 
     let theme_callback = Rc::new(on_theme_changed);
     let density_callback = Rc::new(on_density_changed);
+    let reset_callback = Rc::new(on_reset_defaults);
 
     let theme_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
+        .spacing(8)
         .css_classes(["config-panel", "settings-section"])
         .build();
     content.append(&theme_section);
@@ -117,11 +124,15 @@ pub fn present<F, G>(
             button.add_css_class("is-active");
         }
 
+        let current_theme = current_theme.clone();
         let theme_strip_ref = theme_strip.clone();
         let theme_callback = theme_callback.clone();
         button.connect_clicked(move |_| {
-            theme_callback(mode);
-            sync_theme_strip_active(&theme_strip_ref, mode);
+            if current_theme.get() != mode {
+                current_theme.set(mode);
+                theme_callback(mode);
+                sync_theme_strip_active(&theme_strip_ref, mode);
+            }
         });
         theme_strip.append(&button);
     }
@@ -129,7 +140,7 @@ pub fn present<F, G>(
 
     let density_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
+        .spacing(8)
         .css_classes(["config-panel", "settings-section"])
         .build();
     content.append(&density_section);
@@ -156,11 +167,15 @@ pub fn present<F, G>(
             button.add_css_class("is-active");
         }
 
+        let current_density = current_density.clone();
         let density_strip_ref = density_strip.clone();
         let density_callback = density_callback.clone();
         button.connect_clicked(move |_| {
-            density_callback(density);
-            sync_density_strip_active(&density_strip_ref, density);
+            if current_density.get() != density {
+                current_density.set(density);
+                density_callback(density);
+                sync_density_strip_active(&density_strip_ref, density);
+            }
         });
         density_strip.append(&button);
     }
@@ -197,6 +212,47 @@ pub fn present<F, G>(
         "Rotates only the current workspace without changing the saved app default.",
     ));
 
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-actions"])
+        .build();
+    actions.append(
+        &gtk::Label::builder()
+            .label("Defaults apply immediately to new launch tabs.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .css_classes(["field-hint", "settings-footer-note"])
+            .build(),
+    );
+
+    let reset_button = gtk::Button::with_label("Reset Defaults");
+    reset_button.add_css_class("pill-button");
+    reset_button.add_css_class("secondary-button");
+    {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let theme_strip = theme_strip.clone();
+        let density_strip = density_strip.clone();
+        let reset_callback = reset_callback.clone();
+        reset_button.connect_clicked(move |_| {
+            let defaults = AppPreferences::default();
+            let changed = current_theme.get() != defaults.default_theme
+                || current_density.get() != defaults.default_density;
+            if !changed {
+                return;
+            }
+
+            current_theme.set(defaults.default_theme);
+            current_density.set(defaults.default_density);
+            sync_theme_strip_active(&theme_strip, defaults.default_theme);
+            sync_density_strip_active(&density_strip, defaults.default_density);
+            reset_callback();
+        });
+    }
+    actions.append(&reset_button);
+    content.append(&actions);
+
     dialog.connect_response(move |dialog, _| {
         dialog.close();
     });
@@ -207,14 +263,14 @@ pub fn present<F, G>(
 fn build_shortcut_row(label: &str, keys: &str, note: &str) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(10)
         .valign(gtk::Align::Center)
         .css_classes(["settings-shortcut-row"])
         .build();
 
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
+        .spacing(2)
         .hexpand(true)
         .build();
     text.append(
@@ -251,7 +307,7 @@ fn build_shortcut_row(label: &str, keys: &str, note: &str) -> gtk::Widget {
 fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
+        .spacing(6)
         .build();
 
     let top = gtk::Box::builder()

@@ -1004,7 +1004,7 @@ button.destructive-button:hover {
 }
 
 .settings-title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -1018,13 +1018,13 @@ button.destructive-button:hover {
 
 .settings-inline-note {
   color: rgba(240, 179, 75, 0.88);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .settings-choice-strip {
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .settings-meta-chip {
@@ -1034,11 +1034,11 @@ button.destructive-button:hover {
 }
 
 .settings-shortcut-row {
-  padding: 6px 0;
+  padding: 4px 0;
 }
 
 .settings-shortcut-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -1055,6 +1055,15 @@ button.destructive-button:hover {
   text-align: center;
 }
 
+.settings-actions {
+  margin-top: 2px;
+  align-items: center;
+}
+
+.settings-footer-note {
+  font-size: 10px;
+}
+
 .settings-section separator {
   opacity: 0.55;
 }
@@ -1064,19 +1073,19 @@ window.profile-comfortable .terminal-frame {
 }
 
 window.profile-comfortable .settings-section {
-  padding: 22px;
+  padding: 18px;
 }
 
 window.profile-comfortable .settings-shortcut-row {
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
 window.profile-comfortable .settings-title {
-  font-size: 18px;
+  font-size: 17px;
 }
 
 window.profile-comfortable .settings-shortcut-title {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 window.profile-compact headerbar {
@@ -1085,11 +1094,11 @@ window.profile-compact headerbar {
 }
 
 window.profile-compact .settings-section {
-  padding: 14px;
+  padding: 11px;
 }
 
 window.profile-compact .settings-shortcut-row {
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 window.profile-compact .settings-hero-icon {
@@ -1098,7 +1107,7 @@ window.profile-compact .settings-hero-icon {
 }
 
 window.profile-compact .settings-title {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 window.profile-compact .settings-shortcut-chip {
@@ -1114,7 +1123,7 @@ window.profile-standard headerbar {
 }
 
 window.profile-standard .settings-section {
-  padding: 18px;
+  padding: 14px;
 }
 
 window.profile-standard .settings-shortcut-chip {
