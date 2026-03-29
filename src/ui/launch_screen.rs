@@ -33,6 +33,7 @@ struct TileEditorPanel {
 pub fn build<F, G, H, I, C>(
     load_warning: Option<String>,
     presets: &[WorkspacePreset],
+    default_theme: ThemeMode,
     default_density: ApplicationDensity,
     preset_store: PresetStore,
     on_theme_preview: H,
@@ -60,9 +61,8 @@ where
     let preset_store = Rc::new(preset_store);
     let on_presets_changed: Rc<dyn Fn()> = Rc::new(on_presets_changed);
     let selected: Rc<Cell<Selection>> = Rc::new(Cell::new(Selection::Template(0)));
-    let chosen_theme: Rc<Cell<ThemeMode>> = Rc::new(Cell::new(ThemeMode::System));
-    let chosen_density: Rc<Cell<ApplicationDensity>> =
-        Rc::new(Cell::new(default_density));
+    let chosen_theme: Rc<Cell<ThemeMode>> = Rc::new(Cell::new(default_theme));
+    let chosen_density: Rc<Cell<ApplicationDensity>> = Rc::new(Cell::new(default_density));
     let active_layout = Rc::new(RefCell::new(generate_layout(
         templates
             .first()
@@ -70,8 +70,6 @@ where
             .unwrap_or(1),
     )));
     let edit_preset_button_handle: Rc<RefCell<Option<gtk::Button>>> = Rc::new(RefCell::new(None));
-
-    density_preview_callback(default_density);
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -295,6 +293,12 @@ where
         .build();
     left_column.append(&options_panel);
 
+    let theme_strip = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .css_classes(["control-strip"])
+        .build();
+
     // Theme toggle
     {
         let theme_row = gtk::Box::builder()
@@ -310,12 +314,6 @@ where
             .build();
         theme_row.append(&theme_label);
 
-        let theme_strip = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(0)
-            .css_classes(["control-strip"])
-            .build();
-
         for (mode, label) in [
             (ThemeMode::System, "System"),
             (ThemeMode::Light, "Light"),
@@ -323,7 +321,7 @@ where
         ] {
             let btn = gtk::Button::with_label(label);
             btn.add_css_class("flat");
-            if mode == ThemeMode::System {
+            if mode == default_theme {
                 btn.add_css_class("is-active");
             }
 
@@ -333,11 +331,7 @@ where
             btn.connect_clicked(move |clicked| {
                 chosen_theme.set(mode);
                 theme_preview_callback(mode);
-                let mut child = theme_strip_ref.first_child();
-                while let Some(sibling) = child {
-                    sibling.remove_css_class("is-active");
-                    child = sibling.next_sibling();
-                }
+                sync_theme_strip_active(&theme_strip_ref, mode);
                 clicked.add_css_class("is-active");
             });
             theme_strip.append(&btn);
@@ -459,9 +453,11 @@ where
             let session_name_entry = session_name_entry.clone();
             let chosen_theme = chosen_theme.clone();
             let chosen_density = chosen_density.clone();
+            let theme_strip = theme_strip.clone();
             let density_strip = density_strip.clone();
             let edit_preset_button_handle = edit_preset_button_handle.clone();
             let density_preview_callback = density_preview_callback.clone();
+            let default_theme = default_theme;
             let label = template.label;
             let subtitle = template.subtitle;
             let tile_count = template.tile_count;
@@ -471,8 +467,9 @@ where
                 summary.name_label.set_text(label);
                 summary.subtitle_label.set_text(subtitle);
                 session_name_entry.set_text(label);
-                chosen_theme.set(ThemeMode::System);
-                theme_preview_callback(ThemeMode::System);
+                chosen_theme.set(default_theme);
+                theme_preview_callback(default_theme);
+                sync_theme_strip_active(&theme_strip, default_theme);
                 let density = chosen_density.get();
                 density_preview_callback(density);
                 sync_density_strip_active(&density_strip, density);
@@ -557,6 +554,7 @@ where
                     let session_name_entry = session_name_entry.clone();
                     let chosen_theme = chosen_theme.clone();
                     let chosen_density = chosen_density.clone();
+                    let theme_strip = theme_strip.clone();
                     let density_strip = density_strip.clone();
                     let edit_preset_button_handle = edit_preset_button_handle.clone();
                     let density_preview_callback = density_preview_callback.clone();
@@ -574,6 +572,7 @@ where
                         chosen_theme.set(p.theme);
                         chosen_density.set(p.density);
                         theme_preview_callback(p.theme);
+                        sync_theme_strip_active(&theme_strip, p.theme);
                         density_preview_callback(p.density);
                         sync_density_strip_active(&density_strip, p.density);
                         *active_layout.borrow_mut() = p.layout.clone();
@@ -881,6 +880,20 @@ fn build_launch_preset(
             preset.layout = layout.clone();
             preset
         }
+    }
+}
+
+fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {
+    let mut child = strip.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.remove_css_class("is-active");
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+            && button.label().as_deref() == Some(active_theme.label())
+        {
+            button.add_css_class("is-active");
+        }
+        child = next;
     }
 }
 

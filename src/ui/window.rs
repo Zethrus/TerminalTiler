@@ -7,10 +7,10 @@ use gtk::{gdk, glib};
 
 use crate::app::logging;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
-use crate::storage::preference_store::PreferenceStore;
+use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
-use crate::ui::{launch_screen, workspace_view};
+use crate::ui::{launch_screen, settings_dialog, workspace_view};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -146,6 +146,13 @@ pub fn present(
     fullscreen_button.set_visible(false);
     header.pack_end(&fullscreen_button);
 
+    let settings_button = gtk::Button::from_icon_name("preferences-system-symbolic");
+    settings_button.add_css_class("flat");
+    settings_button.add_css_class("titlebar-action-button");
+    settings_button.add_css_class("titlebar-icon-button");
+    settings_button.set_tooltip_text(Some("Application settings"));
+    header.pack_end(&settings_button);
+
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
     let next_tab_id = Rc::new(Cell::new(1usize));
     let active_tab_id = Rc::new(Cell::new(0usize));
@@ -168,6 +175,7 @@ pub fn present(
         let fullscreen_for_select = fullscreen_button.clone();
         let tabs_for_select = tabs.clone();
         let active_for_select = active_tab_id.clone();
+        let preference_store_for_select = preference_store.clone();
         let select_handle = select_tab.clone();
         let rename_handle = request_tab_rename.clone();
         let close_handle = close_tab.clone();
@@ -210,7 +218,11 @@ pub fn present(
             if let Some(preset) = preset_for_profile.as_ref() {
                 apply_shell_profile(&header_for_select, &window_for_select, preset);
             } else {
-                reset_shell_profile(&header_for_select, &window_for_select);
+                apply_launch_profile(
+                    &header_for_select,
+                    &window_for_select,
+                    &preference_store_for_select.load(),
+                );
             }
             back_for_select.set_visible(is_workspace);
             sync_fullscreen_chrome(
@@ -557,6 +569,32 @@ pub fn present(
     }
 
     {
+        let tabs_for_shortcut = tabs.clone();
+        let active_for_shortcut = active_tab_id.clone();
+        let window_for_shortcut = window.clone();
+
+        let shortcut_controller = gtk::ShortcutController::new();
+        shortcut_controller.set_scope(gtk::ShortcutScope::Global);
+        let trigger = gtk::ShortcutTrigger::parse_string("<Ctrl><Shift>D")
+            .expect("Ctrl+Shift+D shortcut trigger should parse");
+        let action = gtk::CallbackAction::new(move |_, _| {
+            if cycle_active_workspace_density(
+                &window_for_shortcut,
+                &tabs_for_shortcut,
+                active_for_shortcut.get(),
+            )
+            .is_some()
+            {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+        window.add_controller(shortcut_controller);
+    }
+
+    {
         let window_for_notify = window.clone();
         let title_root_for_notify = title.root.clone();
         let fullscreen_for_notify = fullscreen_button.clone();
@@ -631,6 +669,49 @@ pub fn present(
             if let Some(add_tab) = add_for_button.borrow().as_ref() {
                 add_tab();
             }
+        });
+    }
+
+    {
+        let window_for_settings = window.clone();
+        let preference_store_for_settings = preference_store.clone();
+        let refresh_for_settings = refresh_launch_tabs.clone();
+
+        settings_button.connect_clicked(move |_| {
+            let preferences = preference_store_for_settings.load();
+            settings_dialog::present(
+                &window_for_settings,
+                preferences.default_theme,
+                preferences.default_density,
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let refresh_handle = refresh_for_settings.clone();
+                    move |theme| {
+                        preference_store.save_default_theme(theme);
+                        logging::info(format!(
+                            "updated application settings default_theme={} ",
+                            theme.label()
+                        ));
+                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                            refresh();
+                        }
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let refresh_handle = refresh_for_settings.clone();
+                    move |density| {
+                        preference_store.save_default_density(density);
+                        logging::info(format!(
+                            "updated application settings default_density={}",
+                            density.label()
+                        ));
+                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                            refresh();
+                        }
+                    }
+                },
+            );
         });
     }
 
@@ -853,8 +934,7 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
 
     let load_outcome = context.preset_store.load_presets_with_status();
     let presets = load_outcome.presets;
-    let default_density = context.preference_store.load_last_density();
-    let preference_store = context.preference_store.clone();
+    let preferences = context.preference_store.load();
     let preset_store = context.preset_store.as_ref().clone();
     let window = context.window.clone();
     let show_workspace_handle = context.show_workspace_handle.clone();
@@ -867,15 +947,14 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let launch_surface = launch_screen::build(
         load_outcome.warning,
         &presets,
-        default_density,
+        preferences.default_theme,
+        preferences.default_density,
         preset_store,
         move |theme| {
             apply_theme_mode(&theme_preview_window, &theme);
         },
         {
-            let preference_store = preference_store.clone();
             move |density| {
-                preference_store.save_last_density(density);
                 apply_window_density(&density_preview_window, Some(density));
             }
         },
@@ -1271,11 +1350,19 @@ fn apply_shell_profile(
     apply_window_density(window, Some(preset.density));
 }
 
-fn reset_shell_profile(header: &adw::HeaderBar, window: &adw::ApplicationWindow) {
+fn apply_launch_profile(
+    header: &adw::HeaderBar,
+    window: &adw::ApplicationWindow,
+    preferences: &AppPreferences,
+) {
     configure_window_controls(header);
-    logging::info("resetting shell density for launch deck");
-    apply_theme_mode(window, &ThemeMode::System);
-    apply_window_density(window, None);
+    logging::info(format!(
+        "applying launch profile theme={} density={}",
+        preferences.default_theme.label(),
+        preferences.default_density.label()
+    ));
+    apply_theme_mode(window, &preferences.default_theme);
+    apply_window_density(window, Some(preferences.default_density));
 }
 
 fn active_tab_is_workspace(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>, active_tab_id: usize) -> bool {
@@ -1294,6 +1381,37 @@ fn toggle_workspace_fullscreen(
     if active_tab_is_workspace(tabs, active_tab_id) || window.is_fullscreen() {
         window.set_fullscreened(!window.is_fullscreen());
     }
+}
+
+fn cycle_active_workspace_density(
+    window: &adw::ApplicationWindow,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+) -> Option<ApplicationDensity> {
+    let (workspace_name, next_density, runtime) = {
+        let mut tabs = tabs.borrow_mut();
+        let tab = tabs.iter_mut().find(|tab| tab.id == active_tab_id)?;
+        let workspace = match &mut tab.content {
+            TabContent::Workspace(workspace) => workspace,
+            TabContent::LaunchDeck => return None,
+        };
+        let next_density = workspace.preset.density.next();
+        workspace.preset.density = next_density;
+        (
+            workspace.preset.name.clone(),
+            next_density,
+            workspace.runtime.clone(),
+        )
+    };
+
+    runtime.apply_density(next_density);
+    apply_window_density(window, Some(next_density));
+    logging::info(format!(
+        "cycled workspace density preset='{}' density={}",
+        workspace_name,
+        next_density.label()
+    ));
+    Some(next_density)
 }
 
 fn sync_fullscreen_chrome(

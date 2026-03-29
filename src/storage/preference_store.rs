@@ -6,10 +6,16 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::app::logging;
-use crate::model::preset::ApplicationDensity;
+use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
 const STORE_VERSION: u32 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppPreferences {
+    pub default_density: ApplicationDensity,
+    pub default_theme: ThemeMode,
+}
 
 #[derive(Clone, Debug)]
 pub struct PreferenceStore {
@@ -19,7 +25,18 @@ pub struct PreferenceStore {
 #[derive(Debug, Serialize, Deserialize)]
 struct PreferenceDocument {
     version: u32,
-    last_density: ApplicationDensity,
+    #[serde(default = "default_density", alias = "last_density")]
+    default_density: ApplicationDensity,
+    #[serde(default = "default_theme")]
+    default_theme: ThemeMode,
+}
+
+fn default_density() -> ApplicationDensity {
+    ApplicationDensity::Compact
+}
+
+fn default_theme() -> ThemeMode {
+    ThemeMode::System
 }
 
 impl PreferenceStore {
@@ -29,15 +46,15 @@ impl PreferenceStore {
         Self { path }
     }
 
-    pub fn load_last_density(&self) -> ApplicationDensity {
+    pub fn load(&self) -> AppPreferences {
         let Some(path) = self.path.as_ref() else {
-            return ApplicationDensity::Compact;
+            return AppPreferences::default();
         };
 
         let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return ApplicationDensity::Compact;
+                return AppPreferences::default();
             }
             Err(error) => {
                 logging::error(format!(
@@ -45,31 +62,47 @@ impl PreferenceStore {
                     path.display(),
                     error
                 ));
-                return ApplicationDensity::Compact;
+                return AppPreferences::default();
             }
         };
 
         match toml::from_str::<PreferenceDocument>(&raw) {
-            Ok(document) if document.version == STORE_VERSION => document.last_density,
+            Ok(document) if document.version == STORE_VERSION => AppPreferences {
+                default_density: document.default_density,
+                default_theme: document.default_theme,
+            },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
-                ApplicationDensity::Compact
+                AppPreferences::default()
             }
             Err(error) => {
                 self.recover_invalid_preferences(path, &format!("corrupt preferences: {error}"));
-                ApplicationDensity::Compact
+                AppPreferences::default()
             }
         }
     }
 
-    pub fn save_last_density(&self, density: ApplicationDensity) {
+    pub fn save_default_density(&self, density: ApplicationDensity) {
+        let mut preferences = self.load();
+        preferences.default_density = density;
+        self.save(&preferences);
+    }
+
+    pub fn save_default_theme(&self, theme: ThemeMode) {
+        let mut preferences = self.load();
+        preferences.default_theme = theme;
+        self.save(&preferences);
+    }
+
+    pub fn save(&self, preferences: &AppPreferences) {
         let Some(path) = self.path.as_ref() else {
             return;
         };
 
         let document = PreferenceDocument {
             version: STORE_VERSION,
-            last_density: density,
+            default_density: preferences.default_density,
+            default_theme: preferences.default_theme,
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -106,6 +139,15 @@ impl PreferenceStore {
     }
 }
 
+impl Default for AppPreferences {
+    fn default() -> Self {
+        Self {
+            default_density: default_density(),
+            default_theme: default_theme(),
+        }
+    }
+}
+
 #[cfg(test)]
 impl PreferenceStore {
     fn from_path(path: PathBuf) -> Self {
@@ -115,8 +157,8 @@ impl PreferenceStore {
 
 #[cfg(test)]
 mod tests {
-    use super::PreferenceStore;
-    use crate::model::preset::ApplicationDensity;
+    use super::{AppPreferences, PreferenceStore};
+    use crate::model::preset::{ApplicationDensity, ThemeMode};
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -132,16 +174,47 @@ mod tests {
         let dir = temp_dir("pref-missing");
         let store = PreferenceStore::from_path(dir.join("preferences.toml"));
 
-        assert_eq!(store.load_last_density(), ApplicationDensity::Compact);
+        assert_eq!(store.load().default_density, ApplicationDensity::Compact);
+        assert_eq!(store.load().default_theme, ThemeMode::System);
     }
 
     #[test]
-    fn persists_last_density() {
+    fn persists_default_preferences() {
         let dir = temp_dir("pref-roundtrip");
         let store = PreferenceStore::from_path(dir.join("preferences.toml"));
 
-        store.save_last_density(ApplicationDensity::Comfortable);
+        store.save(&AppPreferences {
+            default_density: ApplicationDensity::Comfortable,
+            default_theme: ThemeMode::Dark,
+        });
 
-        assert_eq!(store.load_last_density(), ApplicationDensity::Comfortable);
+        assert_eq!(
+            store.load(),
+            AppPreferences {
+                default_density: ApplicationDensity::Comfortable,
+                default_theme: ThemeMode::Dark,
+            }
+        );
+    }
+
+    #[test]
+    fn loads_legacy_last_density_field() {
+        let dir = temp_dir("pref-legacy");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\nlast_density = \"comfortable\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(
+            store.load(),
+            AppPreferences {
+                default_density: ApplicationDensity::Comfortable,
+                default_theme: ThemeMode::System,
+            }
+        );
     }
 }

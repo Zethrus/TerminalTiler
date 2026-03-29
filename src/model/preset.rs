@@ -29,6 +29,14 @@ impl ThemeMode {
 }
 
 impl ApplicationDensity {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Comfortable => Self::Standard,
+            Self::Standard => Self::Compact,
+            Self::Compact => Self::Comfortable,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::Comfortable => "Comfortable",
@@ -59,6 +67,27 @@ impl ApplicationDensity {
             Self::Standard => 1.0,
             Self::Compact => 0.94,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApplicationDensity;
+
+    #[test]
+    fn cycles_density_in_expected_order() {
+        assert_eq!(
+            ApplicationDensity::Comfortable.next(),
+            ApplicationDensity::Standard
+        );
+        assert_eq!(
+            ApplicationDensity::Standard.next(),
+            ApplicationDensity::Compact
+        );
+        assert_eq!(
+            ApplicationDensity::Compact.next(),
+            ApplicationDensity::Comfortable
+        );
     }
 }
 

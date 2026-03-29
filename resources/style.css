@@ -34,6 +34,11 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
+  min-width: 30px;
+  padding: 0;
+}
+
 window.profile-comfortable headerbar.app-headerbar {
   min-height: 48px;
   padding: 5px 12px;
@@ -975,13 +980,51 @@ button.destructive-button:hover {
   min-height: 4px;
 }
 
+.settings-dialog-content {
+  background: transparent;
+}
+
+.settings-section {
+  border-radius: 16px;
+}
+
+.settings-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.settings-shortcut-row {
+  padding: 6px 0;
+}
+
+.settings-shortcut-chip {
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.05em;
+}
+
 window.profile-comfortable .terminal-frame {
   padding: 12px;
+}
+
+window.profile-comfortable .settings-section {
+  padding: 22px;
+}
+
+window.profile-comfortable .settings-shortcut-row {
+  padding: 8px 0;
 }
 
 window.profile-compact headerbar {
   background: rgba(6, 6, 8, 0.9);
   box-shadow: inset 0 -1px rgba(255, 255, 255, 0.03);
+}
+
+window.profile-compact .settings-section {
+  padding: 14px;
+}
+
+window.profile-compact .settings-shortcut-row {
+  padding: 4px 0;
 }
 
 window.profile-comfortable headerbar {
@@ -990,6 +1033,10 @@ window.profile-comfortable headerbar {
 
 window.profile-standard headerbar {
   background: rgba(8, 9, 12, 0.96);
+}
+
+window.profile-standard .settings-section {
+  padding: 18px;
 }
 
 window.window-shell.theme-light {

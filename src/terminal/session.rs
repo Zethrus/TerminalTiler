@@ -43,11 +43,7 @@ impl TerminalSession {
         terminal.set_mouse_autohide(true);
         terminal.set_clear_background(false);
         terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
-        terminal.set_font(Some(&pango::FontDescription::from_string(&format!(
-            "JetBrains Mono {}",
-            density.terminal_font_points()
-        ))));
-        terminal.set_cell_height_scale(density.terminal_line_height_scale());
+        apply_terminal_density(&terminal, density);
 
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));
@@ -151,6 +147,10 @@ impl TerminalSession {
         request_process_termination(&self.state, &self.descriptor, reason);
     }
 
+    pub fn apply_density(&self, density: ApplicationDensity) {
+        apply_terminal_density(&self.terminal, density);
+    }
+
     pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
         let Some(payload) = serialize_dropped_paths(paths) else {
             return false;
@@ -168,6 +168,14 @@ impl TerminalSession {
     fn report_spawn_problem(&self, message: &str) {
         report_spawn_problem(&self.terminal, &self.descriptor, message);
     }
+}
+
+fn apply_terminal_density(terminal: &vte4::Terminal, density: ApplicationDensity) {
+    terminal.set_font(Some(&pango::FontDescription::from_string(&format!(
+        "JetBrains Mono {}",
+        density.terminal_font_points()
+    ))));
+    terminal.set_cell_height_scale(density.terminal_line_height_scale());
 }
 
 fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {

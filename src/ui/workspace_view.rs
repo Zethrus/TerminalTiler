@@ -2,7 +2,7 @@ use std::path::Path;
 
 use gtk::prelude::*;
 
-use crate::model::preset::WorkspacePreset;
+use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::ui::layout_tree;
 
 #[derive(Clone)]
@@ -11,6 +11,12 @@ pub struct WorkspaceRuntime {
 }
 
 impl WorkspaceRuntime {
+    pub fn apply_density(&self, density: ApplicationDensity) {
+        for session in &self.sessions {
+            session.apply_density(density);
+        }
+    }
+
     pub fn terminate_all(&self, reason: &str) {
         for session in &self.sessions {
             session.terminate(reason);
