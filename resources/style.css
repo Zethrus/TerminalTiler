@@ -1037,6 +1037,10 @@ button.destructive-button:hover {
   padding: 4px 0;
 }
 
+.settings-shortcut-trailing {
+  margin-left: 10px;
+}
+
 .settings-shortcut-title {
   font-size: 11px;
   font-weight: 700;
@@ -1053,6 +1057,45 @@ button.destructive-button:hover {
   padding-left: 10px;
   padding-right: 10px;
   text-align: center;
+}
+
+.settings-help-button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.settings-help-button:hover {
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.settings-help-popover contents {
+  padding: 0;
+}
+
+.settings-help-title {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-help-copy {
+  max-width: 28ch;
+}
+
+.settings-help-eyebrow {
+  letter-spacing: 0.1em;
+}
+
+.settings-help-example {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .settings-actions {
@@ -1080,6 +1123,11 @@ window.profile-comfortable .settings-shortcut-row {
   padding: 6px 0;
 }
 
+window.profile-comfortable .settings-help-button {
+  min-width: 28px;
+  min-height: 28px;
+}
+
 window.profile-comfortable .settings-title {
   font-size: 17px;
 }
@@ -1101,6 +1149,10 @@ window.profile-compact .settings-shortcut-row {
   padding: 2px 0;
 }
 
+window.profile-compact .settings-shortcut-trailing {
+  margin-left: 8px;
+}
+
 window.profile-compact .settings-hero-icon {
   min-width: 36px;
   min-height: 36px;
@@ -1112,6 +1164,11 @@ window.profile-compact .settings-title {
 
 window.profile-compact .settings-shortcut-chip {
   min-width: 78px;
+}
+
+window.profile-compact .settings-help-button {
+  min-width: 24px;
+  min-height: 24px;
 }
 
 window.profile-comfortable headerbar {
@@ -1252,6 +1309,20 @@ window.window-shell.theme-light .settings-meta-chip {
   background: rgba(17, 24, 39, 0.05);
   border-color: rgba(17, 24, 39, 0.08);
   color: rgba(21, 25, 34, 0.68);
+}
+
+window.window-shell.theme-light .settings-help-button {
+  color: rgba(21, 25, 34, 0.56);
+}
+
+window.window-shell.theme-light .settings-help-button:hover {
+  color: rgba(21, 25, 34, 0.84);
+  background: rgba(17, 24, 39, 0.05);
+}
+
+window.window-shell.theme-light .settings-help-example {
+  background: rgba(17, 24, 39, 0.04);
+  border-color: rgba(17, 24, 39, 0.08);
 }
 
 window.window-shell.theme-light .workspace-path entry,

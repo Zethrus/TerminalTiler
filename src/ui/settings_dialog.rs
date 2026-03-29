@@ -332,6 +332,7 @@ pub fn present<F, G, H, I, J>(
         "Available only while a workspace tab is active.",
         &fullscreen_entry,
         &fullscreen_status,
+        &["F11", "<Shift>F11", "<Ctrl>F11"],
     ));
 
     shortcuts_section.append(&gtk::Separator::builder().orientation(gtk::Orientation::Horizontal).build());
@@ -386,6 +387,11 @@ pub fn present<F, G, H, I, J>(
         "Rotates only the current workspace without changing the saved app default.",
         &density_entry,
         &density_status,
+        &[
+            "<Ctrl><Shift>D",
+            "<Shift>F8",
+            "<Alt><Super>D",
+        ],
     ));
 
     let actions = gtk::Box::builder()
@@ -471,6 +477,7 @@ fn build_shortcut_entry_row(
     note: &str,
     control: &impl IsA<gtk::Widget>,
     status: &gtk::Label,
+    examples: &[&str],
 ) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -508,10 +515,86 @@ fn build_shortcut_entry_row(
             .build(),
     );
     row.append(&text);
-    row.append(control);
+
+    let trailing = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .css_classes(["settings-shortcut-trailing"])
+        .build();
+    trailing.append(control);
+    trailing.append(&build_shortcut_help_button(label, examples));
+    row.append(&trailing);
+
     shell.append(&row);
     shell.append(status);
     shell.upcast()
+}
+
+fn build_shortcut_help_button(title: &str, examples: &[&str]) -> gtk::Widget {
+    let button = gtk::MenuButton::new();
+    button.set_icon_name("dialog-question-symbolic");
+    button.set_tooltip_text(Some("Show shortcut syntax examples"));
+    button.set_valign(gtk::Align::Center);
+    button.add_css_class("flat");
+    button.add_css_class("circular");
+    button.add_css_class("settings-help-button");
+
+    let popover = gtk::Popover::new();
+    popover.add_css_class("settings-help-popover");
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(10)
+        .margin_bottom(10)
+        .margin_start(10)
+        .margin_end(10)
+        .build();
+    body.append(
+        &gtk::Label::builder()
+            .label(title)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["settings-help-title"])
+            .build(),
+    );
+    body.append(
+        &gtk::Label::builder()
+            .label("Use GTK accelerator syntax. Write modifiers in angle brackets, then the key.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-help-copy"])
+            .build(),
+    );
+
+    let examples_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .css_classes(["settings-help-examples"])
+        .build();
+    examples_box.append(
+        &gtk::Label::builder()
+            .label("Examples")
+            .halign(gtk::Align::Start)
+            .css_classes(["eyebrow", "settings-help-eyebrow"])
+            .build(),
+    );
+    for example in examples {
+        examples_box.append(
+            &gtk::Label::builder()
+                .label(*example)
+                .halign(gtk::Align::Start)
+                .selectable(true)
+                .css_classes(["settings-help-example"])
+                .build(),
+        );
+    }
+    body.append(&examples_box);
+
+    popover.set_child(Some(&body));
+    button.set_popover(Some(&popover));
+    button.upcast()
 }
 
 fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
