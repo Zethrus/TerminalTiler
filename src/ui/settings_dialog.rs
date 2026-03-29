@@ -32,17 +32,65 @@ fn set_recorder_recording(record_button: &gtk::Button, status: &gtk::Label) {
     status.set_visible(true);
 }
 
+fn fallback_shortcut_key_from_keycode(
+    display: &gdk::Display,
+    keycode: u32,
+) -> Option<(gdk::Key, gdk::ModifierType)> {
+    display.map_keycode(keycode).and_then(|entries| {
+        entries
+            .into_iter()
+            .filter_map(|(keymap_key, mapped_key)| {
+                let priority = match mapped_key.name().as_deref() {
+                    Some(name) if name.starts_with("KP_") => 0,
+                    _ if mapped_key.to_unicode().is_some() => 1,
+                    _ => 2,
+                };
+                let consumed = if keymap_key.level() > 0 {
+                    gdk::ModifierType::SHIFT_MASK
+                } else {
+                    gdk::ModifierType::empty()
+                };
+                Some((priority, keymap_key.level(), mapped_key, consumed))
+            })
+            .min_by_key(|(priority, level, _, _)| (*priority, *level))
+            .map(|(_, _, mapped_key, consumed)| (mapped_key, consumed))
+    })
+}
+
 fn normalize_captured_shortcut(
+    controller: &gtk::EventControllerKey,
     key: gdk::Key,
+    keycode: u32,
     state: gdk::ModifierType,
 ) -> Option<(String, String)> {
-    let modifiers = state & gtk::accelerator_get_default_mod_mask();
-    if !gtk::accelerator_valid(key, modifiers) {
+    let default_modifiers = state & gtk::accelerator_get_default_mod_mask();
+    let mut normalized_key = key;
+    let mut consumed_modifiers = gdk::ModifierType::empty();
+
+    if let Some(display) = gdk::Display::default() {
+        if let Some((translated_key, _, _, consumed)) =
+            display.translate_key(keycode, state, controller.group() as i32)
+        {
+            normalized_key = translated_key;
+            consumed_modifiers = consumed & gtk::accelerator_get_default_mod_mask();
+        }
+
+        if matches!(normalized_key.name().as_deref(), Some("ClearGrab"))
+            && let Some((mapped_key, mapped_consumed)) =
+                fallback_shortcut_key_from_keycode(&display, keycode)
+        {
+            normalized_key = mapped_key;
+            consumed_modifiers = mapped_consumed;
+        }
+    }
+
+    let modifiers = default_modifiers & !consumed_modifiers;
+    if !gtk::accelerator_valid(normalized_key, modifiers) {
         return None;
     }
 
-    let shortcut = gtk::accelerator_name(key, modifiers).to_string();
-    let label = gtk::accelerator_get_label(key, modifiers).to_string();
+    let shortcut = gtk::accelerator_name(normalized_key, modifiers).to_string();
+    let label = gtk::accelerator_get_label(normalized_key, modifiers).to_string();
     Some((shortcut, label))
 }
 
@@ -333,7 +381,7 @@ pub fn present<F, G, H, I, J>(
         let recording = fullscreen_recording.clone();
         let callback = fullscreen_shortcut_callback.clone();
         let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |_, key, _, state| {
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
             if !recording.get() {
                 return glib::Propagation::Proceed;
             }
@@ -345,7 +393,9 @@ pub fn present<F, G, H, I, J>(
                 return glib::Propagation::Stop;
             }
 
-            let Some((shortcut, label)) = normalize_captured_shortcut(key, state) else {
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
                 status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
                 status.set_visible(true);
                 return glib::Propagation::Stop;
@@ -440,7 +490,7 @@ pub fn present<F, G, H, I, J>(
         let recording = density_recording.clone();
         let callback = density_shortcut_callback.clone();
         let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |_, key, _, state| {
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
             if !recording.get() {
                 return glib::Propagation::Proceed;
             }
@@ -452,7 +502,9 @@ pub fn present<F, G, H, I, J>(
                 return glib::Propagation::Stop;
             }
 
-            let Some((shortcut, label)) = normalize_captured_shortcut(key, state) else {
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
                 status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
                 status.set_visible(true);
                 return glib::Propagation::Stop;

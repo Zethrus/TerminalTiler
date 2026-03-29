@@ -1565,6 +1565,7 @@ fn cycle_active_workspace_density(
 fn install_shortcut_controller<F>(
     window: &adw::ApplicationWindow,
     controller_handle: &ShortcutControllerHandle,
+    shortcut_name: &str,
     accelerator: &str,
     fallback_accelerator: &str,
     on_activate: F,
@@ -1577,9 +1578,33 @@ fn install_shortcut_controller<F>(
 
     let shortcut_controller = gtk::ShortcutController::new();
     shortcut_controller.set_scope(gtk::ShortcutScope::Global);
-    let trigger = gtk::ShortcutTrigger::parse_string(accelerator)
-        .or_else(|| gtk::ShortcutTrigger::parse_string(fallback_accelerator))
-        .expect("default shortcut trigger should parse");
+    let parsed_trigger = gtk::ShortcutTrigger::parse_string(accelerator.trim());
+    let trigger = if let Some(trigger) = parsed_trigger {
+        logging::info(format!(
+            "installed {} shortcut requested='{}' active='{}'",
+            shortcut_name,
+            accelerator.trim(),
+            trigger.to_str()
+        ));
+        trigger
+    } else if let Some(trigger) = gtk::ShortcutTrigger::parse_string(fallback_accelerator) {
+        logging::info(format!(
+            "shortcut parse fallback {} requested='{}' fallback='{}' active='{}'",
+            shortcut_name,
+            accelerator.trim(),
+            fallback_accelerator,
+            trigger.to_str()
+        ));
+        trigger
+    } else {
+        logging::error(format!(
+            "failed to install {} shortcut requested='{}' fallback='{}'",
+            shortcut_name,
+            accelerator.trim(),
+            fallback_accelerator,
+        ));
+        return;
+    };
     let action = gtk::CallbackAction::new(move |_, _| on_activate());
     shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
     window.add_controller(shortcut_controller.clone());
@@ -1599,6 +1624,7 @@ fn install_workspace_fullscreen_shortcut(
     install_shortcut_controller(
         window,
         controller_handle,
+        "workspace_fullscreen",
         shortcut,
         DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT,
         move || {
@@ -1625,6 +1651,7 @@ fn install_workspace_density_shortcut(
     install_shortcut_controller(
         window,
         controller_handle,
+        "workspace_density",
         shortcut,
         DEFAULT_WORKSPACE_DENSITY_SHORTCUT,
         move || {

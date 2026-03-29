@@ -69,6 +69,7 @@ fn normalize_density_shortcut(shortcut: &str) -> String {
         "ctrl-shift-d" => "<Ctrl><Shift>D".into(),
         "ctrl-shift-m" => "<Ctrl><Shift>M".into(),
         "shift-f8" => "<Shift>F8".into(),
+        "<Control><Alt>ClearGrab" | "<Ctrl><Alt>ClearGrab" => "<Ctrl><Alt>KP_Multiply".into(),
         other => other.to_string(),
     }
 }
@@ -302,5 +303,23 @@ mod tests {
 
         assert_eq!(store.load().workspace_fullscreen_shortcut, "<Shift>F11");
         assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
+    }
+
+    #[test]
+    fn normalizes_invalid_cleargrab_density_shortcut() {
+        let dir = temp_dir("pref-cleargrab-shortcut");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"comfortable\"\nworkspace_fullscreen_shortcut = \"F11\"\nworkspace_density_shortcut = \"<Control><Alt>ClearGrab\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(
+            store.load().workspace_density_shortcut,
+            "<Ctrl><Alt>KP_Multiply"
+        );
     }
 }
