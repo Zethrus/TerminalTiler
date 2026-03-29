@@ -11,6 +11,8 @@ use crate::app::logging;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 
+const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
+
 #[derive(Clone)]
 pub struct TerminalSession {
     terminal: vte4::Terminal,
@@ -43,6 +45,7 @@ impl TerminalSession {
         terminal.set_mouse_autohide(true);
         terminal.set_clear_background(false);
         terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
+        install_terminal_shortcuts(&terminal);
         apply_terminal_density(&terminal, density);
 
         let working_dir = tile.working_directory.resolve(workspace_root);
@@ -176,6 +179,27 @@ fn apply_terminal_density(terminal: &vte4::Terminal, density: ApplicationDensity
         density.terminal_font_points()
     ))));
     terminal.set_cell_height_scale(density.terminal_line_height_scale());
+}
+
+fn install_terminal_shortcuts(terminal: &vte4::Terminal) {
+    let Some(trigger) = gtk::ShortcutTrigger::parse_string(DEFAULT_TERMINAL_PASTE_SHORTCUT) else {
+        logging::error(format!(
+            "failed to parse terminal paste shortcut '{}'",
+            DEFAULT_TERMINAL_PASTE_SHORTCUT
+        ));
+        return;
+    };
+
+    let terminal_for_paste = terminal.clone();
+    let paste_action = gtk::CallbackAction::new(move |_, _| {
+        terminal_for_paste.paste_clipboard();
+        glib::Propagation::Stop
+    });
+
+    let shortcut_controller = gtk::ShortcutController::new();
+    shortcut_controller.set_scope(gtk::ShortcutScope::Local);
+    shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(paste_action)));
+    terminal.add_controller(shortcut_controller);
 }
 
 fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {
