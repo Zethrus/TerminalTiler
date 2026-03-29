@@ -18,22 +18,6 @@ pub enum ApplicationDensity {
     Compact,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceFullscreenShortcut {
-    F11,
-    ShiftF11,
-    CtrlF11,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceDensityShortcut {
-    CtrlShiftD,
-    CtrlShiftM,
-    ShiftF8,
-}
-
 impl ThemeMode {
     pub fn label(&self) -> &'static str {
         match self {
@@ -82,50 +66,6 @@ impl ApplicationDensity {
             Self::Comfortable => 1.10,
             Self::Standard => 1.0,
             Self::Compact => 0.94,
-        }
-    }
-}
-
-impl WorkspaceFullscreenShortcut {
-    pub fn all() -> &'static [Self] {
-        &[Self::F11, Self::ShiftF11, Self::CtrlF11]
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::F11 => "F11",
-            Self::ShiftF11 => "Shift+F11",
-            Self::CtrlF11 => "Ctrl+F11",
-        }
-    }
-
-    pub fn accelerator(&self) -> &'static str {
-        match self {
-            Self::F11 => "F11",
-            Self::ShiftF11 => "<Shift>F11",
-            Self::CtrlF11 => "<Ctrl>F11",
-        }
-    }
-}
-
-impl WorkspaceDensityShortcut {
-    pub fn all() -> &'static [Self] {
-        &[Self::CtrlShiftD, Self::CtrlShiftM, Self::ShiftF8]
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::CtrlShiftD => "Ctrl+Shift+D",
-            Self::CtrlShiftM => "Ctrl+Shift+M",
-            Self::ShiftF8 => "Shift+F8",
-        }
-    }
-
-    pub fn accelerator(&self) -> &'static str {
-        match self {
-            Self::CtrlShiftD => "<Ctrl><Shift>D",
-            Self::CtrlShiftM => "<Ctrl><Shift>M",
-            Self::ShiftF8 => "<Shift>F8",
         }
     }
 }

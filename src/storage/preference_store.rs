@@ -6,19 +6,19 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::app::logging;
-use crate::model::preset::{
-    ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
-};
+use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
 const STORE_VERSION: u32 = 1;
+const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
+const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPreferences {
     pub default_density: ApplicationDensity,
     pub default_theme: ThemeMode,
-    pub workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut,
-    pub workspace_density_shortcut: WorkspaceDensityShortcut,
+    pub workspace_fullscreen_shortcut: String,
+    pub workspace_density_shortcut: String,
 }
 
 #[derive(Clone, Debug)]
@@ -34,9 +34,9 @@ struct PreferenceDocument {
     #[serde(default = "default_theme")]
     default_theme: ThemeMode,
     #[serde(default = "default_fullscreen_shortcut")]
-    workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut,
+    workspace_fullscreen_shortcut: String,
     #[serde(default = "default_density_shortcut")]
-    workspace_density_shortcut: WorkspaceDensityShortcut,
+    workspace_density_shortcut: String,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -47,12 +47,30 @@ fn default_theme() -> ThemeMode {
     ThemeMode::System
 }
 
-fn default_fullscreen_shortcut() -> WorkspaceFullscreenShortcut {
-    WorkspaceFullscreenShortcut::F11
+fn default_fullscreen_shortcut() -> String {
+    DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT.into()
 }
 
-fn default_density_shortcut() -> WorkspaceDensityShortcut {
-    WorkspaceDensityShortcut::CtrlShiftD
+fn default_density_shortcut() -> String {
+    DEFAULT_WORKSPACE_DENSITY_SHORTCUT.into()
+}
+
+fn normalize_fullscreen_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "f11" | "F11" => "F11".into(),
+        "shift-f11" => "<Shift>F11".into(),
+        "ctrl-f11" => "<Ctrl>F11".into(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_density_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "ctrl-shift-d" => "<Ctrl><Shift>D".into(),
+        "ctrl-shift-m" => "<Ctrl><Shift>M".into(),
+        "shift-f8" => "<Shift>F8".into(),
+        other => other.to_string(),
+    }
 }
 
 impl PreferenceStore {
@@ -86,8 +104,12 @@ impl PreferenceStore {
             Ok(document) if document.version == STORE_VERSION => AppPreferences {
                 default_density: document.default_density,
                 default_theme: document.default_theme,
-                workspace_fullscreen_shortcut: document.workspace_fullscreen_shortcut,
-                workspace_density_shortcut: document.workspace_density_shortcut,
+                workspace_fullscreen_shortcut: normalize_fullscreen_shortcut(
+                    &document.workspace_fullscreen_shortcut,
+                ),
+                workspace_density_shortcut: normalize_density_shortcut(
+                    &document.workspace_density_shortcut,
+                ),
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -112,15 +134,15 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
-    pub fn save_workspace_fullscreen_shortcut(&self, shortcut: WorkspaceFullscreenShortcut) {
+    pub fn save_workspace_fullscreen_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
-        preferences.workspace_fullscreen_shortcut = shortcut;
+        preferences.workspace_fullscreen_shortcut = shortcut.trim().to_string();
         self.save(&preferences);
     }
 
-    pub fn save_workspace_density_shortcut(&self, shortcut: WorkspaceDensityShortcut) {
+    pub fn save_workspace_density_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
-        preferences.workspace_density_shortcut = shortcut;
+        preferences.workspace_density_shortcut = shortcut.trim().to_string();
         self.save(&preferences);
     }
 
@@ -133,8 +155,8 @@ impl PreferenceStore {
             version: STORE_VERSION,
             default_density: preferences.default_density,
             default_theme: preferences.default_theme,
-            workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut,
-            workspace_density_shortcut: preferences.workspace_density_shortcut,
+            workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
+            workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -192,9 +214,7 @@ impl PreferenceStore {
 #[cfg(test)]
 mod tests {
     use super::{AppPreferences, PreferenceStore};
-    use crate::model::preset::{
-        ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
-    };
+    use crate::model::preset::{ApplicationDensity, ThemeMode};
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -214,11 +234,11 @@ mod tests {
         assert_eq!(store.load().default_theme, ThemeMode::System);
         assert_eq!(
             store.load().workspace_fullscreen_shortcut,
-            WorkspaceFullscreenShortcut::F11
+            "F11"
         );
         assert_eq!(
             store.load().workspace_density_shortcut,
-            WorkspaceDensityShortcut::CtrlShiftD
+            "<Ctrl><Shift>D"
         );
     }
 
@@ -230,8 +250,8 @@ mod tests {
         store.save(&AppPreferences {
             default_density: ApplicationDensity::Comfortable,
             default_theme: ThemeMode::Dark,
-            workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::ShiftF11,
-            workspace_density_shortcut: WorkspaceDensityShortcut::ShiftF8,
+            workspace_fullscreen_shortcut: "<Shift>F11".into(),
+            workspace_density_shortcut: "<Shift>F8".into(),
         });
 
         assert_eq!(
@@ -239,8 +259,8 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::Dark,
-                workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::ShiftF11,
-                workspace_density_shortcut: WorkspaceDensityShortcut::ShiftF8,
+                workspace_fullscreen_shortcut: "<Shift>F11".into(),
+                workspace_density_shortcut: "<Shift>F8".into(),
             }
         );
     }
@@ -262,9 +282,25 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::System,
-                workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::F11,
-                workspace_density_shortcut: WorkspaceDensityShortcut::CtrlShiftD,
+                workspace_fullscreen_shortcut: "F11".into(),
+                workspace_density_shortcut: "<Ctrl><Shift>D".into(),
             }
         );
+    }
+
+    #[test]
+    fn normalizes_legacy_shortcut_enums_to_accelerators() {
+        let dir = temp_dir("pref-legacy-shortcuts");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nworkspace_fullscreen_shortcut = \"shift-f11\"\nworkspace_density_shortcut = \"shift-f8\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().workspace_fullscreen_shortcut, "<Shift>F11");
+        assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
     }
 }
