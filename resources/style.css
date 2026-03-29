@@ -986,20 +986,77 @@ button.destructive-button:hover {
 
 .settings-section {
   border-radius: 16px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+}
+
+.settings-hero {
+  align-items: flex-start;
+}
+
+.settings-hero-icon {
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(240, 179, 75, 0.18), rgba(240, 179, 75, 0.06));
+  border: 1px solid rgba(240, 179, 75, 0.18);
+}
+
+.settings-hero-icon image {
+  color: rgba(240, 179, 75, 0.92);
 }
 
 .settings-title {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
+}
+
+.settings-section-heading {
+  letter-spacing: 0.1em;
+}
+
+.settings-copy {
+  max-width: 58ch;
+}
+
+.settings-inline-note {
+  color: rgba(240, 179, 75, 0.88);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.settings-choice-strip {
+  margin-top: 2px;
+}
+
+.settings-meta-chip {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .settings-shortcut-row {
   padding: 6px 0;
 }
 
+.settings-shortcut-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-shortcut-note {
+  max-width: 42ch;
+}
+
 .settings-shortcut-chip {
   font-family: "JetBrains Mono", monospace;
   letter-spacing: 0.05em;
+  min-width: 94px;
+  padding-left: 10px;
+  padding-right: 10px;
+  text-align: center;
+}
+
+.settings-section separator {
+  opacity: 0.55;
 }
 
 window.profile-comfortable .terminal-frame {
@@ -1012,6 +1069,14 @@ window.profile-comfortable .settings-section {
 
 window.profile-comfortable .settings-shortcut-row {
   padding: 8px 0;
+}
+
+window.profile-comfortable .settings-title {
+  font-size: 18px;
+}
+
+window.profile-comfortable .settings-shortcut-title {
+  font-size: 13px;
 }
 
 window.profile-compact headerbar {
@@ -1027,6 +1092,19 @@ window.profile-compact .settings-shortcut-row {
   padding: 4px 0;
 }
 
+window.profile-compact .settings-hero-icon {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+window.profile-compact .settings-title {
+  font-size: 15px;
+}
+
+window.profile-compact .settings-shortcut-chip {
+  min-width: 78px;
+}
+
 window.profile-comfortable headerbar {
   background: rgba(9, 10, 14, 0.98);
 }
@@ -1037,6 +1115,10 @@ window.profile-standard headerbar {
 
 window.profile-standard .settings-section {
   padding: 18px;
+}
+
+window.profile-standard .settings-shortcut-chip {
+  min-width: 88px;
 }
 
 window.window-shell.theme-light {
@@ -1145,6 +1227,22 @@ window.window-shell.theme-light .terminal-card {
   border: 1px solid rgba(17, 24, 39, 0.08);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 247, 252, 0.98));
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.10);
+}
+
+window.window-shell.theme-light .settings-hero-icon {
+  background: linear-gradient(180deg, rgba(190, 85, 32, 0.12), rgba(190, 85, 32, 0.04));
+  border-color: rgba(190, 85, 32, 0.16);
+}
+
+window.window-shell.theme-light .settings-hero-icon image,
+window.window-shell.theme-light .settings-inline-note {
+  color: rgba(168, 72, 26, 0.92);
+}
+
+window.window-shell.theme-light .settings-meta-chip {
+  background: rgba(17, 24, 39, 0.05);
+  border-color: rgba(17, 24, 39, 0.08);
+  color: rgba(21, 25, 34, 0.68);
 }
 
 window.window-shell.theme-light .workspace-path entry,

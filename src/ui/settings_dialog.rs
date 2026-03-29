@@ -19,7 +19,7 @@ pub fn present<F, G>(
         .modal(true)
         .transient_for(window)
         .title("Application Settings")
-        .default_width(520)
+        .default_width(560)
         .build();
     dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.set_default_response(gtk::ResponseType::Close);
@@ -33,24 +33,56 @@ pub fn present<F, G>(
     content.add_css_class("settings-dialog-content");
 
     let intro = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .css_classes(["config-panel", "settings-section"])
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(14)
+        .css_classes(["config-panel", "settings-section", "settings-hero"])
         .build();
 
+    let intro_icon = gtk::Box::builder()
+        .width_request(42)
+        .height_request(42)
+        .valign(gtk::Align::Start)
+        .css_classes(["settings-hero-icon"])
+        .build();
+    intro_icon.append(&gtk::Image::from_icon_name("preferences-system-symbolic"));
+    intro.append(&intro_icon);
+
+    let intro_body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .hexpand(true)
+        .build();
+    intro.append(&intro_body);
+
+    let intro_top = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
     let title = gtk::Label::builder()
         .label("Application Settings")
         .halign(gtk::Align::Start)
+        .hexpand(true)
         .css_classes(["section-title", "settings-title"])
         .build();
+    intro_top.append(&title);
+    intro_top.append(&build_meta_chip("Saved automatically"));
+    intro_body.append(&intro_top);
+
     let body = gtk::Label::builder()
-        .label("Manage defaults for new launch tabs. Running workspaces keep their own preset theme, and the workspace density hotkey only changes the active workspace.")
+        .label("Set defaults for new launch tabs and keep a few high-value controls close at hand. Running workspaces keep their own preset theme, and the density hotkey only changes the active workspace.")
         .halign(gtk::Align::Start)
         .wrap(true)
-        .css_classes(["field-hint"])
+        .css_classes(["field-hint", "settings-copy"])
         .build();
-    intro.append(&title);
-    intro.append(&body);
+    intro_body.append(&body);
+
+    let intro_note = gtk::Label::builder()
+        .label("Launch defaults are immediate. Workspace presets still take over after a workspace starts.")
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .css_classes(["settings-inline-note"])
+        .build();
+    intro_body.append(&intro_note);
     content.append(&intro);
 
     let theme_callback = Rc::new(on_theme_changed);
@@ -63,22 +95,16 @@ pub fn present<F, G>(
         .build();
     content.append(&theme_section);
 
-    let theme_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    let theme_label = gtk::Label::builder()
-        .label("Default Theme")
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["eyebrow"])
-        .build();
-    theme_row.append(&theme_label);
+    theme_section.append(&build_section_header(
+        "Default Theme",
+        "New launch tabs",
+        "Used when opening or editing launch tabs. Workspace presets still control the theme after launch.",
+    ));
 
     let theme_strip = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(0)
-        .css_classes(["control-strip"])
+        .css_classes(["control-strip", "settings-choice-strip"])
         .build();
     for (mode, label) in [
         (ThemeMode::System, "System"),
@@ -99,16 +125,7 @@ pub fn present<F, G>(
         });
         theme_strip.append(&button);
     }
-    theme_row.append(&theme_strip);
-    theme_section.append(&theme_row);
-    theme_section.append(
-        &gtk::Label::builder()
-            .label("Used when opening or editing launch tabs. Workspace presets still control the theme after launch.")
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
-            .build(),
-    );
+    theme_section.append(&theme_strip);
 
     let density_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -117,22 +134,16 @@ pub fn present<F, G>(
         .build();
     content.append(&density_section);
 
-    let density_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    let density_label = gtk::Label::builder()
-        .label("Default Application Density")
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["eyebrow"])
-        .build();
-    density_row.append(&density_label);
+    density_section.append(&build_section_header(
+        "Default Application Density",
+        "Window shell",
+        "Affects new launch tabs and the window shell. Use Ctrl+Shift+D inside a workspace to cycle density for only that active workspace.",
+    ));
 
     let density_strip = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(0)
-        .css_classes(["control-strip"])
+        .css_classes(["control-strip", "settings-choice-strip"])
         .build();
     for (density, label) in [
         (ApplicationDensity::Comfortable, "Comfortable"),
@@ -153,14 +164,12 @@ pub fn present<F, G>(
         });
         density_strip.append(&button);
     }
-    density_row.append(&density_strip);
-    density_section.append(&density_row);
+    density_section.append(&density_strip);
     density_section.append(
         &gtk::Label::builder()
-            .label("Affects new launch tabs and the window shell. Use Ctrl+Shift+D inside a workspace to cycle density for only that active workspace.")
+            .label("Workspace quick toggle: Comfortable -> Standard -> Compact")
             .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
+            .css_classes(["settings-inline-note"])
             .build(),
     );
 
@@ -171,20 +180,21 @@ pub fn present<F, G>(
         .build();
     content.append(&shortcuts_section);
 
-    shortcuts_section.append(
-        &gtk::Label::builder()
-            .label("Shortcuts")
-            .halign(gtk::Align::Start)
-            .css_classes(["eyebrow"])
-            .build(),
-    );
+    shortcuts_section.append(&build_section_header(
+        "Shortcuts",
+        "Available now",
+        "These shortcuts do not require opening Settings and are meant to keep workspace adjustments fast.",
+    ));
     shortcuts_section.append(&build_shortcut_row(
         "Toggle workspace fullscreen",
         "F11",
+        "Available only while a workspace tab is active.",
     ));
+    shortcuts_section.append(&gtk::Separator::builder().orientation(gtk::Orientation::Horizontal).build());
     shortcuts_section.append(&build_shortcut_row(
         "Cycle active workspace density",
         "Ctrl+Shift+D",
+        "Rotates only the current workspace without changing the saved app default.",
     ));
 
     dialog.connect_response(move |dialog, _| {
@@ -194,29 +204,90 @@ pub fn present<F, G>(
     dialog.present();
 }
 
-fn build_shortcut_row(label: &str, keys: &str) -> gtk::Widget {
+fn build_shortcut_row(label: &str, keys: &str, note: &str) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
+        .valign(gtk::Align::Center)
         .css_classes(["settings-shortcut-row"])
         .build();
-    row.append(
+
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .build();
+    text.append(
         &gtk::Label::builder()
             .label(label)
             .halign(gtk::Align::Start)
             .hexpand(true)
             .wrap(true)
-            .css_classes(["card-meta"])
+            .css_classes(["settings-shortcut-title"])
             .build(),
     );
+    text.append(
+        &gtk::Label::builder()
+            .label(note)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    row.append(&text);
+
     row.append(
         &gtk::Label::builder()
             .label(keys)
             .halign(gtk::Align::End)
+            .valign(gtk::Align::Center)
             .css_classes(["status-chip", "settings-shortcut-chip"])
             .build(),
     );
     row.upcast()
+}
+
+fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .build();
+
+    let top = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    top.append(
+        &gtk::Label::builder()
+            .label(title)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .css_classes(["eyebrow", "settings-section-heading"])
+            .build(),
+    );
+    top.append(&build_meta_chip(meta));
+    shell.append(&top);
+
+    shell.append(
+        &gtk::Label::builder()
+            .label(body)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-copy"])
+            .build(),
+    );
+
+    shell.upcast()
+}
+
+fn build_meta_chip(label: &str) -> gtk::Widget {
+    gtk::Label::builder()
+        .label(label)
+        .halign(gtk::Align::End)
+        .css_classes(["status-chip", "settings-meta-chip"])
+        .build()
+        .upcast()
 }
 
 fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {
