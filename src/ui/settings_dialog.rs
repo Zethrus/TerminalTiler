@@ -166,7 +166,7 @@ pub fn present<F, G, H>(
     density_section.append(&build_section_header(
         "Default Application Density",
         "Window shell",
-        "Affects new launch tabs and the window shell. Use Ctrl+Shift+D inside a workspace to cycle density for only that active workspace.",
+        "Affects new launch tabs and the window shell. Use Ctrl+Alt+D inside a workspace to cycle density for only that active workspace.",
     ));
 
     let density_strip = gtk::Box::builder()
@@ -229,7 +229,7 @@ pub fn present<F, G, H>(
     shortcuts_section.append(&gtk::Separator::builder().orientation(gtk::Orientation::Horizontal).build());
     shortcuts_section.append(&build_shortcut_row(
         "Cycle active workspace density",
-        "Ctrl+Shift+D",
+        "Ctrl+Alt+D",
         "Rotates only the current workspace without changing the saved app default.",
     ));
 

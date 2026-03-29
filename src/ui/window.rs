@@ -578,8 +578,8 @@ pub fn present(
 
         let shortcut_controller = gtk::ShortcutController::new();
         shortcut_controller.set_scope(gtk::ShortcutScope::Global);
-        let trigger = gtk::ShortcutTrigger::parse_string("<Ctrl><Shift>D")
-            .expect("Ctrl+Shift+D shortcut trigger should parse");
+        let trigger = gtk::ShortcutTrigger::parse_string("<Ctrl><Alt>D")
+            .expect("Ctrl+Alt+D shortcut trigger should parse");
         let action = gtk::CallbackAction::new(move |_, _| {
             if cycle_active_workspace_density(
                 &window_for_shortcut,
