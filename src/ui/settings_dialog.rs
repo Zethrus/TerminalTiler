@@ -6,6 +6,17 @@ use std::cell::Cell;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
 
+fn sync_reset_button_state(
+    reset_button: &gtk::Button,
+    theme: ThemeMode,
+    density: ApplicationDensity,
+) {
+    let defaults = AppPreferences::default();
+    reset_button.set_sensitive(
+        theme != defaults.default_theme || density != defaults.default_density,
+    );
+}
+
 #[allow(deprecated)]
 pub fn present<F, G, H>(
     window: &adw::ApplicationWindow,
@@ -38,6 +49,10 @@ pub fn present<F, G, H>(
 
     let current_theme = Rc::new(Cell::new(default_theme));
     let current_density = Rc::new(Cell::new(default_density));
+    let reset_button = gtk::Button::with_label("Reset Defaults");
+    reset_button.add_css_class("pill-button");
+    reset_button.add_css_class("secondary-button");
+    sync_reset_button_state(&reset_button, current_theme.get(), current_density.get());
 
     let intro = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -126,12 +141,15 @@ pub fn present<F, G, H>(
 
         let current_theme = current_theme.clone();
         let theme_strip_ref = theme_strip.clone();
+        let current_density = current_density.clone();
+        let reset_button = reset_button.clone();
         let theme_callback = theme_callback.clone();
         button.connect_clicked(move |_| {
             if current_theme.get() != mode {
                 current_theme.set(mode);
                 theme_callback(mode);
                 sync_theme_strip_active(&theme_strip_ref, mode);
+                sync_reset_button_state(&reset_button, mode, current_density.get());
             }
         });
         theme_strip.append(&button);
@@ -169,12 +187,15 @@ pub fn present<F, G, H>(
 
         let current_density = current_density.clone();
         let density_strip_ref = density_strip.clone();
+        let current_theme = current_theme.clone();
+        let reset_button = reset_button.clone();
         let density_callback = density_callback.clone();
         button.connect_clicked(move |_| {
             if current_density.get() != density {
                 current_density.set(density);
                 density_callback(density);
                 sync_density_strip_active(&density_strip_ref, density);
+                sync_reset_button_state(&reset_button, current_theme.get(), density);
             }
         });
         density_strip.append(&button);
@@ -226,16 +247,15 @@ pub fn present<F, G, H>(
             .build(),
     );
 
-    let reset_button = gtk::Button::with_label("Reset Defaults");
-    reset_button.add_css_class("pill-button");
-    reset_button.add_css_class("secondary-button");
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
+        let reset_button = reset_button.clone();
+        let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
-        reset_button.connect_clicked(move |_| {
+        reset_button_for_signal.connect_clicked(move |_| {
             let defaults = AppPreferences::default();
             let changed = current_theme.get() != defaults.default_theme
                 || current_density.get() != defaults.default_density;
@@ -247,6 +267,7 @@ pub fn present<F, G, H>(
             current_density.set(defaults.default_density);
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
+            sync_reset_button_state(&reset_button, defaults.default_theme, defaults.default_density);
             reset_callback();
         });
     }
