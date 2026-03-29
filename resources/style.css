@@ -141,7 +141,7 @@ window.profile-comfortable .selection-summary {
 window.profile-comfortable .selection-summary-name,
 window.profile-comfortable .card-title,
 window.profile-comfortable .workspace-summary-name {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 window.profile-comfortable .selection-summary-subtitle,
@@ -150,12 +150,12 @@ window.profile-comfortable .card-meta,
 window.profile-comfortable .tile-meta,
 window.profile-comfortable .field-hint,
 window.profile-comfortable .workspace-summary-path {
-  font-size: 11px;
+  font-size: 10px;
 }
 
 window.profile-comfortable .workspace-summary {
-  padding: 12px 14px;
-  margin-bottom: 6px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
 }
 
 window.profile-comfortable .terminal-header {
@@ -324,7 +324,7 @@ window.profile-compact .selection-summary {
 window.profile-compact .selection-summary-name,
 window.profile-compact .card-title,
 window.profile-compact .workspace-summary-name {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 window.profile-compact .selection-summary-subtitle,
@@ -333,7 +333,7 @@ window.profile-compact .card-meta,
 window.profile-compact .tile-meta,
 window.profile-compact .field-hint,
 window.profile-compact .workspace-summary-path {
-  font-size: 10px;
+  font-size: 9px;
 }
 
 window.profile-compact .status-chip,
@@ -378,8 +378,8 @@ window.profile-compact .action-bar-bottom {
 }
 
 window.profile-compact .workspace-summary {
-  padding: 8px 10px;
-  margin-bottom: 2px;
+  padding: 4px 8px;
+  margin-bottom: 1px;
 }
 
 window.profile-compact .terminal-header {
@@ -906,14 +906,14 @@ button.destructive-button:hover {
 
 
 .workspace-summary {
-  padding: 10px 12px;
+  padding: 6px 10px;
   border-radius: 12px;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .workspace-summary-name {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
 }
 .workspace-summary-subtitle {
   font-size: 11px;
@@ -921,7 +921,7 @@ button.destructive-button:hover {
 }
 .workspace-summary-path {
   font-family: "JetBrains Mono", monospace;
-  font-size: 11px;
+  font-size: 10px;
   opacity: 0.5;
 }
 

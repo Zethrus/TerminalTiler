@@ -33,10 +33,10 @@ pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
-        .margin_top(6)
-        .margin_bottom(6)
-        .margin_start(6)
-        .margin_end(6)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(4)
+        .margin_end(4)
         .build();
 
     // Workspace summary header
@@ -46,28 +46,13 @@ pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
         .css_classes(["workspace-summary"])
         .build();
 
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
-        .hexpand(true)
-        .valign(gtk::Align::Center)
-        .build();
-
     let name_label = gtk::Label::builder()
         .label(&preset.name)
         .halign(gtk::Align::Start)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["workspace-summary-name"])
         .build();
-    left.append(&name_label);
-
-    if !preset.root_label.is_empty() {
-        let root_label = gtk::Label::builder()
-            .label(&preset.root_label)
-            .halign(gtk::Align::Start)
-            .css_classes(["workspace-summary-subtitle"])
-            .build();
-        left.append(&root_label);
-    }
 
     let path_label = gtk::Label::builder()
         .label(workspace_root.display().to_string())
@@ -77,7 +62,7 @@ pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
         .css_classes(["workspace-summary-path"])
         .build();
 
-    summary.append(&left);
+    summary.append(&name_label);
     summary.append(&path_label);
     shell.append(&summary);
 
