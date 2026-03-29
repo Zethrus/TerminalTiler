@@ -6,7 +6,10 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 
 use crate::app::logging;
-use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::model::preset::{
+    ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
+    WorkspacePreset,
+};
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
@@ -18,6 +21,7 @@ type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize, bool)>>>>;
 type RenameTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, Option<String>)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
+type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
 
 fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     let manager = adw::StyleManager::default();
@@ -167,6 +171,12 @@ pub fn present(
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
     let refresh_launch_tabs: VoidHandle = Rc::new(RefCell::new(None));
     let add_workspace_tab: VoidHandle = Rc::new(RefCell::new(None));
+    let current_shortcuts = preference_store.load();
+    let current_fullscreen_shortcut =
+        Rc::new(Cell::new(current_shortcuts.workspace_fullscreen_shortcut));
+    let current_density_shortcut = Rc::new(Cell::new(current_shortcuts.workspace_density_shortcut));
+    let fullscreen_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
 
     {
         let title_for_select = title.clone();
@@ -179,6 +189,7 @@ pub fn present(
         let tabs_for_select = tabs.clone();
         let active_for_select = active_tab_id.clone();
         let preference_store_for_select = preference_store.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let select_handle = select_tab.clone();
         let rename_handle = request_tab_rename.clone();
         let close_handle = close_tab.clone();
@@ -233,6 +244,7 @@ pub fn present(
                 title_root_for_select.upcast_ref(),
                 &fullscreen_for_select,
                 is_workspace,
+                current_fullscreen_shortcut.get(),
             );
 
             let on_select = Rc::new({
@@ -550,52 +562,21 @@ pub fn present(
         });
     }
 
-    {
-        let tabs_for_shortcut = tabs.clone();
-        let active_for_shortcut = active_tab_id.clone();
-        let window_for_shortcut = window.clone();
+    install_workspace_fullscreen_shortcut(
+        &window,
+        &fullscreen_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+        current_fullscreen_shortcut.get(),
+    );
 
-        let shortcut_controller = gtk::ShortcutController::new();
-        shortcut_controller.set_scope(gtk::ShortcutScope::Global);
-        let trigger =
-            gtk::ShortcutTrigger::parse_string("F11").expect("F11 shortcut trigger should parse");
-        let action = gtk::CallbackAction::new(move |_, _| {
-            toggle_workspace_fullscreen(
-                &window_for_shortcut,
-                &tabs_for_shortcut,
-                active_for_shortcut.get(),
-            );
-            glib::Propagation::Stop
-        });
-        shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
-        window.add_controller(shortcut_controller);
-    }
-
-    {
-        let tabs_for_shortcut = tabs.clone();
-        let active_for_shortcut = active_tab_id.clone();
-        let window_for_shortcut = window.clone();
-
-        let shortcut_controller = gtk::ShortcutController::new();
-        shortcut_controller.set_scope(gtk::ShortcutScope::Global);
-        let trigger = gtk::ShortcutTrigger::parse_string("<Ctrl><Alt>D")
-            .expect("Ctrl+Alt+D shortcut trigger should parse");
-        let action = gtk::CallbackAction::new(move |_, _| {
-            if cycle_active_workspace_density(
-                &window_for_shortcut,
-                &tabs_for_shortcut,
-                active_for_shortcut.get(),
-            )
-            .is_some()
-            {
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-        shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
-        window.add_controller(shortcut_controller);
-    }
+    install_workspace_density_shortcut(
+        &window,
+        &density_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+        current_density_shortcut.get(),
+    );
 
     {
         let window_for_notify = window.clone();
@@ -603,6 +584,7 @@ pub fn present(
         let fullscreen_for_notify = fullscreen_button.clone();
         let tabs_for_notify = tabs.clone();
         let active_for_notify = active_tab_id.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         window.connect_fullscreened_notify(move |window| {
             let is_workspace = active_tab_is_workspace(&tabs_for_notify, active_for_notify.get());
             sync_fullscreen_chrome(
@@ -610,6 +592,7 @@ pub fn present(
                 title_root_for_notify.upcast_ref(),
                 &fullscreen_for_notify,
                 is_workspace,
+                current_fullscreen_shortcut.get(),
             );
             if !is_workspace && window.is_fullscreen() {
                 window.set_fullscreened(false);
@@ -680,6 +663,14 @@ pub fn present(
         let preference_store_for_settings = preference_store.clone();
         let refresh_for_settings = refresh_launch_tabs.clone();
         let toast_overlay_for_settings = toast_overlay.clone();
+        let tabs_for_settings = tabs.clone();
+        let active_for_settings = active_tab_id.clone();
+        let title_root_for_settings = title.root.clone();
+        let fullscreen_button_for_settings = fullscreen_button.clone();
+        let fullscreen_shortcut_controller = fullscreen_shortcut_controller.clone();
+        let density_shortcut_controller = density_shortcut_controller.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
 
         settings_button.connect_clicked(move |_| {
             let preferences = preference_store_for_settings.load();
@@ -687,6 +678,8 @@ pub fn present(
                 &window_for_settings,
                 preferences.default_theme,
                 preferences.default_density,
+                preferences.workspace_fullscreen_shortcut,
+                preferences.workspace_density_shortcut,
                 {
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
@@ -727,11 +720,108 @@ pub fn present(
                 },
                 {
                     let preference_store = preference_store_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    let tabs = tabs_for_settings.clone();
+                    let active_tab_id = active_for_settings.clone();
+                    let title_root = title_root_for_settings.clone();
+                    let fullscreen_button = fullscreen_button_for_settings.clone();
+                    let window = window_for_settings.clone();
+                    let controller_handle = fullscreen_shortcut_controller.clone();
+                    let current_shortcut = current_fullscreen_shortcut.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_fullscreen_shortcut(shortcut);
+                        current_shortcut.set(shortcut);
+                        install_workspace_fullscreen_shortcut(
+                            &window,
+                            &controller_handle,
+                            &tabs,
+                            &active_tab_id,
+                            shortcut,
+                        );
+                        sync_fullscreen_chrome(
+                            &window,
+                            title_root.upcast_ref(),
+                            &fullscreen_button,
+                            active_tab_is_workspace(&tabs, active_tab_id.get()),
+                            shortcut,
+                        );
+                        logging::info(format!(
+                            "updated application settings workspace_fullscreen_shortcut={}",
+                            shortcut.label()
+                        ));
+                        show_toast(
+                            &toast_overlay,
+                            &format!("Fullscreen shortcut set to {}", shortcut.label()),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    let tabs = tabs_for_settings.clone();
+                    let active_tab_id = active_for_settings.clone();
+                    let window = window_for_settings.clone();
+                    let controller_handle = density_shortcut_controller.clone();
+                    let current_shortcut = current_density_shortcut.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_density_shortcut(shortcut);
+                        current_shortcut.set(shortcut);
+                        install_workspace_density_shortcut(
+                            &window,
+                            &controller_handle,
+                            &tabs,
+                            &active_tab_id,
+                            shortcut,
+                        );
+                        logging::info(format!(
+                            "updated application settings workspace_density_shortcut={}",
+                            shortcut.label()
+                        ));
+                        show_toast(
+                            &toast_overlay,
+                            &format!("Density shortcut set to {}", shortcut.label()),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
+                    let tabs = tabs_for_settings.clone();
+                    let active_tab_id = active_for_settings.clone();
+                    let title_root = title_root_for_settings.clone();
+                    let fullscreen_button = fullscreen_button_for_settings.clone();
+                    let window = window_for_settings.clone();
+                    let fullscreen_controller = fullscreen_shortcut_controller.clone();
+                    let density_controller = density_shortcut_controller.clone();
+                    let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+                    let current_density_shortcut = current_density_shortcut.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
+                        current_fullscreen_shortcut.set(defaults.workspace_fullscreen_shortcut);
+                        current_density_shortcut.set(defaults.workspace_density_shortcut);
+                        install_workspace_fullscreen_shortcut(
+                            &window,
+                            &fullscreen_controller,
+                            &tabs,
+                            &active_tab_id,
+                            defaults.workspace_fullscreen_shortcut,
+                        );
+                        install_workspace_density_shortcut(
+                            &window,
+                            &density_controller,
+                            &tabs,
+                            &active_tab_id,
+                            defaults.workspace_density_shortcut,
+                        );
+                        sync_fullscreen_chrome(
+                            &window,
+                            title_root.upcast_ref(),
+                            &fullscreen_button,
+                            active_tab_is_workspace(&tabs, active_tab_id.get()),
+                            defaults.workspace_fullscreen_shortcut,
+                        );
                         logging::info("reset application settings to defaults");
                         if let Some(refresh) = refresh_handle.borrow().as_ref() {
                             refresh();
@@ -1442,11 +1532,89 @@ fn cycle_active_workspace_density(
     Some(next_density)
 }
 
+fn install_shortcut_controller<F>(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    accelerator: &str,
+    on_activate: F,
+) where
+    F: Fn() -> glib::Propagation + 'static,
+{
+    if let Some(existing) = controller_handle.borrow_mut().take() {
+        window.remove_controller(&existing);
+    }
+
+    let shortcut_controller = gtk::ShortcutController::new();
+    shortcut_controller.set_scope(gtk::ShortcutScope::Global);
+    let trigger = gtk::ShortcutTrigger::parse_string(accelerator)
+        .expect("configured shortcut trigger should parse");
+    let action = gtk::CallbackAction::new(move |_, _| on_activate());
+    shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+    window.add_controller(shortcut_controller.clone());
+    *controller_handle.borrow_mut() = Some(shortcut_controller);
+}
+
+fn install_workspace_fullscreen_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    shortcut: WorkspaceFullscreenShortcut,
+) {
+    let window_for_shortcut = window.clone();
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        shortcut.accelerator(),
+        move || {
+            toggle_workspace_fullscreen(
+                &window_for_shortcut,
+                &tabs_for_shortcut,
+                active_for_shortcut.get(),
+            );
+            glib::Propagation::Stop
+        },
+    );
+}
+
+fn install_workspace_density_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    shortcut: WorkspaceDensityShortcut,
+) {
+    let window_for_shortcut = window.clone();
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        shortcut.accelerator(),
+        move || {
+            if cycle_active_workspace_density(
+                &window_for_shortcut,
+                &tabs_for_shortcut,
+                active_for_shortcut.get(),
+            )
+            .is_some()
+            {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        },
+    );
+}
+
 fn sync_fullscreen_chrome(
     window: &adw::ApplicationWindow,
     title_widget: &gtk::Widget,
     fullscreen_button: &gtk::Button,
     is_workspace: bool,
+    fullscreen_shortcut: WorkspaceFullscreenShortcut,
 ) {
     if !is_workspace {
         title_widget.set_visible(true);
@@ -1462,10 +1630,16 @@ fn sync_fullscreen_chrome(
     fullscreen_button.set_visible(true);
     if is_fullscreen {
         fullscreen_button.set_label("Exit Fullscreen");
-        fullscreen_button.set_tooltip_text(Some("Exit fullscreen (F11)"));
+        fullscreen_button.set_tooltip_text(Some(&format!(
+            "Exit fullscreen ({})",
+            fullscreen_shortcut.label()
+        )));
     } else {
         fullscreen_button.set_label("Fullscreen");
-        fullscreen_button.set_tooltip_text(Some("Enter fullscreen"));
+        fullscreen_button.set_tooltip_text(Some(&format!(
+            "Enter fullscreen ({})",
+            fullscreen_shortcut.label()
+        )));
     }
 }
 

@@ -3,32 +3,45 @@ use std::rc::Rc;
 use adw::prelude::*;
 use std::cell::Cell;
 
-use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::model::preset::{
+    ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
+};
 use crate::storage::preference_store::AppPreferences;
 
 fn sync_reset_button_state(
     reset_button: &gtk::Button,
     theme: ThemeMode,
     density: ApplicationDensity,
+    fullscreen_shortcut: WorkspaceFullscreenShortcut,
+    density_shortcut: WorkspaceDensityShortcut,
 ) {
     let defaults = AppPreferences::default();
     reset_button.set_sensitive(
-        theme != defaults.default_theme || density != defaults.default_density,
+        theme != defaults.default_theme
+            || density != defaults.default_density
+            || fullscreen_shortcut != defaults.workspace_fullscreen_shortcut
+            || density_shortcut != defaults.workspace_density_shortcut,
     );
 }
 
 #[allow(deprecated)]
-pub fn present<F, G, H>(
+pub fn present<F, G, H, I, J>(
     window: &adw::ApplicationWindow,
     default_theme: ThemeMode,
     default_density: ApplicationDensity,
+    workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut,
+    workspace_density_shortcut: WorkspaceDensityShortcut,
     on_theme_changed: F,
     on_density_changed: G,
-    on_reset_defaults: H,
+    on_fullscreen_shortcut_changed: H,
+    on_density_shortcut_changed: I,
+    on_reset_defaults: J,
 ) where
     F: Fn(ThemeMode) + 'static,
     G: Fn(ApplicationDensity) + 'static,
-    H: Fn() + 'static,
+    H: Fn(WorkspaceFullscreenShortcut) + 'static,
+    I: Fn(WorkspaceDensityShortcut) + 'static,
+    J: Fn() + 'static,
 {
     let dialog = gtk::Dialog::builder()
         .modal(true)
@@ -49,10 +62,18 @@ pub fn present<F, G, H>(
 
     let current_theme = Rc::new(Cell::new(default_theme));
     let current_density = Rc::new(Cell::new(default_density));
+    let current_fullscreen_shortcut = Rc::new(Cell::new(workspace_fullscreen_shortcut));
+    let current_density_shortcut = Rc::new(Cell::new(workspace_density_shortcut));
     let reset_button = gtk::Button::with_label("Reset Defaults");
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
-    sync_reset_button_state(&reset_button, current_theme.get(), current_density.get());
+    sync_reset_button_state(
+        &reset_button,
+        current_theme.get(),
+        current_density.get(),
+        current_fullscreen_shortcut.get(),
+        current_density_shortcut.get(),
+    );
 
     let intro = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -108,6 +129,8 @@ pub fn present<F, G, H>(
 
     let theme_callback = Rc::new(on_theme_changed);
     let density_callback = Rc::new(on_density_changed);
+    let fullscreen_shortcut_callback = Rc::new(on_fullscreen_shortcut_changed);
+    let density_shortcut_callback = Rc::new(on_density_shortcut_changed);
     let reset_callback = Rc::new(on_reset_defaults);
 
     let theme_section = gtk::Box::builder()
@@ -142,6 +165,8 @@ pub fn present<F, G, H>(
         let current_theme = current_theme.clone();
         let theme_strip_ref = theme_strip.clone();
         let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
         let reset_button = reset_button.clone();
         let theme_callback = theme_callback.clone();
         button.connect_clicked(move |_| {
@@ -149,7 +174,13 @@ pub fn present<F, G, H>(
                 current_theme.set(mode);
                 theme_callback(mode);
                 sync_theme_strip_active(&theme_strip_ref, mode);
-                sync_reset_button_state(&reset_button, mode, current_density.get());
+                sync_reset_button_state(
+                    &reset_button,
+                    mode,
+                    current_density.get(),
+                    current_fullscreen_shortcut.get(),
+                    current_density_shortcut.get(),
+                );
             }
         });
         theme_strip.append(&button);
@@ -166,7 +197,7 @@ pub fn present<F, G, H>(
     density_section.append(&build_section_header(
         "Default Application Density",
         "Window shell",
-        "Affects new launch tabs and the window shell. Use Ctrl+Alt+D inside a workspace to cycle density for only that active workspace.",
+        "Affects new launch tabs and the window shell. Running workspaces keep their own density, and the workspace shortcut below only changes the active workspace.",
     ));
 
     let density_strip = gtk::Box::builder()
@@ -188,6 +219,8 @@ pub fn present<F, G, H>(
         let current_density = current_density.clone();
         let density_strip_ref = density_strip.clone();
         let current_theme = current_theme.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
         let reset_button = reset_button.clone();
         let density_callback = density_callback.clone();
         button.connect_clicked(move |_| {
@@ -195,7 +228,13 @@ pub fn present<F, G, H>(
                 current_density.set(density);
                 density_callback(density);
                 sync_density_strip_active(&density_strip_ref, density);
-                sync_reset_button_state(&reset_button, current_theme.get(), density);
+                sync_reset_button_state(
+                    &reset_button,
+                    current_theme.get(),
+                    density,
+                    current_fullscreen_shortcut.get(),
+                    current_density_shortcut.get(),
+                );
             }
         });
         density_strip.append(&button);
@@ -218,19 +257,104 @@ pub fn present<F, G, H>(
 
     shortcuts_section.append(&build_section_header(
         "Shortcuts",
-        "Available now",
-        "These shortcuts do not require opening Settings and are meant to keep workspace adjustments fast.",
+        "Apply immediately",
+        "Choose default workspace shortcuts that fit your desktop environment. These take effect in the current window as soon as you change them.",
     ));
-    shortcuts_section.append(&build_shortcut_row(
+    let fullscreen_options = WorkspaceFullscreenShortcut::all();
+    let fullscreen_option_labels = fullscreen_options
+        .iter()
+        .map(WorkspaceFullscreenShortcut::label)
+        .collect::<Vec<_>>();
+    let fullscreen_dropdown = gtk::DropDown::builder()
+        .model(&gtk::StringList::new(&fullscreen_option_labels))
+        .selected(
+            fullscreen_options
+                .iter()
+                .position(|candidate| *candidate == workspace_fullscreen_shortcut)
+                .unwrap_or(0) as u32,
+        )
+        .build();
+    fullscreen_dropdown.add_css_class("settings-shortcut-control");
+    {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
+        let reset_button = reset_button.clone();
+        let callback = fullscreen_shortcut_callback.clone();
+        fullscreen_dropdown.connect_selected_notify(move |dropdown| {
+            let Some(shortcut) = WorkspaceFullscreenShortcut::all()
+                .get(dropdown.selected() as usize)
+                .copied()
+            else {
+                return;
+            };
+            if current_fullscreen_shortcut.get() != shortcut {
+                current_fullscreen_shortcut.set(shortcut);
+                callback(shortcut);
+                sync_reset_button_state(
+                    &reset_button,
+                    current_theme.get(),
+                    current_density.get(),
+                    shortcut,
+                    current_density_shortcut.get(),
+                );
+            }
+        });
+    }
+    shortcuts_section.append(&build_shortcut_selector_row(
         "Toggle workspace fullscreen",
-        "F11",
         "Available only while a workspace tab is active.",
+        &fullscreen_dropdown,
     ));
+
     shortcuts_section.append(&gtk::Separator::builder().orientation(gtk::Orientation::Horizontal).build());
-    shortcuts_section.append(&build_shortcut_row(
+    let density_options = WorkspaceDensityShortcut::all();
+    let density_option_labels = density_options
+        .iter()
+        .map(WorkspaceDensityShortcut::label)
+        .collect::<Vec<_>>();
+    let density_dropdown = gtk::DropDown::builder()
+        .model(&gtk::StringList::new(&density_option_labels))
+        .selected(
+            density_options
+                .iter()
+                .position(|candidate| *candidate == workspace_density_shortcut)
+                .unwrap_or(0) as u32,
+        )
+        .build();
+    density_dropdown.add_css_class("settings-shortcut-control");
+    {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
+        let reset_button = reset_button.clone();
+        let callback = density_shortcut_callback.clone();
+        density_dropdown.connect_selected_notify(move |dropdown| {
+            let Some(shortcut) = WorkspaceDensityShortcut::all()
+                .get(dropdown.selected() as usize)
+                .copied()
+            else {
+                return;
+            };
+            if current_density_shortcut.get() != shortcut {
+                current_density_shortcut.set(shortcut);
+                callback(shortcut);
+                sync_reset_button_state(
+                    &reset_button,
+                    current_theme.get(),
+                    current_density.get(),
+                    current_fullscreen_shortcut.get(),
+                    shortcut,
+                );
+            }
+        });
+    }
+    shortcuts_section.append(&build_shortcut_selector_row(
         "Cycle active workspace density",
-        "Ctrl+Alt+D",
         "Rotates only the current workspace without changing the saved app default.",
+        &density_dropdown,
     ));
 
     let actions = gtk::Box::builder()
@@ -250,24 +374,50 @@ pub fn present<F, G, H>(
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
+        let fullscreen_dropdown = fullscreen_dropdown.clone();
+        let density_dropdown = density_dropdown.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
         reset_button_for_signal.connect_clicked(move |_| {
             let defaults = AppPreferences::default();
             let changed = current_theme.get() != defaults.default_theme
-                || current_density.get() != defaults.default_density;
+                || current_density.get() != defaults.default_density
+                || current_fullscreen_shortcut.get() != defaults.workspace_fullscreen_shortcut
+                || current_density_shortcut.get() != defaults.workspace_density_shortcut;
             if !changed {
                 return;
             }
 
             current_theme.set(defaults.default_theme);
             current_density.set(defaults.default_density);
+            current_fullscreen_shortcut.set(defaults.workspace_fullscreen_shortcut);
+            current_density_shortcut.set(defaults.workspace_density_shortcut);
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
-            sync_reset_button_state(&reset_button, defaults.default_theme, defaults.default_density);
+            fullscreen_dropdown.set_selected(
+                WorkspaceFullscreenShortcut::all()
+                    .iter()
+                    .position(|candidate| *candidate == defaults.workspace_fullscreen_shortcut)
+                    .unwrap_or(0) as u32,
+            );
+            density_dropdown.set_selected(
+                WorkspaceDensityShortcut::all()
+                    .iter()
+                    .position(|candidate| *candidate == defaults.workspace_density_shortcut)
+                    .unwrap_or(0) as u32,
+            );
+            sync_reset_button_state(
+                &reset_button,
+                defaults.default_theme,
+                defaults.default_density,
+                defaults.workspace_fullscreen_shortcut,
+                defaults.workspace_density_shortcut,
+            );
             reset_callback();
         });
     }
@@ -281,7 +431,7 @@ pub fn present<F, G, H>(
     dialog.present();
 }
 
-fn build_shortcut_row(label: &str, keys: &str, note: &str) -> gtk::Widget {
+fn build_shortcut_selector_row(label: &str, note: &str, control: &impl IsA<gtk::Widget>) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
@@ -313,18 +463,9 @@ fn build_shortcut_row(label: &str, keys: &str, note: &str) -> gtk::Widget {
             .build(),
     );
     row.append(&text);
-
-    row.append(
-        &gtk::Label::builder()
-            .label(keys)
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Center)
-            .css_classes(["status-chip", "settings-shortcut-chip"])
-            .build(),
-    );
+    row.append(control);
     row.upcast()
 }
-
 fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

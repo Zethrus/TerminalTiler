@@ -6,7 +6,9 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::app::logging;
-use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::model::preset::{
+    ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
+};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
 const STORE_VERSION: u32 = 1;
@@ -15,6 +17,8 @@ const STORE_VERSION: u32 = 1;
 pub struct AppPreferences {
     pub default_density: ApplicationDensity,
     pub default_theme: ThemeMode,
+    pub workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut,
+    pub workspace_density_shortcut: WorkspaceDensityShortcut,
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +33,10 @@ struct PreferenceDocument {
     default_density: ApplicationDensity,
     #[serde(default = "default_theme")]
     default_theme: ThemeMode,
+    #[serde(default = "default_fullscreen_shortcut")]
+    workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut,
+    #[serde(default = "default_density_shortcut")]
+    workspace_density_shortcut: WorkspaceDensityShortcut,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -37,6 +45,14 @@ fn default_density() -> ApplicationDensity {
 
 fn default_theme() -> ThemeMode {
     ThemeMode::System
+}
+
+fn default_fullscreen_shortcut() -> WorkspaceFullscreenShortcut {
+    WorkspaceFullscreenShortcut::F11
+}
+
+fn default_density_shortcut() -> WorkspaceDensityShortcut {
+    WorkspaceDensityShortcut::CtrlShiftD
 }
 
 impl PreferenceStore {
@@ -70,6 +86,8 @@ impl PreferenceStore {
             Ok(document) if document.version == STORE_VERSION => AppPreferences {
                 default_density: document.default_density,
                 default_theme: document.default_theme,
+                workspace_fullscreen_shortcut: document.workspace_fullscreen_shortcut,
+                workspace_density_shortcut: document.workspace_density_shortcut,
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -94,6 +112,18 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    pub fn save_workspace_fullscreen_shortcut(&self, shortcut: WorkspaceFullscreenShortcut) {
+        let mut preferences = self.load();
+        preferences.workspace_fullscreen_shortcut = shortcut;
+        self.save(&preferences);
+    }
+
+    pub fn save_workspace_density_shortcut(&self, shortcut: WorkspaceDensityShortcut) {
+        let mut preferences = self.load();
+        preferences.workspace_density_shortcut = shortcut;
+        self.save(&preferences);
+    }
+
     pub fn save(&self, preferences: &AppPreferences) {
         let Some(path) = self.path.as_ref() else {
             return;
@@ -103,6 +133,8 @@ impl PreferenceStore {
             version: STORE_VERSION,
             default_density: preferences.default_density,
             default_theme: preferences.default_theme,
+            workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut,
+            workspace_density_shortcut: preferences.workspace_density_shortcut,
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -144,6 +176,8 @@ impl Default for AppPreferences {
         Self {
             default_density: default_density(),
             default_theme: default_theme(),
+            workspace_fullscreen_shortcut: default_fullscreen_shortcut(),
+            workspace_density_shortcut: default_density_shortcut(),
         }
     }
 }
@@ -158,7 +192,9 @@ impl PreferenceStore {
 #[cfg(test)]
 mod tests {
     use super::{AppPreferences, PreferenceStore};
-    use crate::model::preset::{ApplicationDensity, ThemeMode};
+    use crate::model::preset::{
+        ApplicationDensity, ThemeMode, WorkspaceDensityShortcut, WorkspaceFullscreenShortcut,
+    };
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -176,6 +212,14 @@ mod tests {
 
         assert_eq!(store.load().default_density, ApplicationDensity::Compact);
         assert_eq!(store.load().default_theme, ThemeMode::System);
+        assert_eq!(
+            store.load().workspace_fullscreen_shortcut,
+            WorkspaceFullscreenShortcut::F11
+        );
+        assert_eq!(
+            store.load().workspace_density_shortcut,
+            WorkspaceDensityShortcut::CtrlShiftD
+        );
     }
 
     #[test]
@@ -186,6 +230,8 @@ mod tests {
         store.save(&AppPreferences {
             default_density: ApplicationDensity::Comfortable,
             default_theme: ThemeMode::Dark,
+            workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::ShiftF11,
+            workspace_density_shortcut: WorkspaceDensityShortcut::ShiftF8,
         });
 
         assert_eq!(
@@ -193,6 +239,8 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::Dark,
+                workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::ShiftF11,
+                workspace_density_shortcut: WorkspaceDensityShortcut::ShiftF8,
             }
         );
     }
@@ -214,6 +262,8 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::System,
+                workspace_fullscreen_shortcut: WorkspaceFullscreenShortcut::F11,
+                workspace_density_shortcut: WorkspaceDensityShortcut::CtrlShiftD,
             }
         );
     }
