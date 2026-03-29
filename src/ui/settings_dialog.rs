@@ -2,31 +2,48 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use std::cell::{Cell, RefCell};
+use gtk::glib;
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
 
-fn normalize_accelerator_input(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
+fn shortcut_display_label(shortcut: &str) -> String {
+    gtk::accelerator_parse(shortcut)
+        .map(|(key, modifiers)| gtk::accelerator_get_label(key, modifiers).to_string())
+        .unwrap_or_else(|| shortcut.to_string())
+}
+
+fn sync_shortcut_capture_label(label: &gtk::Label, shortcut: &str) {
+    label.set_label(&shortcut_display_label(shortcut));
+    label.set_tooltip_text(Some(shortcut));
+}
+
+fn set_recorder_idle(record_button: &gtk::Button, status: &gtk::Label) {
+    record_button.remove_css_class("is-recording");
+    record_button.set_label("Record");
+    status.set_visible(false);
+    status.set_label("");
+}
+
+fn set_recorder_recording(record_button: &gtk::Button, status: &gtk::Label) {
+    record_button.add_css_class("is-recording");
+    record_button.set_label("Press keys...");
+    status.set_label("Listening for a shortcut. Press Esc to cancel.");
+    status.set_visible(true);
+}
+
+fn normalize_captured_shortcut(
+    key: gdk::Key,
+    state: gdk::ModifierType,
+) -> Option<(String, String)> {
+    let modifiers = state & gtk::accelerator_get_default_mod_mask();
+    if !gtk::accelerator_valid(key, modifiers) {
         return None;
     }
 
-    gtk::ShortcutTrigger::parse_string(trimmed).map(|trigger| trigger.to_str().to_string())
-}
-
-fn sync_shortcut_entry_feedback(entry: &gtk::Entry, status: &gtk::Label, example: &str) {
-    if normalize_accelerator_input(entry.text().as_str()).is_some() {
-        entry.remove_css_class("error");
-        entry.set_tooltip_text(None);
-        status.set_visible(false);
-        status.set_label("");
-    } else {
-        entry.add_css_class("error");
-        entry.set_tooltip_text(Some(example));
-        status.set_label(example);
-        status.set_visible(true);
-    }
+    let shortcut = gtk::accelerator_name(key, modifiers).to_string();
+    let label = gtk::accelerator_get_label(key, modifiers).to_string();
+    Some((shortcut, label))
 }
 
 fn sync_reset_button_state(
@@ -279,24 +296,31 @@ pub fn present<F, G, H, I, J>(
     shortcuts_section.append(&build_section_header(
         "Shortcuts",
         "Apply immediately",
-        "Choose default workspace shortcuts that fit your desktop environment. These take effect in the current window as soon as you change them.",
+        "Choose default workspace shortcuts that fit your desktop environment. Click Record, then press the shortcut you want. Changes take effect in the current window immediately.",
     ));
     let fullscreen_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .css_classes(["field-hint", "settings-shortcut-note", "settings-shortcut-status"])
         .visible(false)
         .build();
-    let fullscreen_entry = gtk::Entry::builder()
-        .text(current_fullscreen_shortcut.borrow().as_str())
-        .placeholder_text("F11 or <Shift>F11")
-        .width_chars(20)
-        .css_classes(["settings-shortcut-control"])
+    let fullscreen_capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
         .build();
-    sync_shortcut_entry_feedback(
-        &fullscreen_entry,
-        &fullscreen_status,
-        "Invalid accelerator. Example: F11 or <Shift>F11",
+    sync_shortcut_capture_label(
+        &fullscreen_capture_label,
+        current_fullscreen_shortcut.borrow().as_str(),
     );
+    let fullscreen_record_button = gtk::Button::with_label("Record");
+    fullscreen_record_button.add_css_class("pill-button");
+    fullscreen_record_button.add_css_class("secondary-button");
+    fullscreen_record_button.add_css_class("settings-shortcut-record-button");
+    let fullscreen_control = build_shortcut_capture_control(
+        &fullscreen_capture_label,
+        &fullscreen_record_button,
+    );
+    let fullscreen_recording = Rc::new(Cell::new(false));
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -304,16 +328,33 @@ pub fn present<F, G, H, I, J>(
         let current_density_shortcut = current_density_shortcut.clone();
         let reset_button = reset_button.clone();
         let status = fullscreen_status.clone();
+        let capture_label = fullscreen_capture_label.clone();
+        let record_button = fullscreen_record_button.clone();
+        let recording = fullscreen_recording.clone();
         let callback = fullscreen_shortcut_callback.clone();
-        fullscreen_entry.connect_changed(move |entry| {
-            sync_shortcut_entry_feedback(
-                entry,
-                &status,
-                "Invalid accelerator. Example: F11 or <Shift>F11",
-            );
-            let Some(shortcut) = normalize_accelerator_input(entry.text().as_str()) else {
-                return;
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |_, key, _, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) = normalize_captured_shortcut(key, state) else {
+                status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
+                status.set_visible(true);
+                return glib::Propagation::Stop;
             };
+
+            recording.set(false);
+            set_recorder_idle(&record_button, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
             if current_fullscreen_shortcut.borrow().as_str() != shortcut {
                 current_fullscreen_shortcut.replace(shortcut.clone());
                 callback(shortcut);
@@ -325,12 +366,40 @@ pub fn present<F, G, H, I, J>(
                     current_density_shortcut.borrow().as_str(),
                 );
             }
+            glib::Propagation::Stop
+        });
+        fullscreen_record_button.add_controller(key_controller);
+    }
+    {
+        let status = fullscreen_status.clone();
+        let record_button = fullscreen_record_button.clone();
+        let recording = fullscreen_recording.clone();
+        fullscreen_record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = fullscreen_status.clone();
+        let record_button = fullscreen_record_button.clone();
+        let recording = fullscreen_recording.clone();
+        fullscreen_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            }
         });
     }
     shortcuts_section.append(&build_shortcut_entry_row(
         "Toggle workspace fullscreen",
         "Available only while a workspace tab is active.",
-        &fullscreen_entry,
+        &fullscreen_control,
         &fullscreen_status,
         &["F11", "<Shift>F11", "<Ctrl>F11"],
     ));
@@ -341,17 +410,24 @@ pub fn present<F, G, H, I, J>(
         .css_classes(["field-hint", "settings-shortcut-note", "settings-shortcut-status"])
         .visible(false)
         .build();
-    let density_entry = gtk::Entry::builder()
-        .text(current_density_shortcut.borrow().as_str())
-        .placeholder_text("<Ctrl><Shift>D or <Shift>F8")
-        .width_chars(20)
-        .css_classes(["settings-shortcut-control"])
+    let density_capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
         .build();
-    sync_shortcut_entry_feedback(
-        &density_entry,
-        &density_status,
-        "Invalid accelerator. Example: <Ctrl><Shift>D or <Shift>F8",
+    sync_shortcut_capture_label(
+        &density_capture_label,
+        current_density_shortcut.borrow().as_str(),
     );
+    let density_record_button = gtk::Button::with_label("Record");
+    density_record_button.add_css_class("pill-button");
+    density_record_button.add_css_class("secondary-button");
+    density_record_button.add_css_class("settings-shortcut-record-button");
+    let density_control = build_shortcut_capture_control(
+        &density_capture_label,
+        &density_record_button,
+    );
+    let density_recording = Rc::new(Cell::new(false));
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -359,16 +435,33 @@ pub fn present<F, G, H, I, J>(
         let current_density_shortcut = current_density_shortcut.clone();
         let reset_button = reset_button.clone();
         let status = density_status.clone();
+        let capture_label = density_capture_label.clone();
+        let record_button = density_record_button.clone();
+        let recording = density_recording.clone();
         let callback = density_shortcut_callback.clone();
-        density_entry.connect_changed(move |entry| {
-            sync_shortcut_entry_feedback(
-                entry,
-                &status,
-                "Invalid accelerator. Example: <Ctrl><Shift>D or <Shift>F8",
-            );
-            let Some(shortcut) = normalize_accelerator_input(entry.text().as_str()) else {
-                return;
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |_, key, _, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) = normalize_captured_shortcut(key, state) else {
+                status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
+                status.set_visible(true);
+                return glib::Propagation::Stop;
             };
+
+            recording.set(false);
+            set_recorder_idle(&record_button, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
             if current_density_shortcut.borrow().as_str() != shortcut {
                 current_density_shortcut.replace(shortcut.clone());
                 callback(shortcut);
@@ -380,12 +473,40 @@ pub fn present<F, G, H, I, J>(
                     current_density_shortcut.borrow().as_str(),
                 );
             }
+            glib::Propagation::Stop
+        });
+        density_record_button.add_controller(key_controller);
+    }
+    {
+        let status = density_status.clone();
+        let record_button = density_record_button.clone();
+        let recording = density_recording.clone();
+        density_record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = density_status.clone();
+        let record_button = density_record_button.clone();
+        let recording = density_recording.clone();
+        density_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            }
         });
     }
     shortcuts_section.append(&build_shortcut_entry_row(
         "Cycle active workspace density",
         "Rotates only the current workspace without changing the saved app default.",
-        &density_entry,
+        &density_control,
         &density_status,
         &[
             "<Ctrl><Shift>D",
@@ -415,10 +536,14 @@ pub fn present<F, G, H, I, J>(
         let current_density_shortcut = current_density_shortcut.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
-        let fullscreen_entry = fullscreen_entry.clone();
-        let density_entry = density_entry.clone();
+        let fullscreen_capture_label = fullscreen_capture_label.clone();
+        let density_capture_label = density_capture_label.clone();
+        let fullscreen_record_button = fullscreen_record_button.clone();
+        let density_record_button = density_record_button.clone();
         let fullscreen_status = fullscreen_status.clone();
         let density_status = density_status.clone();
+        let fullscreen_recording = fullscreen_recording.clone();
+        let density_recording = density_recording.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
@@ -440,18 +565,18 @@ pub fn present<F, G, H, I, J>(
             current_density_shortcut.replace(defaults.workspace_density_shortcut.clone());
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
-            fullscreen_entry.set_text(&defaults.workspace_fullscreen_shortcut);
-            density_entry.set_text(&defaults.workspace_density_shortcut);
-            sync_shortcut_entry_feedback(
-                &fullscreen_entry,
-                &fullscreen_status,
-                "Invalid accelerator. Example: F11 or <Shift>F11",
+            sync_shortcut_capture_label(
+                &fullscreen_capture_label,
+                &defaults.workspace_fullscreen_shortcut,
             );
-            sync_shortcut_entry_feedback(
-                &density_entry,
-                &density_status,
-                "Invalid accelerator. Example: <Ctrl><Shift>D or <Shift>F8",
+            sync_shortcut_capture_label(
+                &density_capture_label,
+                &defaults.workspace_density_shortcut,
             );
+            fullscreen_recording.set(false);
+            density_recording.set(false);
+            set_recorder_idle(&fullscreen_record_button, &fullscreen_status);
+            set_recorder_idle(&density_record_button, &density_status);
             sync_reset_button_state(
                 &reset_button,
                 defaults.default_theme,
@@ -470,6 +595,21 @@ pub fn present<F, G, H, I, J>(
     });
 
     dialog.present();
+}
+
+fn build_shortcut_capture_control(
+    value_label: &impl IsA<gtk::Widget>,
+    record_button: &impl IsA<gtk::Widget>,
+) -> gtk::Widget {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .css_classes(["settings-shortcut-control-shell"])
+        .build();
+    shell.append(value_label);
+    shell.append(record_button);
+    shell.upcast()
 }
 
 fn build_shortcut_entry_row(
@@ -561,7 +701,7 @@ fn build_shortcut_help_button(title: &str, examples: &[&str]) -> gtk::Widget {
     );
     body.append(
         &gtk::Label::builder()
-            .label("Use GTK accelerator syntax. Write modifiers in angle brackets, then the key.")
+            .label("Click Record, then press the shortcut you want to use. Press Esc while recording to cancel.")
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["field-hint", "settings-help-copy"])

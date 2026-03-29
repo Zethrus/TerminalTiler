@@ -1041,6 +1041,10 @@ button.destructive-button:hover {
   margin-left: 10px;
 }
 
+.settings-shortcut-control-shell {
+  align-items: center;
+}
+
 .settings-shortcut-title {
   font-size: 11px;
   font-weight: 700;
@@ -1054,9 +1058,22 @@ button.destructive-button:hover {
   font-family: "JetBrains Mono", monospace;
   letter-spacing: 0.05em;
   min-width: 94px;
+  min-height: 26px;
   padding-left: 10px;
   padding-right: 10px;
   text-align: center;
+}
+
+.settings-shortcut-record-button {
+  min-width: 72px;
+  min-height: 26px;
+  padding: 0 12px;
+}
+
+.settings-shortcut-record-button.is-recording {
+  background: rgba(240, 179, 75, 0.18);
+  border-color: rgba(240, 179, 75, 0.28);
+  color: rgba(255, 246, 221, 0.96);
 }
 
 .settings-help-button {
@@ -1128,6 +1145,11 @@ window.profile-comfortable .settings-help-button {
   min-height: 28px;
 }
 
+window.profile-comfortable .settings-shortcut-chip,
+window.profile-comfortable .settings-shortcut-record-button {
+  min-height: 28px;
+}
+
 window.profile-comfortable .settings-title {
   font-size: 17px;
 }
@@ -1164,11 +1186,18 @@ window.profile-compact .settings-title {
 
 window.profile-compact .settings-shortcut-chip {
   min-width: 78px;
+  min-height: 24px;
 }
 
 window.profile-compact .settings-help-button {
   min-width: 24px;
   min-height: 24px;
+}
+
+window.profile-compact .settings-shortcut-record-button {
+  min-width: 64px;
+  min-height: 24px;
+  padding: 0 10px;
 }
 
 window.profile-comfortable headerbar {
@@ -1313,6 +1342,12 @@ window.window-shell.theme-light .settings-meta-chip {
 
 window.window-shell.theme-light .settings-help-button {
   color: rgba(21, 25, 34, 0.56);
+}
+
+window.window-shell.theme-light .settings-shortcut-record-button.is-recording {
+  background: rgba(190, 85, 32, 0.12);
+  border-color: rgba(190, 85, 32, 0.22);
+  color: rgba(122, 48, 16, 0.96);
 }
 
 window.window-shell.theme-light .settings-help-button:hover {
