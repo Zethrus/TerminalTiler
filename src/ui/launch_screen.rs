@@ -10,9 +10,7 @@ use crate::app::logging;
 use crate::model::layout::{
     LayoutNode, LayoutTemplate, TileSpec, builtin_templates, generate_layout,
 };
-use crate::model::preset::{
-    ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
-};
+use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::storage::fs_utils::canonicalize_existing_dir;
 use crate::storage::preset_store::PresetStore;
 

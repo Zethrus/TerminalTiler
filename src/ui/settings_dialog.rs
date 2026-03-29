@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use adw::prelude::*;
-use std::cell::{Cell, RefCell};
 use gtk::glib;
+use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
@@ -100,34 +100,44 @@ fn sync_reset_button_state(
     density: ApplicationDensity,
     fullscreen_shortcut: &str,
     density_shortcut: &str,
+    zoom_in_shortcut: &str,
+    zoom_out_shortcut: &str,
 ) {
     let defaults = AppPreferences::default();
     reset_button.set_sensitive(
         theme != defaults.default_theme
             || density != defaults.default_density
             || fullscreen_shortcut != defaults.workspace_fullscreen_shortcut
-            || density_shortcut != defaults.workspace_density_shortcut,
+            || density_shortcut != defaults.workspace_density_shortcut
+            || zoom_in_shortcut != defaults.workspace_zoom_in_shortcut
+            || zoom_out_shortcut != defaults.workspace_zoom_out_shortcut,
     );
 }
 
 #[allow(deprecated)]
-pub fn present<F, G, H, I, J>(
+pub fn present<F, G, H, I, J, K, L>(
     window: &adw::ApplicationWindow,
     default_theme: ThemeMode,
     default_density: ApplicationDensity,
     workspace_fullscreen_shortcut: String,
     workspace_density_shortcut: String,
+    workspace_zoom_in_shortcut: String,
+    workspace_zoom_out_shortcut: String,
     on_theme_changed: F,
     on_density_changed: G,
     on_fullscreen_shortcut_changed: H,
     on_density_shortcut_changed: I,
-    on_reset_defaults: J,
+    on_zoom_in_shortcut_changed: J,
+    on_zoom_out_shortcut_changed: K,
+    on_reset_defaults: L,
 ) where
     F: Fn(ThemeMode) + 'static,
     G: Fn(ApplicationDensity) + 'static,
     H: Fn(String) + 'static,
     I: Fn(String) + 'static,
-    J: Fn() + 'static,
+    J: Fn(String) + 'static,
+    K: Fn(String) + 'static,
+    L: Fn() + 'static,
 {
     let dialog = gtk::Dialog::builder()
         .modal(true)
@@ -150,6 +160,8 @@ pub fn present<F, G, H, I, J>(
     let current_density = Rc::new(Cell::new(default_density));
     let current_fullscreen_shortcut = Rc::new(RefCell::new(workspace_fullscreen_shortcut));
     let current_density_shortcut = Rc::new(RefCell::new(workspace_density_shortcut));
+    let current_zoom_in_shortcut = Rc::new(RefCell::new(workspace_zoom_in_shortcut));
+    let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
     let reset_button = gtk::Button::with_label("Reset Defaults");
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
@@ -159,6 +171,8 @@ pub fn present<F, G, H, I, J>(
         current_density.get(),
         current_fullscreen_shortcut.borrow().as_str(),
         current_density_shortcut.borrow().as_str(),
+        current_zoom_in_shortcut.borrow().as_str(),
+        current_zoom_out_shortcut.borrow().as_str(),
     );
 
     let intro = gtk::Box::builder()
@@ -198,7 +212,7 @@ pub fn present<F, G, H, I, J>(
     intro_body.append(&intro_top);
 
     let body = gtk::Label::builder()
-        .label("Set defaults for new launch tabs and keep a few high-value controls close at hand. Running workspaces keep their own preset theme, and the density hotkey only changes the active workspace.")
+        .label("Set defaults for new launch tabs and keep a few high-value controls close at hand. Running workspaces keep their own preset theme, and workspace shortcuts only affect the active workspace.")
         .halign(gtk::Align::Start)
         .wrap(true)
         .css_classes(["field-hint", "settings-copy"])
@@ -206,7 +220,7 @@ pub fn present<F, G, H, I, J>(
     intro_body.append(&body);
 
     let intro_note = gtk::Label::builder()
-        .label("Launch defaults are immediate. Workspace presets still take over after a workspace starts.")
+        .label("Launch defaults are immediate. Running workspace zoom is session-scoped and restored with saved workspaces.")
         .halign(gtk::Align::Start)
         .css_classes(["settings-inline-note"])
         .build();
@@ -217,6 +231,8 @@ pub fn present<F, G, H, I, J>(
     let density_callback = Rc::new(on_density_changed);
     let fullscreen_shortcut_callback = Rc::new(on_fullscreen_shortcut_changed);
     let density_shortcut_callback = Rc::new(on_density_shortcut_changed);
+    let zoom_in_shortcut_callback = Rc::new(on_zoom_in_shortcut_changed);
+    let zoom_out_shortcut_callback = Rc::new(on_zoom_out_shortcut_changed);
     let reset_callback = Rc::new(on_reset_defaults);
 
     let theme_section = gtk::Box::builder()
@@ -253,6 +269,8 @@ pub fn present<F, G, H, I, J>(
         let current_density = current_density.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let reset_button = reset_button.clone();
         let theme_callback = theme_callback.clone();
         button.connect_clicked(move |_| {
@@ -266,6 +284,8 @@ pub fn present<F, G, H, I, J>(
                     current_density.get(),
                     current_fullscreen_shortcut.borrow().as_str(),
                     current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
                 );
             }
         });
@@ -307,6 +327,8 @@ pub fn present<F, G, H, I, J>(
         let current_theme = current_theme.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let reset_button = reset_button.clone();
         let density_callback = density_callback.clone();
         button.connect_clicked(move |_| {
@@ -320,6 +342,8 @@ pub fn present<F, G, H, I, J>(
                     density,
                     current_fullscreen_shortcut.borrow().as_str(),
                     current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
                 );
             }
         });
@@ -348,7 +372,11 @@ pub fn present<F, G, H, I, J>(
     ));
     let fullscreen_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
-        .css_classes(["field-hint", "settings-shortcut-note", "settings-shortcut-status"])
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
         .visible(false)
         .build();
     let fullscreen_capture_label = gtk::Label::builder()
@@ -364,16 +392,16 @@ pub fn present<F, G, H, I, J>(
     fullscreen_record_button.add_css_class("pill-button");
     fullscreen_record_button.add_css_class("secondary-button");
     fullscreen_record_button.add_css_class("settings-shortcut-record-button");
-    let fullscreen_control = build_shortcut_capture_control(
-        &fullscreen_capture_label,
-        &fullscreen_record_button,
-    );
+    let fullscreen_control =
+        build_shortcut_capture_control(&fullscreen_capture_label, &fullscreen_record_button);
     let fullscreen_recording = Rc::new(Cell::new(false));
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let reset_button = reset_button.clone();
         let status = fullscreen_status.clone();
         let capture_label = fullscreen_capture_label.clone();
@@ -396,7 +424,9 @@ pub fn present<F, G, H, I, J>(
             let Some((shortcut, label)) =
                 normalize_captured_shortcut(controller, key, keycode, state)
             else {
-                status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
                 status.set_visible(true);
                 return glib::Propagation::Stop;
             };
@@ -414,6 +444,8 @@ pub fn present<F, G, H, I, J>(
                     current_density.get(),
                     current_fullscreen_shortcut.borrow().as_str(),
                     current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
                 );
             }
             glib::Propagation::Stop
@@ -454,10 +486,18 @@ pub fn present<F, G, H, I, J>(
         &["F11", "<Shift>F11", "<Ctrl>F11"],
     ));
 
-    shortcuts_section.append(&gtk::Separator::builder().orientation(gtk::Orientation::Horizontal).build());
+    shortcuts_section.append(
+        &gtk::Separator::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .build(),
+    );
     let density_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
-        .css_classes(["field-hint", "settings-shortcut-note", "settings-shortcut-status"])
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
         .visible(false)
         .build();
     let density_capture_label = gtk::Label::builder()
@@ -473,16 +513,16 @@ pub fn present<F, G, H, I, J>(
     density_record_button.add_css_class("pill-button");
     density_record_button.add_css_class("secondary-button");
     density_record_button.add_css_class("settings-shortcut-record-button");
-    let density_control = build_shortcut_capture_control(
-        &density_capture_label,
-        &density_record_button,
-    );
+    let density_control =
+        build_shortcut_capture_control(&density_capture_label, &density_record_button);
     let density_recording = Rc::new(Cell::new(false));
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let reset_button = reset_button.clone();
         let status = density_status.clone();
         let capture_label = density_capture_label.clone();
@@ -505,7 +545,9 @@ pub fn present<F, G, H, I, J>(
             let Some((shortcut, label)) =
                 normalize_captured_shortcut(controller, key, keycode, state)
             else {
-                status.set_label("That key cannot be used alone. Try a function key or add modifiers.");
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
                 status.set_visible(true);
                 return glib::Propagation::Stop;
             };
@@ -523,6 +565,8 @@ pub fn present<F, G, H, I, J>(
                     current_density.get(),
                     current_fullscreen_shortcut.borrow().as_str(),
                     current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
                 );
             }
             glib::Propagation::Stop
@@ -560,11 +604,249 @@ pub fn present<F, G, H, I, J>(
         "Rotates only the current workspace without changing the saved app default.",
         &density_control,
         &density_status,
-        &[
-            "<Ctrl><Shift>D",
-            "<Shift>F8",
-            "<Alt><Super>D",
-        ],
+        &["<Ctrl><Shift>D", "<Shift>F8", "<Alt><Super>D"],
+    ));
+
+    shortcuts_section.append(
+        &gtk::Separator::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .build(),
+    );
+    let zoom_in_status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
+        .visible(false)
+        .build();
+    let zoom_in_capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
+        .build();
+    sync_shortcut_capture_label(
+        &zoom_in_capture_label,
+        current_zoom_in_shortcut.borrow().as_str(),
+    );
+    let zoom_in_record_button = gtk::Button::with_label("Record");
+    zoom_in_record_button.add_css_class("pill-button");
+    zoom_in_record_button.add_css_class("secondary-button");
+    zoom_in_record_button.add_css_class("settings-shortcut-record-button");
+    let zoom_in_control =
+        build_shortcut_capture_control(&zoom_in_capture_label, &zoom_in_record_button);
+    let zoom_in_recording = Rc::new(Cell::new(false));
+    {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let reset_button = reset_button.clone();
+        let status = zoom_in_status.clone();
+        let capture_label = zoom_in_capture_label.clone();
+        let record_button = zoom_in_record_button.clone();
+        let recording = zoom_in_recording.clone();
+        let callback = zoom_in_shortcut_callback.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
+                status.set_visible(true);
+                return glib::Propagation::Stop;
+            };
+
+            recording.set(false);
+            set_recorder_idle(&record_button, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
+            if current_zoom_in_shortcut.borrow().as_str() != shortcut {
+                current_zoom_in_shortcut.replace(shortcut.clone());
+                callback(shortcut);
+                sync_reset_button_state(
+                    &reset_button,
+                    current_theme.get(),
+                    current_density.get(),
+                    current_fullscreen_shortcut.borrow().as_str(),
+                    current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
+                );
+            }
+            glib::Propagation::Stop
+        });
+        zoom_in_record_button.add_controller(key_controller);
+    }
+    {
+        let status = zoom_in_status.clone();
+        let record_button = zoom_in_record_button.clone();
+        let recording = zoom_in_recording.clone();
+        zoom_in_record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = zoom_in_status.clone();
+        let record_button = zoom_in_record_button.clone();
+        let recording = zoom_in_recording.clone();
+        zoom_in_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            }
+        });
+    }
+    shortcuts_section.append(&build_shortcut_entry_row(
+        "Zoom in terminal text",
+        "Applies only to the active workspace and is restored with saved workspace sessions.",
+        &zoom_in_control,
+        &zoom_in_status,
+        &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
+    ));
+
+    shortcuts_section.append(
+        &gtk::Separator::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .build(),
+    );
+    let zoom_out_status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
+        .visible(false)
+        .build();
+    let zoom_out_capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
+        .build();
+    sync_shortcut_capture_label(
+        &zoom_out_capture_label,
+        current_zoom_out_shortcut.borrow().as_str(),
+    );
+    let zoom_out_record_button = gtk::Button::with_label("Record");
+    zoom_out_record_button.add_css_class("pill-button");
+    zoom_out_record_button.add_css_class("secondary-button");
+    zoom_out_record_button.add_css_class("settings-shortcut-record-button");
+    let zoom_out_control =
+        build_shortcut_capture_control(&zoom_out_capture_label, &zoom_out_record_button);
+    let zoom_out_recording = Rc::new(Cell::new(false));
+    {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let reset_button = reset_button.clone();
+        let status = zoom_out_status.clone();
+        let capture_label = zoom_out_capture_label.clone();
+        let record_button = zoom_out_record_button.clone();
+        let recording = zoom_out_recording.clone();
+        let callback = zoom_out_shortcut_callback.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
+                status.set_visible(true);
+                return glib::Propagation::Stop;
+            };
+
+            recording.set(false);
+            set_recorder_idle(&record_button, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
+            if current_zoom_out_shortcut.borrow().as_str() != shortcut {
+                current_zoom_out_shortcut.replace(shortcut.clone());
+                callback(shortcut);
+                sync_reset_button_state(
+                    &reset_button,
+                    current_theme.get(),
+                    current_density.get(),
+                    current_fullscreen_shortcut.borrow().as_str(),
+                    current_density_shortcut.borrow().as_str(),
+                    current_zoom_in_shortcut.borrow().as_str(),
+                    current_zoom_out_shortcut.borrow().as_str(),
+                );
+            }
+            glib::Propagation::Stop
+        });
+        zoom_out_record_button.add_controller(key_controller);
+    }
+    {
+        let status = zoom_out_status.clone();
+        let record_button = zoom_out_record_button.clone();
+        let recording = zoom_out_recording.clone();
+        zoom_out_record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = zoom_out_status.clone();
+        let record_button = zoom_out_record_button.clone();
+        let recording = zoom_out_recording.clone();
+        zoom_out_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            }
+        });
+    }
+    shortcuts_section.append(&build_shortcut_entry_row(
+        "Zoom out terminal text",
+        "Applies only to the active workspace and is restored with saved workspace sessions.",
+        &zoom_out_control,
+        &zoom_out_status,
+        &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
     ));
 
     let actions = gtk::Box::builder()
@@ -586,16 +868,26 @@ pub fn present<F, G, H, I, J>(
         let current_density = current_density.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
         let fullscreen_capture_label = fullscreen_capture_label.clone();
         let density_capture_label = density_capture_label.clone();
+        let zoom_in_capture_label = zoom_in_capture_label.clone();
+        let zoom_out_capture_label = zoom_out_capture_label.clone();
         let fullscreen_record_button = fullscreen_record_button.clone();
         let density_record_button = density_record_button.clone();
+        let zoom_in_record_button = zoom_in_record_button.clone();
+        let zoom_out_record_button = zoom_out_record_button.clone();
         let fullscreen_status = fullscreen_status.clone();
         let density_status = density_status.clone();
+        let zoom_in_status = zoom_in_status.clone();
+        let zoom_out_status = zoom_out_status.clone();
         let fullscreen_recording = fullscreen_recording.clone();
         let density_recording = density_recording.clone();
+        let zoom_in_recording = zoom_in_recording.clone();
+        let zoom_out_recording = zoom_out_recording.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
@@ -606,7 +898,11 @@ pub fn present<F, G, H, I, J>(
                 || current_fullscreen_shortcut.borrow().as_str()
                     != defaults.workspace_fullscreen_shortcut
                 || current_density_shortcut.borrow().as_str()
-                    != defaults.workspace_density_shortcut;
+                    != defaults.workspace_density_shortcut
+                || current_zoom_in_shortcut.borrow().as_str()
+                    != defaults.workspace_zoom_in_shortcut
+                || current_zoom_out_shortcut.borrow().as_str()
+                    != defaults.workspace_zoom_out_shortcut;
             if !changed {
                 return;
             }
@@ -615,6 +911,8 @@ pub fn present<F, G, H, I, J>(
             current_density.set(defaults.default_density);
             current_fullscreen_shortcut.replace(defaults.workspace_fullscreen_shortcut.clone());
             current_density_shortcut.replace(defaults.workspace_density_shortcut.clone());
+            current_zoom_in_shortcut.replace(defaults.workspace_zoom_in_shortcut.clone());
+            current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
             sync_shortcut_capture_label(
@@ -625,16 +923,30 @@ pub fn present<F, G, H, I, J>(
                 &density_capture_label,
                 &defaults.workspace_density_shortcut,
             );
+            sync_shortcut_capture_label(
+                &zoom_in_capture_label,
+                &defaults.workspace_zoom_in_shortcut,
+            );
+            sync_shortcut_capture_label(
+                &zoom_out_capture_label,
+                &defaults.workspace_zoom_out_shortcut,
+            );
             fullscreen_recording.set(false);
             density_recording.set(false);
+            zoom_in_recording.set(false);
+            zoom_out_recording.set(false);
             set_recorder_idle(&fullscreen_record_button, &fullscreen_status);
             set_recorder_idle(&density_record_button, &density_status);
+            set_recorder_idle(&zoom_in_record_button, &zoom_in_status);
+            set_recorder_idle(&zoom_out_record_button, &zoom_out_status);
             sync_reset_button_state(
                 &reset_button,
                 defaults.default_theme,
                 defaults.default_density,
                 &defaults.workspace_fullscreen_shortcut,
                 &defaults.workspace_density_shortcut,
+                &defaults.workspace_zoom_in_shortcut,
+                &defaults.workspace_zoom_out_shortcut,
             );
             reset_callback();
         });

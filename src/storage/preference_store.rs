@@ -12,6 +12,8 @@ use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 const STORE_VERSION: u32 = 1;
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
+const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
+const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPreferences {
@@ -19,6 +21,8 @@ pub struct AppPreferences {
     pub default_theme: ThemeMode,
     pub workspace_fullscreen_shortcut: String,
     pub workspace_density_shortcut: String,
+    pub workspace_zoom_in_shortcut: String,
+    pub workspace_zoom_out_shortcut: String,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +41,10 @@ struct PreferenceDocument {
     workspace_fullscreen_shortcut: String,
     #[serde(default = "default_density_shortcut")]
     workspace_density_shortcut: String,
+    #[serde(default = "default_zoom_in_shortcut")]
+    workspace_zoom_in_shortcut: String,
+    #[serde(default = "default_zoom_out_shortcut")]
+    workspace_zoom_out_shortcut: String,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -55,6 +63,14 @@ fn default_density_shortcut() -> String {
     DEFAULT_WORKSPACE_DENSITY_SHORTCUT.into()
 }
 
+fn default_zoom_in_shortcut() -> String {
+    DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT.into()
+}
+
+fn default_zoom_out_shortcut() -> String {
+    DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT.into()
+}
+
 fn normalize_fullscreen_shortcut(shortcut: &str) -> String {
     match shortcut.trim() {
         "f11" | "F11" => "F11".into(),
@@ -70,6 +86,23 @@ fn normalize_density_shortcut(shortcut: &str) -> String {
         "ctrl-shift-m" => "<Ctrl><Shift>M".into(),
         "shift-f8" => "<Shift>F8".into(),
         "<Control><Alt>ClearGrab" | "<Ctrl><Alt>ClearGrab" => "<Ctrl><Alt>KP_Multiply".into(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_zoom_in_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "ctrl-plus" => "<Ctrl>plus".into(),
+        "ctrl-equal" => "<Ctrl>equal".into(),
+        "ctrl-kp-add" => "<Ctrl>KP_Add".into(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_zoom_out_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "ctrl-minus" => "<Ctrl>minus".into(),
+        "ctrl-kp-subtract" => "<Ctrl>KP_Subtract".into(),
         other => other.to_string(),
     }
 }
@@ -111,6 +144,12 @@ impl PreferenceStore {
                 workspace_density_shortcut: normalize_density_shortcut(
                     &document.workspace_density_shortcut,
                 ),
+                workspace_zoom_in_shortcut: normalize_zoom_in_shortcut(
+                    &document.workspace_zoom_in_shortcut,
+                ),
+                workspace_zoom_out_shortcut: normalize_zoom_out_shortcut(
+                    &document.workspace_zoom_out_shortcut,
+                ),
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -147,6 +186,18 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    pub fn save_workspace_zoom_in_shortcut(&self, shortcut: &str) {
+        let mut preferences = self.load();
+        preferences.workspace_zoom_in_shortcut = shortcut.trim().to_string();
+        self.save(&preferences);
+    }
+
+    pub fn save_workspace_zoom_out_shortcut(&self, shortcut: &str) {
+        let mut preferences = self.load();
+        preferences.workspace_zoom_out_shortcut = shortcut.trim().to_string();
+        self.save(&preferences);
+    }
+
     pub fn save(&self, preferences: &AppPreferences) {
         let Some(path) = self.path.as_ref() else {
             return;
@@ -158,6 +209,8 @@ impl PreferenceStore {
             default_theme: preferences.default_theme,
             workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
+            workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
+            workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -201,6 +254,8 @@ impl Default for AppPreferences {
             default_theme: default_theme(),
             workspace_fullscreen_shortcut: default_fullscreen_shortcut(),
             workspace_density_shortcut: default_density_shortcut(),
+            workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
+            workspace_zoom_out_shortcut: default_zoom_out_shortcut(),
         }
     }
 }
@@ -233,14 +288,10 @@ mod tests {
 
         assert_eq!(store.load().default_density, ApplicationDensity::Compact);
         assert_eq!(store.load().default_theme, ThemeMode::System);
-        assert_eq!(
-            store.load().workspace_fullscreen_shortcut,
-            "F11"
-        );
-        assert_eq!(
-            store.load().workspace_density_shortcut,
-            "<Ctrl><Shift>D"
-        );
+        assert_eq!(store.load().workspace_fullscreen_shortcut, "F11");
+        assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
+        assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
+        assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
     }
 
     #[test]
@@ -253,6 +304,8 @@ mod tests {
             default_theme: ThemeMode::Dark,
             workspace_fullscreen_shortcut: "<Shift>F11".into(),
             workspace_density_shortcut: "<Shift>F8".into(),
+            workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
+            workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
         });
 
         assert_eq!(
@@ -262,6 +315,8 @@ mod tests {
                 default_theme: ThemeMode::Dark,
                 workspace_fullscreen_shortcut: "<Shift>F11".into(),
                 workspace_density_shortcut: "<Shift>F8".into(),
+                workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
+                workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
             }
         );
     }
@@ -270,11 +325,7 @@ mod tests {
     fn loads_legacy_last_density_field() {
         let dir = temp_dir("pref-legacy");
         let path = dir.join("preferences.toml");
-        fs::write(
-            &path,
-            "version = 1\nlast_density = \"comfortable\"\n",
-        )
-        .unwrap();
+        fs::write(&path, "version = 1\nlast_density = \"comfortable\"\n").unwrap();
 
         let store = PreferenceStore::from_path(path);
 
@@ -285,6 +336,8 @@ mod tests {
                 default_theme: ThemeMode::System,
                 workspace_fullscreen_shortcut: "F11".into(),
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
+                workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
+                workspace_zoom_out_shortcut: "<Ctrl>minus".into(),
             }
         );
     }
@@ -303,6 +356,8 @@ mod tests {
 
         assert_eq!(store.load().workspace_fullscreen_shortcut, "<Shift>F11");
         assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
+        assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
+        assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
     }
 
     #[test]
@@ -320,6 +375,25 @@ mod tests {
         assert_eq!(
             store.load().workspace_density_shortcut,
             "<Ctrl><Alt>KP_Multiply"
+        );
+    }
+
+    #[test]
+    fn normalizes_legacy_zoom_shortcut_enums_to_accelerators() {
+        let dir = temp_dir("pref-legacy-zoom-shortcuts");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nworkspace_fullscreen_shortcut = \"F11\"\nworkspace_density_shortcut = \"<Ctrl><Shift>D\"\nworkspace_zoom_in_shortcut = \"ctrl-equal\"\nworkspace_zoom_out_shortcut = \"ctrl-kp-subtract\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>equal");
+        assert_eq!(
+            store.load().workspace_zoom_out_shortcut,
+            "<Ctrl>KP_Subtract"
         );
     }
 }

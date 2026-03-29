@@ -11,9 +11,9 @@ pub struct WorkspaceRuntime {
 }
 
 impl WorkspaceRuntime {
-    pub fn apply_density(&self, density: ApplicationDensity) {
+    pub fn apply_density(&self, density: ApplicationDensity, zoom_steps: i32) {
         for session in &self.sessions {
-            session.apply_density(density);
+            session.apply_density(density, zoom_steps);
         }
     }
 
@@ -29,7 +29,7 @@ pub struct WorkspaceView {
     pub runtime: WorkspaceRuntime,
 }
 
-pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
+pub fn build(preset: &WorkspacePreset, workspace_root: &Path, zoom_steps: i32) -> WorkspaceView {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -66,7 +66,7 @@ pub fn build(preset: &WorkspacePreset, workspace_root: &Path) -> WorkspaceView {
     summary.append(&path_label);
     shell.append(&summary);
 
-    let layout = layout_tree::build(&preset.layout, workspace_root, preset.density);
+    let layout = layout_tree::build(&preset.layout, workspace_root, preset.density, zoom_steps);
     layout.widget.set_hexpand(true);
     layout.widget.set_vexpand(true);
     shell.append(&layout.widget);

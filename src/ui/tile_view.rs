@@ -14,8 +14,13 @@ pub struct TileView {
     pub session: TerminalSession,
 }
 
-pub fn build(tile: &TileSpec, workspace_root: &Path, density: ApplicationDensity) -> TileView {
-    let session = TerminalSession::spawn(tile, workspace_root, density);
+pub fn build(
+    tile: &TileSpec,
+    workspace_root: &Path,
+    density: ApplicationDensity,
+    zoom_steps: i32,
+) -> TileView {
+    let session = TerminalSession::spawn(tile, workspace_root, density, zoom_steps);
     let resolved_dir = tile.working_directory.resolve(workspace_root);
 
     let shell = gtk::Box::builder()

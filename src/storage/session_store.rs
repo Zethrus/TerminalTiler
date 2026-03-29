@@ -13,6 +13,10 @@ use crate::storage::fs_utils::{
 
 const SESSION_VERSION: u32 = 1;
 
+fn default_terminal_zoom_steps() -> i32 {
+    0
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct SessionDocument {
     version: u32,
@@ -25,6 +29,8 @@ pub struct SavedTab {
     pub preset: WorkspacePreset,
     pub workspace_root: PathBuf,
     pub custom_title: Option<String>,
+    #[serde(default = "default_terminal_zoom_steps")]
+    pub terminal_zoom_steps: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -288,11 +294,13 @@ mod tests {
                     preset: sample_preset(),
                     workspace_root: valid_root.clone(),
                     custom_title: Some("valid".into()),
+                    terminal_zoom_steps: 2,
                 },
                 SavedTab {
                     preset: sample_preset(),
                     workspace_root: dir.join("missing"),
                     custom_title: Some("missing".into()),
+                    terminal_zoom_steps: -1,
                 },
             ],
         };
@@ -305,6 +313,40 @@ mod tests {
         assert_eq!(session.tabs.len(), 1);
         assert_eq!(session.active_tab_index, 0);
         assert!(session.tabs[0].workspace_root.is_absolute());
+        assert_eq!(session.tabs[0].terminal_zoom_steps, 2);
         assert!(outcome.warning.is_some());
+    }
+
+    #[test]
+    fn loads_legacy_sessions_without_zoom_steps() {
+        let dir = temp_dir("legacy-session-zoom");
+        let valid_root = dir.join("workspace");
+        fs::create_dir_all(&valid_root).unwrap();
+
+        let path = dir.join("session.toml");
+        let legacy_document = SessionDocument {
+            version: SESSION_VERSION,
+            active_tab_index: 0,
+            tabs: vec![SavedTab {
+                preset: sample_preset(),
+                workspace_root: valid_root,
+                custom_title: Some("legacy".into()),
+                terminal_zoom_steps: 3,
+            }],
+        };
+        let legacy_session = toml::to_string_pretty(&legacy_document)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("terminal_zoom_steps = "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, legacy_session).unwrap();
+        let store = SessionStore::from_path(path);
+
+        let outcome = store.load_with_status();
+
+        let session = outcome.session.expect("legacy session should load");
+        assert_eq!(session.tabs.len(), 1);
+        assert_eq!(session.tabs[0].terminal_zoom_steps, 0);
     }
 }

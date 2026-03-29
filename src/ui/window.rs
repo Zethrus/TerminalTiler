@@ -10,6 +10,7 @@ use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::ui::{launch_screen, settings_dialog, workspace_view};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -22,6 +23,8 @@ type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
 
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
+const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
+const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 
 fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     let manager = adw::StyleManager::default();
@@ -50,7 +53,11 @@ fn apply_window_density(window: &adw::ApplicationWindow, density: Option<Applica
     }
 }
 
-fn shortcut_display_label(_window: &adw::ApplicationWindow, accelerator: &str, fallback: &str) -> String {
+fn shortcut_display_label(
+    _window: &adw::ApplicationWindow,
+    accelerator: &str,
+    fallback: &str,
+) -> String {
     let trigger = gtk::ShortcutTrigger::parse_string(accelerator.trim())
         .or_else(|| gtk::ShortcutTrigger::parse_string(fallback))
         .expect("default shortcut trigger should parse");
@@ -89,6 +96,7 @@ struct TabLabel {
 struct WorkspaceState {
     preset: WorkspacePreset,
     runtime: workspace_view::WorkspaceRuntime,
+    terminal_zoom_steps: i32,
 }
 
 #[derive(Clone)]
@@ -189,8 +197,16 @@ pub fn present(
     let current_density_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_density_shortcut.clone(),
     ));
+    let current_zoom_in_shortcut = Rc::new(RefCell::new(
+        current_shortcuts.workspace_zoom_in_shortcut.clone(),
+    ));
+    let current_zoom_out_shortcut = Rc::new(RefCell::new(
+        current_shortcuts.workspace_zoom_out_shortcut.clone(),
+    ));
     let fullscreen_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
 
     {
         let title_for_select = title.clone();
@@ -396,7 +412,9 @@ pub fn present(
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
-                let built_workspace = workspace_view::build(&preset, &workspace_root);
+                let terminal_zoom_steps = 0;
+                let built_workspace =
+                    workspace_view::build(&preset, &workspace_root, terminal_zoom_steps);
                 let (page_name, previous_runtime) = {
                     let mut tabs = tabs_for_workspace.borrow_mut();
                     let tab = tabs
@@ -411,6 +429,7 @@ pub fn present(
                     tab.content = TabContent::Workspace(Box::new(WorkspaceState {
                         preset: preset.clone(),
                         runtime: built_workspace.runtime.clone(),
+                        terminal_zoom_steps,
                     }));
                     tab.workspace_root = Some(workspace_root.clone());
                     (tab.page_name.clone(), previous_runtime)
@@ -592,6 +611,22 @@ pub fn present(
         current_density_shortcut.borrow().as_str(),
     );
 
+    install_workspace_zoom_in_shortcut(
+        &window,
+        &zoom_in_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+        current_zoom_in_shortcut.borrow().as_str(),
+    );
+
+    install_workspace_zoom_out_shortcut(
+        &window,
+        &zoom_out_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+        current_zoom_out_shortcut.borrow().as_str(),
+    );
+
     {
         let window_for_notify = window.clone();
         let title_root_for_notify = title.root.clone();
@@ -683,8 +718,12 @@ pub fn present(
         let fullscreen_button_for_settings = fullscreen_button.clone();
         let fullscreen_shortcut_controller = fullscreen_shortcut_controller.clone();
         let density_shortcut_controller = density_shortcut_controller.clone();
+        let zoom_in_shortcut_controller = zoom_in_shortcut_controller.clone();
+        let zoom_out_shortcut_controller = zoom_out_shortcut_controller.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
 
         settings_button.connect_clicked(move |_| {
             let preferences = preference_store_for_settings.load();
@@ -694,6 +733,8 @@ pub fn present(
                 preferences.default_density,
                 preferences.workspace_fullscreen_shortcut,
                 preferences.workspace_density_shortcut,
+                preferences.workspace_zoom_in_shortcut,
+                preferences.workspace_zoom_out_shortcut,
                 {
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
@@ -813,6 +854,76 @@ pub fn present(
                 },
                 {
                     let preference_store = preference_store_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    let tabs = tabs_for_settings.clone();
+                    let active_tab_id = active_for_settings.clone();
+                    let window = window_for_settings.clone();
+                    let controller_handle = zoom_in_shortcut_controller.clone();
+                    let current_shortcut = current_zoom_in_shortcut.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_zoom_in_shortcut(&shortcut);
+                        current_shortcut.replace(shortcut.clone());
+                        install_workspace_zoom_in_shortcut(
+                            &window,
+                            &controller_handle,
+                            &tabs,
+                            &active_tab_id,
+                            &shortcut,
+                        );
+                        logging::info(format!(
+                            "updated application settings workspace_zoom_in_shortcut={}",
+                            shortcut
+                        ));
+                        show_toast(
+                            &toast_overlay,
+                            &format!(
+                                "Zoom in shortcut set to {}",
+                                shortcut_display_label(
+                                    &window,
+                                    &shortcut,
+                                    DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT,
+                                )
+                            ),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    let tabs = tabs_for_settings.clone();
+                    let active_tab_id = active_for_settings.clone();
+                    let window = window_for_settings.clone();
+                    let controller_handle = zoom_out_shortcut_controller.clone();
+                    let current_shortcut = current_zoom_out_shortcut.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_zoom_out_shortcut(&shortcut);
+                        current_shortcut.replace(shortcut.clone());
+                        install_workspace_zoom_out_shortcut(
+                            &window,
+                            &controller_handle,
+                            &tabs,
+                            &active_tab_id,
+                            &shortcut,
+                        );
+                        logging::info(format!(
+                            "updated application settings workspace_zoom_out_shortcut={}",
+                            shortcut
+                        ));
+                        show_toast(
+                            &toast_overlay,
+                            &format!(
+                                "Zoom out shortcut set to {}",
+                                shortcut_display_label(
+                                    &window,
+                                    &shortcut,
+                                    DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT,
+                                )
+                            ),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let tabs = tabs_for_settings.clone();
@@ -822,8 +933,12 @@ pub fn present(
                     let window = window_for_settings.clone();
                     let fullscreen_controller = fullscreen_shortcut_controller.clone();
                     let density_controller = density_shortcut_controller.clone();
+                    let zoom_in_controller = zoom_in_shortcut_controller.clone();
+                    let zoom_out_controller = zoom_out_shortcut_controller.clone();
                     let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
                     let current_density_shortcut = current_density_shortcut.clone();
+                    let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+                    let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
@@ -831,6 +946,10 @@ pub fn present(
                             .replace(defaults.workspace_fullscreen_shortcut.clone());
                         current_density_shortcut
                             .replace(defaults.workspace_density_shortcut.clone());
+                        current_zoom_in_shortcut
+                            .replace(defaults.workspace_zoom_in_shortcut.clone());
+                        current_zoom_out_shortcut
+                            .replace(defaults.workspace_zoom_out_shortcut.clone());
                         install_workspace_fullscreen_shortcut(
                             &window,
                             &fullscreen_controller,
@@ -844,6 +963,20 @@ pub fn present(
                             &tabs,
                             &active_tab_id,
                             &defaults.workspace_density_shortcut,
+                        );
+                        install_workspace_zoom_in_shortcut(
+                            &window,
+                            &zoom_in_controller,
+                            &tabs,
+                            &active_tab_id,
+                            &defaults.workspace_zoom_in_shortcut,
+                        );
+                        install_workspace_zoom_out_shortcut(
+                            &window,
+                            &zoom_out_controller,
+                            &tabs,
+                            &active_tab_id,
+                            &defaults.workspace_zoom_out_shortcut,
                         );
                         sync_fullscreen_chrome(
                             &window,
@@ -1198,8 +1331,10 @@ fn restore_saved_session(
         let page_name = tab_page_name(tab_id);
         let workspace_root = saved_tab.workspace_root;
         let preset = saved_tab.preset;
+        let terminal_zoom_steps =
+            clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
 
-        let built_workspace = workspace_view::build(&preset, &workspace_root);
+        let built_workspace = workspace_view::build(&preset, &workspace_root, terminal_zoom_steps);
         tabs.borrow_mut().push(WorkspaceTab {
             id: tab_id,
             default_title: format!("Workspace {}", tab_id),
@@ -1209,6 +1344,7 @@ fn restore_saved_session(
             content: TabContent::Workspace(Box::new(WorkspaceState {
                 preset: preset.clone(),
                 runtime: built_workspace.runtime.clone(),
+                terminal_zoom_steps,
             })),
             workspace_root: Some(workspace_root.clone()),
         });
@@ -1536,7 +1672,7 @@ fn cycle_active_workspace_density(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
 ) -> Option<ApplicationDensity> {
-    let (workspace_name, next_density, runtime) = {
+    let (workspace_name, next_density, terminal_zoom_steps, runtime) = {
         let mut tabs = tabs.borrow_mut();
         let tab = tabs.iter_mut().find(|tab| tab.id == active_tab_id)?;
         let workspace = match &mut tab.content {
@@ -1544,15 +1680,18 @@ fn cycle_active_workspace_density(
             TabContent::LaunchDeck => return None,
         };
         let next_density = workspace.preset.density.next();
+        workspace.terminal_zoom_steps =
+            clamp_terminal_zoom_steps(next_density, workspace.terminal_zoom_steps);
         workspace.preset.density = next_density;
         (
             workspace.preset.name.clone(),
             next_density,
+            workspace.terminal_zoom_steps,
             workspace.runtime.clone(),
         )
     };
 
-    runtime.apply_density(next_density);
+    runtime.apply_density(next_density, terminal_zoom_steps);
     apply_window_density(window, Some(next_density));
     logging::info(format!(
         "cycled workspace density preset='{}' density={}",
@@ -1562,12 +1701,47 @@ fn cycle_active_workspace_density(
     Some(next_density)
 }
 
+fn adjust_active_workspace_zoom(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+    delta: i32,
+) -> Option<i32> {
+    let (workspace_name, density, terminal_zoom_steps, runtime) = {
+        let mut tabs = tabs.borrow_mut();
+        let tab = tabs.iter_mut().find(|tab| tab.id == active_tab_id)?;
+        let workspace = match &mut tab.content {
+            TabContent::Workspace(workspace) => workspace,
+            TabContent::LaunchDeck => return None,
+        };
+        let next_zoom_steps = clamp_terminal_zoom_steps(
+            workspace.preset.density,
+            workspace.terminal_zoom_steps + delta,
+        );
+        if next_zoom_steps == workspace.terminal_zoom_steps {
+            return None;
+        }
+        workspace.terminal_zoom_steps = next_zoom_steps;
+        (
+            workspace.preset.name.clone(),
+            workspace.preset.density,
+            workspace.terminal_zoom_steps,
+            workspace.runtime.clone(),
+        )
+    };
+
+    runtime.apply_density(density, terminal_zoom_steps);
+    logging::info(format!(
+        "adjusted workspace terminal zoom preset='{}' zoom_steps={}",
+        workspace_name, terminal_zoom_steps
+    ));
+    Some(terminal_zoom_steps)
+}
+
 fn install_shortcut_controller<F>(
     window: &adw::ApplicationWindow,
     controller_handle: &ShortcutControllerHandle,
     shortcut_name: &str,
-    accelerator: &str,
-    fallback_accelerator: &str,
+    accelerators: &[String],
     on_activate: F,
 ) where
     F: Fn() -> glib::Propagation + 'static,
@@ -1578,37 +1752,84 @@ fn install_shortcut_controller<F>(
 
     let shortcut_controller = gtk::ShortcutController::new();
     shortcut_controller.set_scope(gtk::ShortcutScope::Global);
-    let parsed_trigger = gtk::ShortcutTrigger::parse_string(accelerator.trim());
-    let trigger = if let Some(trigger) = parsed_trigger {
-        logging::info(format!(
-            "installed {} shortcut requested='{}' active='{}'",
-            shortcut_name,
-            accelerator.trim(),
-            trigger.to_str()
-        ));
-        trigger
-    } else if let Some(trigger) = gtk::ShortcutTrigger::parse_string(fallback_accelerator) {
-        logging::info(format!(
-            "shortcut parse fallback {} requested='{}' fallback='{}' active='{}'",
-            shortcut_name,
-            accelerator.trim(),
-            fallback_accelerator,
-            trigger.to_str()
-        ));
-        trigger
-    } else {
+    let on_activate = Rc::new(on_activate);
+    let mut installed_triggers = Vec::new();
+    let mut active_labels = Vec::new();
+    for accelerator in accelerators {
+        let accelerator = accelerator.trim();
+        if accelerator.is_empty() || installed_triggers.iter().any(|item| item == accelerator) {
+            continue;
+        }
+        installed_triggers.push(accelerator.to_string());
+
+        let Some(trigger) = gtk::ShortcutTrigger::parse_string(accelerator) else {
+            logging::error(format!(
+                "failed to parse {} shortcut accelerator='{}'",
+                shortcut_name, accelerator
+            ));
+            continue;
+        };
+
+        active_labels.push(trigger.to_str().to_string());
+        let on_activate = on_activate.clone();
+        let action = gtk::CallbackAction::new(move |_, _| on_activate());
+        shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+    }
+
+    if installed_triggers.is_empty() {
         logging::error(format!(
-            "failed to install {} shortcut requested='{}' fallback='{}'",
+            "failed to install {} shortcut: no valid accelerators",
             shortcut_name,
-            accelerator.trim(),
-            fallback_accelerator,
         ));
         return;
-    };
-    let action = gtk::CallbackAction::new(move |_, _| on_activate());
-    shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+    }
+
+    logging::info(format!(
+        "installed {} shortcut requested={:?} active={:?}",
+        shortcut_name, installed_triggers, active_labels
+    ));
     window.add_controller(shortcut_controller.clone());
     *controller_handle.borrow_mut() = Some(shortcut_controller);
+}
+
+fn zoom_in_shortcut_accelerators(shortcut: &str) -> Vec<String> {
+    let trimmed = shortcut.trim();
+    let mut accelerators = vec![trimmed.to_string()];
+    if matches!(
+        trimmed,
+        "<Ctrl>plus"
+            | "<Control>plus"
+            | "<Primary>plus"
+            | "<Ctrl>equal"
+            | "<Control>equal"
+            | "<Primary>equal"
+            | "<Ctrl>KP_Add"
+            | "<Control>KP_Add"
+            | "<Primary>KP_Add"
+    ) {
+        accelerators.push("<Ctrl>plus".into());
+        accelerators.push("<Ctrl>equal".into());
+        accelerators.push("<Ctrl>KP_Add".into());
+    }
+    accelerators
+}
+
+fn zoom_out_shortcut_accelerators(shortcut: &str) -> Vec<String> {
+    let trimmed = shortcut.trim();
+    let mut accelerators = vec![trimmed.to_string()];
+    if matches!(
+        trimmed,
+        "<Ctrl>minus"
+            | "<Control>minus"
+            | "<Primary>minus"
+            | "<Ctrl>KP_Subtract"
+            | "<Control>KP_Subtract"
+            | "<Primary>KP_Subtract"
+    ) {
+        accelerators.push("<Ctrl>minus".into());
+        accelerators.push("<Ctrl>KP_Subtract".into());
+    }
+    accelerators
 }
 
 fn install_workspace_fullscreen_shortcut(
@@ -1625,8 +1846,10 @@ fn install_workspace_fullscreen_shortcut(
         window,
         controller_handle,
         "workspace_fullscreen",
-        shortcut,
-        DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT,
+        &[
+            shortcut.trim().to_string(),
+            DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT.into(),
+        ],
         move || {
             toggle_workspace_fullscreen(
                 &window_for_shortcut,
@@ -1652,8 +1875,10 @@ fn install_workspace_density_shortcut(
         window,
         controller_handle,
         "workspace_density",
-        shortcut,
-        DEFAULT_WORKSPACE_DENSITY_SHORTCUT,
+        &[
+            shortcut.trim().to_string(),
+            DEFAULT_WORKSPACE_DENSITY_SHORTCUT.into(),
+        ],
         move || {
             if cycle_active_workspace_density(
                 &window_for_shortcut,
@@ -1661,6 +1886,58 @@ fn install_workspace_density_shortcut(
                 active_for_shortcut.get(),
             )
             .is_some()
+            {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        },
+    );
+}
+
+fn install_workspace_zoom_in_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    shortcut: &str,
+) {
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        "workspace_zoom_in",
+        &zoom_in_shortcut_accelerators(shortcut),
+        move || {
+            if adjust_active_workspace_zoom(&tabs_for_shortcut, active_for_shortcut.get(), 1)
+                .is_some()
+            {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        },
+    );
+}
+
+fn install_workspace_zoom_out_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    shortcut: &str,
+) {
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        "workspace_zoom_out",
+        &zoom_out_shortcut_accelerators(shortcut),
+        move || {
+            if adjust_active_workspace_zoom(&tabs_for_shortcut, active_for_shortcut.get(), -1)
+                .is_some()
             {
                 glib::Propagation::Stop
             } else {
@@ -1693,13 +1970,21 @@ fn sync_fullscreen_chrome(
         fullscreen_button.set_label("Exit Fullscreen");
         fullscreen_button.set_tooltip_text(Some(&format!(
             "Exit fullscreen ({})",
-            shortcut_display_label(window, fullscreen_shortcut, DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT)
+            shortcut_display_label(
+                window,
+                fullscreen_shortcut,
+                DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT
+            )
         )));
     } else {
         fullscreen_button.set_label("Fullscreen");
         fullscreen_button.set_tooltip_text(Some(&format!(
             "Enter fullscreen ({})",
-            shortcut_display_label(window, fullscreen_shortcut, DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT)
+            shortcut_display_label(
+                window,
+                fullscreen_shortcut,
+                DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT
+            )
         )));
     }
 }
@@ -1727,6 +2012,7 @@ fn collect_session(
                 preset: workspace.preset.clone(),
                 workspace_root: root.clone(),
                 custom_title: tab.custom_title.clone(),
+                terminal_zoom_steps: workspace.terminal_zoom_steps,
             }),
             TabContent::LaunchDeck => None,
         })

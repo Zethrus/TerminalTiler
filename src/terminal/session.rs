@@ -12,6 +12,8 @@ use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
+const MIN_TERMINAL_FONT_POINTS: i32 = 7;
+const MAX_TERMINAL_FONT_POINTS: i32 = 20;
 
 #[derive(Clone)]
 pub struct TerminalSession {
@@ -37,7 +39,12 @@ impl TerminalSessionState {
 }
 
 impl TerminalSession {
-    pub fn spawn(tile: &TileSpec, workspace_root: &Path, density: ApplicationDensity) -> Self {
+    pub fn spawn(
+        tile: &TileSpec,
+        workspace_root: &Path,
+        density: ApplicationDensity,
+        zoom_steps: i32,
+    ) -> Self {
         let terminal = vte4::Terminal::new();
         terminal.set_hexpand(true);
         terminal.set_vexpand(true);
@@ -46,7 +53,7 @@ impl TerminalSession {
         terminal.set_clear_background(false);
         terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
         install_terminal_shortcuts(&terminal);
-        apply_terminal_density(&terminal, density);
+        apply_terminal_appearance(&terminal, density, zoom_steps);
 
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));
@@ -150,8 +157,8 @@ impl TerminalSession {
         request_process_termination(&self.state, &self.descriptor, reason);
     }
 
-    pub fn apply_density(&self, density: ApplicationDensity) {
-        apply_terminal_density(&self.terminal, density);
+    pub fn apply_density(&self, density: ApplicationDensity, zoom_steps: i32) {
+        apply_terminal_appearance(&self.terminal, density, zoom_steps);
     }
 
     pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
@@ -173,10 +180,24 @@ impl TerminalSession {
     }
 }
 
-fn apply_terminal_density(terminal: &vte4::Terminal, density: ApplicationDensity) {
+pub fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+    let base_points = density.terminal_font_points();
+    (base_points + zoom_steps).clamp(MIN_TERMINAL_FONT_POINTS, MAX_TERMINAL_FONT_POINTS)
+        - base_points
+}
+
+fn effective_terminal_font_points(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+    density.terminal_font_points() + clamp_terminal_zoom_steps(density, zoom_steps)
+}
+
+fn apply_terminal_appearance(
+    terminal: &vte4::Terminal,
+    density: ApplicationDensity,
+    zoom_steps: i32,
+) {
     terminal.set_font(Some(&pango::FontDescription::from_string(&format!(
         "JetBrains Mono {}",
-        density.terminal_font_points()
+        effective_terminal_font_points(density, zoom_steps)
     ))));
     terminal.set_cell_height_scale(density.terminal_line_height_scale());
 }
