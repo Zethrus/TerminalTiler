@@ -1009,7 +1009,7 @@ button.destructive-button:hover {
 
 .workspace-summary {
   padding: 6px 10px;
-  border-radius: 12px;
+  border-radius: 0;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
   margin-bottom: 2px;
 }
