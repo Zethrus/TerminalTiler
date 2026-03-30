@@ -211,8 +211,7 @@ fn resolve_wsl_runtime(
         }) {
             if distribution.version == 2 {
                 let selected = distribution.clone();
-                let selection_reason =
-                    format!("using configured WSL2 distro '{}'", selected.name);
+                let selection_reason = format!("using configured WSL2 distro '{}'", selected.name);
                 return Ok(WslRuntime {
                     distributions,
                     selected,
