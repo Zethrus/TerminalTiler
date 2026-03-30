@@ -144,11 +144,48 @@ pub fn present(
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&stack));
 
+    let close_to_background_notice = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .reveal_child(false)
+        .build();
+    let close_to_background_notice_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(18)
+        .margin_end(18)
+        .build();
+    close_to_background_notice_row.add_css_class("card");
+    close_to_background_notice_row.append(
+        &gtk::Image::builder()
+            .icon_name("dialog-warning-symbolic")
+            .pixel_size(18)
+            .valign(gtk::Align::Start)
+            .build(),
+    );
+    close_to_background_notice_row.append(
+        &gtk::Label::builder()
+            .label("Close-to-background is enabled, but no system tray watcher is available. Closing the window will quit TerminalTiler normally.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
+    let close_to_background_notice_button = gtk::Button::with_label("Open Settings");
+    close_to_background_notice_button.add_css_class("pill-button");
+    close_to_background_notice_button.add_css_class("suggested-action");
+    close_to_background_notice_button.set_valign(gtk::Align::Center);
+    close_to_background_notice_row.append(&close_to_background_notice_button);
+    close_to_background_notice.set_child(Some(&close_to_background_notice_row));
+
     let window_shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
     window_shell.append(&header);
+    window_shell.append(&close_to_background_notice);
     window_shell.append(&toast_overlay);
 
     let window = adw::ApplicationWindow::builder()
@@ -211,6 +248,24 @@ pub fn present(
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let sync_close_to_background_notice: Rc<dyn Fn()> = {
+        let close_to_background_notice = close_to_background_notice.clone();
+        let current_close_to_background = current_close_to_background.clone();
+        let tray_controller = tray_controller.clone();
+        Rc::new(move || {
+            close_to_background_notice
+                .set_reveal_child(current_close_to_background.get() && !tray_controller.is_available());
+        })
+    };
+
+    {
+        let sync_close_to_background_notice = sync_close_to_background_notice.clone();
+        sync_close_to_background_notice();
+        glib::timeout_add_seconds_local(1, move || {
+            sync_close_to_background_notice();
+            glib::ControlFlow::Continue
+        });
+    }
 
     {
         let title_for_select = title.clone();
@@ -729,6 +784,8 @@ pub fn present(
         let current_close_to_background = current_close_to_background.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let sync_close_to_background_notice = sync_close_to_background_notice.clone();
+        let tray_controller = tray_controller.clone();
 
         Rc::new(move || {
             let preferences = preference_store_for_settings.load();
@@ -785,9 +842,12 @@ pub fn present(
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let current_close_to_background = current_close_to_background.clone();
+                    let sync_close_to_background_notice = sync_close_to_background_notice.clone();
+                    let tray_controller = tray_controller.clone();
                     move |close_to_background| {
                         preference_store.save_close_to_background(close_to_background);
                         current_close_to_background.set(close_to_background);
+                        sync_close_to_background_notice();
                         logging::info(format!(
                             "updated application settings close_to_background={}",
                             close_to_background
@@ -795,7 +855,11 @@ pub fn present(
                         show_toast(
                             &toast_overlay,
                             if close_to_background {
-                                "Close button now hides TerminalTiler to the background when tray support is available"
+                                if tray_controller.is_available() {
+                                    "Close button now hides TerminalTiler to the background"
+                                } else {
+                                    "Close-to-background is enabled, but no tray watcher is available right now. Closing will still quit normally"
+                                }
                             } else {
                                 "Close button now quits TerminalTiler"
                             },
@@ -969,6 +1033,7 @@ pub fn present(
                     let current_close_to_background = current_close_to_background.clone();
                     let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
                     let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+                    let sync_close_to_background_notice = sync_close_to_background_notice.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
@@ -977,6 +1042,7 @@ pub fn present(
                         current_density_shortcut
                             .replace(defaults.workspace_density_shortcut.clone());
                         current_close_to_background.set(defaults.close_to_background);
+                        sync_close_to_background_notice();
                         current_zoom_in_shortcut
                             .replace(defaults.workspace_zoom_in_shortcut.clone());
                         current_zoom_out_shortcut
@@ -1036,6 +1102,11 @@ pub fn present(
     {
         let open_settings_dialog = open_settings_dialog.clone();
         settings_button.connect_clicked(move |_| open_settings_dialog());
+    }
+
+    {
+        let open_settings_dialog = open_settings_dialog.clone();
+        close_to_background_notice_button.connect_clicked(move |_| open_settings_dialog());
     }
 
     {
