@@ -114,21 +114,33 @@ fn sync_reset_button_state(
     );
 }
 
-fn default_settings_dialog_size(window: &adw::ApplicationWindow) -> (i32, i32) {
+fn default_settings_dialog_size(
+    window: &adw::ApplicationWindow,
+    saved_width: i32,
+    saved_height: i32,
+) -> (i32, i32) {
     let width = match window.width() {
-        width if width > 0 => (width - 32).min(528).max(200),
-        _ => 528,
+        width if width > 0 => (width - 32).min(saved_width).max(200),
+        _ => saved_width.max(200),
     };
     let height = match window.height() {
-        height if height > 0 => (height - 48).min(760).max(240),
-        _ => 760,
+        height if height > 0 => (height - 48).min(saved_height).max(240),
+        _ => saved_height.max(240),
     };
 
     (width, height)
 }
 
+fn persist_dialog_size(dialog: &gtk::Dialog, on_size_changed: &Rc<dyn Fn(i32, i32)>) {
+    let width = dialog.width();
+    let height = dialog.height();
+    if width > 0 && height > 0 {
+        on_size_changed(width, height);
+    }
+}
+
 #[allow(deprecated)]
-pub fn present<F, G, H, I, J, K, L>(
+pub fn present<F, G, H, I, J, K, L, M>(
     window: &adw::ApplicationWindow,
     default_theme: ThemeMode,
     default_density: ApplicationDensity,
@@ -136,6 +148,8 @@ pub fn present<F, G, H, I, J, K, L>(
     workspace_density_shortcut: String,
     workspace_zoom_in_shortcut: String,
     workspace_zoom_out_shortcut: String,
+    settings_dialog_width: i32,
+    settings_dialog_height: i32,
     on_theme_changed: F,
     on_density_changed: G,
     on_fullscreen_shortcut_changed: H,
@@ -143,6 +157,7 @@ pub fn present<F, G, H, I, J, K, L>(
     on_zoom_in_shortcut_changed: J,
     on_zoom_out_shortcut_changed: K,
     on_reset_defaults: L,
+    on_size_changed: M,
 ) where
     F: Fn(ThemeMode) + 'static,
     G: Fn(ApplicationDensity) + 'static,
@@ -151,8 +166,10 @@ pub fn present<F, G, H, I, J, K, L>(
     J: Fn(String) + 'static,
     K: Fn(String) + 'static,
     L: Fn() + 'static,
+    M: Fn(i32, i32) + 'static,
 {
-    let (default_width, default_height) = default_settings_dialog_size(window);
+    let (default_width, default_height) =
+        default_settings_dialog_size(window, settings_dialog_width, settings_dialog_height);
     let dialog = gtk::Dialog::builder()
         .modal(true)
         .transient_for(window)
@@ -265,6 +282,7 @@ pub fn present<F, G, H, I, J, K, L>(
     let zoom_in_shortcut_callback = Rc::new(on_zoom_in_shortcut_changed);
     let zoom_out_shortcut_callback = Rc::new(on_zoom_out_shortcut_changed);
     let reset_callback = Rc::new(on_reset_defaults);
+    let size_changed_callback: Rc<dyn Fn(i32, i32)> = Rc::new(on_size_changed);
 
     let theme_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -985,9 +1003,21 @@ pub fn present<F, G, H, I, J, K, L>(
     actions.append(&reset_button);
     content.append(&actions);
 
-    dialog.connect_response(move |dialog, _| {
-        dialog.close();
-    });
+    {
+        let size_changed_callback = size_changed_callback.clone();
+        dialog.connect_response(move |dialog, _| {
+            persist_dialog_size(dialog, &size_changed_callback);
+            dialog.close();
+        });
+    }
+
+    {
+        let size_changed_callback = size_changed_callback.clone();
+        dialog.connect_close_request(move |dialog| {
+            persist_dialog_size(dialog, &size_changed_callback);
+            glib::Propagation::Proceed
+        });
+    }
 
     dialog.present();
 }

@@ -14,6 +14,8 @@ const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
+const DEFAULT_SETTINGS_DIALOG_WIDTH: i32 = 528;
+const DEFAULT_SETTINGS_DIALOG_HEIGHT: i32 = 760;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPreferences {
@@ -23,6 +25,8 @@ pub struct AppPreferences {
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
     pub workspace_zoom_out_shortcut: String,
+    pub settings_dialog_width: i32,
+    pub settings_dialog_height: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +49,10 @@ struct PreferenceDocument {
     workspace_zoom_in_shortcut: String,
     #[serde(default = "default_zoom_out_shortcut")]
     workspace_zoom_out_shortcut: String,
+    #[serde(default = "default_settings_dialog_width")]
+    settings_dialog_width: i32,
+    #[serde(default = "default_settings_dialog_height")]
+    settings_dialog_height: i32,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -69,6 +77,22 @@ fn default_zoom_in_shortcut() -> String {
 
 fn default_zoom_out_shortcut() -> String {
     DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT.into()
+}
+
+fn default_settings_dialog_width() -> i32 {
+    DEFAULT_SETTINGS_DIALOG_WIDTH
+}
+
+fn default_settings_dialog_height() -> i32 {
+    DEFAULT_SETTINGS_DIALOG_HEIGHT
+}
+
+fn normalize_settings_dialog_width(width: i32) -> i32 {
+    width.max(200)
+}
+
+fn normalize_settings_dialog_height(height: i32) -> i32 {
+    height.max(240)
 }
 
 fn normalize_fullscreen_shortcut(shortcut: &str) -> String {
@@ -160,6 +184,12 @@ impl PreferenceStore {
                 workspace_zoom_out_shortcut: normalize_zoom_out_shortcut(
                     &document.workspace_zoom_out_shortcut,
                 ),
+                settings_dialog_width: normalize_settings_dialog_width(
+                    document.settings_dialog_width,
+                ),
+                settings_dialog_height: normalize_settings_dialog_height(
+                    document.settings_dialog_height,
+                ),
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -208,6 +238,13 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    pub fn save_settings_dialog_size(&self, width: i32, height: i32) {
+        let mut preferences = self.load();
+        preferences.settings_dialog_width = normalize_settings_dialog_width(width);
+        preferences.settings_dialog_height = normalize_settings_dialog_height(height);
+        self.save(&preferences);
+    }
+
     pub fn save(&self, preferences: &AppPreferences) {
         let Some(path) = self.path.as_ref() else {
             return;
@@ -221,6 +258,8 @@ impl PreferenceStore {
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
             workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
             workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
+            settings_dialog_width: preferences.settings_dialog_width,
+            settings_dialog_height: preferences.settings_dialog_height,
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -266,6 +305,8 @@ impl Default for AppPreferences {
             workspace_density_shortcut: default_density_shortcut(),
             workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
             workspace_zoom_out_shortcut: default_zoom_out_shortcut(),
+            settings_dialog_width: default_settings_dialog_width(),
+            settings_dialog_height: default_settings_dialog_height(),
         }
     }
 }
@@ -302,6 +343,8 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(store.load().settings_dialog_width, 528);
+        assert_eq!(store.load().settings_dialog_height, 760);
     }
 
     #[test]
@@ -316,6 +359,8 @@ mod tests {
             workspace_density_shortcut: "<Shift>F8".into(),
             workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
             workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+            settings_dialog_width: 640,
+            settings_dialog_height: 540,
         });
 
         assert_eq!(
@@ -327,6 +372,8 @@ mod tests {
                 workspace_density_shortcut: "<Shift>F8".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+                settings_dialog_width: 640,
+                settings_dialog_height: 540,
             }
         );
     }
@@ -348,6 +395,8 @@ mod tests {
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>minus".into(),
+                settings_dialog_width: 528,
+                settings_dialog_height: 760,
             }
         );
     }
@@ -368,6 +417,8 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(store.load().settings_dialog_width, 528);
+        assert_eq!(store.load().settings_dialog_height, 760);
     }
 
     #[test]
@@ -386,6 +437,8 @@ mod tests {
             store.load().workspace_density_shortcut,
             "<Ctrl><Alt>KP_Multiply"
         );
+        assert_eq!(store.load().settings_dialog_width, 528);
+        assert_eq!(store.load().settings_dialog_height, 760);
     }
 
     #[test]
@@ -405,6 +458,8 @@ mod tests {
             store.load().workspace_zoom_out_shortcut,
             "<Ctrl>KP_Subtract"
         );
+        assert_eq!(store.load().settings_dialog_width, 528);
+        assert_eq!(store.load().settings_dialog_height, 760);
     }
 
     #[test]
@@ -421,5 +476,21 @@ mod tests {
 
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl><Alt>KP_Add");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Alt>KP_Subtract");
+    }
+
+    #[test]
+    fn normalizes_small_saved_settings_dialog_size() {
+        let dir = temp_dir("pref-settings-dialog-size");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nworkspace_fullscreen_shortcut = \"F11\"\nworkspace_density_shortcut = \"<Ctrl><Shift>D\"\nworkspace_zoom_in_shortcut = \"<Ctrl>plus\"\nworkspace_zoom_out_shortcut = \"<Ctrl>minus\"\nsettings_dialog_width = 120\nsettings_dialog_height = 80\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().settings_dialog_width, 200);
+        assert_eq!(store.load().settings_dialog_height, 240);
     }
 }

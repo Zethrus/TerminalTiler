@@ -735,6 +735,8 @@ pub fn present(
                 preferences.workspace_density_shortcut,
                 preferences.workspace_zoom_in_shortcut,
                 preferences.workspace_zoom_out_shortcut,
+                preferences.settings_dialog_width,
+                preferences.settings_dialog_height,
                 {
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
@@ -990,6 +992,12 @@ pub fn present(
                             refresh();
                         }
                         show_toast(&toast_overlay, "Application defaults reset");
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    move |width, height| {
+                        preference_store.save_settings_dialog_size(width, height);
                     }
                 },
             );
