@@ -21,7 +21,6 @@ pub fn build(
     zoom_steps: i32,
 ) -> TileView {
     let session = TerminalSession::spawn(tile, workspace_root, density, zoom_steps);
-    let resolved_dir = tile.working_directory.resolve(workspace_root);
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -52,17 +51,9 @@ pub fn build(
         .halign(gtk::Align::Start)
         .css_classes(["tile-title"])
         .build();
-    let meta = gtk::Label::builder()
-        .label(resolved_dir.display().to_string())
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["tile-meta", "tile-directory"])
-        .build();
 
     left.append(&badge);
     left.append(&title);
-    left.append(&meta);
 
     let status = gtk::Label::builder()
         .label(tile.working_directory.short_label())
