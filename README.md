@@ -68,13 +68,13 @@ The packaging scripts produce self-contained runtime bundles:
 - `packaging/build-in-container.sh` runs the packaging flow inside a pinned Debian 12 build container for reproducible Linux release artifacts
 - `packaging/release-smoke-test.sh` validates AppStream metadata, builds both artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
 
-Each packaging run now derives a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.1.0` and no prior successful packaging run has been recorded, the first build emits `0.1.0`, then `0.1.1`, then `0.1.2`, and so on.
+Each packaging run now derives a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.2.0` and no prior successful packaging run has been recorded, the first build emits `0.2.0`, then `0.2.1`, then `0.2.2`, and so on.
 
 If you change `Cargo.toml` to a new `major.minor` base such as `0.2.0` or `1.1.0`, the stored patch counter is ignored and the next successful build starts again from that exact base version, for example `0.2.0` or `1.1.0`. Later successful builds on that line continue with `0.2.1`, `0.2.2`, or `1.1.1`, `1.1.2`.
 
 The last successful build version is stored in `packaging/.build/versioning/last-successful-version`, which is already ignored by git. That file is only updated after a package build completes successfully, so failed runs do not consume a version number.
 
-By default the scripts write versioned artifacts such as `dist/terminaltiler_0.1.2_amd64.deb` and `dist/TerminalTiler-0.1.2-x86_64.AppImage`, then refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks to the newest build.
+By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2.2_amd64.deb` and `dist/TerminalTiler-0.2.2-x86_64.AppImage`, then refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks to the newest build.
 
 You can override the generated version inputs when needed:
 
@@ -93,7 +93,7 @@ The preferred release path is now:
 bash packaging/release-verify.sh
 ```
 
-GitHub Actions also publishes tagged releases automatically. Push a semver tag in the form `vX.Y.Z`, for example `v0.1.60`, and the `Release` workflow will:
+GitHub Actions also publishes tagged releases automatically. Push a semver tag in the form `vX.Y.Z`, for example `v0.2.0`, and the `Release` workflow will:
 
 - set `PACKAGE_VERSION` from the tag value
 - build the versioned `.deb` and AppImage artifacts
@@ -103,6 +103,6 @@ GitHub Actions also publishes tagged releases automatically. Push a semver tag i
 Example:
 
 ```bash
-git tag v0.1.60
-git push origin v0.1.60
+git tag v0.2.0
+git push origin v0.2.0
 ```

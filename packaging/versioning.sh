@@ -129,7 +129,7 @@ record_successful_build_version() {
 }
 
 if ! is_clean_semver "$BASE_VERSION"; then
-  echo "package version in Cargo.toml must be a clean semver like 0.1.0" >&2
+  echo "package version in Cargo.toml must be a clean semver like 0.2.0" >&2
   exit 1
 fi
 
