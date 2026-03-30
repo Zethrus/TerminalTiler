@@ -673,8 +673,7 @@ entry.path-valid {
 
 .section-title,
 .workspace-title,
-.card-title,
-.tile-title {
+.card-title {
   color: #f5f5f1;
   font-weight: 700;
 }
@@ -685,6 +684,8 @@ entry.path-valid {
 
 .tile-title {
   font-size: 12px;
+  color: rgba(255, 255, 255, 0.76);
+  font-weight: 600;
 }
 
 .section-title {
@@ -1445,10 +1446,13 @@ window.window-shell.theme-light .hero-title,
 window.window-shell.theme-light .section-title,
 window.window-shell.theme-light .workspace-title,
 window.window-shell.theme-light .card-title,
-window.window-shell.theme-light .tile-title,
 window.window-shell.theme-light .status-chip,
 window.window-shell.theme-light .agent-badge {
   color: #151922;
+}
+
+window.window-shell.theme-light .tile-title {
+  color: rgba(21, 25, 34, 0.72);
 }
 
 window.window-shell.theme-light .config-panel,
