@@ -21,20 +21,21 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CREATESTRUCTW,
         CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-        DestroyMenu, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT,
-        ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgItem,
+        DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
+        ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgItem,
         GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
         IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
-        LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OKCANCEL, MF_STRING,
-        MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER,
-        SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-        WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE,
-        WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OKCANCEL,
+        MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
+        SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
+        WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
+    use crate::model::layout::{LayoutNode, LayoutTemplate, builtin_templates, generate_layout};
     use crate::model::preset::{WorkspacePreset, is_builtin_preset_id};
     use crate::platform::{home_dir, resolve_workspace_root};
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -62,6 +63,12 @@ mod imp {
     const ID_SETTINGS: isize = 1013;
     const ID_UPDATE_PRESET: isize = 1014;
     const ID_DELETE_PRESET: isize = 1015;
+    const ID_LABEL_TEMPLATES: isize = 1016;
+    const ID_TEMPLATE_LIST: isize = 1017;
+    const ID_LABEL_TILE_COUNT: isize = 1018;
+    const ID_TILE_COUNT: isize = 1019;
+    const ID_LABEL_SELECTION_SUMMARY: isize = 1020;
+    const ID_SELECTION_SUMMARY: isize = 1021;
     const ID_SETTINGS_THEME_LIST: isize = 2001;
     const ID_SETTINGS_DENSITY_LIST: isize = 2002;
     const ID_SETTINGS_CLOSE_BACKGROUND: isize = 2003;
@@ -91,6 +98,12 @@ mod imp {
     const TRAY_MENU_QUIT: usize = 3;
     static PRIMARY_SHELL_HWND: AtomicIsize = AtomicIsize::new(0);
 
+    #[derive(Clone, Copy, Debug)]
+    enum LaunchSelection {
+        Template(usize),
+        Preset(usize),
+    }
+
     pub fn run() -> ExitCode {
         logging::init();
         logging::info("windows GUI shell startup");
@@ -111,18 +124,24 @@ mod imp {
         session_store: SessionStore,
         runtime: Option<WindowsRuntime>,
         runtime_error: Option<String>,
+        templates: Vec<LayoutTemplate>,
         presets: Vec<WorkspacePreset>,
         preset_warning: Option<String>,
         session: Option<SavedSession>,
         session_warning: Option<String>,
         workspace_path_hwnd: HWND,
         session_name_hwnd: HWND,
+        template_list_hwnd: HWND,
         preset_list_hwnd: HWND,
+        tile_count_hwnd: HWND,
+        selection_summary_hwnd: HWND,
         status_hwnd: HWND,
         settings_window_hwnd: HWND,
         tray_icon_added: bool,
         window_hidden_to_tray: bool,
         quit_requested: bool,
+        selected_source: LaunchSelection,
+        active_layout: LayoutNode,
         save_preset_button_hwnd: HWND,
         update_preset_button_hwnd: HWND,
         delete_preset_button_hwnd: HWND,
@@ -154,18 +173,24 @@ mod imp {
             session_store: SessionStore::new(),
             runtime: None,
             runtime_error: None,
+            templates: builtin_templates(),
             presets: Vec::new(),
             preset_warning: None,
             session: None,
             session_warning: None,
             workspace_path_hwnd: ptr::null_mut(),
             session_name_hwnd: ptr::null_mut(),
+            template_list_hwnd: ptr::null_mut(),
             preset_list_hwnd: ptr::null_mut(),
+            tile_count_hwnd: ptr::null_mut(),
+            selection_summary_hwnd: ptr::null_mut(),
             status_hwnd: ptr::null_mut(),
             settings_window_hwnd: ptr::null_mut(),
             tray_icon_added: false,
             window_hidden_to_tray: false,
             quit_requested: false,
+            selected_source: LaunchSelection::Template(0),
+            active_layout: generate_layout(1),
             save_preset_button_hwnd: ptr::null_mut(),
             update_preset_button_hwnd: ptr::null_mut(),
             delete_preset_button_hwnd: ptr::null_mut(),
@@ -303,10 +328,38 @@ mod imp {
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 if let Some(state) = unsafe { state_mut(hwnd) } {
+                    let notification = ((wparam >> 16) & 0xffff) as u32;
                     match command_id {
-                        ID_PRESET_LIST if ((wparam >> 16) & 0xffff) as u32 == LBN_SELCHANGE => {
-                            sync_launch_name_to_selection(state);
-                            update_preset_action_buttons(state);
+                        ID_TEMPLATE_LIST if notification == LBN_SELCHANGE => {
+                            state.selected_source = LaunchSelection::Template(
+                                selected_listbox_index(state.template_list_hwnd),
+                            );
+                            apply_launcher_selection(state);
+                        }
+                        ID_TEMPLATE_LIST if notification == LBN_DBLCLK => {
+                            state.selected_source = LaunchSelection::Template(
+                                selected_listbox_index(state.template_list_hwnd),
+                            );
+                            apply_launcher_selection(state);
+                            launch_selected_preset(hwnd, state);
+                        }
+                        ID_PRESET_LIST if notification == LBN_SELCHANGE => {
+                            state.selected_source = LaunchSelection::Preset(
+                                selected_listbox_index(state.preset_list_hwnd),
+                            );
+                            apply_launcher_selection(state);
+                        }
+                        ID_PRESET_LIST if notification == LBN_DBLCLK => {
+                            state.selected_source = LaunchSelection::Preset(
+                                selected_listbox_index(state.preset_list_hwnd),
+                            );
+                            apply_launcher_selection(state);
+                            launch_selected_preset(hwnd, state);
+                        }
+                        ID_TILE_COUNT if notification == EN_CHANGE => {
+                            sync_tile_count_from_input(state);
+                        }
+                        ID_WORKSPACE_PATH | ID_LAUNCH_NAME if notification == EN_CHANGE => {
                             sync_status_text(state);
                         }
                         ID_REFRESH => refresh_state(hwnd, state),
@@ -471,6 +524,22 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
+            "Templates",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_TEMPLATES,
+        );
+        state.template_list_hwnd = create_child_window(
+            hwnd,
+            "LISTBOX",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
+            0,
+            ID_TEMPLATE_LIST,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
             "Presets",
             WS_CHILD | WS_VISIBLE,
             0,
@@ -483,6 +552,38 @@ mod imp {
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
             0,
             ID_PRESET_LIST,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Tile count",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_TILE_COUNT,
+        );
+        state.tile_count_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            "1",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
+            0,
+            ID_TILE_COUNT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Selection summary",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_SELECTION_SUMMARY,
+        );
+        state.selection_summary_hwnd = create_child_window(
+            hwnd,
+            "STATIC",
+            "",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SELECTION_SUMMARY,
         );
         state.status_hwnd = create_child_window(
             hwnd,
@@ -502,7 +603,7 @@ mod imp {
         state.launch_preset_button_hwnd = create_child_window(
             hwnd,
             "BUTTON",
-            "Launch Selected Preset",
+            "Launch Workspace",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_LAUNCH_PRESET,
@@ -570,6 +671,12 @@ mod imp {
             state.workspace_path_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_NAME as i32) },
             state.session_name_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_TILE_COUNT as i32) },
+            state.tile_count_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_SELECTION_SUMMARY as i32) },
+            state.selection_summary_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_TEMPLATES as i32) },
+            state.template_list_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_PRESETS as i32) },
             state.preset_list_hwnd,
             state.status_hwnd,
@@ -589,6 +696,7 @@ mod imp {
             }
         }
 
+        populate_template_list(state);
         layout_controls(hwnd, state);
     }
 
@@ -605,9 +713,15 @@ mod imp {
         let workspace_edit_y = workspace_label_y + LABEL_HEIGHT + 4;
         let name_label_y = workspace_edit_y + FIELD_HEIGHT + 10;
         let name_edit_y = name_label_y + LABEL_HEIGHT + 4;
-        let presets_label_y = name_edit_y + FIELD_HEIGHT + 12;
-        let preset_list_y = presets_label_y + LABEL_HEIGHT + 4;
-        let preset_actions_y = preset_list_y + LIST_HEIGHT + 12;
+        let tile_count_label_y = name_edit_y + FIELD_HEIGHT + 10;
+        let tile_count_edit_y = tile_count_label_y + LABEL_HEIGHT + 4;
+        let summary_label_y = tile_count_label_y;
+        let summary_y = tile_count_edit_y;
+        let lists_label_y = tile_count_edit_y + FIELD_HEIGHT + 12;
+        let list_y = lists_label_y + LABEL_HEIGHT + 4;
+        let column_gap = 12;
+        let column_width = ((content_width - column_gap) / 2).max(180);
+        let preset_actions_y = list_y + LIST_HEIGHT + 12;
         let button_y = height - MARGIN - BUTTON_HEIGHT;
         let status_y = preset_actions_y + BUTTON_HEIGHT + 12;
         let status_height = (button_y - status_y - 12).max(120);
@@ -650,20 +764,74 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                GetDlgItem(hwnd, ID_LABEL_PRESETS as i32),
+                GetDlgItem(hwnd, ID_LABEL_TILE_COUNT as i32),
                 ptr::null_mut(),
                 MARGIN,
-                presets_label_y,
-                content_width,
+                tile_count_label_y,
+                96,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.tile_count_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                tile_count_edit_y,
+                72,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_SELECTION_SUMMARY as i32),
+                ptr::null_mut(),
+                MARGIN + 88,
+                summary_label_y,
+                content_width - 88,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.selection_summary_hwnd,
+                ptr::null_mut(),
+                MARGIN + 88,
+                summary_y,
+                content_width - 88,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_TEMPLATES as i32),
+                ptr::null_mut(),
+                MARGIN,
+                lists_label_y,
+                column_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.template_list_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                list_y,
+                column_width,
+                LIST_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_PRESETS as i32),
+                ptr::null_mut(),
+                MARGIN + column_width + column_gap,
+                lists_label_y,
+                column_width,
                 LABEL_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
                 state.preset_list_hwnd,
                 ptr::null_mut(),
-                MARGIN,
-                preset_list_y,
-                content_width,
+                MARGIN + column_width + column_gap,
+                list_y,
+                column_width,
                 LIST_HEIGHT,
                 SWP_NOZORDER,
             );
@@ -767,8 +935,7 @@ mod imp {
         state.presets = preset_outcome.presets;
         state.preset_warning = preset_outcome.warning;
         populate_preset_list(state);
-        sync_launch_name_to_selection(state);
-        update_preset_action_buttons(state);
+        apply_launcher_selection(state);
 
         let session_outcome = state.session_store.load_with_status();
         state.session = session_outcome.session;
@@ -778,7 +945,7 @@ mod imp {
             sync_status_text(state);
             EnableWindow(
                 state.launch_preset_button_hwnd,
-                (state.runtime.is_some() && !state.presets.is_empty()) as i32,
+                (state.runtime.is_some() && has_launcher_selection(state)) as i32,
             );
             EnableWindow(
                 state.launch_button_hwnd,
@@ -794,7 +961,7 @@ mod imp {
         let Some(runtime) = state.runtime.as_ref() else {
             return;
         };
-        let Some(preset) = selected_preset(state).cloned() else {
+        let Some(preset) = launcher_preset_snapshot(state) else {
             return;
         };
 
@@ -830,10 +997,12 @@ mod imp {
         match wsl::collect_session_launch_commands(&session, runtime) {
             Ok(_) => match workspace::open_saved_workspaces(&session, runtime) {
                 Ok((window_count, pane_count)) => {
+                    let source_label = selected_source_label(state);
                     let status = format!(
-                        "Opened {} new workspace window(s) with {} pane(s) from preset '{}' using {}.",
+                        "Opened {} new workspace window(s) with {} pane(s) from {} '{}' using {}.",
                         window_count,
                         pane_count,
+                        source_label,
                         preset.name,
                         runtime.label()
                     );
@@ -841,9 +1010,10 @@ mod imp {
                         SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
                     }
                     logging::info(format!(
-                        "opened {} new workspace window(s) with {} pane(s) from preset '{}' using {}",
+                        "opened {} new workspace window(s) with {} pane(s) from {} '{}' using {}",
                         window_count,
                         pane_count,
+                        source_label,
                         preset.name,
                         runtime.label()
                     ));
@@ -946,6 +1116,26 @@ mod imp {
         }
 
         lines.push(String::new());
+        lines.push(format!(
+            "Workspace root: {}",
+            read_window_text(state.workspace_path_hwnd).trim()
+        ));
+        let launch_name = read_window_text(state.session_name_hwnd);
+        if !launch_name.trim().is_empty() {
+            lines.push(format!("Launch name: {}", launch_name.trim()));
+        }
+        lines.push(format!(
+            "Selection summary: {}",
+            build_selection_summary_text(state)
+        ));
+        lines.push(String::new());
+        lines.push(format!("Available templates: {}", state.templates.len()));
+        if let Some(template) = selected_template(state) {
+            lines.push(format!(
+                "Selected template: {} ({})",
+                template.label, template.subtitle
+            ));
+        }
         lines.push(format!("Available presets: {}", state.presets.len()));
         if let Some(preset) = selected_preset(state) {
             lines.push(format!(
@@ -954,6 +1144,17 @@ mod imp {
                 preset.layout.tile_specs().len()
             ));
         }
+        lines.push(format!(
+            "Launcher selection: {}",
+            match state.selected_source {
+                LaunchSelection::Template(_) => "template",
+                LaunchSelection::Preset(_) => "preset",
+            }
+        ));
+        lines.push(format!(
+            "Active tile count: {}",
+            state.active_layout.tile_count()
+        ));
         if let Some(warning) = state.preset_warning.as_deref() {
             lines.push(format!("Preset warning: {}", warning));
         }
@@ -1019,15 +1220,15 @@ mod imp {
             "- Refresh Runtime reloads WSL/PowerShell availability and saved session state.".into(),
         );
         lines.push(
-            "- Launch Selected Preset opens a new native workspace window from the chosen preset and workspace root."
+            "- Launch Workspace opens a new native workspace window from the selected template or preset using the current tile count."
                 .into(),
         );
         lines.push(
-            "- Save as Preset stores a copy of the selected preset, using the Launch name field as the preset name when provided."
+            "- Save as Preset stores the current launcher selection, using the Launch name field as the preset name when provided."
                 .into(),
         );
         lines.push(
-            "- Update Preset rewrites the selected custom preset, while builtin presets are copied instead of modified in place."
+            "- Update Preset rewrites the selected custom preset, while builtin presets are copied instead of modified in place. Templates can only be saved as new presets."
                 .into(),
         );
         lines.push(
@@ -1702,6 +1903,27 @@ mod imp {
         }
     }
 
+    fn populate_template_list(state: &AppWindowState) {
+        unsafe {
+            SendMessageW(state.template_list_hwnd, LB_RESETCONTENT, 0, 0);
+            for template in &state.templates {
+                let label = format!(
+                    "{}  •  {}  •  {} tiles",
+                    template.label, template.subtitle, template.tile_count
+                );
+                SendMessageW(
+                    state.template_list_hwnd,
+                    LB_ADDSTRING,
+                    0,
+                    wide(&label).as_ptr() as LPARAM,
+                );
+            }
+            if !state.templates.is_empty() {
+                SendMessageW(state.template_list_hwnd, LB_SETCURSEL, 0, 0);
+            }
+        }
+    }
+
     fn populate_preset_list(state: &AppWindowState) {
         unsafe {
             SendMessageW(state.preset_list_hwnd, LB_RESETCONTENT, 0, 0);
@@ -1724,7 +1946,52 @@ mod imp {
         }
     }
 
+    fn apply_launcher_selection(state: &mut AppWindowState) {
+        match state.selected_source {
+            LaunchSelection::Template(index) => {
+                let resolved = index.min(state.templates.len().saturating_sub(1));
+                state.selected_source = LaunchSelection::Template(resolved);
+                if let Some(template) = state.templates.get(resolved) {
+                    state.active_layout = generate_layout(template.tile_count);
+                    unsafe {
+                        SendMessageW(state.template_list_hwnd, LB_SETCURSEL, resolved, 0);
+                        SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, usize::MAX, 0);
+                        SetWindowTextW(state.session_name_hwnd, wide(template.label).as_ptr());
+                        SetWindowTextW(
+                            state.tile_count_hwnd,
+                            wide(&template.tile_count.to_string()).as_ptr(),
+                        );
+                    }
+                }
+            }
+            LaunchSelection::Preset(index) => {
+                if state.presets.is_empty() {
+                    state.selected_source = LaunchSelection::Template(0);
+                    apply_launcher_selection(state);
+                    return;
+                }
+                let resolved = index.min(state.presets.len().saturating_sub(1));
+                state.selected_source = LaunchSelection::Preset(resolved);
+                if let Some(preset) = state.presets.get(resolved) {
+                    state.active_layout = preset.layout.clone();
+                    unsafe {
+                        SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, resolved, 0);
+                        SendMessageW(state.template_list_hwnd, LB_SETCURSEL, usize::MAX, 0);
+                        SetWindowTextW(state.session_name_hwnd, wide(&preset.name).as_ptr());
+                        SetWindowTextW(
+                            state.tile_count_hwnd,
+                            wide(&preset.layout.tile_count().to_string()).as_ptr(),
+                        );
+                    }
+                }
+            }
+        }
+        update_preset_action_buttons(state);
+        sync_status_text(state);
+    }
+
     fn sync_status_text(state: &AppWindowState) {
+        sync_selection_summary(state);
         let preferences = state.preference_store.load();
         let status_text = build_status_text(state, preferences.windows_wsl_distribution.as_deref());
         unsafe {
@@ -1732,30 +1999,132 @@ mod imp {
         }
     }
 
-    fn sync_launch_name_to_selection(state: &AppWindowState) {
-        if let Some(preset) = selected_preset(state) {
-            unsafe {
-                SetWindowTextW(state.session_name_hwnd, wide(&preset.name).as_ptr());
+    fn sync_tile_count_from_input(state: &mut AppWindowState) {
+        let requested = read_window_text(state.tile_count_hwnd);
+        let Ok(tile_count) = requested.trim().parse::<usize>() else {
+            return;
+        };
+        let tile_count = tile_count.clamp(1, 16);
+        state.active_layout = generate_layout(tile_count);
+        unsafe {
+            SetWindowTextW(
+                state.tile_count_hwnd,
+                wide(&tile_count.to_string()).as_ptr(),
+            );
+        }
+        sync_status_text(state);
+    }
+
+    fn has_launcher_selection(state: &AppWindowState) -> bool {
+        selected_template(state).is_some() || selected_preset(state).is_some()
+    }
+
+    fn selected_source_label(state: &AppWindowState) -> &'static str {
+        match state.selected_source {
+            LaunchSelection::Template(_) => "template",
+            LaunchSelection::Preset(_) => "preset",
+        }
+    }
+
+    fn selected_template(state: &AppWindowState) -> Option<&LayoutTemplate> {
+        match state.selected_source {
+            LaunchSelection::Template(index) => state.templates.get(index),
+            LaunchSelection::Preset(_) => None,
+        }
+    }
+
+    fn sync_selection_summary(state: &AppWindowState) {
+        if state.selection_summary_hwnd.is_null() {
+            return;
+        }
+        let summary = build_selection_summary_text(state);
+        unsafe {
+            SetWindowTextW(state.selection_summary_hwnd, wide(&summary).as_ptr());
+        }
+    }
+
+    fn build_selection_summary_text(state: &AppWindowState) -> String {
+        let launch_name = read_window_text(state.session_name_hwnd);
+        let launch_name = launch_name.trim();
+        match state.selected_source {
+            LaunchSelection::Template(index) => {
+                let Some(template) = state.templates.get(index) else {
+                    return "Choose a template or preset to begin.".into();
+                };
+                let tile_summary = if state.active_layout.tile_count() != template.tile_count {
+                    format!(
+                        "customized from {} to {} tiles",
+                        template.tile_count,
+                        state.active_layout.tile_count()
+                    )
+                } else {
+                    format!("{} tiles", template.tile_count)
+                };
+                if launch_name.is_empty() || launch_name == template.label {
+                    format!(
+                        "{} template, {}, {} density",
+                        template.label,
+                        tile_summary,
+                        state.preference_store.load().default_density.label()
+                    )
+                } else {
+                    format!(
+                        "{} template, {}, launches as '{}'",
+                        template.label, tile_summary, launch_name
+                    )
+                }
+            }
+            LaunchSelection::Preset(index) => {
+                let Some(preset) = state.presets.get(index) else {
+                    return "Choose a template or preset to begin.".into();
+                };
+                let tile_summary = if state.active_layout.tile_count() != preset.layout.tile_count()
+                {
+                    format!(
+                        "customized from {} to {} tiles",
+                        preset.layout.tile_count(),
+                        state.active_layout.tile_count()
+                    )
+                } else {
+                    format!("{} tiles", preset.layout.tile_count())
+                };
+                if launch_name.is_empty() || launch_name == preset.name {
+                    format!(
+                        "{} preset, {}, {} theme / {} density",
+                        preset.name,
+                        tile_summary,
+                        preset.theme.label(),
+                        preset.density.label()
+                    )
+                } else {
+                    format!(
+                        "{} preset, {}, launches as '{}'",
+                        preset.name, tile_summary, launch_name
+                    )
+                }
             }
         }
     }
 
     fn update_preset_action_buttons(state: &AppWindowState) {
-        let has_selection = selected_preset(state).is_some();
+        let has_selection = has_launcher_selection(state);
         let selected_is_builtin = selected_preset(state)
             .map(|preset| is_builtin_preset_id(&preset.id))
             .unwrap_or(false);
+        let allow_update = selected_preset(state).is_some();
 
         unsafe {
             EnableWindow(state.save_preset_button_hwnd, has_selection as i32);
-            EnableWindow(state.update_preset_button_hwnd, has_selection as i32);
+            EnableWindow(state.update_preset_button_hwnd, allow_update as i32);
             EnableWindow(
                 state.delete_preset_button_hwnd,
                 (has_selection && !selected_is_builtin) as i32,
             );
             SetWindowTextW(
                 state.update_preset_button_hwnd,
-                wide(if selected_is_builtin {
+                wide(if !allow_update {
+                    "Update Preset"
+                } else if selected_is_builtin {
                     "Save Copy"
                 } else {
                     "Update Preset"
@@ -1766,11 +2135,9 @@ mod imp {
     }
 
     fn selected_preset(state: &AppWindowState) -> Option<&WorkspacePreset> {
-        let index = unsafe { SendMessageW(state.preset_list_hwnd, LB_GETCURSEL, 0, 0) };
-        if index == LB_ERR as isize || index < 0 {
-            None
-        } else {
-            state.presets.get(index as usize)
+        match state.selected_source {
+            LaunchSelection::Preset(index) => state.presets.get(index),
+            LaunchSelection::Template(_) => None,
         }
     }
 
@@ -1787,7 +2154,7 @@ mod imp {
             Ok(()) => {
                 refresh_state(hwnd, state);
                 select_preset_by_id(state, &unique_preset_lookup_name(&state.presets, &name));
-                sync_launch_name_to_selection(state);
+                apply_launcher_selection(state);
                 update_preset_action_buttons(state);
                 sync_status_text(state);
                 unsafe {
@@ -1849,7 +2216,7 @@ mod imp {
                 if !target_id.is_empty() {
                     select_preset_by_id(state, &target_id);
                 }
-                sync_launch_name_to_selection(state);
+                apply_launcher_selection(state);
                 update_preset_action_buttons(state);
                 let status = if builtin {
                     format!(
@@ -1903,7 +2270,7 @@ mod imp {
         match state.preset_store.delete_preset(&selected.id) {
             Ok(()) => {
                 refresh_state(hwnd, state);
-                sync_launch_name_to_selection(state);
+                apply_launcher_selection(state);
                 update_preset_action_buttons(state);
                 unsafe {
                     SetWindowTextW(
@@ -1924,7 +2291,27 @@ mod imp {
     }
 
     fn launcher_preset_snapshot(state: &AppWindowState) -> Option<WorkspacePreset> {
-        let mut preset = selected_preset(state)?.clone();
+        let mut preset = match state.selected_source {
+            LaunchSelection::Preset(index) => {
+                let mut preset = state.presets.get(index)?.clone();
+                preset.layout = state.active_layout.clone();
+                preset
+            }
+            LaunchSelection::Template(index) => {
+                let template = state.templates.get(index)?;
+                let preferences = state.preference_store.load();
+                WorkspacePreset {
+                    id: format!("template-{}", template.tile_count),
+                    name: template.label.to_string(),
+                    description: template.subtitle.to_string(),
+                    tags: vec!["template".into(), "windows".into()],
+                    root_label: "Workspace root".into(),
+                    theme: preferences.default_theme,
+                    density: preferences.default_density,
+                    layout: state.active_layout.clone(),
+                }
+            }
+        };
         let desired_name = read_window_text(state.session_name_hwnd);
         let desired_name = desired_name.trim();
         if !desired_name.is_empty() {
@@ -1943,12 +2330,13 @@ mod imp {
         }
     }
 
-    fn select_preset_by_id(state: &AppWindowState, preset_id: &str) {
+    fn select_preset_by_id(state: &mut AppWindowState, preset_id: &str) {
         if let Some(index) = state
             .presets
             .iter()
             .position(|preset| preset.id == preset_id)
         {
+            state.selected_source = LaunchSelection::Preset(index);
             unsafe {
                 SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, index, 0);
             }

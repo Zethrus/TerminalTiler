@@ -47,7 +47,7 @@ mod imp {
     };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
+        AppendMenuW, BN_DBLCLK, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
         GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
         GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
@@ -101,6 +101,7 @@ mod imp {
     const ID_TAB_BUTTON_BASE: isize = 3000;
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
+    const EM_SETSEL_MESSAGE: u32 = 0x00B1;
     static NEXT_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
     static SESSION_REGISTRY: OnceLock<Mutex<WorkspaceSessionRegistry>> = OnceLock::new();
 
@@ -617,7 +618,12 @@ mod imp {
                         }
                         id if id >= ID_TAB_BUTTON_BASE => {
                             let index = (id - ID_TAB_BUTTON_BASE) as usize;
-                            switch_active_tab(hwnd, state, index);
+                            let notification = ((wparam >> 16) & 0xffff) as u32;
+                            if notification == BN_DBLCLK {
+                                begin_tab_rename(hwnd, state, index);
+                            } else {
+                                switch_active_tab(hwnd, state, index);
+                            }
                         }
                         _ => {}
                     }
@@ -1288,7 +1294,10 @@ mod imp {
                 hwnd,
                 "BUTTON",
                 &label,
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                WS_CHILD
+                    | WS_VISIBLE
+                    | WS_TABSTOP
+                    | windows_sys::Win32::UI::WindowsAndMessaging::BS_NOTIFY as u32,
                 0,
                 ID_TAB_BUTTON_BASE + index as isize,
                 ptr::null_mut(),
@@ -1409,6 +1418,20 @@ mod imp {
         }
         state.active_tab_index = index;
         rebuild_active_tab_content(hwnd, state);
+    }
+
+    fn begin_tab_rename(hwnd: HWND, state: &mut WorkspaceWindowState, index: usize) {
+        if index >= state.tabs.len() {
+            return;
+        }
+        if index != state.active_tab_index {
+            state.active_tab_index = index;
+            rebuild_active_tab_content(hwnd, state);
+        }
+        unsafe {
+            SetFocus(state.title_hwnd);
+            SendMessageW(state.title_hwnd, EM_SETSEL_MESSAGE, 0, -1isize as LPARAM);
+        }
     }
 
     fn move_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState, direction: isize) {

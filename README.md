@@ -1,6 +1,6 @@
 # TerminalTiler
 
-TerminalTiler is a native Ubuntu and Debian desktop application for launching premium multi-terminal workspaces from reusable templates. It is built with Rust, GTK4, libadwaita, and VTE.
+TerminalTiler is a native desktop application for launching premium multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 builds use a native Win32 shell with ConPTY and prefer WSL2, falling back to PowerShell when WSL2 is unavailable.
 
 ## Current scope
 
@@ -12,7 +12,9 @@ TerminalTiler is a native Ubuntu and Debian desktop application for launching pr
 - Per-tile startup command execution through VTE
 - Per-tile agent labeling with editable preset save and update flows
 - XDG config seeding for user-editable presets
-- Initial `.deb` and AppImage packaging scaffolding
+- Native Windows 11 workspace host with WSL2-first and PowerShell-fallback runtime selection
+- Linux `.deb` and AppImage packaging
+- Windows `.exe` installer and portable zip packaging
 
 ## Build-time dependencies
 
@@ -36,6 +38,13 @@ cargo check
 cargo run
 ```
 
+For a Windows-targeted compile from a Windows machine:
+
+```powershell
+cargo check --target x86_64-pc-windows-msvc
+cargo run --target x86_64-pc-windows-msvc
+```
+
 The first launch seeds presets at the XDG config location for the app. On Linux this is typically:
 
 ```text
@@ -56,10 +65,11 @@ Launcher stderr from desktop or packaged starts is also appended separately to:
 
 ## Packaging
 
-The repo includes starter assets and release tooling for:
+The repo includes release tooling for:
 
 - `.deb` packaging under `packaging/deb`
 - AppImage packaging under `packaging/appimage`
+- Windows installer packaging under `packaging/windows`
 
 The packaging scripts produce self-contained runtime bundles:
 
@@ -67,6 +77,8 @@ The packaging scripts produce self-contained runtime bundles:
 - `packaging/build-deb.sh` stages the application under `packaging/.build/deb-root/opt/terminaltiler`, bundles the same runtime payload, and installs a launcher at `/usr/bin/terminaltiler`
 - `packaging/build-in-container.sh` runs the packaging flow inside a pinned Debian 12 build container for reproducible Linux release artifacts
 - `packaging/release-smoke-test.sh` validates AppStream metadata, builds both artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
+- `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload, emits a portable zip, and generates an NSIS installer
+- `packaging/windows-smoke-test.ps1` validates the portable zip and installer, then performs timed launch smoke tests against both packaged Windows outputs
 
 Each packaging run now derives a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.2.0` and no prior successful packaging run has been recorded, the first build emits `0.2.0`, then `0.2.1`, then `0.2.2`, and so on.
 
@@ -74,7 +86,7 @@ If you change `Cargo.toml` to a new `major.minor` base such as `0.2.0` or `1.1.0
 
 The last successful build version is stored in `packaging/.build/versioning/last-successful-version`, which is already ignored by git. That file is only updated after a package build completes successfully, so failed runs do not consume a version number.
 
-By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2.2_amd64.deb` and `dist/TerminalTiler-0.2.2-x86_64.AppImage`, then refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks to the newest build.
+By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2.2_amd64.deb`, `dist/TerminalTiler-0.2.2-x86_64.AppImage`, `dist/TerminalTiler-0.2.2-windows-x86_64.zip`, and `dist/TerminalTiler-setup-0.2.2-x86_64.exe`. Linux builds refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks, while Windows builds refresh `dist/TerminalTiler-latest-windows-x86_64.zip` and `dist/TerminalTiler-setup-latest-x86_64.exe` copies.
 
 You can override the generated version inputs when needed:
 
@@ -83,7 +95,14 @@ PACKAGE_VERSION=0.2.0 bash packaging/build-deb.sh
 LAST_SUCCESSFUL_VERSION=0.3.9 bash packaging/build-appimage.sh
 ```
 
+```powershell
+$env:PACKAGE_VERSION = "0.2.0"
+./packaging/build-windows.ps1
+```
+
 The resulting AppImage and `.deb` are intended to run on supported Ubuntu and Debian desktops without separately installing GTK, libadwaita, or VTE runtime packages.
+
+The resulting Windows installer and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise.
 
 Both artifact formats now also ship reverse-DNS desktop metadata at `usr/share/applications/dev.zethrus.terminaltiler.desktop` and AppStream metadata at `usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml` for cleaner distribution tooling integration.
 
@@ -96,9 +115,9 @@ bash packaging/release-verify.sh
 GitHub Actions also publishes tagged releases automatically. Push a semver tag in the form `vX.Y.Z`, for example `v0.2.0`, and the `Release` workflow will:
 
 - set `PACKAGE_VERSION` from the tag value
-- build the versioned `.deb` and AppImage artifacts
-- run the existing headless release smoke test
-- attach `dist/terminaltiler_X.Y.Z_amd64.deb` and `dist/TerminalTiler-X.Y.Z-x86_64.AppImage` to the GitHub Release for that tag
+- build the versioned `.deb`, AppImage, Windows zip, and Windows installer artifacts
+- run the Linux and Windows smoke coverage already in the repo
+- attach `dist/terminaltiler_X.Y.Z_amd64.deb`, `dist/TerminalTiler-X.Y.Z-x86_64.AppImage`, `dist/TerminalTiler-X.Y.Z-windows-x86_64.zip`, and `dist/TerminalTiler-setup-X.Y.Z-x86_64.exe` to the GitHub Release for that tag
 
 Example:
 
