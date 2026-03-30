@@ -26,6 +26,7 @@ struct TileEditorPanel {
     tile_count: gtk::SpinButton,
     status_label: gtk::Label,
     rows: gtk::Box,
+    scroller: gtk::ScrolledWindow,
 }
 
 pub fn build<F, G, H, I, C>(
@@ -78,11 +79,11 @@ where
 
     let stage = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(24)
-        .margin_top(28)
-        .margin_bottom(28)
-        .margin_start(28)
-        .margin_end(28)
+        .spacing(16)
+        .margin_top(18)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
         .hexpand(true)
         .halign(gtk::Align::Fill)
         .valign(gtk::Align::Start)
@@ -90,7 +91,6 @@ where
         .build();
     root.append(&stage);
 
-    // ── Header ──────────────────────────────────────────────
     let header = build_header();
     stage.append(&header);
 
@@ -104,46 +104,20 @@ where
         stage.append(&warning);
     }
 
-    // ── Main content: left column + right column ────────────
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(24)
-        .hexpand(true)
-        .valign(gtk::Align::Start)
-        .css_classes(["configurator-body"])
-        .build();
-    stage.append(&content);
-
-    let left_column = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(16)
-        .hexpand(true)
-        .vexpand(false)
-        .valign(gtk::Align::Start)
-        .css_classes(["config-column"])
-        .build();
-    content.append(&left_column);
-
-    let right_column = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .hexpand(true)
-        .vexpand(false)
-        .valign(gtk::Align::Start)
-        .css_classes(["template-panel"])
-        .build();
-    content.append(&right_column);
-
-    // ── Left: Working Directory ─────────────────────────────
     let directory_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
-        .css_classes(["config-panel", "directory-panel"])
+        .css_classes(["config-panel", "directory-panel", "setup-panel"])
         .build();
-    left_column.append(&directory_panel);
+    stage.append(&directory_panel);
+    directory_panel.append(&build_section_header(
+        "Step 1",
+        "Workspace setup",
+        "Choose the workspace folder and give this launch a clear name.",
+    ));
 
     let path_label = gtk::Label::builder()
-        .label("Working Directory")
+        .label("Workspace root")
         .halign(gtk::Align::Start)
         .css_classes(["eyebrow"])
         .build();
@@ -204,7 +178,6 @@ where
         }
     });
 
-    // Breadcrumb quick-switch to parent directory
     let breadcrumb_target: Rc<std::cell::RefCell<String>> =
         Rc::new(std::cell::RefCell::new(String::new()));
 
@@ -213,7 +186,6 @@ where
         .css_classes(["breadcrumb-hint"])
         .build();
 
-    // Initialize breadcrumb from current directory
     {
         let path = PathBuf::from(current_dir.display().to_string());
         if let Some(parent_path) = path.parent() {
@@ -228,7 +200,6 @@ where
         }
     }
 
-    // Click handler reads target from shared cell
     {
         let path_entry_for_bc = path_entry.clone();
         let target = breadcrumb_target.clone();
@@ -241,7 +212,6 @@ where
     }
     directory_panel.append(&breadcrumb);
 
-    // Update breadcrumb label and target when path entry changes
     {
         let breadcrumb = breadcrumb.clone();
         let target = breadcrumb_target.clone();
@@ -262,34 +232,34 @@ where
         });
     }
 
-    // ── Left: Selected template summary ─────────────────────
-    let summary = build_selection_summary();
-    left_column.append(&summary.root);
+    let session_name_label = gtk::Label::builder()
+        .label("Launch name")
+        .halign(gtk::Align::Start)
+        .css_classes(["eyebrow"])
+        .build();
+    directory_panel.append(&session_name_label);
 
-    // Initialize summary with first template
-    if let Some(first) = templates.first() {
-        summary.name_label.set_text(first.label);
-        summary.subtitle_label.set_text(first.subtitle);
-    }
-
-    // ── Left: Session name ─────────────────────────────────
     let session_name_entry = gtk::Entry::builder()
         .hexpand(true)
-        .placeholder_text("Session name (optional)")
+        .placeholder_text("Session name, for example: Review Pair")
         .css_classes(["workspace-path"])
         .build();
     if let Some(first) = templates.first() {
         session_name_entry.set_text(first.label);
     }
-    left_column.append(&session_name_entry);
+    directory_panel.append(&session_name_entry);
 
-    // ── Left: Theme & Chrome controls ──────────────────────
     let options_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
-        .css_classes(["config-panel"])
+        .css_classes(["config-panel", "appearance-panel"])
         .build();
-    left_column.append(&options_panel);
+    stage.append(&options_panel);
+    options_panel.append(&build_section_header(
+        "Step 2",
+        "Appearance",
+        "Preview the theme and density before you open the workspace.",
+    ));
 
     let theme_strip = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -297,7 +267,6 @@ where
         .css_classes(["control-strip"])
         .build();
 
-    // Theme toggle
     {
         let theme_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -344,7 +313,6 @@ where
         .css_classes(["control-strip"])
         .build();
 
-    // Application density toggle
     {
         let density_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -352,7 +320,7 @@ where
             .build();
 
         let density_label = gtk::Label::builder()
-            .label("Application Density")
+            .label("Density")
             .halign(gtk::Align::Start)
             .hexpand(true)
             .css_classes(["eyebrow"])
@@ -360,7 +328,7 @@ where
         density_row.append(&density_label);
 
         let density_hint = gtk::Label::builder()
-            .label("Adjusts titlebars, panels, controls, and terminal shell spacing.")
+            .label("Density changes panel spacing, titlebars, and terminal shell size.")
             .halign(gtk::Align::Start)
             .css_classes(["field-hint"])
             .build();
@@ -391,28 +359,45 @@ where
         options_panel.append(&density_hint);
     }
 
-    // ── Right: Layout Templates grid ────────────────────────
+    let summary = build_selection_summary();
+    if let Some(first) = templates.first() {
+        summary.name_label.set_text(first.label);
+        summary.subtitle_label.set_text(first.subtitle);
+    }
+
+    let layout_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "layout-selection-panel"])
+        .build();
+    stage.append(&layout_panel);
+    layout_panel.append(&build_section_header(
+        "Step 3",
+        "Choose a layout",
+        "Start from a template or load a saved preset, then tune the tiles below.",
+    ));
+    layout_panel.append(&summary.root);
+
     let templates_header = gtk::Label::builder()
-        .label("Layout Templates")
+        .label("Templates")
         .halign(gtk::Align::Start)
         .css_classes(["eyebrow"])
         .build();
-    right_column.append(&templates_header);
+    layout_panel.append(&templates_header);
 
     let template_grid = gtk::FlowBox::builder()
         .selection_mode(gtk::SelectionMode::None)
-        .row_spacing(10)
-        .column_spacing(10)
-        .min_children_per_line(3)
-        .max_children_per_line(3)
+        .row_spacing(8)
+        .column_spacing(8)
+        .min_children_per_line(4)
+        .max_children_per_line(4)
         .homogeneous(true)
         .hexpand(true)
         .css_classes(["template-grid"])
         .build();
-    right_column.append(&template_grid);
+    layout_panel.append(&template_grid);
 
     let tile_editor = build_tile_editor_panel();
-    right_column.append(&tile_editor.root);
     tile_editor
         .tile_count
         .set_value(active_layout.borrow().tile_count() as f64);
@@ -500,29 +485,18 @@ where
         template_grid.insert(&button, -1);
     }
 
-    // ── Presets section ─────────────────────────────────────
     if !presets.is_empty() {
         let presets_section = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(10)
-            .css_classes(["presets-section"])
+            .css_classes(["config-panel", "presets-section"])
             .build();
         stage.append(&presets_section);
-
-        let presets_label = gtk::Label::builder()
-            .label("Presets")
-            .halign(gtk::Align::Start)
-            .css_classes(["eyebrow"])
-            .build();
-        presets_section.append(&presets_label);
-
-        let presets_hint = gtk::Label::builder()
-            .label("Select any existing preset to load it into the editor above. Custom presets can be overwritten; built-ins can be saved as copies.")
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
-            .build();
-        presets_section.append(&presets_hint);
+        presets_section.append(&build_section_header(
+            "Saved presets",
+            "Reuse a preset",
+            "Load an existing setup or save the one you just configured.",
+        ));
 
         let presets_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
@@ -533,7 +507,7 @@ where
 
         let presets_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(12)
+            .spacing(10)
             .build();
         presets_scroll.set_child(Some(&presets_row));
         presets_section.append(&presets_scroll);
@@ -582,7 +556,7 @@ where
                             button.set_label(if is_builtin_preset_id(&p.id) {
                                 "Save Copy"
                             } else {
-                                "Save Changes"
+                                "Update Preset"
                             });
                         }
 
@@ -605,14 +579,14 @@ where
         let preset_actions = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(10)
-            .halign(gtk::Align::End)
+            .halign(gtk::Align::Fill)
             .css_classes(["preset-actions"])
             .build();
         presets_section.append(&preset_actions);
 
         let save_preset_button = gtk::Button::builder()
-            .label("Save New Preset")
-            .css_classes(["new-preset-button"])
+            .label("Save as Preset")
+            .css_classes(["pill-button", "secondary-button", "new-preset-button"])
             .valign(gtk::Align::Center)
             .build();
         {
@@ -678,7 +652,7 @@ where
         preset_actions.append(&save_preset_button);
 
         let edit_preset_button = gtk::Button::builder()
-            .label("Save Changes")
+            .label("Update Preset")
             .css_classes(["pill-button", "secondary-button"])
             .visible(false)
             .build();
@@ -764,12 +738,12 @@ where
         preset_actions.append(&edit_preset_button);
     }
 
-    // ── Action bar ──────────────────────────────────────────
+    stage.append(&tile_editor.root);
+
     let action_bar = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
         .hexpand(true)
-        .margin_top(8)
         .css_classes(["action-bar-bottom"])
         .build();
     stage.append(&action_bar);
@@ -783,7 +757,7 @@ where
     let spacer = gtk::Box::builder().hexpand(true).build();
     action_bar.append(&spacer);
 
-    let configure_button = gtk::Button::with_label("Configure Agents");
+    let configure_button = gtk::Button::with_label("Launch Workspace");
     configure_button.add_css_class("pill-button");
     configure_button.add_css_class("primary-cta-button");
     action_bar.append(&configure_button);
@@ -824,7 +798,6 @@ where
         });
     }
 
-    // ── Wrap in scroller ────────────────────────────────────
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -839,80 +812,10 @@ where
     scroller.upcast()
 }
 
-fn build_launch_preset(
-    selected: &Rc<Cell<Selection>>,
-    templates: &[LayoutTemplate],
-    presets: &[WorkspacePreset],
-    layout: &LayoutNode,
-    session_name: &str,
-    theme: ThemeMode,
-    density: ApplicationDensity,
-) -> WorkspacePreset {
-    let custom_name = if session_name.is_empty() {
-        None
-    } else {
-        Some(session_name.to_string())
-    };
-
-    match selected.get() {
-        Selection::Template(idx) => {
-            let template = &templates[idx];
-            WorkspacePreset {
-                id: format!("session-{}", template.tile_count),
-                name: custom_name.unwrap_or_else(|| template.label.to_string()),
-                description: String::new(),
-                tags: Vec::new(),
-                root_label: "Workspace root".into(),
-                theme,
-                density,
-                layout: layout.clone(),
-            }
-        }
-        Selection::Preset(idx) => {
-            let mut preset = presets[idx].clone();
-            if let Some(name) = custom_name {
-                preset.name = name;
-            }
-            preset.theme = theme;
-            preset.density = density;
-            preset.layout = layout.clone();
-            preset
-        }
-    }
-}
-
-fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {
-    let mut child = strip.first_child();
-    while let Some(widget) = child {
-        let next = widget.next_sibling();
-        widget.remove_css_class("is-active");
-        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
-            && button.label().as_deref() == Some(active_theme.label())
-        {
-            button.add_css_class("is-active");
-        }
-        child = next;
-    }
-}
-
-fn sync_density_strip_active(strip: &gtk::Box, active_density: ApplicationDensity) {
-    let mut child = strip.first_child();
-    while let Some(widget) = child {
-        let next = widget.next_sibling();
-        widget.remove_css_class("is-active");
-        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
-            && button.label().as_deref() == Some(active_density.label())
-        {
-            button.add_css_class("is-active");
-        }
-        child = next;
-    }
-}
-
 fn build_header() -> gtk::Widget {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
+        .spacing(6)
         .halign(gtk::Align::Center)
         .css_classes(["launch-header"])
         .build();
@@ -924,7 +827,7 @@ fn build_header() -> gtk::Widget {
         .css_classes(["hero-title", "config-title"])
         .build();
     let body = gtk::Label::builder()
-        .label("Select a starting layout, then set the exact agent and command for each tile.")
+        .label("Pick a starting layout, then tune the tiles you want to open.")
         .halign(gtk::Align::Center)
         .wrap(true)
         .css_classes(["hero-body", "config-subtitle"])
@@ -933,6 +836,39 @@ fn build_header() -> gtk::Widget {
     card.append(&title);
     card.append(&body);
     card.upcast()
+}
+
+fn build_section_header(kicker: &str, title: &str, body: &str) -> gtk::Widget {
+    let container = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(3)
+        .css_classes(["section-header"])
+        .build();
+
+    let kicker_label = gtk::Label::builder()
+        .label(kicker)
+        .halign(gtk::Align::Start)
+        .css_classes(["eyebrow"])
+        .build();
+    container.append(&kicker_label);
+
+    let title_label = gtk::Label::builder()
+        .label(title)
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .css_classes(["section-title"])
+        .build();
+    container.append(&title_label);
+
+    let body_label = gtk::Label::builder()
+        .label(body)
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .css_classes(["field-hint"])
+        .build();
+    container.append(&body_label);
+
+    container.upcast()
 }
 
 fn build_template_button<F>(template: &LayoutTemplate, index: usize, on_select: F) -> gtk::Widget
@@ -961,6 +897,13 @@ where
         .css_classes(["card-title"])
         .build();
     content.append(&label);
+
+    let meta = gtk::Label::builder()
+        .label(format!("{} tiles", template.tile_count))
+        .halign(gtk::Align::Center)
+        .css_classes(["card-meta"])
+        .build();
+    content.append(&meta);
 
     button.set_child(Some(&content));
     button.connect_clicked(move |_| {
@@ -1083,13 +1026,13 @@ where
 
     let top_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(4)
+        .spacing(8)
         .build();
     shell.append(&top_row);
 
     let button = gtk::Button::builder()
         .hexpand(true)
-        .css_classes(["flat"])
+        .css_classes(["flat", "preset-card-compact-button"])
         .build();
 
     let content = gtk::Box::builder()
@@ -1144,6 +1087,7 @@ where
         let delete_button = gtk::Button::from_icon_name("window-close-symbolic");
         delete_button.add_css_class("flat");
         delete_button.add_css_class("preset-delete-button");
+        delete_button.add_css_class("destructive-button");
         delete_button.set_valign(gtk::Align::Start);
         delete_button.set_tooltip_text(Some("Delete preset"));
 
@@ -1198,29 +1142,15 @@ where
 fn build_tile_editor_panel() -> TileEditorPanel {
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
+        .spacing(10)
         .css_classes(["config-panel", "tile-editor-panel"])
         .build();
 
-    let header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-
-    let title = gtk::Label::builder()
-        .label("Preset Editor")
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["eyebrow"])
-        .build();
-    header.append(&title);
-
-    let status_label = gtk::Label::builder()
-        .halign(gtk::Align::End)
-        .css_classes(["card-meta"])
-        .build();
-    header.append(&status_label);
-    root.append(&header);
+    root.append(&build_section_header(
+        "Step 4",
+        "Tile setup",
+        "Set how many terminals to open, then name each tile and add an optional startup command.",
+    ));
 
     let count_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -1236,6 +1166,12 @@ fn build_tile_editor_panel() -> TileEditorPanel {
         .build();
     count_row.append(&count_label);
 
+    let status_label = gtk::Label::builder()
+        .halign(gtk::Align::End)
+        .css_classes(["card-meta"])
+        .build();
+    count_row.append(&status_label);
+
     let tile_count = gtk::SpinButton::with_range(1.0, 16.0, 1.0);
     tile_count.set_numeric(true);
     tile_count.set_width_chars(3);
@@ -1243,22 +1179,14 @@ fn build_tile_editor_panel() -> TileEditorPanel {
     count_row.append(&tile_count);
     root.append(&count_row);
 
-    let hint = gtk::Label::builder()
-        .label("Set the exact tiles to open, then edit each tile's title, agent label, and startup command.")
-        .halign(gtk::Align::Start)
-        .wrap(true)
-        .css_classes(["field-hint"])
-        .build();
-    root.append(&hint);
-
     let rows = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
+        .spacing(8)
         .build();
 
     let scroller = gtk::ScrolledWindow::builder()
-        .min_content_height(280)
-        .max_content_height(420)
+        .min_content_height(168)
+        .max_content_height(400)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .css_classes(["tile-editor-scroll"])
@@ -1271,6 +1199,7 @@ fn build_tile_editor_panel() -> TileEditorPanel {
         tile_count,
         status_label,
         rows,
+        scroller,
     }
 }
 
@@ -1284,10 +1213,94 @@ fn refresh_tile_editor(panel: &TileEditorPanel, layout_state: &Rc<RefCell<Layout
         .status_label
         .set_text(&format!("{} configured", tile_specs.len()));
 
+    let clamped_rows = tile_specs.len().clamp(1, 4) as i32;
+    let desired_height = 36 + (clamped_rows * 88);
+    panel
+        .scroller
+        .set_min_content_height(desired_height.clamp(148, 388));
+    panel
+        .scroller
+        .set_max_content_height((desired_height + 24).clamp(196, 428));
+    panel.scroller.set_vscrollbar_policy(if tile_specs.len() > 4 {
+        gtk::PolicyType::Automatic
+    } else {
+        gtk::PolicyType::Never
+    });
+
     for (index, tile) in tile_specs.iter().enumerate() {
         panel
             .rows
             .append(&build_tile_editor_row(index, tile, layout_state));
+    }
+}
+
+fn build_launch_preset(
+    selected: &Rc<Cell<Selection>>,
+    templates: &[LayoutTemplate],
+    presets: &[WorkspacePreset],
+    layout: &LayoutNode,
+    session_name: &str,
+    theme: ThemeMode,
+    density: ApplicationDensity,
+) -> WorkspacePreset {
+    let custom_name = if session_name.is_empty() {
+        None
+    } else {
+        Some(session_name.to_string())
+    };
+
+    match selected.get() {
+        Selection::Template(idx) => {
+            let template = &templates[idx];
+            WorkspacePreset {
+                id: format!("session-{}", template.tile_count),
+                name: custom_name.unwrap_or_else(|| template.label.to_string()),
+                description: String::new(),
+                tags: Vec::new(),
+                root_label: "Workspace root".into(),
+                theme,
+                density,
+                layout: layout.clone(),
+            }
+        }
+        Selection::Preset(idx) => {
+            let mut preset = presets[idx].clone();
+            if let Some(name) = custom_name {
+                preset.name = name;
+            }
+            preset.theme = theme;
+            preset.density = density;
+            preset.layout = layout.clone();
+            preset
+        }
+    }
+}
+
+fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {
+    let mut child = strip.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.remove_css_class("is-active");
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+            && button.label().as_deref() == Some(active_theme.label())
+        {
+            button.add_css_class("is-active");
+        }
+        child = next;
+    }
+}
+
+fn sync_density_strip_active(strip: &gtk::Box, active_density: ApplicationDensity) {
+    let mut child = strip.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.remove_css_class("is-active");
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+            && button.label().as_deref() == Some(active_density.label())
+        {
+            button.add_css_class("is-active");
+        }
+        child = next;
     }
 }
 
