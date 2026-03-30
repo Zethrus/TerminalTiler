@@ -28,7 +28,9 @@ pub struct VtStyle {
     pub fg: VtColor,
     pub bg: VtColor,
     pub bold: bool,
+    pub underline: bool,
     pub inverse: bool,
+    pub hyperlink_id: Option<u32>,
 }
 
 impl Default for VtStyle {
@@ -37,7 +39,9 @@ impl Default for VtStyle {
             fg: VtColor::DefaultForeground,
             bg: VtColor::DefaultBackground,
             bold: false,
+            underline: false,
             inverse: false,
+            hyperlink_id: None,
         }
     }
 }
@@ -101,6 +105,8 @@ pub struct VtBuffer {
     title_stack: Vec<String>,
     current_working_directory: Option<String>,
     shell_integration_phase: Option<ShellIntegrationPhase>,
+    hyperlinks: Vec<String>,
+    current_hyperlink: Option<u32>,
     pending_input: Vec<u8>,
     pending_clipboard_write: Option<String>,
     primary_screen: Option<SavedScreen>,
@@ -147,6 +153,8 @@ impl VtBuffer {
             title_stack: Vec::new(),
             current_working_directory: None,
             shell_integration_phase: None,
+            hyperlinks: Vec::new(),
+            current_hyperlink: None,
             pending_input: Vec::new(),
             pending_clipboard_write: None,
             primary_screen: None,
@@ -178,6 +186,14 @@ impl VtBuffer {
 
     pub fn shell_integration_phase(&self) -> Option<ShellIntegrationPhase> {
         self.shell_integration_phase
+    }
+
+    pub fn hyperlink_at(&self, row: usize, column: usize) -> Option<&str> {
+        self.visible_cell(row, column)
+            .style
+            .hyperlink_id
+            .and_then(|id| self.hyperlinks.get(id as usize))
+            .map(String::as_str)
     }
 
     pub fn cursor_visible(&self) -> bool {
@@ -565,6 +581,7 @@ impl VtBuffer {
                 let title = value.trim();
                 self.window_title = (!title.is_empty()).then(|| title.to_string());
             }
+            "8" => self.apply_osc8(value),
             "22" => self.push_title(),
             "23" => self.pop_title(),
             "52" => self.apply_osc52(value),
@@ -575,6 +592,23 @@ impl VtBuffer {
             "133" => self.apply_osc133(value),
             _ => {}
         }
+    }
+
+    fn apply_osc8(&mut self, value: &str) {
+        let Some((_, uri)) = value.split_once(';') else {
+            return;
+        };
+        let uri = uri.trim();
+        if uri.is_empty() {
+            self.current_hyperlink = None;
+            self.style.hyperlink_id = None;
+            return;
+        }
+
+        let hyperlink_id = self.hyperlinks.len() as u32;
+        self.hyperlinks.push(uri.to_string());
+        self.current_hyperlink = Some(hyperlink_id);
+        self.style.hyperlink_id = Some(hyperlink_id);
     }
 
     fn push_title(&mut self) {
@@ -624,6 +658,7 @@ impl VtBuffer {
     fn apply_sgr(&mut self, values: &[usize]) {
         if values.is_empty() {
             self.style = VtStyle::default();
+            self.style.hyperlink_id = self.current_hyperlink;
             return;
         }
 
@@ -634,6 +669,8 @@ impl VtBuffer {
                 0 => self.style = VtStyle::default(),
                 1 => self.style.bold = true,
                 22 => self.style.bold = false,
+                4 => self.style.underline = true,
+                24 => self.style.underline = false,
                 7 => self.style.inverse = true,
                 27 => self.style.inverse = false,
                 30..=37 => self.style.fg = VtColor::Indexed((value - 30) as u8),
@@ -660,6 +697,8 @@ impl VtBuffer {
                 }
                 _ => {}
             }
+
+            self.style.hyperlink_id = self.current_hyperlink;
         }
     }
 
@@ -1292,6 +1331,15 @@ mod tests {
     }
 
     #[test]
+    fn tracks_sgr_underline_state() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}[4mU\u{1b}[24mN");
+
+        assert!(buffer.cell(0, 0).unwrap().style.underline);
+        assert!(!buffer.cell(0, 1).unwrap().style.underline);
+    }
+
+    #[test]
     fn tracks_private_modes_and_reports_terminal_status() {
         let mut buffer = VtBuffer::new(8, 2);
         buffer.process("\u{1b}[?1h\u{1b}[?2004h");
@@ -1436,5 +1484,15 @@ mod tests {
             buffer.shell_integration_phase(),
             Some(ShellIntegrationPhase::PromptEnd)
         );
+    }
+
+    #[test]
+    fn tracks_osc8_hyperlinks_on_cells() {
+        let mut buffer = VtBuffer::new(6, 1);
+        buffer.process("\u{1b}]8;;https://example.com\u{7}go\u{1b}]8;;\u{7}!");
+
+        assert_eq!(buffer.hyperlink_at(0, 0), Some("https://example.com"));
+        assert_eq!(buffer.hyperlink_at(0, 1), Some("https://example.com"));
+        assert_eq!(buffer.hyperlink_at(0, 2), None);
     }
 }

@@ -41,6 +41,7 @@ mod imp {
         GetKeyState, SetFocus, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT,
         VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
     };
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, GWLP_USERDATA, GetClientRect,
@@ -80,6 +81,8 @@ mod imp {
     const MAX_TERMINAL_FONT_POINTS: i32 = 20;
     const MENU_COPY_SELECTION: usize = 1;
     const MENU_PASTE_CLIPBOARD: usize = 2;
+    const MENU_OPEN_LINK: usize = 3;
+    const MENU_COPY_LINK: usize = 4;
 
     struct WorkspaceWindowState {
         tab: SavedTab,
@@ -1030,13 +1033,21 @@ mod imp {
             while column < pane.terminal.columns() {
                 let mut text = String::new();
                 let cell = pane.terminal.visible_cell(row, column);
-                let style =
-                    resolved_style(cell.style, selection_contains(pane, row, column), false);
+                let style = resolved_style(
+                    cell.style,
+                    pane.terminal.hyperlink_at(row, column).is_some(),
+                    selection_contains(pane, row, column),
+                    false,
+                );
                 let start_column = column;
                 while column < pane.terminal.columns() {
                     let next = pane.terminal.visible_cell(row, column);
-                    if resolved_style(next.style, selection_contains(pane, row, column), false)
-                        != style
+                    if resolved_style(
+                        next.style,
+                        pane.terminal.hyperlink_at(row, column).is_some(),
+                        selection_contains(pane, row, column),
+                        false,
+                    ) != style
                     {
                         break;
                     }
@@ -1065,6 +1076,19 @@ mod imp {
                         text_wide.len() as i32,
                     );
                 }
+                if style.underline {
+                    let underline_top = (run_rect.bottom - 2).max(run_rect.top);
+                    fill_rect_color(
+                        hdc,
+                        RECT {
+                            left: run_rect.left,
+                            top: underline_top,
+                            right: run_rect.right,
+                            bottom: (underline_top + 1).min(run_rect.bottom),
+                        },
+                        style.fg,
+                    );
+                }
             }
         }
 
@@ -1075,6 +1099,7 @@ mod imp {
             let cell = pane.terminal.visible_cell(cursor_row, cursor_col);
             let cursor_style = resolved_style(
                 cell.style,
+                pane.terminal.hyperlink_at(cursor_row, cursor_col).is_some(),
                 selection_contains(pane, cursor_row, cursor_col),
                 true,
             );
@@ -1097,6 +1122,19 @@ mod imp {
                     cursor_rect.top + pane.baseline_offset,
                     text_wide.as_ptr(),
                     text_wide.len() as i32,
+                );
+            }
+            if cursor_style.underline {
+                let underline_top = (cursor_rect.bottom - 2).max(cursor_rect.top);
+                fill_rect_color(
+                    hdc,
+                    RECT {
+                        left: cursor_rect.left,
+                        top: underline_top,
+                        right: cursor_rect.right,
+                        bottom: (underline_top + 1).min(cursor_rect.bottom),
+                    },
+                    cursor_style.fg,
                 );
             }
         }
@@ -1192,14 +1230,23 @@ mod imp {
     struct ResolvedStyle {
         fg: COLORREF,
         bg: COLORREF,
+        underline: bool,
     }
 
-    fn resolved_style(style: VtStyle, selected: bool, cursor: bool) -> ResolvedStyle {
+    fn resolved_style(
+        style: VtStyle,
+        hyperlink: bool,
+        selected: bool,
+        cursor: bool,
+    ) -> ResolvedStyle {
         let mut fg = style.fg;
         let mut bg = style.bg;
 
         if style.inverse {
             std::mem::swap(&mut fg, &mut bg);
+        }
+        if hyperlink && matches!(fg, VtColor::DefaultForeground) {
+            fg = VtColor::Indexed(12);
         }
         if selected {
             std::mem::swap(&mut fg, &mut bg);
@@ -1216,6 +1263,7 @@ mod imp {
         ResolvedStyle {
             fg: resolve_terminal_color(fg, true, style.bold),
             bg: resolve_terminal_color(bg, false, false),
+            underline: style.underline || hyperlink,
         }
     }
 
@@ -1587,6 +1635,11 @@ mod imp {
             return;
         }
 
+        let click_position = pane_position_from_lparam(pane, lparam);
+        let hyperlink = pane
+            .terminal
+            .hyperlink_at(click_position.row, click_position.column)
+            .map(str::to_string);
         let has_selection = pane
             .selection_anchor
             .zip(pane.selection_focus)
@@ -1597,6 +1650,18 @@ mod imp {
                 MF_STRING | if has_selection { 0 } else { MF_GRAYED },
                 MENU_COPY_SELECTION,
                 wide("Copy").as_ptr(),
+            );
+            AppendMenuW(
+                menu,
+                MF_STRING | if hyperlink.is_some() { 0 } else { MF_GRAYED },
+                MENU_OPEN_LINK,
+                wide("Open Link").as_ptr(),
+            );
+            AppendMenuW(
+                menu,
+                MF_STRING | if hyperlink.is_some() { 0 } else { MF_GRAYED },
+                MENU_COPY_LINK,
+                wide("Copy Link").as_ptr(),
             );
             AppendMenuW(
                 menu,
@@ -1627,6 +1692,16 @@ mod imp {
         match command as usize {
             MENU_COPY_SELECTION => {
                 let _ = copy_pane_selection_to_clipboard(pane);
+            }
+            MENU_OPEN_LINK => {
+                if let Some(link) = hyperlink.as_deref() {
+                    let _ = open_url(link);
+                }
+            }
+            MENU_COPY_LINK => {
+                if let Some(link) = hyperlink.as_deref() {
+                    let _ = write_clipboard_text(link);
+                }
             }
             MENU_PASTE_CLIPBOARD => {
                 let _ = paste_clipboard_into_pane(pane);
@@ -1673,6 +1748,30 @@ mod imp {
             session.write_input(wrapped.as_bytes())
         } else {
             session.write_input(normalized.as_bytes())
+        }
+    }
+
+    fn open_url(url: &str) -> Result<(), String> {
+        let operation = wide("open");
+        let target = wide(url);
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                SW_SHOW,
+            )
+        };
+
+        if result as usize <= 32 {
+            Err(format!(
+                "ShellExecuteW failed for hyperlink launch: {}",
+                result as usize
+            ))
+        } else {
+            Ok(())
         }
     }
 
