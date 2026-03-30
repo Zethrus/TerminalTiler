@@ -1472,12 +1472,28 @@ fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
         let _ = dialog.set_current_folder(Some(&gio::File::for_path(&initial)));
     }
 
+    logging::info(format!(
+        "opening workspace folder picker from {}",
+        initial.display()
+    ));
+
     dialog.connect_response(move |dialog: &gtk::FileChooserDialog, response| {
         if response == gtk::ResponseType::Accept
             && let Some(folder) = dialog.file()
             && let Some(path) = folder.path()
         {
+            logging::info(format!(
+                "workspace folder picker accepted {}",
+                path.display()
+            ));
             entry.set_text(&path.display().to_string());
+        } else if response == gtk::ResponseType::Cancel {
+            logging::info("workspace folder picker cancelled");
+        } else {
+            logging::info(format!(
+                "workspace folder picker closed with response {:?}",
+                response
+            ));
         }
 
         dialog.close();
