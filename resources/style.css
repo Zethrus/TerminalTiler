@@ -393,6 +393,10 @@ window.profile-compact .workspace-summary {
   margin-bottom: 1px;
 }
 
+window.profile-compact .terminal-card {
+  border-radius: 0 0 14px 14px;
+}
+
 window.profile-compact .terminal-header {
   padding: 6px 8px;
 }
@@ -1008,6 +1012,8 @@ button.destructive-button:hover {
   padding: 8px 10px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .terminal-surface {
@@ -1015,7 +1021,7 @@ button.destructive-button:hover {
 }
 
 .terminal-card {
-  border-radius: 12px;
+  border-radius: 0 0 12px 12px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.20);
 }
 
