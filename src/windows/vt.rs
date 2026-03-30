@@ -16,6 +16,14 @@ pub enum MouseTrackingMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellIntegrationPhase {
+    PromptStart,
+    PromptEnd,
+    CommandStart,
+    CommandEnd,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VtStyle {
     pub fg: VtColor,
     pub bg: VtColor,
@@ -64,6 +72,8 @@ struct SavedScreen {
     cursor_row: usize,
     saved_cursor_col: usize,
     saved_cursor_row: usize,
+    scroll_top: usize,
+    scroll_bottom: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -80,14 +90,22 @@ pub struct VtBuffer {
     style: VtStyle,
     cursor_visible: bool,
     application_cursor_keys: bool,
+    autowrap: bool,
+    origin_mode: bool,
     bracketed_paste: bool,
     alternate_screen: bool,
     mouse_tracking: MouseTrackingMode,
     sgr_mouse_mode: bool,
+    focus_reporting: bool,
     window_title: Option<String>,
+    title_stack: Vec<String>,
     current_working_directory: Option<String>,
+    shell_integration_phase: Option<ShellIntegrationPhase>,
     pending_input: Vec<u8>,
+    pending_clipboard_write: Option<String>,
     primary_screen: Option<SavedScreen>,
+    scroll_top: usize,
+    scroll_bottom: usize,
     parser_state: ParserState,
 }
 
@@ -118,14 +136,22 @@ impl VtBuffer {
             style: VtStyle::default(),
             cursor_visible: true,
             application_cursor_keys: false,
+            autowrap: true,
+            origin_mode: false,
             bracketed_paste: false,
             alternate_screen: false,
             mouse_tracking: MouseTrackingMode::Disabled,
             sgr_mouse_mode: false,
+            focus_reporting: false,
             window_title: None,
+            title_stack: Vec::new(),
             current_working_directory: None,
+            shell_integration_phase: None,
             pending_input: Vec::new(),
+            pending_clipboard_write: None,
             primary_screen: None,
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
             parser_state: ParserState::Ground,
         }
     }
@@ -150,12 +176,20 @@ impl VtBuffer {
         self.current_working_directory.as_deref()
     }
 
+    pub fn shell_integration_phase(&self) -> Option<ShellIntegrationPhase> {
+        self.shell_integration_phase
+    }
+
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
     }
 
     pub fn application_cursor_keys(&self) -> bool {
         self.application_cursor_keys
+    }
+
+    pub fn autowrap(&self) -> bool {
+        self.autowrap
     }
 
     pub fn bracketed_paste(&self) -> bool {
@@ -170,6 +204,10 @@ impl VtBuffer {
         self.sgr_mouse_mode
     }
 
+    pub fn focus_reporting(&self) -> bool {
+        self.focus_reporting
+    }
+
     pub fn history_len(&self) -> usize {
         self.history.len()
     }
@@ -180,6 +218,10 @@ impl VtBuffer {
 
     pub fn take_pending_input(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pending_input)
+    }
+
+    pub fn take_pending_clipboard_write(&mut self) -> Option<String> {
+        self.pending_clipboard_write.take()
     }
 
     pub fn has_selection(&self, start: VtPosition, end: VtPosition) -> bool {
@@ -299,6 +341,10 @@ impl VtBuffer {
         self.cursor_row = self.cursor_row.min(self.rows - 1);
         self.saved_cursor_col = self.saved_cursor_col.min(self.columns - 1);
         self.saved_cursor_row = self.saved_cursor_row.min(self.rows - 1);
+        self.scroll_top = self.scroll_top.min(self.rows.saturating_sub(1));
+        self.scroll_bottom = self
+            .scroll_bottom
+            .clamp(self.scroll_top, self.rows.saturating_sub(1));
         self.viewport_offset = self.viewport_offset.min(self.history.len());
     }
 
@@ -453,9 +499,9 @@ impl VtBuffer {
                     .min(self.columns.saturating_sub(1));
             }
             'H' | 'f' => {
-                let row = param_or(&values, 0, 1).saturating_sub(1);
+                let row = self.resolve_row_param(param_or(&values, 0, 1));
                 let col = param_or(&values, 1, 1).saturating_sub(1);
-                self.cursor_row = row.min(self.rows.saturating_sub(1));
+                self.cursor_row = row;
                 self.cursor_col = col.min(self.columns.saturating_sub(1));
             }
             'J' => match values.first().copied().unwrap_or(0) {
@@ -479,11 +525,7 @@ impl VtBuffer {
             '@' => self.insert_chars(param_or(&values, 0, 1)),
             'P' => self.delete_chars(param_or(&values, 0, 1)),
             'X' => self.erase_chars(param_or(&values, 0, 1)),
-            'd' => {
-                self.cursor_row = param_or(&values, 0, 1)
-                    .saturating_sub(1)
-                    .min(self.rows.saturating_sub(1));
-            }
+            'd' => self.cursor_row = self.resolve_row_param(param_or(&values, 0, 1)),
             'S' => self.scroll_up(param_or(&values, 0, 1)),
             'T' => self.scroll_down(param_or(&values, 0, 1)),
             'a' => {
@@ -506,6 +548,7 @@ impl VtBuffer {
                 self.cursor_col = self.saved_cursor_col.min(self.columns - 1);
                 self.cursor_row = self.saved_cursor_row.min(self.rows - 1);
             }
+            'r' => self.set_scroll_region(&values),
             'h' if prefix == Some('?') => self.apply_private_mode(&values, true),
             'l' if prefix == Some('?') => self.apply_private_mode(&values, false),
             _ => {}
@@ -522,12 +565,60 @@ impl VtBuffer {
                 let title = value.trim();
                 self.window_title = (!title.is_empty()).then(|| title.to_string());
             }
+            "22" => self.push_title(),
+            "23" => self.pop_title(),
+            "52" => self.apply_osc52(value),
             "7" => {
                 let cwd = value.trim();
                 self.current_working_directory = parse_osc7_path(cwd);
             }
+            "133" => self.apply_osc133(value),
             _ => {}
         }
+    }
+
+    fn push_title(&mut self) {
+        if let Some(title) = self.window_title.as_ref() {
+            self.title_stack.push(title.clone());
+        }
+    }
+
+    fn pop_title(&mut self) {
+        self.window_title = self.title_stack.pop();
+    }
+
+    fn apply_osc52(&mut self, value: &str) {
+        let Some((selection, payload)) = value.split_once(';') else {
+            return;
+        };
+        let selection = selection.trim();
+        if !selection.is_empty() && !selection.contains(['c', 'p', 's', '0']) {
+            return;
+        }
+
+        if payload == "?" {
+            return;
+        }
+
+        if payload.is_empty() {
+            self.pending_clipboard_write = Some(String::new());
+            return;
+        }
+
+        if let Some(decoded) = decode_base64(payload.trim()) {
+            self.pending_clipboard_write = String::from_utf8(decoded).ok();
+        }
+    }
+
+    fn apply_osc133(&mut self, value: &str) {
+        let marker = value.split(';').next().unwrap_or_default().trim();
+        self.shell_integration_phase = match marker {
+            "A" => Some(ShellIntegrationPhase::PromptStart),
+            "B" => Some(ShellIntegrationPhase::CommandStart),
+            "C" => Some(ShellIntegrationPhase::CommandEnd),
+            "D" => Some(ShellIntegrationPhase::PromptEnd),
+            _ => self.shell_integration_phase,
+        };
     }
 
     fn apply_sgr(&mut self, values: &[usize]) {
@@ -576,6 +667,11 @@ impl VtBuffer {
         for value in values {
             match *value {
                 1 => self.application_cursor_keys = enabled,
+                6 => {
+                    self.origin_mode = enabled;
+                    self.cursor_to_home();
+                }
+                7 => self.autowrap = enabled,
                 25 => self.cursor_visible = enabled,
                 2004 => self.bracketed_paste = enabled,
                 1000 => {
@@ -592,7 +688,17 @@ impl VtBuffer {
                         self.mouse_tracking = MouseTrackingMode::Disabled;
                     }
                 }
+                1004 => self.focus_reporting = enabled,
                 1006 => self.sgr_mouse_mode = enabled,
+                1048 => {
+                    if enabled {
+                        self.saved_cursor_col = self.cursor_col;
+                        self.saved_cursor_row = self.cursor_row;
+                    } else {
+                        self.cursor_col = self.saved_cursor_col.min(self.columns - 1);
+                        self.cursor_row = self.saved_cursor_row.min(self.rows - 1);
+                    }
+                }
                 47 | 1047 | 1049 => self.set_alternate_screen(enabled),
                 _ => {}
             }
@@ -645,6 +751,8 @@ impl VtBuffer {
                 cursor_row: self.cursor_row,
                 saved_cursor_col: self.saved_cursor_col,
                 saved_cursor_row: self.saved_cursor_row,
+                scroll_top: self.scroll_top,
+                scroll_bottom: self.scroll_bottom,
             });
             self.cells = vec![VtCell::default(); self.columns * self.rows];
             self.history.clear();
@@ -653,6 +761,8 @@ impl VtBuffer {
             self.cursor_row = 0;
             self.saved_cursor_col = 0;
             self.saved_cursor_row = 0;
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
         } else if let Some(saved) = self.primary_screen.take() {
             self.cells = saved.cells;
             self.history = saved.history;
@@ -661,6 +771,10 @@ impl VtBuffer {
             self.cursor_row = saved.cursor_row.min(self.rows.saturating_sub(1));
             self.saved_cursor_col = saved.saved_cursor_col.min(self.columns.saturating_sub(1));
             self.saved_cursor_row = saved.saved_cursor_row.min(self.rows.saturating_sub(1));
+            self.scroll_top = saved.scroll_top.min(self.rows.saturating_sub(1));
+            self.scroll_bottom = saved
+                .scroll_bottom
+                .clamp(self.scroll_top, self.rows.saturating_sub(1));
         }
 
         self.alternate_screen = enabled;
@@ -675,15 +789,26 @@ impl VtBuffer {
             };
         }
 
-        self.cursor_col += 1;
-        if self.cursor_col >= self.columns {
-            self.cursor_col = 0;
-            self.line_feed();
+        if self.cursor_col + 1 >= self.columns {
+            if self.autowrap {
+                self.cursor_col = 0;
+                self.line_feed();
+            } else {
+                self.cursor_col = self.columns.saturating_sub(1);
+            }
+        } else {
+            self.cursor_col += 1;
         }
     }
 
     fn line_feed(&mut self) {
-        if self.cursor_row + 1 >= self.rows {
+        if self.cursor_row >= self.scroll_top && self.cursor_row <= self.scroll_bottom {
+            if self.cursor_row == self.scroll_bottom {
+                self.scroll_region_up(self.scroll_top, self.scroll_bottom, 1);
+            } else {
+                self.cursor_row += 1;
+            }
+        } else if self.cursor_row + 1 >= self.rows {
             self.scroll_up(1);
         } else {
             self.cursor_row += 1;
@@ -691,7 +816,12 @@ impl VtBuffer {
     }
 
     fn reverse_index(&mut self) {
-        if self.cursor_row == 0 {
+        if self.cursor_row >= self.scroll_top
+            && self.cursor_row <= self.scroll_bottom
+            && self.cursor_row == self.scroll_top
+        {
+            self.scroll_region_down(self.scroll_top, self.scroll_bottom, 1);
+        } else if self.cursor_row == 0 {
             self.scroll_down(1);
         } else {
             self.cursor_row -= 1;
@@ -699,12 +829,16 @@ impl VtBuffer {
     }
 
     fn insert_lines(&mut self, lines: usize) {
-        let lines = lines.min(self.rows.saturating_sub(self.cursor_row));
+        if self.cursor_row < self.scroll_top || self.cursor_row > self.scroll_bottom {
+            return;
+        }
+
+        let lines = lines.min(self.scroll_bottom.saturating_sub(self.cursor_row) + 1);
         if lines == 0 {
             return;
         }
 
-        for row in (self.cursor_row..(self.rows - lines)).rev() {
+        for row in (self.cursor_row..=(self.scroll_bottom - lines)).rev() {
             self.copy_row(row, row + lines);
         }
         for row in self.cursor_row..(self.cursor_row + lines) {
@@ -713,15 +847,19 @@ impl VtBuffer {
     }
 
     fn delete_lines(&mut self, lines: usize) {
-        let lines = lines.min(self.rows.saturating_sub(self.cursor_row));
+        if self.cursor_row < self.scroll_top || self.cursor_row > self.scroll_bottom {
+            return;
+        }
+
+        let lines = lines.min(self.scroll_bottom.saturating_sub(self.cursor_row) + 1);
         if lines == 0 {
             return;
         }
 
-        for row in self.cursor_row..(self.rows - lines) {
+        for row in self.cursor_row..=(self.scroll_bottom - lines) {
             self.copy_row(row + lines, row);
         }
-        for row in (self.rows - lines)..self.rows {
+        for row in (self.scroll_bottom + 1 - lines)..=self.scroll_bottom {
             self.clear_line(row);
         }
     }
@@ -766,39 +904,78 @@ impl VtBuffer {
     }
 
     fn scroll_up(&mut self, lines: usize) {
-        let lines = lines.min(self.rows);
+        self.scroll_region_up(0, self.rows.saturating_sub(1), lines);
+    }
+
+    fn scroll_region_up(&mut self, top: usize, bottom: usize, lines: usize) {
+        let lines = lines.min(bottom.saturating_sub(top) + 1);
         if lines == 0 {
             return;
         }
 
-        if !self.alternate_screen {
+        if !self.alternate_screen && top == 0 && bottom + 1 == self.rows {
             for row in 0..lines {
-                self.push_history_row(row);
+                self.push_history_row(top + row);
             }
             if self.viewport_offset > 0 {
                 self.viewport_offset = (self.viewport_offset + lines).min(self.history.len());
             }
         }
 
-        for row in 0..(self.rows - lines) {
+        for row in top..=(bottom - lines) {
             self.copy_row(row + lines, row);
         }
-        for row in (self.rows - lines)..self.rows {
+        for row in (bottom + 1 - lines)..=bottom {
             self.clear_line(row);
         }
     }
 
     fn scroll_down(&mut self, lines: usize) {
-        let lines = lines.min(self.rows);
+        self.scroll_region_down(0, self.rows.saturating_sub(1), lines);
+    }
+
+    fn scroll_region_down(&mut self, top: usize, bottom: usize, lines: usize) {
+        let lines = lines.min(bottom.saturating_sub(top) + 1);
         if lines == 0 {
             return;
         }
 
-        for row in (0..(self.rows - lines)).rev() {
+        for row in (top..=(bottom - lines)).rev() {
             self.copy_row(row, row + lines);
         }
-        for row in 0..lines {
+        for row in top..(top + lines) {
             self.clear_line(row);
+        }
+    }
+
+    fn set_scroll_region(&mut self, values: &[usize]) {
+        let top = values.first().copied().unwrap_or(1).saturating_sub(1);
+        let bottom = values
+            .get(1)
+            .copied()
+            .unwrap_or(self.rows)
+            .saturating_sub(1);
+        if top >= self.rows || bottom >= self.rows || top >= bottom {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows.saturating_sub(1);
+        } else {
+            self.scroll_top = top;
+            self.scroll_bottom = bottom;
+        }
+        self.cursor_to_home();
+    }
+
+    fn cursor_to_home(&mut self) {
+        self.cursor_col = 0;
+        self.cursor_row = if self.origin_mode { self.scroll_top } else { 0 };
+    }
+
+    fn resolve_row_param(&self, row: usize) -> usize {
+        let row = row.saturating_sub(1);
+        if self.origin_mode {
+            (self.scroll_top + row).min(self.scroll_bottom)
+        } else {
+            row.min(self.rows.saturating_sub(1))
         }
     }
 
@@ -971,6 +1148,45 @@ fn parse_osc7_path(value: &str) -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
+fn decode_base64(value: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity((value.len() * 3) / 4);
+    let mut quartet = [0u8; 4];
+    let mut quartet_len = 0usize;
+    let mut padding = 0usize;
+
+    for ch in value.chars() {
+        let decoded = match ch {
+            'A'..='Z' => ch as u8 - b'A',
+            'a'..='z' => ch as u8 - b'a' + 26,
+            '0'..='9' => ch as u8 - b'0' + 52,
+            '+' => 62,
+            '/' => 63,
+            '=' => {
+                padding += 1;
+                0
+            }
+            '\r' | '\n' => continue,
+            _ => return None,
+        };
+        quartet[quartet_len] = decoded;
+        quartet_len += 1;
+
+        if quartet_len == 4 {
+            output.push((quartet[0] << 2) | (quartet[1] >> 4));
+            if padding < 2 {
+                output.push((quartet[1] << 4) | (quartet[2] >> 2));
+            }
+            if padding == 0 {
+                output.push((quartet[2] << 6) | quartet[3]);
+            }
+            quartet_len = 0;
+            padding = 0;
+        }
+    }
+
+    (quartet_len == 0).then_some(output)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WordClass {
     Space,
@@ -990,7 +1206,13 @@ fn classify_word_char(ch: char) -> WordClass {
 
 #[cfg(test)]
 mod tests {
-    use super::{MouseTrackingMode, VtBuffer, VtColor, VtPosition};
+    use super::{MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition};
+
+    fn row_text(buffer: &VtBuffer, row: usize) -> String {
+        (0..buffer.columns())
+            .map(|column| buffer.cell(row, column).unwrap().ch)
+            .collect()
+    }
 
     #[test]
     fn writes_text_and_wraps_lines() {
@@ -1136,5 +1358,83 @@ mod tests {
         buffer.process("\u{1b}[?1002l\u{1b}[?1006l");
         assert_eq!(buffer.mouse_tracking(), MouseTrackingMode::Disabled);
         assert!(!buffer.sgr_mouse_mode());
+    }
+
+    #[test]
+    fn tracks_focus_reporting_mode() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}[?1004h");
+        assert!(buffer.focus_reporting());
+        buffer.process("\u{1b}[?1004l");
+        assert!(!buffer.focus_reporting());
+    }
+
+    #[test]
+    fn decodes_osc52_clipboard_writes() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}]52;c;aGVsbG8gd29ybGQ=\u{7}");
+        assert_eq!(
+            buffer.take_pending_clipboard_write().as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn tracks_autowrap_mode() {
+        let mut buffer = VtBuffer::new(3, 2);
+        buffer.process("\u{1b}[?7labcX");
+
+        assert!(!buffer.autowrap());
+        assert_eq!(row_text(&buffer, 0), "abX");
+        assert_eq!(buffer.cursor(), (2, 0));
+    }
+
+    #[test]
+    fn applies_scroll_region_and_origin_mode() {
+        let mut buffer = VtBuffer::new(4, 4);
+        buffer.process("\u{1b}[1;1H1\u{1b}[2;1H2\u{1b}[3;1H3\u{1b}[4;1H4");
+        buffer.process("\u{1b}[2;3r\u{1b}[?6h\u{1b}[1;1H\u{1b}M");
+
+        assert_eq!(buffer.cell(0, 0).unwrap().ch, '1');
+        assert_eq!(buffer.cell(1, 0).unwrap().ch, ' ');
+        assert_eq!(buffer.cell(2, 0).unwrap().ch, '2');
+        assert_eq!(buffer.cell(3, 0).unwrap().ch, '4');
+        assert_eq!(buffer.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn saves_and_restores_window_title_stack() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}]0;main\u{7}");
+        buffer.process("\u{1b}]22;\u{7}");
+        buffer.process("\u{1b}]0;build\u{7}");
+        buffer.process("\u{1b}]23;\u{7}");
+
+        assert_eq!(buffer.window_title(), Some("main"));
+    }
+
+    #[test]
+    fn tracks_osc133_shell_integration_markers() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}]133;A\u{7}");
+        assert_eq!(
+            buffer.shell_integration_phase(),
+            Some(ShellIntegrationPhase::PromptStart)
+        );
+        buffer.process("\u{1b}]133;B\u{7}");
+        assert_eq!(
+            buffer.shell_integration_phase(),
+            Some(ShellIntegrationPhase::CommandStart)
+        );
+        buffer.process("\u{1b}]133;C\u{7}");
+        assert_eq!(
+            buffer.shell_integration_phase(),
+            Some(ShellIntegrationPhase::CommandEnd)
+        );
+        buffer.process("\u{1b}]133;D\u{7}");
+        assert_eq!(
+            buffer.shell_integration_phase(),
+            Some(ShellIntegrationPhase::PromptEnd)
+        );
     }
 }

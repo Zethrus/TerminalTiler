@@ -59,7 +59,9 @@ mod imp {
     use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
     use crate::model::preset::ApplicationDensity;
     use crate::storage::session_store::{SavedSession, SavedTab};
-    use crate::windows::vt::{MouseTrackingMode, VtBuffer, VtColor, VtPosition, VtStyle};
+    use crate::windows::vt::{
+        MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
+    };
     use crate::windows::wsl::{self, WslLaunchCommand};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
@@ -577,6 +579,12 @@ mod imp {
             WM_SETFOCUS => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     pane.focused = true;
+                    if pane.terminal.focus_reporting()
+                        && let Some(session) = pane.session.as_ref()
+                        && let Err(error) = session.write_input(b"\x1b[I")
+                    {
+                        logging::error(format!("pane focus-in report failed: {error}"));
+                    }
                     unsafe {
                         InvalidateRect(hwnd, ptr::null(), 1);
                     }
@@ -586,6 +594,12 @@ mod imp {
             WM_KILLFOCUS => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     pane.focused = false;
+                    if pane.terminal.focus_reporting()
+                        && let Some(session) = pane.session.as_ref()
+                        && let Err(error) = session.write_input(b"\x1b[O")
+                    {
+                        logging::error(format!("pane focus-out report failed: {error}"));
+                    }
                     unsafe {
                         InvalidateRect(hwnd, ptr::null(), 1);
                     }
@@ -931,14 +945,13 @@ mod imp {
         {
             logging::error(format!("pane control response write failed: {error}"));
         }
+        if let Some(clipboard_text) = pane.terminal.take_pending_clipboard_write()
+            && let Err(error) = write_clipboard_text(&clipboard_text)
+        {
+            logging::error(format!("pane OSC 52 clipboard write failed: {error}"));
+        }
         update_pane_scrollbar(pane);
-        let header = if let Some(title) = pane.terminal.window_title() {
-            format!("{}  •  {}", pane.tile.title, title)
-        } else if let Some(cwd) = pane.terminal.current_working_directory() {
-            format!("{}  •  {}", pane.tile.title, cwd)
-        } else {
-            format!("{}  •  {}", pane.tile.title, pane.tile.agent_label)
-        };
+        let header = pane_header_text(pane);
         unsafe {
             SetWindowTextW(pane.title_hwnd, wide(&header).as_ptr());
         }
@@ -958,6 +971,32 @@ mod imp {
         update_pane_scrollbar(pane);
         unsafe {
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+        }
+    }
+
+    fn pane_header_text(pane: &PaneState) -> String {
+        if let Some(title) = pane.terminal.window_title() {
+            format!("{}  •  {}", pane.tile.title, title)
+        } else if let Some(cwd) = pane.terminal.current_working_directory() {
+            format!("{}  •  {}", pane.tile.title, cwd)
+        } else if let Some(phase) = pane.terminal.shell_integration_phase() {
+            format!(
+                "{}  •  {}  •  {}",
+                pane.tile.title,
+                pane.tile.agent_label,
+                shell_phase_label(phase)
+            )
+        } else {
+            format!("{}  •  {}", pane.tile.title, pane.tile.agent_label)
+        }
+    }
+
+    fn shell_phase_label(phase: ShellIntegrationPhase) -> &'static str {
+        match phase {
+            ShellIntegrationPhase::PromptStart => "prompt",
+            ShellIntegrationPhase::PromptEnd => "ready",
+            ShellIntegrationPhase::CommandStart => "running",
+            ShellIntegrationPhase::CommandEnd => "done",
         }
     }
 
