@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::app::logging;
+use crate::logging;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
@@ -23,6 +23,7 @@ pub struct AppPreferences {
     pub default_density: ApplicationDensity,
     pub default_theme: ThemeMode,
     pub close_to_background: bool,
+    pub windows_wsl_distribution: Option<String>,
     pub workspace_fullscreen_shortcut: String,
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
@@ -45,6 +46,8 @@ struct PreferenceDocument {
     default_theme: ThemeMode,
     #[serde(default = "default_close_to_background")]
     close_to_background: bool,
+    #[serde(default)]
+    windows_wsl_distribution: Option<String>,
     #[serde(default = "default_fullscreen_shortcut")]
     workspace_fullscreen_shortcut: String,
     #[serde(default = "default_density_shortcut")]
@@ -101,6 +104,13 @@ fn normalize_settings_dialog_width(width: i32) -> i32 {
 
 fn normalize_settings_dialog_height(height: i32) -> i32 {
     height.max(240)
+}
+
+fn normalize_windows_wsl_distribution(distribution: Option<&str>) -> Option<String> {
+    distribution
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn normalize_fullscreen_shortcut(shortcut: &str) -> String {
@@ -181,6 +191,9 @@ impl PreferenceStore {
                 default_density: document.default_density,
                 default_theme: document.default_theme,
                 close_to_background: document.close_to_background,
+                windows_wsl_distribution: normalize_windows_wsl_distribution(
+                    document.windows_wsl_distribution.as_deref(),
+                ),
                 workspace_fullscreen_shortcut: normalize_fullscreen_shortcut(
                     &document.workspace_fullscreen_shortcut,
                 ),
@@ -229,6 +242,13 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    #[allow(dead_code)]
+    pub fn save_windows_wsl_distribution(&self, distribution: Option<&str>) {
+        let mut preferences = self.load();
+        preferences.windows_wsl_distribution = normalize_windows_wsl_distribution(distribution);
+        self.save(&preferences);
+    }
+
     pub fn save_workspace_fullscreen_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.workspace_fullscreen_shortcut = shortcut.trim().to_string();
@@ -270,6 +290,9 @@ impl PreferenceStore {
             default_density: preferences.default_density,
             default_theme: preferences.default_theme,
             close_to_background: preferences.close_to_background,
+            windows_wsl_distribution: normalize_windows_wsl_distribution(
+                preferences.windows_wsl_distribution.as_deref(),
+            ),
             workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
             workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
@@ -318,6 +341,7 @@ impl Default for AppPreferences {
             default_density: default_density(),
             default_theme: default_theme(),
             close_to_background: default_close_to_background(),
+            windows_wsl_distribution: None,
             workspace_fullscreen_shortcut: default_fullscreen_shortcut(),
             workspace_density_shortcut: default_density_shortcut(),
             workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
@@ -357,6 +381,7 @@ mod tests {
         assert_eq!(store.load().default_density, ApplicationDensity::Compact);
         assert_eq!(store.load().default_theme, ThemeMode::System);
         assert!(!store.load().close_to_background);
+        assert_eq!(store.load().windows_wsl_distribution, None);
         assert_eq!(store.load().workspace_fullscreen_shortcut, "F11");
         assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
@@ -374,6 +399,7 @@ mod tests {
             default_density: ApplicationDensity::Comfortable,
             default_theme: ThemeMode::Dark,
             close_to_background: true,
+            windows_wsl_distribution: Some("Ubuntu".into()),
             workspace_fullscreen_shortcut: "<Shift>F11".into(),
             workspace_density_shortcut: "<Shift>F8".into(),
             workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
@@ -388,6 +414,7 @@ mod tests {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::Dark,
                 close_to_background: true,
+                windows_wsl_distribution: Some("Ubuntu".into()),
                 workspace_fullscreen_shortcut: "<Shift>F11".into(),
                 workspace_density_shortcut: "<Shift>F8".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
@@ -412,6 +439,7 @@ mod tests {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::System,
                 close_to_background: false,
+                windows_wsl_distribution: None,
                 workspace_fullscreen_shortcut: "F11".into(),
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
@@ -440,6 +468,21 @@ mod tests {
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
+    }
+
+    #[test]
+    fn trims_blank_windows_distro_names_to_none() {
+        let dir = temp_dir("pref-windows-distro");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nwindows_wsl_distribution = \"   \"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().windows_wsl_distribution, None);
     }
 
     #[test]

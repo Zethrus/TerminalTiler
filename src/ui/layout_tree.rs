@@ -36,7 +36,10 @@ pub fn build(
             second,
         } => {
             let paned = gtk::Paned::builder()
-                .orientation(axis.to_orientation())
+                .orientation(match axis {
+                    crate::model::layout::SplitAxis::Horizontal => gtk::Orientation::Horizontal,
+                    crate::model::layout::SplitAxis::Vertical => gtk::Orientation::Vertical,
+                })
                 .wide_handle(true)
                 .shrink_start_child(true)
                 .shrink_end_child(true)

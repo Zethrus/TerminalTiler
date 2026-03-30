@@ -5,8 +5,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use crate::app::logging;
 use crate::app::tray::TrayController;
+use crate::logging;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
@@ -253,8 +253,9 @@ pub fn present(
         let current_close_to_background = current_close_to_background.clone();
         let tray_controller = tray_controller.clone();
         Rc::new(move || {
-            close_to_background_notice
-                .set_reveal_child(current_close_to_background.get() && !tray_controller.is_available());
+            close_to_background_notice.set_reveal_child(
+                current_close_to_background.get() && !tray_controller.is_available(),
+            );
         })
     };
 
@@ -1948,11 +1949,7 @@ fn zoom_in_shortcut_accelerators(shortcut: &str) -> Vec<String> {
             &["<Control>plus", "<Control>equal", "<Control>KP_Add"],
             &["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"],
             &["<Alt>plus", "<Alt>equal", "<Alt>KP_Add"],
-            &[
-                "<Ctrl><Alt>plus",
-                "<Ctrl><Alt>equal",
-                "<Ctrl><Alt>KP_Add",
-            ],
+            &["<Ctrl><Alt>plus", "<Ctrl><Alt>equal", "<Ctrl><Alt>KP_Add"],
             &[
                 "<Control><Alt>plus",
                 "<Control><Alt>equal",

@@ -1,4 +1,3 @@
-pub mod logging;
 pub mod tray;
 
 use adw::prelude::*;
@@ -7,6 +6,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::logging;
 use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::SessionStore;
@@ -36,7 +36,7 @@ pub fn run() -> adw::glib::ExitCode {
     {
         let tray_controller = tray_controller.clone();
         app.connect_activate(move |app| {
-        logging::info("application activated");
+            logging::info("application activated");
             let _ = ensure_main_window(app, &tray_controller);
         });
     }
@@ -77,11 +77,8 @@ fn handle_tray_command(
         }
         tray::TrayCommand::OpenSettings => {
             if let Some(window) = ensure_main_window(app, tray_controller)
-                && let Err(error) = gtk::prelude::WidgetExt::activate_action(
-                    &window,
-                    "win.open-settings",
-                    None,
-                )
+                && let Err(error) =
+                    gtk::prelude::WidgetExt::activate_action(&window, "win.open-settings", None)
             {
                 logging::error(format!(
                     "failed to activate settings action from tray: {}",

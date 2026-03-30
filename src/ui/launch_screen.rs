@@ -6,12 +6,12 @@ use adw::prelude::*;
 use gtk::gio;
 use uuid::Uuid;
 
-use crate::app::logging;
+use crate::logging;
 use crate::model::layout::{
     LayoutNode, LayoutTemplate, TileSpec, builtin_templates, generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
-use crate::storage::fs_utils::canonicalize_existing_dir;
+use crate::platform::{home_dir, resolve_workspace_root};
 use crate::storage::preset_store::PresetStore;
 
 #[derive(Clone, Copy, Debug)]
@@ -1218,11 +1218,13 @@ fn refresh_tile_editor(panel: &TileEditorPanel, layout_state: &Rc<RefCell<Layout
     panel
         .scroller
         .set_max_content_height((desired_height + 24).clamp(196, 428));
-    panel.scroller.set_vscrollbar_policy(if tile_specs.len() > 4 {
-        gtk::PolicyType::Automatic
-    } else {
-        gtk::PolicyType::Never
-    });
+    panel
+        .scroller
+        .set_vscrollbar_policy(if tile_specs.len() > 4 {
+            gtk::PolicyType::Automatic
+        } else {
+            gtk::PolicyType::Never
+        });
 
     for (index, tile) in tile_specs.iter().enumerate() {
         panel
@@ -1497,17 +1499,13 @@ fn validate_workspace_path_text(text: &str) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("Path is not a directory: {}", path.display()));
     }
-    canonicalize_existing_dir(&path).map_err(|error| {
+    resolve_workspace_root(&path).map_err(|error| {
         format!(
             "Could not resolve workspace path '{}': {}",
             path.display(),
             error
         )
     })
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 fn prompt_preset_name<F>(window: Option<&gtk::Window>, default_name: &str, on_submit: F)

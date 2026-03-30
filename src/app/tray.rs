@@ -6,7 +6,7 @@ use std::sync::mpsc::Sender;
 
 use ksni::blocking::{Handle, TrayMethods};
 
-use crate::app::logging;
+use crate::logging;
 
 #[derive(Clone, Copy, Debug)]
 pub enum TrayCommand {

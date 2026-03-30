@@ -1,22 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use gtk::Orientation;
 use serde::{Deserialize, Serialize};
+
+use crate::platform::home_dir;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SplitAxis {
     Horizontal,
     Vertical,
-}
-
-impl SplitAxis {
-    pub fn to_orientation(self) -> Orientation {
-        match self {
-            Self::Horizontal => Orientation::Horizontal,
-            Self::Vertical => Orientation::Vertical,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,9 +23,7 @@ pub enum WorkingDirectory {
 impl WorkingDirectory {
     pub fn resolve(&self, workspace_root: &Path) -> PathBuf {
         match self {
-            Self::Home => std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| workspace_root.to_path_buf()),
+            Self::Home => home_dir().unwrap_or_else(|| workspace_root.to_path_buf()),
             Self::WorkspaceRoot => workspace_root.to_path_buf(),
             Self::Relative(path) => workspace_root.join(path),
             Self::Absolute(path) => path.clone(),

@@ -1,10 +1,13 @@
 use std::backtrace::Backtrace;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::panic;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::ptr;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,6 +17,7 @@ use directories::ProjectDirs;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
 struct Logger {
@@ -21,7 +25,9 @@ struct Logger {
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
+#[cfg(unix)]
 static CRASH_FD: AtomicI32 = AtomicI32::new(-1);
+#[cfg(unix)]
 static ALT_SIGNAL_STACK: OnceLock<Box<[u8]>> = OnceLock::new();
 static HOOKS_INSTALLED: OnceLock<()> = OnceLock::new();
 
@@ -30,13 +36,12 @@ pub fn init() {
 
     if let Some(path) = &log_path {
         match open_logger(path) {
-            Ok((file, crash_fd)) => {
+            Ok(file) => {
                 let logger = Logger {
                     file: Mutex::new(file),
                 };
 
                 let _ = LOGGER.set(logger);
-                CRASH_FD.store(crash_fd, Ordering::SeqCst);
             }
             Err(error) => {
                 eprintln!("TerminalTiler logging init failed: {error}");
@@ -49,7 +54,7 @@ pub fn init() {
     if let Some(path) = log_path {
         info(format!("logging initialized at {}", path.display()));
     } else {
-        error("could not resolve an XDG state directory for logs");
+        error("could not resolve an application state directory for logs");
     }
 }
 
@@ -62,13 +67,12 @@ pub fn error(message: impl AsRef<str>) {
 }
 
 fn standard_log_path() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "Zethrus", "TerminalTiler").and_then(|dirs| {
-        dirs.state_dir()
-            .map(|state_dir| state_dir.join("logs").join("terminaltiler.log"))
-    })
+    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
+        .and_then(|dirs| dirs.state_dir().map(|state_dir| state_dir.join("logs")))
+        .map(|dir| dir.join("terminaltiler.log"))
 }
 
-fn open_logger(path: &PathBuf) -> std::io::Result<(File, i32)> {
+fn open_logger(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -79,13 +83,24 @@ fn open_logger(path: &PathBuf) -> std::io::Result<(File, i32)> {
     options.mode(PRIVATE_FILE_MODE);
 
     let file = options.open(path)?;
-    let crash_fd = unsafe { libc::dup(file.as_raw_fd()) };
+    initialize_crash_logging(&file)?;
+    Ok(file)
+}
 
+#[cfg(unix)]
+fn initialize_crash_logging(file: &File) -> io::Result<()> {
+    let crash_fd = unsafe { libc::dup(file.as_raw_fd()) };
     if crash_fd < 0 {
-        return Err(std::io::Error::last_os_error());
+        return Err(io::Error::last_os_error());
     }
 
-    Ok((file, crash_fd))
+    CRASH_FD.store(crash_fd, Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn initialize_crash_logging(_file: &File) -> io::Result<()> {
+    Ok(())
 }
 
 fn write_log_line(level: &str, message: &str) {
@@ -142,6 +157,7 @@ fn install_panic_hook() {
     }));
 }
 
+#[cfg(unix)]
 fn install_signal_handlers() {
     let stack_size = libc::SIGSTKSZ.max(64 * 1024);
     let mut stack = vec![0u8; stack_size].into_boxed_slice();
@@ -156,7 +172,7 @@ fn install_signal_handlers() {
         if libc::sigaltstack(&alt_stack, ptr::null_mut()) != 0 {
             error(format!(
                 "sigaltstack installation failed: {}",
-                std::io::Error::last_os_error()
+                io::Error::last_os_error()
             ));
         }
     }
@@ -180,13 +196,17 @@ fn install_signal_handlers() {
                 error(format!(
                     "sigaction installation failed for signal {}: {}",
                     signal,
-                    std::io::Error::last_os_error()
+                    io::Error::last_os_error()
                 ));
             }
         }
     }
 }
 
+#[cfg(not(unix))]
+fn install_signal_handlers() {}
+
+#[cfg(unix)]
 unsafe extern "C" fn crash_signal_handler(
     signal: libc::c_int,
     _info: *mut libc::siginfo_t,

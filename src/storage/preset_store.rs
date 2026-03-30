@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::app::logging;
+use crate::logging;
 use crate::model::preset::{WorkspacePreset, builtin_presets};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 

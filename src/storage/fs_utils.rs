@@ -46,17 +46,6 @@ pub fn preserve_corrupt_file(path: &Path) -> io::Result<Option<PathBuf>> {
     Ok(Some(preserved))
 }
 
-pub fn canonicalize_existing_dir(path: &Path) -> io::Result<PathBuf> {
-    let canonical = fs::canonicalize(path)?;
-    if !canonical.is_dir() {
-        return Err(io::Error::other(format!(
-            "path '{}' is not a directory",
-            canonical.display()
-        )));
-    }
-    Ok(canonical)
-}
-
 fn sibling_temp_path(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
@@ -81,7 +70,8 @@ fn sync_dir(path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{atomic_write_private, canonicalize_existing_dir, preserve_corrupt_file};
+    use super::{atomic_write_private, preserve_corrupt_file};
+    use crate::platform::canonicalize_existing_dir;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;

@@ -7,7 +7,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib, pango};
 use vte4::prelude::*;
 
-use crate::app::logging;
+use crate::logging;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 

@@ -5,11 +5,10 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::app::logging;
+use crate::logging;
 use crate::model::preset::WorkspacePreset;
-use crate::storage::fs_utils::{
-    atomic_write_private, canonicalize_existing_dir, preserve_corrupt_file,
-};
+use crate::platform::resolve_workspace_root;
+use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
 const SESSION_VERSION: u32 = 1;
 
@@ -113,7 +112,7 @@ impl SessionStore {
             .tabs
             .into_iter()
             .filter_map(
-                |mut tab| match canonicalize_existing_dir(&tab.workspace_root) {
+                |mut tab| match resolve_workspace_root(&tab.workspace_root) {
                     Ok(path) => {
                         tab.workspace_root = path;
                         Some(tab)
