@@ -6,39 +6,57 @@ mod imp {
     use std::thread;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HWND, LPARAM, LRESULT, RECT,
-        SetHandleInformation, WPARAM,
+        COLORREF, CloseHandle, GlobalFree, HANDLE, HANDLE_FLAG_INHERIT, HINSTANCE, HWND, LPARAM,
+        LRESULT, RECT, SIZE, SetHandleInformation, WPARAM,
     };
     use windows_sys::Win32::Graphics::Gdi::{
-        COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow,
+        BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontW,
+        CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DeleteObject, EndPaint, FF_MODERN,
+        FIXED_PITCH, FW_NORMAL, FillRect, GetDC, GetStockObject, GetTextExtentPoint32W,
+        GetTextMetricsW, HBRUSH, HFONT, HGDIOBJ, InvalidateRect, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+        ReleaseDC, SelectObject, SetBkColor, SetTextColor, TEXTMETRICW, TextOutW, UpdateWindow,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-    use windows_sys::Win32::Storage::FileSystem::ReadFile;
+    use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
     };
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+        OpenClipboard, SetClipboardData,
+    };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Memory::{
+        GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+    };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
         InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
         PROCESS_INFORMATION, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
     };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, SetFocus, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT,
+        VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, ES_AUTOVSCROLL,
-        ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HMENU,
-        IDC_ARROW, LoadCursorW, PostMessageW, RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_APP,
-        WM_COMMAND, WM_CREATE, WM_DESTROY, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE,
-        WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA,
+        GetClientRect, GetWindowLongPtrW, HMENU, IDC_ARROW, LoadCursorW, PostMessageW,
+        RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
+        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
     };
 
     use crate::logging;
     use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
     use crate::storage::session_store::{SavedSession, SavedTab};
+    use crate::windows::vt::{VtBuffer, VtColor, VtPosition, VtStyle};
     use crate::windows::wsl::{self, WslLaunchCommand};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
+    const PANE_CLASS: &str = "TerminalTilerWindowsPane";
     const WM_PANE_OUTPUT: u32 = WM_APP + 1;
     const WM_PANE_EXIT: u32 = WM_APP + 2;
     const HEADER_HEIGHT: i32 = 56;
@@ -47,24 +65,43 @@ mod imp {
     const PANE_TITLE_HEIGHT: i32 = 20;
     const MIN_PANE_CHARS_X: i16 = 40;
     const MIN_PANE_CHARS_Y: i16 = 12;
-    const APPROX_CELL_WIDTH: i32 = 9;
-    const APPROX_CELL_HEIGHT: i32 = 18;
-    const MAX_BUFFER_CHARS: usize = 64_000;
+    const DEFAULT_FONT_HEIGHT: i32 = 16;
+    const DEFAULT_FONT_FACE: &str = "Consolas";
+    const CF_UNICODETEXT: u32 = 13;
 
     struct WorkspaceWindowState {
         tab: SavedTab,
         distribution: String,
         title_hwnd: HWND,
         path_hwnd: HWND,
-        panes: Vec<PaneState>,
+        panes: Vec<Box<PaneState>>,
     }
 
     struct PaneState {
         tile: TileSpec,
         title_hwnd: HWND,
         output_hwnd: HWND,
-        buffer: String,
+        terminal: VtBuffer,
+        focused: bool,
+        font: HFONT,
+        cell_width: i32,
+        cell_height: i32,
+        baseline_offset: i32,
+        selection_anchor: Option<VtPosition>,
+        selection_focus: Option<VtPosition>,
+        selecting: bool,
         session: Option<PaneSession>,
+    }
+
+    impl Drop for PaneState {
+        fn drop(&mut self) {
+            if !self.font.is_null() {
+                unsafe {
+                    DeleteObject(self.font as HGDIOBJ);
+                }
+                self.font = ptr::null_mut();
+            }
+        }
     }
 
     struct PaneSession {
@@ -293,6 +330,27 @@ mod imp {
             }
         }
 
+        fn write_input(&self, bytes: &[u8]) -> Result<(), String> {
+            let mut written = 0u32;
+            if unsafe {
+                WriteFile(
+                    self.input_write,
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                    &mut written,
+                    ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(format!(
+                    "WriteFile to pseudo console input failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            Ok(())
+        }
+
         fn terminate(&mut self) {
             unsafe {
                 if !self.process_handle.is_null() {
@@ -338,7 +396,7 @@ mod imp {
             return Err("could not resolve module handle for workspace window".into());
         }
 
-        register_window_class(instance)?;
+        register_window_classes(instance)?;
         let window_title = tab
             .custom_title
             .clone()
@@ -384,13 +442,22 @@ mod imp {
         Ok(())
     }
 
-    fn register_window_class(instance: HANDLE) -> Result<(), String> {
-        let class_name = wide(WINDOW_CLASS);
+    fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
+        register_class(instance, WINDOW_CLASS, window_proc)?;
+        register_class(instance, PANE_CLASS, pane_window_proc)
+    }
+
+    fn register_class(
+        instance: HINSTANCE,
+        class_name: &str,
+        window_proc: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+    ) -> Result<(), String> {
+        let class_name_wide = wide(class_name);
         let window_class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
-            lpszClassName: class_name.as_ptr(),
+            lpszClassName: class_name_wide.as_ptr(),
             hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
             hbrBackground: (COLOR_WINDOW as isize + 1) as _,
             ..unsafe { mem::zeroed() }
@@ -399,9 +466,8 @@ mod imp {
         let atom = unsafe { RegisterClassW(&window_class) };
         if atom == 0 {
             let error = std::io::Error::last_os_error();
-            let already_exists = error.raw_os_error() == Some(1410);
-            if !already_exists {
-                return Err(format!("RegisterClassW failed for workspace host: {error}"));
+            if error.raw_os_error() != Some(1410) {
+                return Err(format!("RegisterClassW failed for {class_name}: {error}"));
             }
         }
 
@@ -428,14 +494,14 @@ mod imp {
                 1
             }
             WM_CREATE => {
-                if let Some(state) = unsafe { state_mut(hwnd) } {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     create_controls(hwnd, state);
                     spawn_pane_sessions(hwnd, state);
                 }
                 0
             }
             WM_SIZE => {
-                if let Some(state) = unsafe { state_mut(hwnd) } {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     layout_controls(hwnd, state);
                 }
                 0
@@ -445,19 +511,15 @@ mod imp {
                 let event_ptr = lparam as *mut PaneOutputEvent;
                 if !event_ptr.is_null() {
                     let event = unsafe { Box::from_raw(event_ptr) };
-                    if let Some(state) = unsafe { state_mut(hwnd) } {
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
                         append_pane_output(state, event.pane_index, &event.text);
                     }
                 }
                 0
             }
             WM_PANE_EXIT => {
-                if let Some(state) = unsafe { state_mut(hwnd) } {
-                    append_pane_output(
-                        state,
-                        wparam as usize,
-                        "\r\n\r\n[terminal session exited]\r\n",
-                    );
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    mark_pane_exited(state, wparam as usize);
                 }
                 0
             }
@@ -466,12 +528,103 @@ mod imp {
                 let state_ptr = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) }
                     as *mut WorkspaceWindowState;
                 if !state_ptr.is_null() {
-                    let mut state = unsafe { Box::from_raw(state_ptr) };
-                    for pane in &mut state.panes {
-                        if let Some(session) = pane.session.as_mut() {
-                            session.terminate();
-                        }
+                    drop(unsafe { Box::from_raw(state_ptr) });
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
+    }
+
+    unsafe extern "system" fn pane_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_NCCREATE => {
+                let create = lparam as *const CREATESTRUCTW;
+                if create.is_null() {
+                    return 0;
+                }
+
+                let pane_ptr = unsafe { (*create).lpCreateParams as *mut PaneState };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, pane_ptr as isize);
+                }
+                1
+            }
+            WM_PAINT => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    render_pane(hwnd, pane);
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_SETFOCUS => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.focused = true;
+                    unsafe {
+                        InvalidateRect(hwnd, ptr::null(), 1);
                     }
+                }
+                0
+            }
+            WM_KILLFOCUS => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.focused = false;
+                    unsafe {
+                        InvalidateRect(hwnd, ptr::null(), 1);
+                    }
+                }
+                0
+            }
+            WM_LBUTTONDOWN => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    unsafe { SetFocus(hwnd) };
+                    let position = pane_position_from_lparam(pane, lparam);
+                    pane.selection_anchor = Some(position);
+                    pane.selection_focus = Some(position);
+                    pane.selecting = true;
+                    unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+                }
+                0
+            }
+            WM_MOUSEMOVE => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.selecting {
+                        pane.selection_focus = Some(pane_position_from_lparam(pane, lparam));
+                        unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+                    }
+                }
+                0
+            }
+            WM_LBUTTONUP => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.selecting {
+                        pane.selection_focus = Some(pane_position_from_lparam(pane, lparam));
+                        pane.selecting = false;
+                        unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+                    }
+                }
+                0
+            }
+            WM_CHAR => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    handle_char_input(pane, wparam as u32);
+                }
+                0
+            }
+            WM_KEYDOWN => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    handle_key_input(pane, wparam as u16);
+                }
+                0
+            }
+            WM_NCDESTROY => {
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
@@ -485,7 +638,15 @@ mod imp {
             .custom_title
             .clone()
             .unwrap_or_else(|| state.tab.preset.name.clone());
-        state.title_hwnd = create_child_window(hwnd, "STATIC", &title, WS_CHILD | WS_VISIBLE, 0, 0);
+        state.title_hwnd = create_child_window(
+            hwnd,
+            "STATIC",
+            &title,
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            ptr::null_mut(),
+        );
         state.path_hwnd = create_child_window(
             hwnd,
             "STATIC",
@@ -493,57 +654,62 @@ mod imp {
             WS_CHILD | WS_VISIBLE,
             0,
             0,
+            ptr::null_mut(),
         );
 
-        let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         for control in [state.title_hwnd, state.path_hwnd] {
             if !control.is_null() {
                 unsafe {
-                    SendMessageW(control, WM_SETFONT, font as usize, 1);
+                    SendMessageW(control, WM_SETFONT, ui_font as usize, 1);
                 }
             }
         }
 
-        for tile in state.tab.preset.layout.tile_specs() {
-            let title_hwnd = create_child_window(
+        let tile_specs = state.tab.preset.layout.tile_specs();
+        state.panes = Vec::with_capacity(tile_specs.len());
+        for tile in tile_specs {
+            let mut pane = Box::new(PaneState {
+                tile,
+                title_hwnd: ptr::null_mut(),
+                output_hwnd: ptr::null_mut(),
+                terminal: VtBuffer::new(80, 24),
+                focused: false,
+                font: create_terminal_font(),
+                cell_width: 9,
+                cell_height: 18,
+                baseline_offset: 1,
+                selection_anchor: None,
+                selection_focus: None,
+                selecting: false,
+                session: None,
+            });
+            pane.title_hwnd = create_child_window(
                 hwnd,
                 "STATIC",
-                &format!("{}  •  {}", tile.title, tile.agent_label),
+                &format!("{}  •  {}", pane.tile.title, pane.tile.agent_label),
                 WS_CHILD | WS_VISIBLE,
                 0,
                 0,
+                ptr::null_mut(),
             );
-            let output_hwnd = create_child_window(
+            let pane_ptr: *mut PaneState = &mut *pane;
+            pane.output_hwnd = create_child_window(
                 hwnd,
-                "EDIT",
+                PANE_CLASS,
                 "",
-                WS_CHILD
-                    | WS_VISIBLE
-                    | WS_BORDER
-                    | WS_VSCROLL
-                    | ES_LEFT as u32
-                    | ES_MULTILINE as u32
-                    | ES_AUTOVSCROLL as u32
-                    | ES_READONLY as u32,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER,
                 0,
                 0,
+                pane_ptr.cast(),
             );
-
-            for control in [title_hwnd, output_hwnd] {
-                if !control.is_null() {
-                    unsafe {
-                        SendMessageW(control, WM_SETFONT, font as usize, 1);
-                    }
+            if !pane.title_hwnd.is_null() {
+                unsafe {
+                    SendMessageW(pane.title_hwnd, WM_SETFONT, ui_font as usize, 1);
                 }
             }
-
-            state.panes.push(PaneState {
-                tile,
-                title_hwnd,
-                output_hwnd,
-                buffer: String::new(),
-                session: None,
-            });
+            update_terminal_metrics(&mut pane);
+            state.panes.push(pane);
         }
 
         layout_controls(hwnd, state);
@@ -609,9 +775,13 @@ mod imp {
                 );
             }
 
+            let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
+            pane.terminal.resize(columns as usize, rows as usize);
             if let Some(session) = pane.session.as_ref() {
-                let (columns, rows) = pane_console_size(bounds.width(), output_height);
                 session.resize(columns, rows);
+            }
+            unsafe {
+                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
             }
         }
     }
@@ -625,9 +795,11 @@ mod imp {
             ) {
                 Ok(command) => command,
                 Err(error) => {
-                    pane.buffer = format!("Could not prepare tile launch.\r\n\r\n{error}\r\n");
+                    pane.terminal.process(&format!(
+                        "Could not prepare tile launch.\r\n\r\n{error}\r\n"
+                    ));
                     unsafe {
-                        SetWindowTextW(pane.output_hwnd, wide(&pane.buffer).as_ptr());
+                        InvalidateRect(pane.output_hwnd, ptr::null(), 1);
                     }
                     continue;
                 }
@@ -639,25 +811,26 @@ mod imp {
                 right: 720,
                 bottom: 420,
             });
-            let (columns, rows) = pane_console_size(output_bounds.width(), output_bounds.height());
+            let (columns, rows) =
+                pane_console_size(output_bounds.width(), output_bounds.height(), pane);
+            pane.terminal.resize(columns as usize, rows as usize);
 
             match PaneSession::spawn(hwnd, pane_index, &command, columns, rows) {
                 Ok(session) => {
                     pane.session = Some(session);
-                    pane.buffer = format!(
+                    pane.terminal.process(&format!(
                         "[launching {} in {}]\r\n",
                         pane.tile.title, command.working_directory
-                    );
-                    unsafe {
-                        SetWindowTextW(pane.output_hwnd, wide(&pane.buffer).as_ptr());
-                    }
+                    ));
                 }
                 Err(error) => {
-                    pane.buffer = format!("Could not spawn tile process.\r\n\r\n{error}\r\n");
-                    unsafe {
-                        SetWindowTextW(pane.output_hwnd, wide(&pane.buffer).as_ptr());
-                    }
+                    pane.terminal
+                        .process(&format!("Could not spawn tile process.\r\n\r\n{error}\r\n"));
                 }
+            }
+
+            unsafe {
+                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
             }
         }
     }
@@ -667,13 +840,360 @@ mod imp {
             return;
         };
 
-        pane.buffer.push_str(chunk);
-        if pane.buffer.len() > MAX_BUFFER_CHARS {
-            let trim = pane.buffer.len() - MAX_BUFFER_CHARS;
-            pane.buffer.drain(..trim);
+        pane.terminal.process(chunk);
+        if let Some(title) = pane.terminal.window_title() {
+            unsafe {
+                SetWindowTextW(
+                    pane.title_hwnd,
+                    wide(&format!("{}  •  {}", pane.tile.title, title)).as_ptr(),
+                );
+            }
         }
         unsafe {
-            SetWindowTextW(pane.output_hwnd, wide(&pane.buffer).as_ptr());
+            InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+        }
+    }
+
+    fn mark_pane_exited(state: &mut WorkspaceWindowState, pane_index: usize) {
+        let Some(pane) = state.panes.get_mut(pane_index) else {
+            return;
+        };
+
+        pane.session = None;
+        pane.terminal
+            .process("\r\n\r\n[terminal session exited]\r\n");
+        unsafe {
+            InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+        }
+    }
+
+    fn render_pane(hwnd: HWND, pane: &PaneState) {
+        let mut paint = PAINTSTRUCT::default();
+        let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
+        if hdc.is_null() {
+            return;
+        }
+
+        let rect = client_bounds(hwnd).unwrap_or(Bounds {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+        fill_rect_color(
+            hdc,
+            RECT {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            },
+            palette_color(0),
+        );
+
+        let old_font = unsafe { SelectObject(hdc, pane.font as HGDIOBJ) };
+        for row in 0..pane.terminal.rows() {
+            let mut column = 0usize;
+            while column < pane.terminal.columns() {
+                let mut text = String::new();
+                let cell = *pane.terminal.cell(row, column).unwrap();
+                let style =
+                    resolved_style(cell.style, selection_contains(pane, row, column), false);
+                let start_column = column;
+                while column < pane.terminal.columns() {
+                    let next = *pane.terminal.cell(row, column).unwrap();
+                    if resolved_style(next.style, selection_contains(pane, row, column), false)
+                        != style
+                    {
+                        break;
+                    }
+                    text.push(next.ch);
+                    column += 1;
+                }
+
+                let run_rect = RECT {
+                    left: (start_column as i32) * pane.cell_width,
+                    top: (row as i32) * pane.cell_height,
+                    right: (column as i32) * pane.cell_width,
+                    bottom: ((row + 1) as i32) * pane.cell_height,
+                };
+                fill_rect_color(hdc, run_rect, style.bg);
+                unsafe {
+                    SetTextColor(hdc, style.fg);
+                    SetBkColor(hdc, style.bg);
+                }
+                let text_wide = wide_no_nul(&text);
+                unsafe {
+                    TextOutW(
+                        hdc,
+                        run_rect.left,
+                        run_rect.top + pane.baseline_offset,
+                        text_wide.as_ptr(),
+                        text_wide.len() as i32,
+                    );
+                }
+            }
+        }
+
+        if pane.focused && pane.terminal.cursor_visible() {
+            let (cursor_col, cursor_row) = pane.terminal.cursor();
+            if let Some(cell) = pane.terminal.cell(cursor_row, cursor_col) {
+                let cursor_style = resolved_style(
+                    cell.style,
+                    selection_contains(pane, cursor_row, cursor_col),
+                    true,
+                );
+                let cursor_rect = RECT {
+                    left: (cursor_col as i32) * pane.cell_width,
+                    top: (cursor_row as i32) * pane.cell_height,
+                    right: ((cursor_col + 1) as i32) * pane.cell_width,
+                    bottom: ((cursor_row + 1) as i32) * pane.cell_height,
+                };
+                fill_rect_color(hdc, cursor_rect, cursor_style.bg);
+                unsafe {
+                    SetTextColor(hdc, cursor_style.fg);
+                    SetBkColor(hdc, cursor_style.bg);
+                }
+                let text_wide = wide_no_nul(&cell.ch.to_string());
+                unsafe {
+                    TextOutW(
+                        hdc,
+                        cursor_rect.left,
+                        cursor_rect.top + pane.baseline_offset,
+                        text_wide.as_ptr(),
+                        text_wide.len() as i32,
+                    );
+                }
+            }
+        }
+
+        unsafe {
+            SelectObject(hdc, old_font);
+            EndPaint(hwnd, &paint);
+        }
+    }
+
+    fn handle_char_input(pane: &mut PaneState, value: u32) {
+        if is_modifier_pressed(VK_CONTROL) && is_modifier_pressed(VK_SHIFT) {
+            if value == 'C' as u32 {
+                let _ = copy_pane_selection_to_clipboard(pane);
+                return;
+            }
+            if value == 'V' as u32 {
+                let _ = paste_clipboard_into_pane(pane);
+                return;
+            }
+        }
+
+        let bytes = match value {
+            8 => vec![0x7f],
+            13 => vec![b'\r'],
+            value if value < 32 => vec![value as u8],
+            value => {
+                let Some(character) = char::from_u32(value) else {
+                    return;
+                };
+                let mut encoded = [0u8; 4];
+                character.encode_utf8(&mut encoded).as_bytes().to_vec()
+            }
+        };
+        clear_selection(pane);
+        let Some(session) = pane.session.as_ref() else {
+            return;
+        };
+        if let Err(error) = session.write_input(&bytes) {
+            logging::error(format!("pane input write failed: {error}"));
+        }
+    }
+
+    fn handle_key_input(pane: &mut PaneState, virtual_key: u16) {
+        if virtual_key == VK_INSERT && is_modifier_pressed(VK_SHIFT) {
+            let _ = paste_clipboard_into_pane(pane);
+            return;
+        }
+        if virtual_key == VK_INSERT && is_modifier_pressed(VK_CONTROL) {
+            let _ = copy_pane_selection_to_clipboard(pane);
+            return;
+        }
+
+        let sequence = match virtual_key {
+            VK_LEFT => Some("\u{1b}[D"),
+            VK_RIGHT => Some("\u{1b}[C"),
+            VK_UP => Some("\u{1b}[A"),
+            VK_DOWN => Some("\u{1b}[B"),
+            VK_HOME => Some("\u{1b}[H"),
+            VK_END => Some("\u{1b}[F"),
+            VK_INSERT => Some("\u{1b}[2~"),
+            VK_DELETE => Some("\u{1b}[3~"),
+            VK_PRIOR => Some("\u{1b}[5~"),
+            VK_NEXT => Some("\u{1b}[6~"),
+            _ => None,
+        };
+
+        if let Some(sequence) = sequence {
+            clear_selection(pane);
+            let Some(session) = pane.session.as_ref() else {
+                return;
+            };
+            if let Err(error) = session.write_input(sequence.as_bytes()) {
+                logging::error(format!("pane special key write failed: {error}"));
+            }
+        }
+    }
+
+    fn fill_rect_color(hdc: windows_sys::Win32::Graphics::Gdi::HDC, rect: RECT, color: COLORREF) {
+        let brush = unsafe { CreateSolidBrush(color) };
+        if brush.is_null() {
+            return;
+        }
+        unsafe {
+            FillRect(hdc, &rect, brush as HBRUSH);
+            DeleteObject(brush as HGDIOBJ);
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct ResolvedStyle {
+        fg: COLORREF,
+        bg: COLORREF,
+    }
+
+    fn resolved_style(style: VtStyle, selected: bool, cursor: bool) -> ResolvedStyle {
+        let mut fg = style.fg;
+        let mut bg = style.bg;
+
+        if style.inverse {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        if selected {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        if cursor {
+            std::mem::swap(&mut fg, &mut bg);
+            bg = match bg {
+                VtColor::DefaultBackground => VtColor::Indexed(8),
+                VtColor::DefaultForeground => VtColor::Indexed(15),
+                other => other,
+            };
+        }
+
+        ResolvedStyle {
+            fg: resolve_terminal_color(fg, true, style.bold),
+            bg: resolve_terminal_color(bg, false, false),
+        }
+    }
+
+    fn resolve_terminal_color(color: VtColor, foreground: bool, bold: bool) -> COLORREF {
+        match color {
+            VtColor::DefaultForeground => palette_color(7),
+            VtColor::DefaultBackground => palette_color(0),
+            VtColor::Indexed(index) => {
+                let index = if foreground && bold && index < 8 {
+                    index + 8
+                } else {
+                    index
+                };
+                palette_color(index)
+            }
+            VtColor::Rgb(red, green, blue) => rgb(red, green, blue),
+        }
+    }
+
+    fn palette_color(index: u8) -> COLORREF {
+        const PALETTE: [COLORREF; 16] = [
+            rgb(30, 31, 41),
+            rgb(232, 95, 111),
+            rgb(144, 190, 109),
+            rgb(229, 192, 123),
+            rgb(97, 175, 239),
+            rgb(198, 120, 221),
+            rgb(86, 182, 194),
+            rgb(220, 223, 228),
+            rgb(92, 99, 112),
+            rgb(255, 123, 114),
+            rgb(152, 195, 121),
+            rgb(241, 196, 15),
+            rgb(97, 175, 239),
+            rgb(209, 154, 255),
+            rgb(86, 182, 194),
+            rgb(255, 255, 255),
+        ];
+
+        match index {
+            0..=15 => PALETTE[index as usize],
+            16..=231 => {
+                let color = index - 16;
+                let red = color / 36;
+                let green = (color % 36) / 6;
+                let blue = color % 6;
+                rgb(
+                    cube_component(red),
+                    cube_component(green),
+                    cube_component(blue),
+                )
+            }
+            232..=255 => {
+                let gray = 8 + ((index - 232) * 10);
+                rgb(gray, gray, gray)
+            }
+        }
+    }
+
+    const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
+        red as u32 | ((green as u32) << 8) | ((blue as u32) << 16)
+    }
+
+    const fn cube_component(value: u8) -> u8 {
+        if value == 0 { 0 } else { 55 + (value * 40) }
+    }
+
+    fn create_terminal_font() -> HFONT {
+        unsafe {
+            CreateFontW(
+                -DEFAULT_FONT_HEIGHT,
+                0,
+                0,
+                0,
+                FW_NORMAL as i32,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                OUT_DEFAULT_PRECIS as u32,
+                CLIP_DEFAULT_PRECIS as u32,
+                CLEARTYPE_QUALITY as u32,
+                (FIXED_PITCH as u32) | (FF_MODERN as u32),
+                wide(DEFAULT_FONT_FACE).as_ptr(),
+            )
+        }
+    }
+
+    fn update_terminal_metrics(pane: &mut PaneState) {
+        let hdc = unsafe { GetDC(ptr::null_mut()) };
+        if hdc.is_null() {
+            return;
+        }
+
+        let old_font = unsafe { SelectObject(hdc, pane.font as HGDIOBJ) };
+        let mut metrics = TEXTMETRICW::default();
+        let mut size = SIZE::default();
+        let sample = wide_no_nul("MMMMMMMM");
+
+        if unsafe { GetTextMetricsW(hdc, &mut metrics) } != 0
+            && unsafe {
+                GetTextExtentPoint32W(hdc, sample.as_ptr(), sample.len() as i32, &mut size)
+            } != 0
+        {
+            let average_width = (size.cx / (sample.len() as i32)).max(metrics.tmAveCharWidth);
+            let draw_height = size.cy.max(metrics.tmHeight - metrics.tmInternalLeading);
+            pane.cell_width = average_width.max(1);
+            pane.cell_height = (draw_height + metrics.tmExternalLeading.max(2)).max(1);
+            pane.baseline_offset = ((pane.cell_height - draw_height) / 2).max(0);
+        }
+
+        unsafe {
+            SelectObject(hdc, old_font);
+            ReleaseDC(ptr::null_mut(), hdc);
         }
     }
 
@@ -684,6 +1204,7 @@ mod imp {
         style: u32,
         ex_style: WINDOW_EX_STYLE,
         control_id: isize,
+        lp_param: *mut c_void,
     ) -> HWND {
         unsafe {
             CreateWindowExW(
@@ -698,9 +1219,175 @@ mod imp {
                 hwnd,
                 control_id as HMENU,
                 GetModuleHandleW(ptr::null()),
-                ptr::null(),
+                lp_param,
             )
         }
+    }
+
+    fn selection_contains(pane: &PaneState, row: usize, column: usize) -> bool {
+        let (Some(anchor), Some(focus)) = (pane.selection_anchor, pane.selection_focus) else {
+            return false;
+        };
+        let current = VtPosition { row, column };
+        let (start, end) = normalize_selection(anchor, focus);
+        current >= start && current <= end
+    }
+
+    fn normalize_selection(start: VtPosition, end: VtPosition) -> (VtPosition, VtPosition) {
+        if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        }
+    }
+
+    fn pane_position_from_lparam(pane: &PaneState, lparam: LPARAM) -> VtPosition {
+        let x = ((lparam as i32) & 0xffff) as i16 as i32;
+        let y = (((lparam as i32) >> 16) & 0xffff) as i16 as i32;
+        let row = (y.max(0) / pane.cell_height.max(1)) as usize;
+        let column = (x.max(0) / pane.cell_width.max(1)) as usize;
+        VtPosition {
+            row: row.min(pane.terminal.rows().saturating_sub(1)),
+            column: column.min(pane.terminal.columns().saturating_sub(1)),
+        }
+    }
+
+    fn is_modifier_pressed(virtual_key: u16) -> bool {
+        (unsafe { GetKeyState(virtual_key as i32) }) < 0
+    }
+
+    fn clear_selection(pane: &mut PaneState) {
+        pane.selection_anchor = None;
+        pane.selection_focus = None;
+        pane.selecting = false;
+        unsafe {
+            InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+        }
+    }
+
+    fn copy_pane_selection_to_clipboard(pane: &PaneState) -> Result<(), String> {
+        let (Some(anchor), Some(focus)) = (pane.selection_anchor, pane.selection_focus) else {
+            return Ok(());
+        };
+        let text = pane.terminal.selection_text(anchor, focus);
+        if text.is_empty() {
+            return Ok(());
+        }
+        write_clipboard_text(&text)
+    }
+
+    fn paste_clipboard_into_pane(pane: &mut PaneState) -> Result<(), String> {
+        let Some(text) = read_clipboard_text()? else {
+            return Ok(());
+        };
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        clear_selection(pane);
+        let Some(session) = pane.session.as_ref() else {
+            return Ok(());
+        };
+        session.write_input(normalized.as_bytes())
+    }
+
+    fn write_clipboard_text(text: &str) -> Result<(), String> {
+        let data = wide(text);
+        let bytes = data.len() * std::mem::size_of::<u16>();
+        let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes) };
+        if handle.is_null() {
+            return Err(format!(
+                "GlobalAlloc for clipboard failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let target = unsafe { GlobalLock(handle) } as *mut u16;
+        if target.is_null() {
+            unsafe {
+                GlobalFree(handle);
+            }
+            return Err(format!(
+                "GlobalLock for clipboard failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), target, data.len());
+            GlobalUnlock(handle);
+        }
+
+        if unsafe { OpenClipboard(ptr::null_mut()) } == 0 {
+            unsafe {
+                GlobalFree(handle);
+            }
+            return Err(format!(
+                "OpenClipboard failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let mut result = Ok(());
+        unsafe {
+            if EmptyClipboard() == 0 {
+                result = Err(format!(
+                    "EmptyClipboard failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            } else if SetClipboardData(CF_UNICODETEXT, handle).is_null() {
+                result = Err(format!(
+                    "SetClipboardData failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            CloseClipboard();
+        }
+        if result.is_err() {
+            unsafe {
+                GlobalFree(handle);
+            }
+        }
+        result
+    }
+
+    fn read_clipboard_text() -> Result<Option<String>, String> {
+        if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) } == 0 {
+            return Ok(None);
+        }
+        if unsafe { OpenClipboard(ptr::null_mut()) } == 0 {
+            return Err(format!(
+                "OpenClipboard failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
+        if handle.is_null() {
+            unsafe {
+                CloseClipboard();
+            }
+            return Ok(None);
+        }
+
+        let text = unsafe {
+            let size_bytes = GlobalSize(handle);
+            let source = GlobalLock(handle) as *const u16;
+            if source.is_null() || size_bytes == 0 {
+                None
+            } else {
+                let length = size_bytes / std::mem::size_of::<u16>();
+                let slice = std::slice::from_raw_parts(source, length);
+                let nul = slice
+                    .iter()
+                    .position(|value| *value == 0)
+                    .unwrap_or(slice.len());
+                let string = String::from_utf16_lossy(&slice[..nul]);
+                GlobalUnlock(handle);
+                Some(string)
+            }
+        };
+        unsafe {
+            CloseClipboard();
+        }
+
+        Ok(text)
     }
 
     fn client_bounds(hwnd: HWND) -> Option<Bounds> {
@@ -783,10 +1470,10 @@ mod imp {
         }
     }
 
-    fn pane_console_size(width: i32, height: i32) -> (i16, i16) {
-        let columns = (width.max(120) / APPROX_CELL_WIDTH)
+    fn pane_console_size(width: i32, height: i32, pane: &PaneState) -> (i16, i16) {
+        let columns = (width.max(pane.cell_width) / pane.cell_width.max(1))
             .clamp(MIN_PANE_CHARS_X as i32, i16::MAX as i32) as i16;
-        let rows = (height.max(120) / APPROX_CELL_HEIGHT)
+        let rows = (height.max(pane.cell_height) / pane.cell_height.max(1))
             .clamp(MIN_PANE_CHARS_Y as i32, i16::MAX as i32) as i16;
         (columns, rows)
     }
@@ -854,11 +1541,7 @@ mod imp {
                     break;
                 }
 
-                let text = sanitize_terminal_output(&buffer[..bytes_read as usize]);
-                if text.is_empty() {
-                    continue;
-                }
-
+                let text = String::from_utf8_lossy(&buffer[..bytes_read as usize]).into_owned();
                 let event = Box::new(PaneOutputEvent { pane_index, text });
                 let event_ptr = Box::into_raw(event);
                 if unsafe { PostMessageW(window_hwnd, WM_PANE_OUTPUT, 0, event_ptr as LPARAM) } == 0
@@ -877,39 +1560,17 @@ mod imp {
         });
     }
 
-    fn sanitize_terminal_output(bytes: &[u8]) -> String {
-        let raw = String::from_utf8_lossy(bytes);
-        let mut cleaned = String::with_capacity(raw.len());
-        let mut characters = raw.chars().peekable();
-
-        while let Some(character) = characters.next() {
-            if character == '\u{1b}' {
-                if matches!(characters.peek(), Some('[')) {
-                    let _ = characters.next();
-                    for candidate in characters.by_ref() {
-                        if ('@'..='~').contains(&candidate) {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-                continue;
-            }
-
-            if character == '\r' {
-                if !matches!(characters.peek(), Some('\n')) {
-                    cleaned.push('\n');
-                }
-            } else {
-                cleaned.push(character);
-            }
+    unsafe fn window_state_mut(hwnd: HWND) -> Option<&'static mut WorkspaceWindowState> {
+        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WorkspaceWindowState;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut *ptr })
         }
-
-        cleaned
     }
 
-    unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut WorkspaceWindowState> {
-        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut WorkspaceWindowState;
+    unsafe fn pane_state_mut(hwnd: HWND) -> Option<&'static mut PaneState> {
+        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut PaneState;
         if ptr.is_null() {
             None
         } else {
@@ -923,6 +1584,10 @@ mod imp {
 
     fn wide_mut(value: &str) -> Vec<u16> {
         wide(value)
+    }
+
+    fn wide_no_nul(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
     }
 }
 
