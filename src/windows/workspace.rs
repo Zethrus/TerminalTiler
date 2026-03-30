@@ -14,8 +14,9 @@ mod imp {
         CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DeleteObject, EndPaint,
         FF_MODERN, FIXED_PITCH, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject,
         GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HFONT, HGDIOBJ, InvalidateRect, LOGPIXELSY,
-        OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkColor,
-        SetTextColor, TEXTMETRICW, TextOutW, UpdateWindow,
+        MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+        ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetTextColor, TEXTMETRICW, TextOutW,
+        UpdateWindow,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
@@ -44,12 +45,13 @@ mod imp {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
-        CreateWindowExW, DefWindowProcW, DestroyMenu, GWLP_USERDATA, GetClientRect, GetCursorPos,
-        GetWindowLongPtrW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
+        CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
+        GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+        GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
         PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
         SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-        SW_SHOW, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos,
-        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW,
+        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
         WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
         WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
         WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
@@ -70,7 +72,7 @@ mod imp {
     const PANE_CLASS: &str = "TerminalTilerWindowsPane";
     const WM_PANE_OUTPUT: u32 = WM_APP + 1;
     const WM_PANE_EXIT: u32 = WM_APP + 2;
-    const HEADER_HEIGHT: i32 = 56;
+    const HEADER_HEIGHT: i32 = 112;
     const OUTER_MARGIN: i32 = 12;
     const PANE_GAP: i32 = 8;
     const PANE_TITLE_HEIGHT: i32 = 20;
@@ -84,12 +86,36 @@ mod imp {
     const MENU_PASTE_CLIPBOARD: usize = 2;
     const MENU_OPEN_LINK: usize = 3;
     const MENU_COPY_LINK: usize = 4;
+    const ID_WORKSPACE_TITLE: isize = 1001;
+    const ID_WORKSPACE_ZOOM_OUT: isize = 1002;
+    const ID_WORKSPACE_ZOOM_IN: isize = 1003;
+    const ID_WORKSPACE_DENSITY: isize = 1004;
+    const ID_WORKSPACE_FULLSCREEN: isize = 1005;
+    const ID_WORKSPACE_MOVE_LEFT: isize = 1006;
+    const ID_WORKSPACE_MOVE_RIGHT: isize = 1007;
+    const ID_WORKSPACE_CLOSE_TAB: isize = 1008;
+    const ID_TAB_BUTTON_BASE: isize = 3000;
+    const HEADER_BUTTON_WIDTH: i32 = 90;
+    const HEADER_BUTTON_HEIGHT: i32 = 28;
 
     struct WorkspaceWindowState {
-        tab: SavedTab,
+        tabs: Vec<SavedTab>,
+        active_tab_index: usize,
         runtime: WindowsRuntime,
+        suppress_title_events: bool,
         title_hwnd: HWND,
         path_hwnd: HWND,
+        zoom_out_hwnd: HWND,
+        zoom_in_hwnd: HWND,
+        density_hwnd: HWND,
+        fullscreen_hwnd: HWND,
+        move_left_hwnd: HWND,
+        move_right_hwnd: HWND,
+        close_tab_hwnd: HWND,
+        tab_button_hwnds: Vec<HWND>,
+        is_fullscreen: bool,
+        saved_window_rect: RECT,
+        saved_window_style: isize,
         panes: Vec<Box<PaneState>>,
     }
 
@@ -398,32 +424,57 @@ mod imp {
         session: &SavedSession,
         runtime: &WindowsRuntime,
     ) -> Result<(usize, usize), String> {
-        let mut window_count = 0usize;
-        let mut pane_count = 0usize;
-        for tab in &session.tabs {
-            open_workspace_window(tab.clone(), runtime)?;
-            window_count += 1;
-            pane_count += tab.preset.layout.tile_specs().len();
+        if session.tabs.is_empty() {
+            return Ok((0, 0));
         }
-        Ok((window_count, pane_count))
+
+        let pane_count = session
+            .tabs
+            .iter()
+            .map(|tab| tab.preset.layout.tile_specs().len())
+            .sum::<usize>();
+        open_workspace_window(session.tabs.clone(), session.active_tab_index, runtime)?;
+        Ok((1, pane_count))
     }
 
-    fn open_workspace_window(tab: SavedTab, runtime: &WindowsRuntime) -> Result<(), String> {
+    fn open_workspace_window(
+        tabs: Vec<SavedTab>,
+        active_tab_index: usize,
+        runtime: &WindowsRuntime,
+    ) -> Result<(), String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle for workspace window".into());
         }
 
         register_window_classes(instance)?;
-        let window_title = tab
-            .custom_title
-            .clone()
-            .unwrap_or_else(|| tab.preset.name.clone());
+        let active_tab_index = active_tab_index.min(tabs.len().saturating_sub(1));
+        let window_title = tabs
+            .get(active_tab_index)
+            .and_then(|tab| {
+                tab.custom_title
+                    .clone()
+                    .or_else(|| Some(tab.preset.name.clone()))
+            })
+            .unwrap_or_else(|| "TerminalTiler Workspace".to_string());
         let state = Box::new(WorkspaceWindowState {
-            tab,
+            tabs,
+            active_tab_index,
             runtime: runtime.clone(),
+            suppress_title_events: false,
             title_hwnd: ptr::null_mut(),
             path_hwnd: ptr::null_mut(),
+            zoom_out_hwnd: ptr::null_mut(),
+            zoom_in_hwnd: ptr::null_mut(),
+            density_hwnd: ptr::null_mut(),
+            fullscreen_hwnd: ptr::null_mut(),
+            move_left_hwnd: ptr::null_mut(),
+            move_right_hwnd: ptr::null_mut(),
+            close_tab_hwnd: ptr::null_mut(),
+            tab_button_hwnds: Vec::new(),
+            is_fullscreen: false,
+            saved_window_rect: unsafe { mem::zeroed() },
+            saved_window_style: 0,
             panes: Vec::new(),
         });
         let state_ptr = Box::into_raw(state);
@@ -514,7 +565,6 @@ mod imp {
             WM_CREATE => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     create_controls(hwnd, state);
-                    spawn_pane_sessions(hwnd, state);
                 }
                 0
             }
@@ -524,7 +574,29 @@ mod imp {
                 }
                 0
             }
-            WM_COMMAND => 0,
+            WM_COMMAND => {
+                let command_id = (wparam & 0xffff) as isize;
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    match command_id {
+                        ID_WORKSPACE_TITLE if ((wparam >> 16) & 0xffff) as u32 == EN_CHANGE => {
+                            sync_workspace_title(hwnd, state);
+                        }
+                        ID_WORKSPACE_ZOOM_OUT => adjust_terminal_zoom(hwnd, state, -1),
+                        ID_WORKSPACE_ZOOM_IN => adjust_terminal_zoom(hwnd, state, 1),
+                        ID_WORKSPACE_DENSITY => cycle_workspace_density(hwnd, state),
+                        ID_WORKSPACE_FULLSCREEN => toggle_workspace_fullscreen(hwnd, state),
+                        ID_WORKSPACE_MOVE_LEFT => move_active_tab(hwnd, state, -1),
+                        ID_WORKSPACE_MOVE_RIGHT => move_active_tab(hwnd, state, 1),
+                        ID_WORKSPACE_CLOSE_TAB => close_active_tab(hwnd, state),
+                        id if id >= ID_TAB_BUTTON_BASE => {
+                            let index = (id - ID_TAB_BUTTON_BASE) as usize;
+                            switch_active_tab(hwnd, state, index);
+                        }
+                        _ => {}
+                    }
+                }
+                0
+            }
             WM_PANE_OUTPUT => {
                 let event_ptr = lparam as *mut PaneOutputEvent;
                 if !event_ptr.is_null() {
@@ -746,32 +818,104 @@ mod imp {
     }
 
     fn create_controls(hwnd: HWND, state: &mut WorkspaceWindowState) {
-        let title = state
-            .tab
+        let title = active_tab(state)
             .custom_title
             .clone()
-            .unwrap_or_else(|| state.tab.preset.name.clone());
+            .unwrap_or_else(|| active_tab(state).preset.name.clone());
         state.title_hwnd = create_child_window(
             hwnd,
-            "STATIC",
+            "EDIT",
             &title,
-            WS_CHILD | WS_VISIBLE,
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP,
             0,
-            0,
+            ID_WORKSPACE_TITLE,
             ptr::null_mut(),
         );
         state.path_hwnd = create_child_window(
             hwnd,
             "STATIC",
-            &state.tab.workspace_root.display().to_string(),
+            &active_tab(state).workspace_root.display().to_string(),
             WS_CHILD | WS_VISIBLE,
             0,
             0,
             ptr::null_mut(),
         );
+        state.zoom_out_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Zoom -",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_ZOOM_OUT,
+            ptr::null_mut(),
+        );
+        state.zoom_in_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Zoom +",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_ZOOM_IN,
+            ptr::null_mut(),
+        );
+        state.density_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            density_button_label(active_tab(state).preset.density),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_DENSITY,
+            ptr::null_mut(),
+        );
+        state.fullscreen_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Fullscreen",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_FULLSCREEN,
+            ptr::null_mut(),
+        );
+        state.move_left_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Move Left",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_MOVE_LEFT,
+            ptr::null_mut(),
+        );
+        state.move_right_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Move Right",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_MOVE_RIGHT,
+            ptr::null_mut(),
+        );
+        state.close_tab_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Close Tab",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_CLOSE_TAB,
+            ptr::null_mut(),
+        );
 
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-        for control in [state.title_hwnd, state.path_hwnd] {
+        for control in [
+            state.title_hwnd,
+            state.path_hwnd,
+            state.zoom_out_hwnd,
+            state.zoom_in_hwnd,
+            state.density_hwnd,
+            state.fullscreen_hwnd,
+            state.move_left_hwnd,
+            state.move_right_hwnd,
+            state.close_tab_hwnd,
+        ] {
             if !control.is_null() {
                 unsafe {
                     SendMessageW(control, WM_SETFONT, ui_font as usize, 1);
@@ -779,10 +923,308 @@ mod imp {
             }
         }
 
-        let tile_specs = state.tab.preset.layout.tile_specs();
-        let font_points =
-            effective_terminal_font_points(state.tab.preset.density, state.tab.terminal_zoom_steps);
-        let line_height_scale = state.tab.preset.density.terminal_line_height_scale();
+        rebuild_tab_buttons(hwnd, state);
+        rebuild_active_tab_content(hwnd, state);
+    }
+
+    fn layout_controls(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let bounds = match client_bounds(hwnd) {
+            Some(bounds) => bounds,
+            None => return,
+        };
+
+        let button_gap = 8;
+        let buttons_width = (HEADER_BUTTON_WIDTH * 4) + (button_gap * 3);
+        let title_width = (bounds.width() - (OUTER_MARGIN * 2) - buttons_width - 12).max(240);
+        let tab_action_width = HEADER_BUTTON_WIDTH * 3 + (button_gap * 2);
+        unsafe {
+            SetWindowPos(
+                state.title_hwnd,
+                ptr::null_mut(),
+                OUTER_MARGIN,
+                OUTER_MARGIN,
+                title_width,
+                26,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.path_hwnd,
+                ptr::null_mut(),
+                OUTER_MARGIN,
+                OUTER_MARGIN + 32,
+                title_width,
+                18,
+                SWP_NOZORDER,
+            );
+            let button_left = OUTER_MARGIN + title_width + 12;
+            SetWindowPos(
+                state.zoom_out_hwnd,
+                ptr::null_mut(),
+                button_left,
+                OUTER_MARGIN,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.zoom_in_hwnd,
+                ptr::null_mut(),
+                button_left + HEADER_BUTTON_WIDTH + button_gap,
+                OUTER_MARGIN,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.density_hwnd,
+                ptr::null_mut(),
+                button_left,
+                OUTER_MARGIN + HEADER_BUTTON_HEIGHT + 6,
+                HEADER_BUTTON_WIDTH * 2 + button_gap,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.fullscreen_hwnd,
+                ptr::null_mut(),
+                button_left + (HEADER_BUTTON_WIDTH * 2) + (button_gap * 2),
+                OUTER_MARGIN + HEADER_BUTTON_HEIGHT + 6,
+                HEADER_BUTTON_WIDTH * 2 - button_gap,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            let tab_button_width = 148;
+            let tab_row_y = OUTER_MARGIN + HEADER_BUTTON_HEIGHT + 40;
+            let max_tab_button_width =
+                (bounds.width() - (OUTER_MARGIN * 2) - tab_action_width - 12).max(tab_button_width);
+            for (index, tab_button) in state.tab_button_hwnds.iter().enumerate() {
+                let left = OUTER_MARGIN + (index as i32 * (tab_button_width + 8));
+                let width = (max_tab_button_width - (index as i32 * (tab_button_width + 8)))
+                    .min(tab_button_width)
+                    .max(96);
+                SetWindowPos(
+                    *tab_button,
+                    ptr::null_mut(),
+                    left,
+                    tab_row_y,
+                    width,
+                    HEADER_BUTTON_HEIGHT,
+                    SWP_NOZORDER,
+                );
+            }
+            let tab_action_left = bounds.right - OUTER_MARGIN - tab_action_width;
+            SetWindowPos(
+                state.move_left_hwnd,
+                ptr::null_mut(),
+                tab_action_left,
+                tab_row_y,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.move_right_hwnd,
+                ptr::null_mut(),
+                tab_action_left + HEADER_BUTTON_WIDTH + button_gap,
+                tab_row_y,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.close_tab_hwnd,
+                ptr::null_mut(),
+                tab_action_left + (HEADER_BUTTON_WIDTH + button_gap) * 2,
+                tab_row_y,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+        }
+
+        let layout_bounds = Bounds {
+            left: OUTER_MARGIN,
+            top: OUTER_MARGIN + HEADER_HEIGHT,
+            right: bounds.right - OUTER_MARGIN,
+            bottom: bounds.bottom - OUTER_MARGIN,
+        };
+        let mut pane_bounds = Vec::with_capacity(state.panes.len());
+        collect_tile_bounds(
+            &active_tab(state).preset.layout,
+            layout_bounds,
+            &mut pane_bounds,
+        );
+        for (pane, bounds) in state.panes.iter_mut().zip(pane_bounds.into_iter()) {
+            let output_top = bounds.top + PANE_TITLE_HEIGHT + 4;
+            let output_height = (bounds.bottom - output_top).max(48);
+            unsafe {
+                SetWindowPos(
+                    pane.title_hwnd,
+                    ptr::null_mut(),
+                    bounds.left,
+                    bounds.top,
+                    bounds.width().max(120),
+                    PANE_TITLE_HEIGHT,
+                    SWP_NOZORDER,
+                );
+                SetWindowPos(
+                    pane.output_hwnd,
+                    ptr::null_mut(),
+                    bounds.left,
+                    output_top,
+                    bounds.width().max(120),
+                    output_height,
+                    SWP_NOZORDER,
+                );
+            }
+
+            let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
+            pane.terminal.resize(columns as usize, rows as usize);
+            update_pane_scrollbar(pane);
+            if let Some(session) = pane.session.as_ref() {
+                session.resize(columns, rows);
+            }
+            unsafe {
+                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let workspace_root = active_tab(state).workspace_root.clone();
+        for (pane_index, pane) in state.panes.iter_mut().enumerate() {
+            let command =
+                match wsl::build_launch_command(&pane.tile, &workspace_root, &state.runtime) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        pane.terminal.process(&format!(
+                            "Could not prepare tile launch.\r\n\r\n{error}\r\n"
+                        ));
+                        unsafe {
+                            InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+                        }
+                        continue;
+                    }
+                };
+
+            let output_bounds = client_bounds(pane.output_hwnd).unwrap_or(Bounds {
+                left: 0,
+                top: 0,
+                right: 720,
+                bottom: 420,
+            });
+            let (columns, rows) =
+                pane_console_size(output_bounds.width(), output_bounds.height(), pane);
+            pane.terminal.resize(columns as usize, rows as usize);
+
+            match PaneSession::spawn(hwnd, pane_index, &command, columns, rows) {
+                Ok(session) => {
+                    pane.session = Some(session);
+                    pane.terminal.process(&format!(
+                        "[launching {} in {}]\r\n",
+                        pane.tile.title, command.working_directory
+                    ));
+                }
+                Err(error) => {
+                    pane.terminal
+                        .process(&format!("Could not spawn tile process.\r\n\r\n{error}\r\n"));
+                }
+            }
+            update_pane_scrollbar(pane);
+
+            unsafe {
+                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn active_tab(state: &WorkspaceWindowState) -> &SavedTab {
+        &state.tabs[state.active_tab_index]
+    }
+
+    fn active_tab_mut(state: &mut WorkspaceWindowState) -> &mut SavedTab {
+        &mut state.tabs[state.active_tab_index]
+    }
+
+    fn rebuild_tab_buttons(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        for button in state.tab_button_hwnds.drain(..) {
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(button);
+            }
+        }
+
+        for (index, tab) in state.tabs.iter().enumerate() {
+            let title = tab.custom_title.as_deref().unwrap_or(&tab.preset.name);
+            let label = if index == state.active_tab_index {
+                format!("[{}]", title)
+            } else {
+                title.to_string()
+            };
+            let button = create_child_window(
+                hwnd,
+                "BUTTON",
+                &label,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                0,
+                ID_TAB_BUTTON_BASE + index as isize,
+                ptr::null_mut(),
+            );
+            if !button.is_null() {
+                unsafe {
+                    SendMessageW(button, WM_SETFONT, ui_font as usize, 1);
+                }
+                state.tab_button_hwnds.push(button);
+            }
+        }
+    }
+
+    fn destroy_active_panes(state: &mut WorkspaceWindowState) {
+        for pane in &state.panes {
+            unsafe {
+                if !pane.title_hwnd.is_null() {
+                    windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.title_hwnd);
+                }
+                if !pane.output_hwnd.is_null() {
+                    windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.output_hwnd);
+                }
+            }
+        }
+        state.panes.clear();
+    }
+
+    fn rebuild_active_tab_content(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        destroy_active_panes(state);
+
+        let title = active_tab(state)
+            .custom_title
+            .clone()
+            .unwrap_or_else(|| active_tab(state).preset.name.clone());
+        state.suppress_title_events = true;
+        unsafe {
+            SetWindowTextW(state.title_hwnd, wide(&title).as_ptr());
+            SetWindowTextW(
+                state.path_hwnd,
+                wide(&active_tab(state).workspace_root.display().to_string()).as_ptr(),
+            );
+            SetWindowTextW(
+                state.density_hwnd,
+                wide(density_button_label(active_tab(state).preset.density)).as_ptr(),
+            );
+            SetWindowTextW(hwnd, wide(&title).as_ptr());
+        }
+        state.suppress_title_events = false;
+
+        let tile_specs = active_tab(state).preset.layout.tile_specs();
+        let font_points = effective_terminal_font_points(
+            active_tab(state).preset.density,
+            active_tab(state).terminal_zoom_steps,
+        );
+        let line_height_scale = active_tab(state)
+            .preset
+            .density
+            .terminal_line_height_scale();
+        let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         state.panes = Vec::with_capacity(tile_specs.len());
         for tile in tile_specs {
             let mut pane = Box::new(PaneState {
@@ -831,129 +1273,216 @@ mod imp {
             state.panes.push(pane);
         }
 
+        rebuild_tab_buttons(hwnd, state);
+        update_tab_action_buttons(state);
+        layout_controls(hwnd, state);
+        spawn_pane_sessions(hwnd, state);
+    }
+
+    fn switch_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState, index: usize) {
+        if index >= state.tabs.len() || index == state.active_tab_index {
+            return;
+        }
+        state.active_tab_index = index;
+        rebuild_active_tab_content(hwnd, state);
+    }
+
+    fn move_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState, direction: isize) {
+        let current = state.active_tab_index as isize;
+        let target = current + direction;
+        if target < 0 || target >= state.tabs.len() as isize {
+            return;
+        }
+        state.tabs.swap(current as usize, target as usize);
+        state.active_tab_index = target as usize;
+        rebuild_tab_buttons(hwnd, state);
+        update_tab_action_buttons(state);
         layout_controls(hwnd, state);
     }
 
-    fn layout_controls(hwnd: HWND, state: &mut WorkspaceWindowState) {
-        let bounds = match client_bounds(hwnd) {
-            Some(bounds) => bounds,
-            None => return,
-        };
-
-        let title_width = (bounds.width() - (OUTER_MARGIN * 2)).max(320);
-        unsafe {
-            SetWindowPos(
-                state.title_hwnd,
-                ptr::null_mut(),
-                OUTER_MARGIN,
-                OUTER_MARGIN,
-                title_width,
-                22,
-                SWP_NOZORDER,
-            );
-            SetWindowPos(
-                state.path_hwnd,
-                ptr::null_mut(),
-                OUTER_MARGIN,
-                OUTER_MARGIN + 24,
-                title_width,
-                18,
-                SWP_NOZORDER,
-            );
+    fn close_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.tabs.is_empty() {
+            return;
         }
-
-        let layout_bounds = Bounds {
-            left: OUTER_MARGIN,
-            top: OUTER_MARGIN + HEADER_HEIGHT,
-            right: bounds.right - OUTER_MARGIN,
-            bottom: bounds.bottom - OUTER_MARGIN,
-        };
-        let mut pane_bounds = Vec::with_capacity(state.panes.len());
-        collect_tile_bounds(&state.tab.preset.layout, layout_bounds, &mut pane_bounds);
-        for (pane, bounds) in state.panes.iter_mut().zip(pane_bounds.into_iter()) {
-            let output_top = bounds.top + PANE_TITLE_HEIGHT + 4;
-            let output_height = (bounds.bottom - output_top).max(48);
+        let closing_title = active_tab(state)
+            .custom_title
+            .clone()
+            .unwrap_or_else(|| active_tab(state).preset.name.clone());
+        logging::info(format!("closing Windows workspace tab '{closing_title}'"));
+        state.tabs.remove(state.active_tab_index);
+        if state.tabs.is_empty() {
             unsafe {
-                SetWindowPos(
-                    pane.title_hwnd,
-                    ptr::null_mut(),
-                    bounds.left,
-                    bounds.top,
-                    bounds.width().max(120),
-                    PANE_TITLE_HEIGHT,
-                    SWP_NOZORDER,
-                );
-                SetWindowPos(
-                    pane.output_hwnd,
-                    ptr::null_mut(),
-                    bounds.left,
-                    output_top,
-                    bounds.width().max(120),
-                    output_height,
-                    SWP_NOZORDER,
-                );
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
             }
+            return;
+        }
+        if state.active_tab_index >= state.tabs.len() {
+            state.active_tab_index = state.tabs.len() - 1;
+        }
+        rebuild_active_tab_content(hwnd, state);
+    }
 
-            let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
-            pane.terminal.resize(columns as usize, rows as usize);
-            update_pane_scrollbar(pane);
-            if let Some(session) = pane.session.as_ref() {
-                session.resize(columns, rows);
-            }
-            unsafe {
-                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
-            }
+    fn update_tab_action_buttons(state: &WorkspaceWindowState) {
+        let can_move_left = state.active_tab_index > 0;
+        let can_move_right = state.active_tab_index + 1 < state.tabs.len();
+        let can_close = !state.tabs.is_empty();
+        unsafe {
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.move_left_hwnd,
+                can_move_left as i32,
+            );
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.move_right_hwnd,
+                can_move_right as i32,
+            );
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.close_tab_hwnd,
+                can_close as i32,
+            );
         }
     }
 
-    fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
-        for (pane_index, pane) in state.panes.iter_mut().enumerate() {
-            let command = match wsl::build_launch_command(
-                &pane.tile,
-                &state.tab.workspace_root,
-                &state.runtime,
-            ) {
-                Ok(command) => command,
-                Err(error) => {
-                    pane.terminal.process(&format!(
-                        "Could not prepare tile launch.\r\n\r\n{error}\r\n"
-                    ));
-                    unsafe {
-                        InvalidateRect(pane.output_hwnd, ptr::null(), 1);
-                    }
-                    continue;
-                }
-            };
+    fn sync_workspace_title(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.suppress_title_events {
+            return;
+        }
+        let title = read_window_text(state.title_hwnd);
+        let trimmed = title.trim();
+        active_tab_mut(state).custom_title = (!trimmed.is_empty()
+            && trimmed != active_tab(state).preset.name)
+            .then(|| trimmed.to_string());
+        let window_title = active_tab(state)
+            .custom_title
+            .as_deref()
+            .unwrap_or(&active_tab(state).preset.name);
+        unsafe {
+            SetWindowTextW(hwnd, wide(window_title).as_ptr());
+        }
+        rebuild_tab_buttons(hwnd, state);
+        layout_controls(hwnd, state);
+    }
 
-            let output_bounds = client_bounds(pane.output_hwnd).unwrap_or(Bounds {
-                left: 0,
-                top: 0,
-                right: 720,
-                bottom: 420,
-            });
-            let (columns, rows) =
-                pane_console_size(output_bounds.width(), output_bounds.height(), pane);
-            pane.terminal.resize(columns as usize, rows as usize);
+    fn adjust_terminal_zoom(hwnd: HWND, state: &mut WorkspaceWindowState, delta: i32) {
+        let next_steps = clamp_terminal_zoom_steps(
+            active_tab(state).preset.density,
+            active_tab(state).terminal_zoom_steps + delta,
+        );
+        if next_steps == active_tab(state).terminal_zoom_steps {
+            return;
+        }
+        active_tab_mut(state).terminal_zoom_steps = next_steps;
+        apply_workspace_terminal_presentation(hwnd, state);
+    }
 
-            match PaneSession::spawn(hwnd, pane_index, &command, columns, rows) {
-                Ok(session) => {
-                    pane.session = Some(session);
-                    pane.terminal.process(&format!(
-                        "[launching {} in {}]\r\n",
-                        pane.tile.title, command.working_directory
-                    ));
-                }
-                Err(error) => {
-                    pane.terminal
-                        .process(&format!("Could not spawn tile process.\r\n\r\n{error}\r\n"));
+    fn cycle_workspace_density(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let next_density = active_tab(state).preset.density.next();
+        active_tab_mut(state).preset.density = next_density;
+        unsafe {
+            SetWindowTextW(
+                state.density_hwnd,
+                wide(density_button_label(active_tab(state).preset.density)).as_ptr(),
+            );
+        }
+        active_tab_mut(state).terminal_zoom_steps = clamp_terminal_zoom_steps(
+            active_tab(state).preset.density,
+            active_tab(state).terminal_zoom_steps,
+        );
+        apply_workspace_terminal_presentation(hwnd, state);
+        rebuild_tab_buttons(hwnd, state);
+    }
+
+    fn apply_workspace_terminal_presentation(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let font_points = effective_terminal_font_points(
+            active_tab(state).preset.density,
+            active_tab(state).terminal_zoom_steps,
+        );
+        let line_height_scale = active_tab(state)
+            .preset
+            .density
+            .terminal_line_height_scale();
+        for pane in state.panes.iter_mut() {
+            if !pane.font.is_null() {
+                unsafe {
+                    DeleteObject(pane.font as HGDIOBJ);
                 }
             }
+            pane.font = create_terminal_font(font_points);
+            pane.line_height_scale = line_height_scale;
+            update_terminal_metrics(pane);
             update_pane_scrollbar(pane);
-
             unsafe {
                 InvalidateRect(pane.output_hwnd, ptr::null(), 1);
             }
         }
+        layout_controls(hwnd, state);
+    }
+
+    fn toggle_workspace_fullscreen(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.is_fullscreen {
+            leave_workspace_fullscreen(hwnd, state);
+        } else {
+            enter_workspace_fullscreen(hwnd, state);
+        }
+    }
+
+    fn enter_workspace_fullscreen(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let mut current_rect = unsafe { mem::zeroed::<RECT>() };
+        unsafe {
+            GetWindowRect(hwnd, &mut current_rect);
+        }
+        state.saved_window_rect = current_rect;
+        state.saved_window_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            return;
+        }
+
+        let mut monitor_info = MONITORINFO {
+            cbSize: mem::size_of::<MONITORINFO>() as u32,
+            ..unsafe { mem::zeroed() }
+        };
+        if unsafe { windows_sys::Win32::Graphics::Gdi::GetMonitorInfoW(monitor, &mut monitor_info) }
+            == 0
+        {
+            return;
+        }
+
+        unsafe {
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_STYLE,
+                state.saved_window_style & !(WS_OVERLAPPEDWINDOW as isize),
+            );
+            SetWindowPos(
+                hwnd,
+                ptr::null_mut(),
+                monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.top,
+                monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+            SetWindowTextW(state.fullscreen_hwnd, wide("Windowed").as_ptr());
+        }
+        state.is_fullscreen = true;
+    }
+
+    fn leave_workspace_fullscreen(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, state.saved_window_style);
+            SetWindowPos(
+                hwnd,
+                ptr::null_mut(),
+                state.saved_window_rect.left,
+                state.saved_window_rect.top,
+                state.saved_window_rect.right - state.saved_window_rect.left,
+                state.saved_window_rect.bottom - state.saved_window_rect.top,
+                SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+            SetWindowTextW(state.fullscreen_hwnd, wide("Fullscreen").as_ptr());
+        }
+        state.is_fullscreen = false;
     }
 
     fn append_pane_output(state: &mut WorkspaceWindowState, pane_index: usize, chunk: &str) {
@@ -2120,12 +2649,31 @@ mod imp {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
+    fn read_window_text(hwnd: HWND) -> String {
+        let length = unsafe { GetWindowTextLengthW(hwnd) };
+        if length <= 0 {
+            return String::new();
+        }
+
+        let mut buffer = vec![0u16; length as usize + 1];
+        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        String::from_utf16_lossy(&buffer[..copied as usize])
+    }
+
     fn wide_mut(value: &str) -> Vec<u16> {
         wide(value)
     }
 
     fn wide_no_nul(value: &str) -> Vec<u16> {
         value.encode_utf16().collect()
+    }
+
+    fn density_button_label(density: ApplicationDensity) -> &'static str {
+        match density {
+            ApplicationDensity::Comfortable => "Density: Cozy",
+            ApplicationDensity::Standard => "Density: Std",
+            ApplicationDensity::Compact => "Density: Tight",
+        }
     }
 }
 

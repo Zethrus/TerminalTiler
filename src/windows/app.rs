@@ -23,18 +23,18 @@ mod imp {
         DestroyMenu, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT,
         ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgItem,
         GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-        IDI_APPLICATION, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
-        LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MF_STRING, MSG, PostQuitMessage,
-        RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND,
-        WM_CREATE, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT,
-        WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-        WS_VSCROLL,
+        IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
+        LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OKCANCEL, MF_STRING,
+        MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER,
+        SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+        WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE,
+        WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
-    use crate::model::preset::WorkspacePreset;
+    use crate::model::preset::{WorkspacePreset, is_builtin_preset_id};
     use crate::platform::{home_dir, resolve_workspace_root};
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
@@ -54,10 +54,13 @@ mod imp {
     const ID_LAUNCH_NAME: isize = 1006;
     const ID_PRESET_LIST: isize = 1007;
     const ID_LAUNCH_PRESET: isize = 1008;
+    const ID_SAVE_PRESET: isize = 1009;
     const ID_LABEL_PATH: isize = 1010;
     const ID_LABEL_NAME: isize = 1011;
     const ID_LABEL_PRESETS: isize = 1012;
     const ID_SETTINGS: isize = 1013;
+    const ID_UPDATE_PRESET: isize = 1014;
+    const ID_DELETE_PRESET: isize = 1015;
     const ID_SETTINGS_THEME_LIST: isize = 2001;
     const ID_SETTINGS_DENSITY_LIST: isize = 2002;
     const ID_SETTINGS_CLOSE_BACKGROUND: isize = 2003;
@@ -118,6 +121,9 @@ mod imp {
         tray_icon_added: bool,
         window_hidden_to_tray: bool,
         quit_requested: bool,
+        save_preset_button_hwnd: HWND,
+        update_preset_button_hwnd: HWND,
+        delete_preset_button_hwnd: HWND,
         launch_preset_button_hwnd: HWND,
         launch_button_hwnd: HWND,
     }
@@ -158,6 +164,9 @@ mod imp {
             tray_icon_added: false,
             window_hidden_to_tray: false,
             quit_requested: false,
+            save_preset_button_hwnd: ptr::null_mut(),
+            update_preset_button_hwnd: ptr::null_mut(),
+            delete_preset_button_hwnd: ptr::null_mut(),
             launch_preset_button_hwnd: ptr::null_mut(),
             launch_button_hwnd: ptr::null_mut(),
         });
@@ -293,9 +302,14 @@ mod imp {
                     match command_id {
                         ID_PRESET_LIST if ((wparam >> 16) & 0xffff) as u32 == LBN_SELCHANGE => {
                             sync_launch_name_to_selection(state);
+                            update_preset_action_buttons(state);
+                            sync_status_text(state);
                         }
                         ID_REFRESH => refresh_state(hwnd, state),
                         ID_SETTINGS => open_settings_dialog(hwnd, state),
+                        ID_SAVE_PRESET => save_selected_preset_as_new(hwnd, state),
+                        ID_UPDATE_PRESET => update_selected_preset(hwnd, state),
+                        ID_DELETE_PRESET => delete_selected_preset(hwnd, state),
                         ID_LAUNCH_PRESET => launch_selected_preset(hwnd, state),
                         ID_LAUNCH => launch_restored_session(hwnd, state),
                         ID_QUIT => unsafe {
@@ -486,6 +500,30 @@ mod imp {
             0,
             ID_LAUNCH_PRESET,
         );
+        state.save_preset_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Save as Preset",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SAVE_PRESET,
+        );
+        state.update_preset_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Update Preset",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_UPDATE_PRESET,
+        );
+        state.delete_preset_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Delete Preset",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_DELETE_PRESET,
+        );
         state.launch_button_hwnd = create_child_window(
             hwnd,
             "BUTTON",
@@ -528,6 +566,9 @@ mod imp {
             unsafe { GetDlgItem(hwnd, ID_LABEL_PRESETS as i32) },
             state.preset_list_hwnd,
             state.status_hwnd,
+            state.save_preset_button_hwnd,
+            state.update_preset_button_hwnd,
+            state.delete_preset_button_hwnd,
             state.launch_preset_button_hwnd,
             state.launch_button_hwnd,
             unsafe { GetDlgItem(hwnd, ID_REFRESH as i32) },
@@ -559,8 +600,9 @@ mod imp {
         let name_edit_y = name_label_y + LABEL_HEIGHT + 4;
         let presets_label_y = name_edit_y + FIELD_HEIGHT + 12;
         let preset_list_y = presets_label_y + LABEL_HEIGHT + 4;
+        let preset_actions_y = preset_list_y + LIST_HEIGHT + 12;
         let button_y = height - MARGIN - BUTTON_HEIGHT;
-        let status_y = preset_list_y + LIST_HEIGHT + 12;
+        let status_y = preset_actions_y + BUTTON_HEIGHT + 12;
         let status_height = (button_y - status_y - 12).max(120);
 
         unsafe {
@@ -616,6 +658,33 @@ mod imp {
                 preset_list_y,
                 content_width,
                 LIST_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.save_preset_button_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                preset_actions_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.update_preset_button_hwnd,
+                ptr::null_mut(),
+                MARGIN + BUTTON_WIDTH + 12,
+                preset_actions_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.delete_preset_button_hwnd,
+                ptr::null_mut(),
+                MARGIN + (BUTTON_WIDTH * 2) + 24,
+                preset_actions_y,
+                BUTTON_WIDTH - 24,
+                BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
@@ -692,14 +761,14 @@ mod imp {
         state.preset_warning = preset_outcome.warning;
         populate_preset_list(state);
         sync_launch_name_to_selection(state);
+        update_preset_action_buttons(state);
 
         let session_outcome = state.session_store.load_with_status();
         state.session = session_outcome.session;
         state.session_warning = session_outcome.warning;
 
-        let status_text = build_status_text(state, preferred_distribution.as_deref());
         unsafe {
-            SetWindowTextW(state.status_hwnd, wide(&status_text).as_ptr());
+            sync_status_text(state);
             EnableWindow(
                 state.launch_preset_button_hwnd,
                 (state.runtime.is_some() && !state.presets.is_empty()) as i32,
@@ -947,7 +1016,15 @@ mod imp {
                 .into(),
         );
         lines.push(
-            "- Open Restored Workspaces opens one native workspace host window per restored tab."
+            "- Save as Preset stores a copy of the selected preset, using the Launch name field as the preset name when provided."
+                .into(),
+        );
+        lines.push(
+            "- Update Preset rewrites the selected custom preset, while builtin presets are copied instead of modified in place."
+                .into(),
+        );
+        lines.push(
+            "- Open Restored Workspaces opens the restored session inside one native workspace host window with Windows-managed tabs."
                 .into(),
         );
 
@@ -1640,11 +1717,44 @@ mod imp {
         }
     }
 
+    fn sync_status_text(state: &AppWindowState) {
+        let preferences = state.preference_store.load();
+        let status_text = build_status_text(state, preferences.windows_wsl_distribution.as_deref());
+        unsafe {
+            SetWindowTextW(state.status_hwnd, wide(&status_text).as_ptr());
+        }
+    }
+
     fn sync_launch_name_to_selection(state: &AppWindowState) {
         if let Some(preset) = selected_preset(state) {
             unsafe {
                 SetWindowTextW(state.session_name_hwnd, wide(&preset.name).as_ptr());
             }
+        }
+    }
+
+    fn update_preset_action_buttons(state: &AppWindowState) {
+        let has_selection = selected_preset(state).is_some();
+        let selected_is_builtin = selected_preset(state)
+            .map(|preset| is_builtin_preset_id(&preset.id))
+            .unwrap_or(false);
+
+        unsafe {
+            EnableWindow(state.save_preset_button_hwnd, has_selection as i32);
+            EnableWindow(state.update_preset_button_hwnd, has_selection as i32);
+            EnableWindow(
+                state.delete_preset_button_hwnd,
+                (has_selection && !selected_is_builtin) as i32,
+            );
+            SetWindowTextW(
+                state.update_preset_button_hwnd,
+                wide(if selected_is_builtin {
+                    "Save Copy"
+                } else {
+                    "Update Preset"
+                })
+                .as_ptr(),
+            );
         }
     }
 
@@ -1655,6 +1765,216 @@ mod imp {
         } else {
             state.presets.get(index as usize)
         }
+    }
+
+    fn save_selected_preset_as_new(hwnd: HWND, state: &mut AppWindowState) {
+        let Some(mut preset) = launcher_preset_snapshot(state) else {
+            return;
+        };
+
+        let name = desired_preset_name(state, format!("{} Copy", preset.name));
+        preset.id = unique_preset_id(&name);
+        preset.name = name.clone();
+
+        match state.preset_store.upsert_preset(preset) {
+            Ok(()) => {
+                refresh_state(hwnd, state);
+                select_preset_by_id(state, &unique_preset_lookup_name(&state.presets, &name));
+                sync_launch_name_to_selection(state);
+                update_preset_action_buttons(state);
+                sync_status_text(state);
+                unsafe {
+                    SetWindowTextW(
+                        state.status_hwnd,
+                        wide(&format!("Saved preset copy '{}'.", name)).as_ptr(),
+                    );
+                }
+                logging::info(format!("saved preset copy '{name}'"));
+            }
+            Err(error) => {
+                let status = format!("Could not save preset copy:\r\n{error}");
+                unsafe {
+                    SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
+                }
+                logging::error(format!("could not save preset copy: {error}"));
+            }
+        }
+    }
+
+    fn update_selected_preset(hwnd: HWND, state: &mut AppWindowState) {
+        let Some(selected) = selected_preset(state).cloned() else {
+            return;
+        };
+        let Some(mut preset) = launcher_preset_snapshot(state) else {
+            return;
+        };
+
+        let builtin = is_builtin_preset_id(&selected.id);
+        let name = desired_preset_name(
+            state,
+            if builtin {
+                format!("{} Copy", selected.name)
+            } else {
+                selected.name.clone()
+            },
+        );
+
+        if builtin {
+            preset.id = unique_preset_id(&name);
+        } else {
+            preset.id = selected.id.clone();
+        }
+        preset.name = name.clone();
+
+        match state.preset_store.upsert_preset(preset) {
+            Ok(()) => {
+                refresh_state(hwnd, state);
+                let target_id = if builtin {
+                    state
+                        .presets
+                        .iter()
+                        .find(|preset| preset.name == name)
+                        .map(|preset| preset.id.clone())
+                        .unwrap_or_default()
+                } else {
+                    selected.id.clone()
+                };
+                if !target_id.is_empty() {
+                    select_preset_by_id(state, &target_id);
+                }
+                sync_launch_name_to_selection(state);
+                update_preset_action_buttons(state);
+                let status = if builtin {
+                    format!(
+                        "Saved builtin preset '{}' as new preset '{}'.",
+                        selected.name, name
+                    )
+                } else {
+                    format!("Updated preset '{}'.", name)
+                };
+                unsafe {
+                    SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
+                }
+                logging::info(status);
+            }
+            Err(error) => {
+                let status = format!("Could not update preset:\r\n{error}");
+                unsafe {
+                    SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
+                }
+                logging::error(format!("could not update preset: {error}"));
+            }
+        }
+    }
+
+    fn delete_selected_preset(hwnd: HWND, state: &mut AppWindowState) {
+        let Some(selected) = selected_preset(state).cloned() else {
+            return;
+        };
+        if is_builtin_preset_id(&selected.id) {
+            unsafe {
+                SetWindowTextW(
+                    state.status_hwnd,
+                    wide("Builtin presets cannot be deleted. Save a copy instead.").as_ptr(),
+                );
+            }
+            return;
+        }
+
+        let response = unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(&format!("Delete preset '{}' permanently?", selected.name)).as_ptr(),
+                wide("Delete Preset").as_ptr(),
+                MB_OKCANCEL | MB_ICONWARNING,
+            )
+        };
+        if response != IDOK {
+            return;
+        }
+
+        match state.preset_store.delete_preset(&selected.id) {
+            Ok(()) => {
+                refresh_state(hwnd, state);
+                sync_launch_name_to_selection(state);
+                update_preset_action_buttons(state);
+                unsafe {
+                    SetWindowTextW(
+                        state.status_hwnd,
+                        wide(&format!("Deleted preset '{}'.", selected.name)).as_ptr(),
+                    );
+                }
+                logging::info(format!("deleted preset '{}'", selected.name));
+            }
+            Err(error) => {
+                let status = format!("Could not delete preset:\r\n{error}");
+                unsafe {
+                    SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
+                }
+                logging::error(format!("could not delete preset: {error}"));
+            }
+        }
+    }
+
+    fn launcher_preset_snapshot(state: &AppWindowState) -> Option<WorkspacePreset> {
+        let mut preset = selected_preset(state)?.clone();
+        let desired_name = read_window_text(state.session_name_hwnd);
+        let desired_name = desired_name.trim();
+        if !desired_name.is_empty() {
+            preset.name = desired_name.to_string();
+        }
+        Some(preset)
+    }
+
+    fn desired_preset_name(state: &AppWindowState, fallback: String) -> String {
+        let candidate = read_window_text(state.session_name_hwnd);
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            fallback
+        } else {
+            candidate.to_string()
+        }
+    }
+
+    fn select_preset_by_id(state: &AppWindowState, preset_id: &str) {
+        if let Some(index) = state
+            .presets
+            .iter()
+            .position(|preset| preset.id == preset_id)
+        {
+            unsafe {
+                SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, index, 0);
+            }
+        }
+    }
+
+    fn unique_preset_lookup_name<'a>(presets: &'a [WorkspacePreset], name: &str) -> String {
+        presets
+            .iter()
+            .find(|preset| preset.name == name)
+            .map(|preset| preset.id.clone())
+            .unwrap_or_default()
+    }
+
+    fn slugify(name: &str) -> String {
+        let slug = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let segments = slug
+            .split('-')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if segments.is_empty() {
+            "preset".to_string()
+        } else {
+            segments.join("-")
+        }
+    }
+
+    fn unique_preset_id(name: &str) -> String {
+        format!("{}-{}", slugify(name), uuid::Uuid::new_v4().simple())
     }
 
     fn read_window_text(hwnd: HWND) -> String {
