@@ -130,7 +130,21 @@ where
         .css_classes(["workspace-path"])
         .primary_icon_name("folder-symbolic")
         .build();
-    directory_panel.append(&path_entry);
+
+    let path_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["workspace-path-row"])
+        .build();
+    path_row.append(&path_entry);
+
+    let browse_button = gtk::Button::builder()
+        .label("Browse")
+        .css_classes(["pill-button", "secondary-button", "workspace-browse-button"])
+        .valign(gtk::Align::Center)
+        .build();
+    path_row.append(&browse_button);
+    directory_panel.append(&path_row);
 
     {
         let path_entry = path_entry.clone();
@@ -139,31 +153,14 @@ where
                 return;
             }
 
-            let entry = entry.clone();
-            let window = entry.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-            let dialog = gtk::FileChooserNative::new(
-                Some("Select Working Directory"),
-                window.as_ref(),
-                gtk::FileChooserAction::SelectFolder,
-                Some("Select"),
-                Some("Cancel"),
-            );
-            let initial = PathBuf::from(entry.text().as_str());
-            if initial.is_dir() {
-                let _ = dialog.set_file(&gio::File::for_path(&initial));
-            }
+            prompt_for_workspace_directory(entry);
+        });
+    }
 
-            dialog.connect_response(move |dialog, response| {
-                if response == gtk::ResponseType::Accept
-                    && let Some(folder) = dialog.file()
-                    && let Some(path) = folder.path()
-                {
-                    entry.set_text(&path.display().to_string());
-                }
-
-                dialog.destroy();
-            });
-            dialog.show();
+    {
+        let path_entry = path_entry.clone();
+        browse_button.connect_clicked(move |_| {
+            prompt_for_workspace_directory(&path_entry);
         });
     }
 
@@ -1453,6 +1450,35 @@ fn accent_class_for_agent(agent_label: &str) -> String {
     } else {
         "accent-cyan".into()
     }
+}
+
+fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
+    let entry = path_entry.clone();
+    let window = entry.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+    let dialog = gtk::FileChooserNative::new(
+        Some("Select Working Directory"),
+        window.as_ref(),
+        gtk::FileChooserAction::SelectFolder,
+        Some("Select"),
+        Some("Cancel"),
+    );
+
+    let initial = PathBuf::from(entry.text().as_str());
+    if initial.is_dir() {
+        let _ = dialog.set_file(&gio::File::for_path(&initial));
+    }
+
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept
+            && let Some(folder) = dialog.file()
+            && let Some(path) = folder.path()
+        {
+            entry.set_text(&path.display().to_string());
+        }
+
+        dialog.destroy();
+    });
+    dialog.show();
 }
 
 fn validate_workspace_path(path_entry: &gtk::Entry) -> Result<PathBuf, String> {

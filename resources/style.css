@@ -131,6 +131,10 @@ window.profile-comfortable entry.workspace-path {
   border-radius: 14px;
 }
 
+window.profile-comfortable button.workspace-browse-button {
+  min-height: 46px;
+}
+
 window.profile-comfortable .path-bar {
   padding: 12px;
   border-radius: 16px;
@@ -299,6 +303,11 @@ window.profile-compact .workspace-path entry,
 window.profile-compact entry.workspace-path {
   min-height: 36px;
   border-radius: 10px;
+}
+
+window.profile-compact button.workspace-browse-button {
+  min-height: 36px;
+  padding: 8px 14px;
 }
 
 window.profile-compact .path-bar {
@@ -689,6 +698,16 @@ entry.workspace-path {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.04);
   color: #f5f5f1;
+}
+
+.workspace-path-row {
+  min-width: 0;
+}
+
+button.workspace-browse-button {
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 16px;
 }
 
 .path-bar {
