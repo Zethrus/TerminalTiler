@@ -44,16 +44,17 @@ mod imp {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
-        CreateWindowExW, DefWindowProcW, DestroyMenu, GWLP_USERDATA, GetClientRect,
-        GetWindowLongPtrW, HMENU, IDC_ARROW, LoadCursorW, MF_GRAYED, MF_STRING, PostMessageW,
-        RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
+        CreateWindowExW, DefWindowProcW, DestroyMenu, GWLP_USERDATA, GetClientRect, GetCursorPos,
+        GetWindowLongPtrW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
+        PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
         SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-        SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP,
-        WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
-        WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        SW_SHOW, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
+        WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
+        WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+        WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
@@ -616,6 +617,13 @@ mod imp {
                         pane.pressed_mouse_button = Some(0);
                         return 0;
                     }
+                    if pane.terminal.mouse_tracking() == MouseTrackingMode::Disabled
+                        && is_modifier_pressed(VK_CONTROL)
+                        && let Some(link) = hyperlink_at_lparam(pane, lparam)
+                    {
+                        let _ = open_url(link);
+                        return 0;
+                    }
                     let position = pane_position_from_lparam(pane, lparam);
                     pane.selection_anchor = Some(position);
                     pane.selection_focus = Some(position);
@@ -652,6 +660,19 @@ mod imp {
                     }
                 }
                 0
+            }
+            WM_SETCURSOR => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) }
+                    && pane.terminal.mouse_tracking() == MouseTrackingMode::Disabled
+                    && is_modifier_pressed(VK_CONTROL)
+                    && hyperlink_under_pointer(hwnd, pane).is_some()
+                {
+                    unsafe {
+                        SetCursor(LoadCursorW(ptr::null_mut(), IDC_HAND));
+                    }
+                    return 1;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
             WM_MOUSEWHEEL => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
@@ -982,15 +1003,28 @@ mod imp {
             format!("{}  •  {}", pane.tile.title, title)
         } else if let Some(cwd) = pane.terminal.current_working_directory() {
             format!("{}  •  {}", pane.tile.title, cwd)
-        } else if let Some(phase) = pane.terminal.shell_integration_phase() {
-            format!(
-                "{}  •  {}  •  {}",
-                pane.tile.title,
-                pane.tile.agent_label,
-                shell_phase_label(phase)
-            )
+        } else if pane.terminal.shell_integration_phase().is_some() {
+            format!("{}  •  {}", pane.tile.title, shell_status_label(pane))
         } else {
             format!("{}  •  {}", pane.tile.title, pane.tile.agent_label)
+        }
+    }
+
+    fn shell_status_label(pane: &PaneState) -> String {
+        let phase = pane
+            .terminal
+            .shell_integration_phase()
+            .map(shell_phase_label)
+            .unwrap_or("shell");
+        let command = pane.terminal.shell_integration_command();
+        let status = pane.terminal.last_command_status();
+
+        match (phase, command, status) {
+            ("running", Some(command), _) => format!("{command}  •  running"),
+            ("ready", _, Some(0)) => "ready  •  exit 0".to_string(),
+            ("ready", _, Some(status)) => format!("ready  •  exit {status}"),
+            (_, Some(command), _) => format!("{command}  •  {phase}"),
+            _ => phase.to_string(),
         }
     }
 
@@ -1458,6 +1492,23 @@ mod imp {
             row: row.min(pane.terminal.rows().saturating_sub(1)),
             column: column.min(pane.terminal.columns().saturating_sub(1)),
         }
+    }
+
+    fn hyperlink_at_lparam<'a>(pane: &'a PaneState, lparam: LPARAM) -> Option<&'a str> {
+        let position = pane_position_from_lparam(pane, lparam);
+        pane.terminal.hyperlink_at(position.row, position.column)
+    }
+
+    fn hyperlink_under_pointer<'a>(hwnd: HWND, pane: &'a PaneState) -> Option<&'a str> {
+        let mut point = POINT { x: 0, y: 0 };
+        unsafe {
+            if GetCursorPos(&mut point) == 0 {
+                return None;
+            }
+            ScreenToClient(hwnd, &mut point);
+        }
+        let lparam = ((point.y as u32) << 16 | (point.x as u32 & 0xffff)) as isize;
+        hyperlink_at_lparam(pane, lparam)
     }
 
     fn is_modifier_pressed(virtual_key: u16) -> bool {

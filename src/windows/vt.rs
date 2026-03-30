@@ -105,6 +105,8 @@ pub struct VtBuffer {
     title_stack: Vec<String>,
     current_working_directory: Option<String>,
     shell_integration_phase: Option<ShellIntegrationPhase>,
+    shell_integration_command: Option<String>,
+    last_command_status: Option<i32>,
     hyperlinks: Vec<String>,
     current_hyperlink: Option<u32>,
     pending_input: Vec<u8>,
@@ -153,6 +155,8 @@ impl VtBuffer {
             title_stack: Vec::new(),
             current_working_directory: None,
             shell_integration_phase: None,
+            shell_integration_command: None,
+            last_command_status: None,
             hyperlinks: Vec::new(),
             current_hyperlink: None,
             pending_input: Vec::new(),
@@ -186,6 +190,14 @@ impl VtBuffer {
 
     pub fn shell_integration_phase(&self) -> Option<ShellIntegrationPhase> {
         self.shell_integration_phase
+    }
+
+    pub fn shell_integration_command(&self) -> Option<&str> {
+        self.shell_integration_command.as_deref()
+    }
+
+    pub fn last_command_status(&self) -> Option<i32> {
+        self.last_command_status
     }
 
     pub fn hyperlink_at(&self, row: usize, column: usize) -> Option<&str> {
@@ -475,6 +487,10 @@ impl VtBuffer {
                 self.reverse_index();
                 self.parser_state = ParserState::Ground;
             }
+            'c' => {
+                self.hard_reset();
+                self.parser_state = ParserState::Ground;
+            }
             _ => {
                 self.parser_state = ParserState::Ground;
             }
@@ -565,6 +581,7 @@ impl VtBuffer {
                 self.cursor_row = self.saved_cursor_row.min(self.rows - 1);
             }
             'r' => self.set_scroll_region(&values),
+            'p' if prefix == Some('!') => self.soft_reset(),
             'h' if prefix == Some('?') => self.apply_private_mode(&values, true),
             'l' if prefix == Some('?') => self.apply_private_mode(&values, false),
             _ => {}
@@ -645,14 +662,26 @@ impl VtBuffer {
     }
 
     fn apply_osc133(&mut self, value: &str) {
-        let marker = value.split(';').next().unwrap_or_default().trim();
-        self.shell_integration_phase = match marker {
-            "A" => Some(ShellIntegrationPhase::PromptStart),
-            "B" => Some(ShellIntegrationPhase::CommandStart),
-            "C" => Some(ShellIntegrationPhase::CommandEnd),
-            "D" => Some(ShellIntegrationPhase::PromptEnd),
-            _ => self.shell_integration_phase,
-        };
+        let mut parts = value.split(';');
+        let marker = parts.next().unwrap_or_default().trim();
+        match marker {
+            "A" => {
+                self.shell_integration_phase = Some(ShellIntegrationPhase::PromptStart);
+                self.shell_integration_command = None;
+            }
+            "B" => self.shell_integration_phase = Some(ShellIntegrationPhase::CommandStart),
+            "C" => self.shell_integration_phase = Some(ShellIntegrationPhase::CommandEnd),
+            "D" => {
+                self.shell_integration_phase = Some(ShellIntegrationPhase::PromptEnd);
+                self.last_command_status = parts.next().and_then(|status| status.parse().ok());
+                self.shell_integration_command = None;
+            }
+            "L" => {
+                let command = parts.collect::<Vec<_>>().join(";");
+                self.shell_integration_command = (!command.trim().is_empty()).then_some(command);
+            }
+            _ => {}
+        }
     }
 
     fn apply_sgr(&mut self, values: &[usize]) {
@@ -774,6 +803,45 @@ impl VtBuffer {
 
     fn queue_response(&mut self, response: &str) {
         self.pending_input.extend_from_slice(response.as_bytes());
+    }
+
+    fn soft_reset(&mut self) {
+        self.style = VtStyle::default();
+        self.style.hyperlink_id = self.current_hyperlink;
+        self.cursor_visible = true;
+        self.application_cursor_keys = false;
+        self.autowrap = true;
+        self.origin_mode = false;
+        self.bracketed_paste = false;
+        self.mouse_tracking = MouseTrackingMode::Disabled;
+        self.sgr_mouse_mode = false;
+        self.focus_reporting = false;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows.saturating_sub(1);
+        self.cursor_to_home();
+    }
+
+    fn hard_reset(&mut self) {
+        self.cells.fill(VtCell::default());
+        self.history.clear();
+        self.viewport_offset = 0;
+        self.cursor_col = 0;
+        self.cursor_row = 0;
+        self.saved_cursor_col = 0;
+        self.saved_cursor_row = 0;
+        self.window_title = None;
+        self.title_stack.clear();
+        self.current_working_directory = None;
+        self.shell_integration_phase = None;
+        self.shell_integration_command = None;
+        self.last_command_status = None;
+        self.hyperlinks.clear();
+        self.current_hyperlink = None;
+        self.pending_input.clear();
+        self.pending_clipboard_write = None;
+        self.primary_screen = None;
+        self.alternate_screen = false;
+        self.soft_reset();
     }
 
     fn set_alternate_screen(&mut self, enabled: bool) {
@@ -1469,6 +1537,8 @@ mod tests {
             buffer.shell_integration_phase(),
             Some(ShellIntegrationPhase::PromptStart)
         );
+        buffer.process("\u{1b}]133;L;cargo test\u{7}");
+        assert_eq!(buffer.shell_integration_command(), Some("cargo test"));
         buffer.process("\u{1b}]133;B\u{7}");
         assert_eq!(
             buffer.shell_integration_phase(),
@@ -1479,11 +1549,13 @@ mod tests {
             buffer.shell_integration_phase(),
             Some(ShellIntegrationPhase::CommandEnd)
         );
-        buffer.process("\u{1b}]133;D\u{7}");
+        buffer.process("\u{1b}]133;D;23\u{7}");
         assert_eq!(
             buffer.shell_integration_phase(),
             Some(ShellIntegrationPhase::PromptEnd)
         );
+        assert_eq!(buffer.last_command_status(), Some(23));
+        assert_eq!(buffer.shell_integration_command(), None);
     }
 
     #[test]
@@ -1494,5 +1566,31 @@ mod tests {
         assert_eq!(buffer.hyperlink_at(0, 0), Some("https://example.com"));
         assert_eq!(buffer.hyperlink_at(0, 1), Some("https://example.com"));
         assert_eq!(buffer.hyperlink_at(0, 2), None);
+    }
+
+    #[test]
+    fn supports_soft_reset() {
+        let mut buffer = VtBuffer::new(4, 2);
+        buffer.process("\u{1b}[?7l\u{1b}[?1000h\u{1b}]8;;https://example.com\u{7}\u{1b}[4mX");
+        buffer.process("\u{1b}[!p");
+        buffer.process("Y");
+
+        assert!(buffer.autowrap());
+        assert_eq!(buffer.mouse_tracking(), MouseTrackingMode::Disabled);
+        assert_eq!(buffer.hyperlink_at(0, 0), Some("https://example.com"));
+        assert!(!buffer.cell(0, 0).unwrap().style.underline);
+        assert_eq!(buffer.hyperlink_at(0, 0), Some("https://example.com"));
+    }
+
+    #[test]
+    fn supports_hard_reset() {
+        let mut buffer = VtBuffer::new(4, 2);
+        buffer.process("\u{1b}]0;shell\u{7}\u{1b}]133;L;make build\u{7}ok");
+        buffer.process("\u{1b}c");
+
+        assert_eq!(buffer.window_title(), None);
+        assert_eq!(buffer.shell_integration_command(), None);
+        assert_eq!(buffer.cell(0, 0).unwrap().ch, ' ');
+        assert_eq!(buffer.history_len(), 0);
     }
 }
