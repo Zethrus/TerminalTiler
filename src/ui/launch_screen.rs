@@ -1457,20 +1457,22 @@ fn accent_class_for_agent(agent_label: &str) -> String {
 fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
     let entry = path_entry.clone();
     let window = entry.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-    let dialog = gtk::FileChooserNative::new(
+    let dialog = gtk::FileChooserDialog::new(
         Some("Select Working Directory"),
         window.as_ref(),
         gtk::FileChooserAction::SelectFolder,
-        Some("Select"),
-        Some("Cancel"),
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Select", gtk::ResponseType::Accept),
+        ],
     );
 
     let initial = PathBuf::from(entry.text().as_str());
     if initial.is_dir() {
-        let _ = dialog.set_file(&gio::File::for_path(&initial));
+        let _ = dialog.set_current_folder(Some(&gio::File::for_path(&initial)));
     }
 
-    dialog.connect_response(move |dialog, response| {
+    dialog.connect_response(move |dialog: &gtk::FileChooserDialog, response| {
         if response == gtk::ResponseType::Accept
             && let Some(folder) = dialog.file()
             && let Some(path) = folder.path()
@@ -1478,9 +1480,9 @@ fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
             entry.set_text(&path.display().to_string());
         }
 
-        dialog.destroy();
+        dialog.close();
     });
-    dialog.show();
+    dialog.present();
 }
 
 fn validate_workspace_path(path_entry: &gtk::Entry) -> Result<PathBuf, String> {
