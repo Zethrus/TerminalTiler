@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 
 use crate::app::logging;
+use crate::app::tray::TrayController;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
@@ -118,6 +119,7 @@ pub fn present(
     session_store: SessionStore,
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
+    tray_controller: TrayController,
 ) {
     let preference_store = Rc::new(preference_store);
     let preset_store = Rc::new(preset_store);
@@ -197,12 +199,14 @@ pub fn present(
     let current_density_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_density_shortcut.clone(),
     ));
+    let current_close_to_background = Rc::new(Cell::new(current_shortcuts.close_to_background));
     let current_zoom_in_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_zoom_in_shortcut.clone(),
     ));
     let current_zoom_out_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_zoom_out_shortcut.clone(),
     ));
+    let quit_requested = Rc::new(Cell::new(false));
     let fullscreen_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
@@ -707,7 +711,7 @@ pub fn present(
         });
     }
 
-    {
+    let open_settings_dialog: Rc<dyn Fn()> = {
         let window_for_settings = window.clone();
         let preference_store_for_settings = preference_store.clone();
         let refresh_for_settings = refresh_launch_tabs.clone();
@@ -722,15 +726,17 @@ pub fn present(
         let zoom_out_shortcut_controller = zoom_out_shortcut_controller.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
+        let current_close_to_background = current_close_to_background.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
 
-        settings_button.connect_clicked(move |_| {
+        Rc::new(move || {
             let preferences = preference_store_for_settings.load();
             settings_dialog::present(
                 &window_for_settings,
                 preferences.default_theme,
                 preferences.default_density,
+                preferences.close_to_background,
                 preferences.workspace_fullscreen_shortcut,
                 preferences.workspace_density_shortcut,
                 preferences.workspace_zoom_in_shortcut,
@@ -772,6 +778,27 @@ pub fn present(
                         show_toast(
                             &toast_overlay,
                             &format!("Default density set to {}", density.label()),
+                        );
+                    }
+                },
+                {
+                    let preference_store = preference_store_for_settings.clone();
+                    let toast_overlay = toast_overlay_for_settings.clone();
+                    let current_close_to_background = current_close_to_background.clone();
+                    move |close_to_background| {
+                        preference_store.save_close_to_background(close_to_background);
+                        current_close_to_background.set(close_to_background);
+                        logging::info(format!(
+                            "updated application settings close_to_background={}",
+                            close_to_background
+                        ));
+                        show_toast(
+                            &toast_overlay,
+                            if close_to_background {
+                                "Close button now hides TerminalTiler to the background when tray support is available"
+                            } else {
+                                "Close button now quits TerminalTiler"
+                            },
                         );
                     }
                 },
@@ -939,6 +966,7 @@ pub fn present(
                     let zoom_out_controller = zoom_out_shortcut_controller.clone();
                     let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
                     let current_density_shortcut = current_density_shortcut.clone();
+                    let current_close_to_background = current_close_to_background.clone();
                     let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
                     let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
                     move || {
@@ -948,6 +976,7 @@ pub fn present(
                             .replace(defaults.workspace_fullscreen_shortcut.clone());
                         current_density_shortcut
                             .replace(defaults.workspace_density_shortcut.clone());
+                        current_close_to_background.set(defaults.close_to_background);
                         current_zoom_in_shortcut
                             .replace(defaults.workspace_zoom_in_shortcut.clone());
                         current_zoom_out_shortcut
@@ -1001,7 +1030,32 @@ pub fn present(
                     }
                 },
             );
+        })
+    };
+
+    {
+        let open_settings_dialog = open_settings_dialog.clone();
+        settings_button.connect_clicked(move |_| open_settings_dialog());
+    }
+
+    {
+        let open_settings_dialog = open_settings_dialog.clone();
+        let action = gio::SimpleAction::new("open-settings", None);
+        action.connect_activate(move |_, _| open_settings_dialog());
+        window.add_action(&action);
+    }
+
+    {
+        let window_for_quit_action = window.clone();
+        let tray_controller = tray_controller.clone();
+        let quit_requested = quit_requested.clone();
+        let action = gio::SimpleAction::new("quit-app", None);
+        action.connect_activate(move |_, _| {
+            tray_controller.set_window_hidden(false);
+            quit_requested.set(true);
+            window_for_quit_action.close();
         });
+        window.add_action(&action);
     }
 
     if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
@@ -1102,7 +1156,21 @@ pub fn present(
         let tabs_for_save = tabs.clone();
         let active_for_save = active_tab_id.clone();
         let session_store = session_store.clone();
-        window.connect_close_request(move |_| {
+        let current_close_to_background = current_close_to_background.clone();
+        let quit_requested = quit_requested.clone();
+        let tray_controller = tray_controller.clone();
+        window.connect_close_request(move |window| {
+            if !quit_requested.replace(false)
+                && current_close_to_background.get()
+                && tray_controller.is_available()
+            {
+                logging::info("hiding application window to background");
+                tray_controller.set_window_hidden(true);
+                window.set_visible(false);
+                return glib::Propagation::Stop;
+            }
+
+            tray_controller.set_window_hidden(false);
             let runtimes = workspace_runtimes(&tabs_for_save);
             if let Some(session) = collect_session(&tabs_for_save, active_for_save.get()) {
                 logging::info(format!(

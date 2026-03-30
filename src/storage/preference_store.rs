@@ -16,11 +16,13 @@ const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_SETTINGS_DIALOG_WIDTH: i32 = 528;
 const DEFAULT_SETTINGS_DIALOG_HEIGHT: i32 = 760;
+const DEFAULT_CLOSE_TO_BACKGROUND: bool = false;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPreferences {
     pub default_density: ApplicationDensity,
     pub default_theme: ThemeMode,
+    pub close_to_background: bool,
     pub workspace_fullscreen_shortcut: String,
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
@@ -41,6 +43,8 @@ struct PreferenceDocument {
     default_density: ApplicationDensity,
     #[serde(default = "default_theme")]
     default_theme: ThemeMode,
+    #[serde(default = "default_close_to_background")]
+    close_to_background: bool,
     #[serde(default = "default_fullscreen_shortcut")]
     workspace_fullscreen_shortcut: String,
     #[serde(default = "default_density_shortcut")]
@@ -61,6 +65,10 @@ fn default_density() -> ApplicationDensity {
 
 fn default_theme() -> ThemeMode {
     ThemeMode::System
+}
+
+fn default_close_to_background() -> bool {
+    DEFAULT_CLOSE_TO_BACKGROUND
 }
 
 fn default_fullscreen_shortcut() -> String {
@@ -172,6 +180,7 @@ impl PreferenceStore {
             Ok(document) if document.version == STORE_VERSION => AppPreferences {
                 default_density: document.default_density,
                 default_theme: document.default_theme,
+                close_to_background: document.close_to_background,
                 workspace_fullscreen_shortcut: normalize_fullscreen_shortcut(
                     &document.workspace_fullscreen_shortcut,
                 ),
@@ -211,6 +220,12 @@ impl PreferenceStore {
     pub fn save_default_theme(&self, theme: ThemeMode) {
         let mut preferences = self.load();
         preferences.default_theme = theme;
+        self.save(&preferences);
+    }
+
+    pub fn save_close_to_background(&self, close_to_background: bool) {
+        let mut preferences = self.load();
+        preferences.close_to_background = close_to_background;
         self.save(&preferences);
     }
 
@@ -254,6 +269,7 @@ impl PreferenceStore {
             version: STORE_VERSION,
             default_density: preferences.default_density,
             default_theme: preferences.default_theme,
+            close_to_background: preferences.close_to_background,
             workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
             workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
@@ -301,6 +317,7 @@ impl Default for AppPreferences {
         Self {
             default_density: default_density(),
             default_theme: default_theme(),
+            close_to_background: default_close_to_background(),
             workspace_fullscreen_shortcut: default_fullscreen_shortcut(),
             workspace_density_shortcut: default_density_shortcut(),
             workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
@@ -339,6 +356,7 @@ mod tests {
 
         assert_eq!(store.load().default_density, ApplicationDensity::Compact);
         assert_eq!(store.load().default_theme, ThemeMode::System);
+        assert!(!store.load().close_to_background);
         assert_eq!(store.load().workspace_fullscreen_shortcut, "F11");
         assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
@@ -355,6 +373,7 @@ mod tests {
         store.save(&AppPreferences {
             default_density: ApplicationDensity::Comfortable,
             default_theme: ThemeMode::Dark,
+            close_to_background: true,
             workspace_fullscreen_shortcut: "<Shift>F11".into(),
             workspace_density_shortcut: "<Shift>F8".into(),
             workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
@@ -368,6 +387,7 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::Dark,
+                close_to_background: true,
                 workspace_fullscreen_shortcut: "<Shift>F11".into(),
                 workspace_density_shortcut: "<Shift>F8".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
@@ -391,6 +411,7 @@ mod tests {
             AppPreferences {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::System,
+                close_to_background: false,
                 workspace_fullscreen_shortcut: "F11".into(),
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
