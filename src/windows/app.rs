@@ -25,8 +25,9 @@ mod imp {
         ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgItem,
         GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
         IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
-        LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OKCANCEL,
-        MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
+        IDYES, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING,
+        MB_OKCANCEL, MB_YESNO, MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW,
+        SW_HIDE, SW_SHOW,
         SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
         SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
         TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
@@ -140,6 +141,7 @@ mod imp {
         tray_icon_added: bool,
         window_hidden_to_tray: bool,
         quit_requested: bool,
+        startup_resume_prompted: bool,
         selected_source: LaunchSelection,
         active_layout: LayoutNode,
         save_preset_button_hwnd: HWND,
@@ -189,6 +191,7 @@ mod imp {
             tray_icon_added: false,
             window_hidden_to_tray: false,
             quit_requested: false,
+            startup_resume_prompted: false,
             selected_source: LaunchSelection::Template(0),
             active_layout: generate_layout(1),
             save_preset_button_hwnd: ptr::null_mut(),
@@ -953,8 +956,44 @@ mod imp {
             );
         }
         sync_tray_tooltip(hwnd, state);
+        maybe_prompt_startup_resume(hwnd, state);
 
         logging::info("refreshed Windows shell state");
+    }
+
+    fn maybe_prompt_startup_resume(hwnd: HWND, state: &mut AppWindowState) {
+        if state.startup_resume_prompted {
+            return;
+        }
+        state.startup_resume_prompted = true;
+
+        if state.runtime.is_none() || state.session.is_none() {
+            return;
+        }
+
+        let response = unsafe {
+            MessageBoxW(
+                hwnd,
+                wide("Resume the saved TerminalTiler workspace session now?\r\n\r\nYes = Resume\r\nNo = Start Fresh")
+                    .as_ptr(),
+                wide("Resume Previous Session").as_ptr(),
+                MB_YESNO | MB_ICONWARNING,
+            )
+        };
+
+        if response == IDYES {
+            launch_restored_session(hwnd, state);
+            return;
+        }
+
+        state.session_store.clear();
+        state.session = None;
+        state.session_warning = None;
+        unsafe {
+            sync_status_text(state);
+            EnableWindow(state.launch_button_hwnd, 0);
+        }
+        logging::info("cleared saved Windows session at startup");
     }
 
     fn launch_selected_preset(_hwnd: HWND, state: &mut AppWindowState) {

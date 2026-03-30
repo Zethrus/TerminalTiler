@@ -1,32 +1,29 @@
 use std::cell::Cell;
-use std::path::Path;
 use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
 
 use crate::model::layout::LayoutNode;
-use crate::model::preset::ApplicationDensity;
-use crate::terminal::session::TerminalSession;
-use crate::ui::tile_view;
 
-pub struct LayoutView {
+pub struct LayoutShell {
     pub widget: gtk::Widget,
-    pub sessions: Vec<TerminalSession>,
+    pub slots: Vec<gtk::Box>,
 }
 
-pub fn build(
-    node: &LayoutNode,
-    workspace_root: &Path,
-    density: ApplicationDensity,
-    zoom_steps: i32,
-) -> LayoutView {
+pub fn build(node: &LayoutNode) -> LayoutShell {
     match node {
-        LayoutNode::Tile(tile) => {
-            let tile = tile_view::build(tile, workspace_root, density, zoom_steps);
-            LayoutView {
-                widget: tile.widget,
-                sessions: vec![tile.session],
+        LayoutNode::Tile(_) => {
+            let slot = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(0)
+                .hexpand(true)
+                .vexpand(true)
+                .build();
+
+            LayoutShell {
+                widget: slot.clone().upcast(),
+                slots: vec![slot],
             }
         }
         LayoutNode::Split {
@@ -45,8 +42,8 @@ pub fn build(
                 .shrink_end_child(true)
                 .build();
 
-            let first_child = build(first, workspace_root, density, zoom_steps);
-            let second_child = build(second, workspace_root, density, zoom_steps);
+            let first_child = build(first);
+            let second_child = build(second);
             paned.set_start_child(Some(&first_child.widget));
             paned.set_end_child(Some(&second_child.widget));
 
@@ -74,12 +71,12 @@ pub fn build(
             });
 
             paned.add_css_class("split-pane");
-            let mut sessions = first_child.sessions;
-            sessions.extend(second_child.sessions);
+            let mut slots = first_child.slots;
+            slots.extend(second_child.slots);
 
-            LayoutView {
+            LayoutShell {
                 widget: paned.upcast(),
-                sessions,
+                slots,
             }
         }
     }

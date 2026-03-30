@@ -1045,6 +1045,10 @@ button.destructive-button:hover {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.20);
 }
 
+.terminal-card.is-dragging {
+  opacity: 0.84;
+}
+
 .workspace-subtitle,
 .tile-meta {
   font-size: 11px;

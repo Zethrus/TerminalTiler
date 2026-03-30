@@ -473,8 +473,23 @@ pub fn present(
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
                 let terminal_zoom_steps = 0;
-                let built_workspace =
-                    workspace_view::build(&preset, &workspace_root, terminal_zoom_steps);
+                let built_workspace = workspace_view::build_with_layout_change_handler(
+                    &preset,
+                    &workspace_root,
+                    terminal_zoom_steps,
+                    {
+                        let tabs_for_workspace = tabs_for_workspace.clone();
+                        Rc::new(move |next_layout| {
+                            let mut tabs = tabs_for_workspace.borrow_mut();
+                            let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                                return;
+                            };
+                            if let TabContent::Workspace(workspace) = &mut tab.content {
+                                workspace.preset.layout = next_layout;
+                            }
+                        })
+                    },
+                );
                 let (page_name, previous_runtime) = {
                     let mut tabs = tabs_for_workspace.borrow_mut();
                     let tab = tabs
@@ -1482,7 +1497,23 @@ fn restore_saved_session(
         let terminal_zoom_steps =
             clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
 
-        let built_workspace = workspace_view::build(&preset, &workspace_root, terminal_zoom_steps);
+        let built_workspace = workspace_view::build_with_layout_change_handler(
+            &preset,
+            &workspace_root,
+            terminal_zoom_steps,
+            {
+                let tabs = tabs.clone();
+                Rc::new(move |next_layout| {
+                    let mut tabs = tabs.borrow_mut();
+                    let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                        return;
+                    };
+                    if let TabContent::Workspace(workspace) = &mut tab.content {
+                        workspace.preset.layout = next_layout;
+                    }
+                })
+            },
+        );
         tabs.borrow_mut().push(WorkspaceTab {
             id: tab_id,
             default_title: format!("Workspace {}", tab_id),

@@ -42,8 +42,9 @@ mod imp {
     };
     use windows_sys::Win32::UI::Controls::SetScrollInfo;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetKeyState, SetFocus, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT,
-        VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
+        GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DELETE,
+        VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT,
+        VK_UP,
     };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -52,14 +53,14 @@ mod imp {
         GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
         GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
         PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-        SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW,
-        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
-        WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-        WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-        WS_VISIBLE, WS_VSCROLL,
+        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
+        SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor,
+        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
+        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
+        WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
@@ -73,6 +74,8 @@ mod imp {
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
     const PANE_CLASS: &str = "TerminalTilerWindowsPane";
+    const PANE_HEADER_CLASS: &str = "TerminalTilerWindowsPaneHeader";
+    const TAB_BUTTON_CLASS: &str = "TerminalTilerWindowsTabButton";
     const WM_PANE_OUTPUT: u32 = WM_APP + 1;
     const WM_PANE_EXIT: u32 = WM_APP + 2;
     const HEADER_HEIGHT: i32 = 112;
@@ -102,8 +105,21 @@ mod imp {
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
     const EM_SETSEL_MESSAGE: u32 = 0x00B1;
+    const SS_NOTIFY_STYLE: u32 = 0x0000_0100;
     static NEXT_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
+    static NEXT_PANE_ID: AtomicUsize = AtomicUsize::new(1);
     static SESSION_REGISTRY: OnceLock<Mutex<WorkspaceSessionRegistry>> = OnceLock::new();
+
+    struct TabDragState {
+        dragged_index: usize,
+        target_index: usize,
+        insert_after: bool,
+    }
+
+    struct PaneDragState {
+        dragged_pane_id: usize,
+        target_pane_id: usize,
+    }
 
     struct WorkspaceWindowState {
         window_id: usize,
@@ -123,6 +139,8 @@ mod imp {
         close_tab_hwnd: HWND,
         show_launcher_hwnd: HWND,
         tab_button_hwnds: Vec<HWND>,
+        tab_drag: Option<TabDragState>,
+        pane_drag: Option<PaneDragState>,
         is_fullscreen: bool,
         saved_window_rect: RECT,
         saved_window_style: isize,
@@ -135,7 +153,16 @@ mod imp {
         active_window_id: Option<usize>,
     }
 
+    struct TabButtonState {
+        parent_hwnd: HWND,
+        index: usize,
+        active: bool,
+        press_origin: Option<POINT>,
+    }
+
     struct PaneState {
+        id: usize,
+        parent_hwnd: HWND,
         tile: TileSpec,
         title_hwnd: HWND,
         output_hwnd: HWND,
@@ -150,6 +177,7 @@ mod imp {
         selection_focus: Option<VtPosition>,
         selecting: bool,
         pressed_mouse_button: Option<u8>,
+        header_press_origin: Option<POINT>,
         session: Option<PaneSession>,
     }
 
@@ -171,7 +199,7 @@ mod imp {
     }
 
     struct PaneOutputEvent {
-        pane_index: usize,
+        pane_id: usize,
         text: String,
     }
 
@@ -196,7 +224,7 @@ mod imp {
     impl PaneSession {
         fn spawn(
             window_hwnd: HWND,
-            pane_index: usize,
+            pane_id: usize,
             command: &WindowsLaunchCommand,
             columns: i16,
             rows: i16,
@@ -364,7 +392,7 @@ mod imp {
                 CloseHandle(process_info.hThread);
             }
 
-            spawn_output_reader(window_hwnd, pane_index, output_read);
+            spawn_output_reader(window_hwnd, pane_id, output_read);
 
             Ok(Self {
                 pseudo_console,
@@ -491,6 +519,8 @@ mod imp {
             close_tab_hwnd: ptr::null_mut(),
             show_launcher_hwnd: ptr::null_mut(),
             tab_button_hwnds: Vec::new(),
+            tab_drag: None,
+            pane_drag: None,
             is_fullscreen: false,
             saved_window_rect: unsafe { mem::zeroed() },
             saved_window_style: 0,
@@ -532,7 +562,9 @@ mod imp {
 
     fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
         register_class(instance, WINDOW_CLASS, window_proc)?;
-        register_class(instance, PANE_CLASS, pane_window_proc)
+        register_class(instance, PANE_CLASS, pane_window_proc)?;
+        register_class(instance, PANE_HEADER_CLASS, pane_header_window_proc)?;
+        register_class(instance, TAB_BUTTON_CLASS, tab_button_window_proc)
     }
 
     fn register_class(
@@ -635,7 +667,7 @@ mod imp {
                 if !event_ptr.is_null() {
                     let event = unsafe { Box::from_raw(event_ptr) };
                     if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                        append_pane_output(state, event.pane_index, &event.text);
+                        append_pane_output(state, event.pane_id, &event.text);
                     }
                 }
                 0
@@ -848,6 +880,164 @@ mod imp {
             WM_NCDESTROY => {
                 unsafe {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
+    }
+
+    unsafe extern "system" fn pane_header_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_NCCREATE => {
+                let create = lparam as *const CREATESTRUCTW;
+                if create.is_null() {
+                    return 0;
+                }
+
+                let pane_ptr = unsafe { (*create).lpCreateParams as *mut PaneState };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, pane_ptr as isize);
+                }
+                1
+            }
+            WM_PAINT => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    render_pane_header(hwnd, pane);
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_LBUTTONDOWN => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.header_press_origin = Some(screen_point_from_lparam(hwnd, lparam));
+                    unsafe {
+                        SetCapture(hwnd);
+                    }
+                }
+                0
+            }
+            WM_MOUSEMOVE => {
+                if unsafe { GetCapture() } == hwnd
+                    && let Some(pane) = unsafe { pane_state_mut(hwnd) }
+                    && let Some(origin) = pane.header_press_origin
+                {
+                    let point = screen_point_from_lparam(hwnd, lparam);
+                    if drag_threshold_exceeded(origin, point)
+                        && let Some(state) = unsafe { window_state_mut(pane.parent_hwnd) }
+                    {
+                        update_pane_drag(state, pane.id, point);
+                    }
+                }
+                0
+            }
+            WM_LBUTTONUP => {
+                if unsafe { GetCapture() } == hwnd {
+                    unsafe {
+                        ReleaseCapture();
+                    }
+                }
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.header_press_origin = None;
+                    if let Some(state) = unsafe { window_state_mut(pane.parent_hwnd) } {
+                        finish_pane_drag(pane.parent_hwnd, state, pane.id);
+                    }
+                }
+                0
+            }
+            WM_NCDESTROY => {
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
+    }
+
+    unsafe extern "system" fn tab_button_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_NCCREATE => {
+                let create = lparam as *const CREATESTRUCTW;
+                if create.is_null() {
+                    return 0;
+                }
+
+                let state_ptr = unsafe { (*create).lpCreateParams as *mut TabButtonState };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
+                }
+                1
+            }
+            WM_PAINT => {
+                if let Some(button) = unsafe { tab_button_state_mut(hwnd) } {
+                    render_tab_button(hwnd, button);
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_LBUTTONDOWN => {
+                if let Some(button) = unsafe { tab_button_state_mut(hwnd) } {
+                    button.press_origin = Some(screen_point_from_lparam(hwnd, lparam));
+                    unsafe {
+                        SetCapture(hwnd);
+                    }
+                }
+                0
+            }
+            WM_MOUSEMOVE => {
+                if unsafe { GetCapture() } == hwnd
+                    && let Some(button) = unsafe { tab_button_state_mut(hwnd) }
+                    && let Some(origin) = button.press_origin
+                {
+                    let point = screen_point_from_lparam(hwnd, lparam);
+                    if drag_threshold_exceeded(origin, point)
+                        && let Some(state) = unsafe { window_state_mut(button.parent_hwnd) }
+                    {
+                        update_tab_drag(state, button.index, point);
+                    }
+                }
+                0
+            }
+            WM_LBUTTONUP => {
+                if unsafe { GetCapture() } == hwnd {
+                    unsafe {
+                        ReleaseCapture();
+                    }
+                }
+                if let Some(button) = unsafe { tab_button_state_mut(hwnd) } {
+                    button.press_origin = None;
+                    if let Some(state) = unsafe { window_state_mut(button.parent_hwnd) } {
+                        finish_tab_drag(button.parent_hwnd, state, button.index);
+                    }
+                }
+                0
+            }
+            WM_LBUTTONDBLCLK => {
+                if let Some(button) = unsafe { tab_button_state_mut(hwnd) }
+                    && let Some(state) = unsafe { window_state_mut(button.parent_hwnd) }
+                {
+                    begin_tab_rename(button.parent_hwnd, state, button.index);
+                }
+                0
+            }
+            WM_NCDESTROY => {
+                let state_ptr =
+                    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut TabButtonState;
+                if !state_ptr.is_null() {
+                    unsafe {
+                        drop(Box::from_raw(state_ptr));
+                    }
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
@@ -1149,7 +1339,7 @@ mod imp {
 
     fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
         let workspace_root = active_tab(state).workspace_root.clone();
-        for (pane_index, pane) in state.panes.iter_mut().enumerate() {
+        for pane in state.panes.iter_mut() {
             let command =
                 match wsl::build_launch_command(&pane.tile, &workspace_root, &state.runtime) {
                     Ok(command) => command,
@@ -1174,7 +1364,7 @@ mod imp {
                 pane_console_size(output_bounds.width(), output_bounds.height(), pane);
             pane.terminal.resize(columns as usize, rows as usize);
 
-            match PaneSession::spawn(hwnd, pane_index, &command, columns, rows) {
+            match PaneSession::spawn(hwnd, pane.id, &command, columns, rows) {
                 Ok(session) => {
                     pane.session = Some(session);
                     pane.terminal.process(&format!(
@@ -1201,6 +1391,22 @@ mod imp {
 
     fn active_tab_mut(state: &mut WorkspaceWindowState) -> &mut SavedTab {
         &mut state.tabs[state.active_tab_index]
+    }
+
+    fn pane_mut_by_id(state: &mut WorkspaceWindowState, pane_id: usize) -> Option<&mut PaneState> {
+        state
+            .panes
+            .iter_mut()
+            .find(|pane| pane.id == pane_id)
+            .map(Box::as_mut)
+    }
+
+    fn pane_by_id(state: &WorkspaceWindowState, pane_id: usize) -> Option<&PaneState> {
+        state
+            .panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .map(Box::as_ref)
     }
 
     fn session_registry() -> &'static Mutex<WorkspaceSessionRegistry> {
@@ -1276,42 +1482,37 @@ mod imp {
     }
 
     fn rebuild_tab_buttons(hwnd: HWND, state: &mut WorkspaceWindowState) {
-        let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        state.tab_drag = None;
         for button in state.tab_button_hwnds.drain(..) {
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(button);
             }
         }
 
-        for (index, tab) in state.tabs.iter().enumerate() {
-            let title = tab.custom_title.as_deref().unwrap_or(&tab.preset.name);
-            let label = if index == state.active_tab_index {
-                format!("[{}]", title)
-            } else {
-                title.to_string()
-            };
+        for (index, _) in state.tabs.iter().enumerate() {
+            let button_state = Box::new(TabButtonState {
+                parent_hwnd: hwnd,
+                index,
+                active: index == state.active_tab_index,
+                press_origin: None,
+            });
             let button = create_child_window(
                 hwnd,
-                "BUTTON",
-                &label,
-                WS_CHILD
-                    | WS_VISIBLE
-                    | WS_TABSTOP
-                    | windows_sys::Win32::UI::WindowsAndMessaging::BS_NOTIFY as u32,
+                TAB_BUTTON_CLASS,
+                "",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                 0,
                 ID_TAB_BUTTON_BASE + index as isize,
-                ptr::null_mut(),
+                Box::into_raw(button_state).cast(),
             );
             if !button.is_null() {
-                unsafe {
-                    SendMessageW(button, WM_SETFONT, ui_font as usize, 1);
-                }
                 state.tab_button_hwnds.push(button);
             }
         }
     }
 
     fn destroy_active_panes(state: &mut WorkspaceWindowState) {
+        state.pane_drag = None;
         for pane in &state.panes {
             unsafe {
                 if !pane.title_hwnd.is_null() {
@@ -1360,6 +1561,8 @@ mod imp {
         state.panes = Vec::with_capacity(tile_specs.len());
         for tile in tile_specs {
             let mut pane = Box::new(PaneState {
+                id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
+                parent_hwnd: hwnd,
                 tile,
                 title_hwnd: ptr::null_mut(),
                 output_hwnd: ptr::null_mut(),
@@ -1374,16 +1577,17 @@ mod imp {
                 selection_focus: None,
                 selecting: false,
                 pressed_mouse_button: None,
+                header_press_origin: None,
                 session: None,
             });
             pane.title_hwnd = create_child_window(
                 hwnd,
-                "STATIC",
-                &format!("{}  •  {}", pane.tile.title, pane.tile.agent_label),
-                WS_CHILD | WS_VISIBLE,
+                PANE_HEADER_CLASS,
+                "",
+                WS_CHILD | WS_VISIBLE | SS_NOTIFY_STYLE,
                 0,
                 0,
-                ptr::null_mut(),
+                (&mut *pane as *mut PaneState).cast(),
             );
             let pane_ptr: *mut PaneState = &mut *pane;
             pane.output_hwnd = create_child_window(
@@ -1432,6 +1636,222 @@ mod imp {
             SetFocus(state.title_hwnd);
             SendMessageW(state.title_hwnd, EM_SETSEL_MESSAGE, 0, -1isize as LPARAM);
         }
+    }
+
+    fn drag_threshold_exceeded(origin: POINT, current: POINT) -> bool {
+        (origin.x - current.x).abs() >= 4 || (origin.y - current.y).abs() >= 4
+    }
+
+    fn screen_point_from_lparam(hwnd: HWND, lparam: LPARAM) -> POINT {
+        let mut point = POINT {
+            x: ((lparam as i32) & 0xffff) as i16 as i32,
+            y: (((lparam as i32) >> 16) & 0xffff) as i16 as i32,
+        };
+        unsafe {
+            ClientToScreen(hwnd, &mut point);
+        }
+        point
+    }
+
+    fn invalidate_tab_buttons(state: &WorkspaceWindowState) {
+        for hwnd in &state.tab_button_hwnds {
+            unsafe {
+                InvalidateRect(*hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn invalidate_pane_headers(state: &WorkspaceWindowState) {
+        for pane in &state.panes {
+            unsafe {
+                InvalidateRect(pane.title_hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn update_tab_drag(state: &mut WorkspaceWindowState, dragged_index: usize, point: POINT) {
+        let mut next_drag = None;
+        for (index, hwnd) in state.tab_button_hwnds.iter().enumerate() {
+            let mut rect = unsafe { mem::zeroed::<RECT>() };
+            unsafe {
+                GetWindowRect(*hwnd, &mut rect);
+            }
+            if unsafe { windows_sys::Win32::Graphics::Gdi::PtInRect(&rect, point) } != 0 {
+                let midpoint = rect.left + ((rect.right - rect.left) / 2);
+                next_drag = Some(TabDragState {
+                    dragged_index,
+                    target_index: index,
+                    insert_after: point.x >= midpoint,
+                });
+                break;
+            }
+        }
+
+        let changed = match (&state.tab_drag, &next_drag) {
+            (Some(current), Some(next)) => {
+                current.dragged_index != next.dragged_index
+                    || current.target_index != next.target_index
+                    || current.insert_after != next.insert_after
+            }
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        };
+        state.tab_drag = next_drag;
+        if changed {
+            invalidate_tab_buttons(state);
+        }
+    }
+
+    fn finish_tab_drag(hwnd: HWND, state: &mut WorkspaceWindowState, clicked_index: usize) {
+        let drag = state.tab_drag.take();
+        invalidate_tab_buttons(state);
+
+        let Some(drag) = drag else {
+            switch_active_tab(hwnd, state, clicked_index);
+            return;
+        };
+
+        if reorder_tab_index(state, drag.dragged_index, drag.target_index, drag.insert_after) {
+            rebuild_tab_buttons(hwnd, state);
+            update_tab_action_buttons(state);
+            layout_controls(hwnd, state);
+            save_workspace_session_state(state);
+        }
+    }
+
+    fn reorder_tab_index(
+        state: &mut WorkspaceWindowState,
+        dragged_index: usize,
+        target_index: usize,
+        insert_after: bool,
+    ) -> bool {
+        if dragged_index >= state.tabs.len() || target_index >= state.tabs.len() {
+            return false;
+        }
+
+        let mut insert_index = if insert_after {
+            target_index + 1
+        } else {
+            target_index
+        };
+        if dragged_index < insert_index {
+            insert_index = insert_index.saturating_sub(1);
+        }
+        if insert_index == dragged_index {
+            return false;
+        }
+
+        let active_index = state.active_tab_index;
+        let tab = state.tabs.remove(dragged_index);
+        let insert_index = insert_index.min(state.tabs.len());
+        state.tabs.insert(insert_index, tab);
+        state.active_tab_index = remap_active_index_after_move(active_index, dragged_index, insert_index);
+        true
+    }
+
+    fn remap_active_index_after_move(
+        active_index: usize,
+        dragged_index: usize,
+        insert_index: usize,
+    ) -> usize {
+        if active_index == dragged_index {
+            insert_index
+        } else if dragged_index < active_index && active_index <= insert_index {
+            active_index - 1
+        } else if insert_index <= active_index && active_index < dragged_index {
+            active_index + 1
+        } else {
+            active_index
+        }
+    }
+
+    fn update_pane_drag(state: &mut WorkspaceWindowState, dragged_pane_id: usize, point: POINT) {
+        let mut next_drag = None;
+        for pane in &state.panes {
+            let mut title_rect = unsafe { mem::zeroed::<RECT>() };
+            let mut output_rect = unsafe { mem::zeroed::<RECT>() };
+            unsafe {
+                GetWindowRect(pane.title_hwnd, &mut title_rect);
+                GetWindowRect(pane.output_hwnd, &mut output_rect);
+            }
+            if unsafe { windows_sys::Win32::Graphics::Gdi::PtInRect(&title_rect, point) } != 0
+                || unsafe { windows_sys::Win32::Graphics::Gdi::PtInRect(&output_rect, point) } != 0
+            {
+                next_drag = Some(PaneDragState {
+                    dragged_pane_id,
+                    target_pane_id: pane.id,
+                });
+                break;
+            }
+        }
+
+        let changed = match (&state.pane_drag, &next_drag) {
+            (Some(current), Some(next)) => {
+                current.dragged_pane_id != next.dragged_pane_id
+                    || current.target_pane_id != next.target_pane_id
+            }
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        };
+        state.pane_drag = next_drag;
+        if changed {
+            invalidate_pane_headers(state);
+        }
+    }
+
+    fn finish_pane_drag(hwnd: HWND, state: &mut WorkspaceWindowState, pane_id: usize) {
+        let drag = state.pane_drag.take();
+        invalidate_pane_headers(state);
+
+        let Some(drag) = drag else {
+            if let Some(pane) = pane_by_id(state, pane_id) {
+                unsafe {
+                    SetFocus(pane.output_hwnd);
+                }
+            }
+            return;
+        };
+
+        if drag.dragged_pane_id != drag.target_pane_id {
+            swap_active_panes(hwnd, state, drag.dragged_pane_id, drag.target_pane_id);
+        } else if let Some(pane) = pane_by_id(state, pane_id) {
+            unsafe {
+                SetFocus(pane.output_hwnd);
+            }
+        }
+    }
+
+    fn swap_active_panes(
+        hwnd: HWND,
+        state: &mut WorkspaceWindowState,
+        dragged_pane_id: usize,
+        target_pane_id: usize,
+    ) {
+        let Some(dragged_index) = state.panes.iter().position(|pane| pane.id == dragged_pane_id) else {
+            return;
+        };
+        let Some(target_index) = state.panes.iter().position(|pane| pane.id == target_pane_id) else {
+            return;
+        };
+        if dragged_index == target_index {
+            return;
+        }
+
+        let dragged_tile_id = state.panes[dragged_index].tile.id.clone();
+        let target_tile_id = state.panes[target_index].tile.id.clone();
+        let Some(next_layout) = active_tab(state)
+            .preset
+            .layout
+            .swap_tile_positions(&dragged_tile_id, &target_tile_id)
+        else {
+            return;
+        };
+
+        state.panes.swap(dragged_index, target_index);
+        active_tab_mut(state).preset.layout = next_layout;
+        layout_controls(hwnd, state);
+        save_workspace_session_state(state);
+        invalidate_pane_headers(state);
     }
 
     fn move_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState, direction: isize) {
@@ -1636,8 +2056,8 @@ mod imp {
         state.is_fullscreen = false;
     }
 
-    fn append_pane_output(state: &mut WorkspaceWindowState, pane_index: usize, chunk: &str) {
-        let Some(pane) = state.panes.get_mut(pane_index) else {
+    fn append_pane_output(state: &mut WorkspaceWindowState, pane_id: usize, chunk: &str) {
+        let Some(pane) = pane_mut_by_id(state, pane_id) else {
             return;
         };
 
@@ -1655,17 +2075,14 @@ mod imp {
             logging::error(format!("pane OSC 52 clipboard write failed: {error}"));
         }
         update_pane_scrollbar(pane);
-        let header = pane_header_text(pane);
         unsafe {
-            SetWindowTextW(pane.title_hwnd, wide(&header).as_ptr());
-        }
-        unsafe {
+            InvalidateRect(pane.title_hwnd, ptr::null(), 1);
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
         }
     }
 
-    fn mark_pane_exited(state: &mut WorkspaceWindowState, pane_index: usize) {
-        let Some(pane) = state.panes.get_mut(pane_index) else {
+    fn mark_pane_exited(state: &mut WorkspaceWindowState, pane_id: usize) {
+        let Some(pane) = pane_mut_by_id(state, pane_id) else {
             return;
         };
 
@@ -1674,6 +2091,7 @@ mod imp {
             .process("\r\n\r\n[terminal session exited]\r\n");
         update_pane_scrollbar(pane);
         unsafe {
+            InvalidateRect(pane.title_hwnd, ptr::null(), 1);
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
         }
     }
@@ -1854,6 +2272,143 @@ mod imp {
         }
 
         unsafe {
+            SelectObject(hdc, old_font);
+            EndPaint(hwnd, &paint);
+        }
+    }
+
+    fn render_pane_header(hwnd: HWND, pane: &PaneState) {
+        let mut paint = PAINTSTRUCT::default();
+        let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
+        if hdc.is_null() {
+            return;
+        }
+
+        let rect = client_bounds(hwnd).unwrap_or(Bounds {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+        let is_drop_target = unsafe { window_state_mut(pane.parent_hwnd) }
+            .and_then(|state| state.pane_drag.as_ref())
+            .map(|drag| drag.target_pane_id == pane.id && drag.dragged_pane_id != pane.id)
+            .unwrap_or(false);
+        let background = if is_drop_target {
+            rgb(55, 92, 143)
+        } else {
+            rgb(36, 39, 48)
+        };
+        fill_rect_color(
+            hdc,
+            RECT {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            },
+            background,
+        );
+
+        let old_font = unsafe { SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT)) };
+        unsafe {
+            SetTextColor(hdc, rgb(235, 239, 244));
+            SetBkColor(hdc, background);
+        }
+        let text = wide_no_nul(&pane_header_text(pane));
+        unsafe {
+            TextOutW(
+                hdc,
+                8,
+                ((rect.height() - 16) / 2).max(0),
+                text.as_ptr(),
+                text.len() as i32,
+            );
+            SelectObject(hdc, old_font);
+            EndPaint(hwnd, &paint);
+        }
+    }
+
+    fn render_tab_button(hwnd: HWND, button: &TabButtonState) {
+        let mut paint = PAINTSTRUCT::default();
+        let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
+        if hdc.is_null() {
+            return;
+        }
+
+        let rect = client_bounds(hwnd).unwrap_or(Bounds {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+        let (title, drop_state) = if let Some(state) = unsafe { window_state_mut(button.parent_hwnd) }
+        {
+            let title = state
+                .tabs
+                .get(button.index)
+                .map(|tab| {
+                    tab.custom_title
+                        .clone()
+                        .unwrap_or_else(|| tab.preset.name.clone())
+                })
+                .unwrap_or_else(|| "Workspace".to_string());
+            let drop_state = state.tab_drag.as_ref().and_then(|drag| {
+                (drag.target_index == button.index && drag.dragged_index != button.index)
+                    .then_some(drag.insert_after)
+            });
+            (title, drop_state)
+        } else {
+            ("Workspace".to_string(), None)
+        };
+
+        let background = if button.active {
+            rgb(67, 95, 132)
+        } else {
+            rgb(48, 51, 60)
+        };
+        fill_rect_color(
+            hdc,
+            RECT {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            },
+            background,
+        );
+        if let Some(insert_after) = drop_state {
+            let indicator_left = if insert_after {
+                rect.right.saturating_sub(4)
+            } else {
+                rect.left
+            };
+            fill_rect_color(
+                hdc,
+                RECT {
+                    left: indicator_left,
+                    top: rect.top,
+                    right: indicator_left + 4,
+                    bottom: rect.bottom,
+                },
+                rgb(241, 196, 15),
+            );
+        }
+
+        let old_font = unsafe { SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT)) };
+        unsafe {
+            SetTextColor(hdc, rgb(245, 247, 250));
+            SetBkColor(hdc, background);
+        }
+        let text = wide_no_nul(&title);
+        unsafe {
+            TextOutW(
+                hdc,
+                10,
+                ((rect.height() - 16) / 2).max(0),
+                text.as_ptr(),
+                text.len() as i32,
+            );
             SelectObject(hdc, old_font);
             EndPaint(hwnd, &paint);
         }
@@ -2737,7 +3292,7 @@ mod imp {
         quoted
     }
 
-    fn spawn_output_reader(window_hwnd: HWND, pane_index: usize, output_read: HANDLE) {
+    fn spawn_output_reader(window_hwnd: HWND, pane_id: usize, output_read: HANDLE) {
         let window_hwnd = window_hwnd as isize;
         let output_read = output_read as isize;
         thread::spawn(move || {
@@ -2760,7 +3315,7 @@ mod imp {
                 }
 
                 let text = String::from_utf8_lossy(&buffer[..bytes_read as usize]).into_owned();
-                let event = Box::new(PaneOutputEvent { pane_index, text });
+                let event = Box::new(PaneOutputEvent { pane_id, text });
                 let event_ptr = Box::into_raw(event);
                 if unsafe { PostMessageW(window_hwnd, WM_PANE_OUTPUT, 0, event_ptr as LPARAM) } == 0
                 {
@@ -2774,7 +3329,7 @@ mod imp {
             unsafe {
                 CloseHandle(output_read);
             }
-            let _ = unsafe { PostMessageW(window_hwnd, WM_PANE_EXIT, pane_index, 0) };
+            let _ = unsafe { PostMessageW(window_hwnd, WM_PANE_EXIT, pane_id, 0) };
         });
     }
 
@@ -2789,6 +3344,15 @@ mod imp {
 
     unsafe fn pane_state_mut(hwnd: HWND) -> Option<&'static mut PaneState> {
         let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut PaneState;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut *ptr })
+        }
+    }
+
+    unsafe fn tab_button_state_mut(hwnd: HWND) -> Option<&'static mut TabButtonState> {
+        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TabButtonState;
         if ptr.is_null() {
             None
         } else {

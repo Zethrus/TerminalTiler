@@ -104,6 +104,18 @@ impl LayoutNode {
         layout
     }
 
+    pub fn swap_tile_positions(&self, dragged_id: &str, target_id: &str) -> Option<Self> {
+        if dragged_id == target_id {
+            return None;
+        }
+
+        let mut specs = self.tile_specs();
+        let dragged_index = specs.iter().position(|tile| tile.id == dragged_id)?;
+        let target_index = specs.iter().position(|tile| tile.id == target_id)?;
+        specs.swap(dragged_index, target_index);
+        Some(self.with_tile_specs(&specs))
+    }
+
     #[allow(dead_code)]
     pub fn tile_summaries(&self) -> Vec<String> {
         let mut summaries = Vec::new();
@@ -421,5 +433,101 @@ mod tests {
             }
             _ => panic!("expected split layout to remain a split"),
         }
+    }
+
+    #[test]
+    fn swapping_tile_positions_keeps_layout_shape() {
+        let layout = split(
+            SplitAxis::Horizontal,
+            0.5,
+            tile(
+                "left",
+                "Left",
+                "Codex",
+                "accent-cyan",
+                WorkingDirectory::WorkspaceRoot,
+                Some("codex"),
+            ),
+            split(
+                SplitAxis::Vertical,
+                0.5,
+                tile(
+                    "top-right",
+                    "Top Right",
+                    "Claude",
+                    "accent-amber",
+                    WorkingDirectory::WorkspaceRoot,
+                    Some("claude"),
+                ),
+                tile(
+                    "bottom-right",
+                    "Bottom Right",
+                    "Shell",
+                    "accent-rose",
+                    WorkingDirectory::WorkspaceRoot,
+                    None,
+                ),
+            ),
+        );
+
+        let swapped = layout
+            .swap_tile_positions("left", "bottom-right")
+            .expect("swap should succeed");
+        let specs = swapped.tile_specs();
+
+        assert_eq!(specs[0].id, "bottom-right");
+        assert_eq!(specs[1].id, "top-right");
+        assert_eq!(specs[2].id, "left");
+
+        match swapped {
+            LayoutNode::Split { first, second, .. } => {
+                match *first {
+                    LayoutNode::Tile(tile) => assert_eq!(tile.id, "bottom-right"),
+                    _ => panic!("expected first node to remain a tile"),
+                }
+
+                match *second {
+                    LayoutNode::Split { first, second, .. } => {
+                        match *first {
+                            LayoutNode::Tile(tile) => assert_eq!(tile.id, "top-right"),
+                            _ => panic!("expected top-right node to remain a tile"),
+                        }
+                        match *second {
+                            LayoutNode::Tile(tile) => assert_eq!(tile.id, "left"),
+                            _ => panic!("expected bottom-right node to remain a tile"),
+                        }
+                    }
+                    _ => panic!("expected right side to remain split"),
+                }
+            }
+            _ => panic!("expected split layout to remain a split"),
+        }
+    }
+
+    #[test]
+    fn swapping_unknown_or_identical_tile_is_noop() {
+        let layout = split(
+            SplitAxis::Horizontal,
+            0.5,
+            tile(
+                "left",
+                "Left",
+                "Codex",
+                "accent-cyan",
+                WorkingDirectory::WorkspaceRoot,
+                Some("codex"),
+            ),
+            tile(
+                "right",
+                "Right",
+                "Shell",
+                "accent-rose",
+                WorkingDirectory::WorkspaceRoot,
+                None,
+            ),
+        );
+
+        assert!(layout.swap_tile_positions("left", "left").is_none());
+        assert!(layout.swap_tile_positions("left", "missing").is_none());
     }
 }

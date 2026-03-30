@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gdk::prelude::StaticType;
 use gtk::prelude::*;
@@ -12,6 +13,7 @@ use crate::terminal::session::TerminalSession;
 pub struct TileView {
     pub widget: gtk::Widget,
     pub session: TerminalSession,
+    pub tile: TileSpec,
 }
 
 pub fn build(
@@ -19,6 +21,7 @@ pub fn build(
     workspace_root: &Path,
     density: ApplicationDensity,
     zoom_steps: i32,
+    on_swap: Rc<dyn Fn(String, String)>,
 ) -> TileView {
     let session = TerminalSession::spawn(tile, workspace_root, density, zoom_steps);
 
@@ -33,6 +36,7 @@ pub fn build(
         .spacing(8)
         .css_classes(["terminal-header"])
         .build();
+    header.set_tooltip_text(Some("Drag this header to swap terminal positions"));
 
     let left = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -125,9 +129,63 @@ pub fn build(
     }
     shell.add_controller(file_drop_target);
 
+    let drag_source = gtk::DragSource::builder()
+        .actions(gdk::DragAction::MOVE)
+        .build();
+    {
+        let tile_id = tile.id.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gdk::ContentProvider::for_value(&tile_id.to_value()))
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_begin(move |_, _| {
+            shell.add_css_class("is-dragging");
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            shell.remove_css_class("is-dragging");
+        });
+    }
+    header.add_controller(drag_source);
+
+    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+    {
+        let shell = shell.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gdk::DragAction::MOVE
+        });
+    }
+    {
+        let shell = shell.clone();
+        drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let target_id = tile.id.clone();
+        let on_swap = on_swap.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+
+            let Ok(dragged_id) = value.get::<String>() else {
+                return false;
+            };
+            on_swap(dragged_id, target_id.clone());
+            true
+        });
+    }
+    shell.add_controller(drop_target);
+
     TileView {
         widget: shell.upcast(),
         session,
+        tile: tile.clone(),
     }
 }
 
