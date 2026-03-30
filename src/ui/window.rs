@@ -1752,6 +1752,7 @@ fn install_shortcut_controller<F>(
 
     let shortcut_controller = gtk::ShortcutController::new();
     shortcut_controller.set_scope(gtk::ShortcutScope::Global);
+    shortcut_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     let on_activate = Rc::new(on_activate);
     let mut installed_triggers = Vec::new();
     let mut active_labels = Vec::new();
@@ -1793,42 +1794,52 @@ fn install_shortcut_controller<F>(
 }
 
 fn zoom_in_shortcut_accelerators(shortcut: &str) -> Vec<String> {
-    let trimmed = shortcut.trim();
-    let mut accelerators = vec![trimmed.to_string()];
-    if matches!(
-        trimmed,
-        "<Ctrl>plus"
-            | "<Control>plus"
-            | "<Primary>plus"
-            | "<Ctrl>equal"
-            | "<Control>equal"
-            | "<Primary>equal"
-            | "<Ctrl>KP_Add"
-            | "<Control>KP_Add"
-            | "<Primary>KP_Add"
-    ) {
-        accelerators.push("<Ctrl>plus".into());
-        accelerators.push("<Ctrl>equal".into());
-        accelerators.push("<Ctrl>KP_Add".into());
-    }
-    accelerators
+    equivalent_shortcut_accelerators(
+        shortcut,
+        &[
+            &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
+            &["<Control>plus", "<Control>equal", "<Control>KP_Add"],
+            &["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"],
+            &["<Alt>plus", "<Alt>equal", "<Alt>KP_Add"],
+            &[
+                "<Ctrl><Alt>plus",
+                "<Ctrl><Alt>equal",
+                "<Ctrl><Alt>KP_Add",
+            ],
+            &[
+                "<Control><Alt>plus",
+                "<Control><Alt>equal",
+                "<Control><Alt>KP_Add",
+            ],
+        ],
+    )
 }
 
 fn zoom_out_shortcut_accelerators(shortcut: &str) -> Vec<String> {
+    equivalent_shortcut_accelerators(
+        shortcut,
+        &[
+            &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
+            &["<Control>minus", "<Control>KP_Subtract"],
+            &["<Primary>minus", "<Primary>KP_Subtract"],
+            &["<Alt>minus", "<Alt>KP_Subtract"],
+            &["<Ctrl><Alt>minus", "<Ctrl><Alt>KP_Subtract"],
+            &["<Control><Alt>minus", "<Control><Alt>KP_Subtract"],
+        ],
+    )
+}
+
+fn equivalent_shortcut_accelerators(shortcut: &str, families: &[&[&str]]) -> Vec<String> {
     let trimmed = shortcut.trim();
     let mut accelerators = vec![trimmed.to_string()];
-    if matches!(
-        trimmed,
-        "<Ctrl>minus"
-            | "<Control>minus"
-            | "<Primary>minus"
-            | "<Ctrl>KP_Subtract"
-            | "<Control>KP_Subtract"
-            | "<Primary>KP_Subtract"
-    ) {
-        accelerators.push("<Ctrl>minus".into());
-        accelerators.push("<Ctrl>KP_Subtract".into());
+
+    if let Some(family) = families
+        .iter()
+        .find(|family| family.iter().any(|candidate| candidate == &trimmed))
+    {
+        accelerators.extend(family.iter().map(|candidate| (*candidate).to_string()));
     }
+
     accelerators
 }
 

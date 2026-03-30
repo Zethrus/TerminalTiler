@@ -95,6 +95,12 @@ fn normalize_zoom_in_shortcut(shortcut: &str) -> String {
         "ctrl-plus" => "<Ctrl>plus".into(),
         "ctrl-equal" => "<Ctrl>equal".into(),
         "ctrl-kp-add" => "<Ctrl>KP_Add".into(),
+        "alt-plus" => "<Alt>plus".into(),
+        "alt-equal" => "<Alt>equal".into(),
+        "alt-kp-add" => "<Alt>KP_Add".into(),
+        "ctrl-alt-plus" => "<Ctrl><Alt>plus".into(),
+        "ctrl-alt-equal" => "<Ctrl><Alt>equal".into(),
+        "ctrl-alt-kp-add" => "<Ctrl><Alt>KP_Add".into(),
         other => other.to_string(),
     }
 }
@@ -103,6 +109,10 @@ fn normalize_zoom_out_shortcut(shortcut: &str) -> String {
     match shortcut.trim() {
         "ctrl-minus" => "<Ctrl>minus".into(),
         "ctrl-kp-subtract" => "<Ctrl>KP_Subtract".into(),
+        "alt-minus" => "<Alt>minus".into(),
+        "alt-kp-subtract" => "<Alt>KP_Subtract".into(),
+        "ctrl-alt-minus" => "<Ctrl><Alt>minus".into(),
+        "ctrl-alt-kp-subtract" => "<Ctrl><Alt>KP_Subtract".into(),
         other => other.to_string(),
     }
 }
@@ -395,5 +405,21 @@ mod tests {
             store.load().workspace_zoom_out_shortcut,
             "<Ctrl>KP_Subtract"
         );
+    }
+
+    #[test]
+    fn normalizes_alt_keypad_zoom_shortcut_enums_to_accelerators() {
+        let dir = temp_dir("pref-alt-keypad-zoom-shortcuts");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nworkspace_fullscreen_shortcut = \"F11\"\nworkspace_density_shortcut = \"<Ctrl><Shift>D\"\nworkspace_zoom_in_shortcut = \"ctrl-alt-kp-add\"\nworkspace_zoom_out_shortcut = \"alt-kp-subtract\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl><Alt>KP_Add");
+        assert_eq!(store.load().workspace_zoom_out_shortcut, "<Alt>KP_Subtract");
     }
 }
