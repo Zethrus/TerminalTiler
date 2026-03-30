@@ -114,6 +114,19 @@ fn sync_reset_button_state(
     );
 }
 
+fn default_settings_dialog_size(window: &adw::ApplicationWindow) -> (i32, i32) {
+    let width = match window.width() {
+        width if width > 0 => (width - 32).min(528).max(200),
+        _ => 528,
+    };
+    let height = match window.height() {
+        height if height > 0 => (height - 48).min(760).max(240),
+        _ => 760,
+    };
+
+    (width, height)
+}
+
 #[allow(deprecated)]
 pub fn present<F, G, H, I, J, K, L>(
     window: &adw::ApplicationWindow,
@@ -139,16 +152,34 @@ pub fn present<F, G, H, I, J, K, L>(
     K: Fn(String) + 'static,
     L: Fn() + 'static,
 {
+    let (default_width, default_height) = default_settings_dialog_size(window);
     let dialog = gtk::Dialog::builder()
         .modal(true)
         .transient_for(window)
         .title("Application Settings")
-        .default_width(528)
+        .default_width(default_width)
+        .default_height(default_height)
+        .resizable(true)
         .build();
     dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.set_default_response(gtk::ResponseType::Close);
 
-    let content = dialog.content_area();
+    let content_area = dialog.content_area();
+    content_area.set_vexpand(true);
+    let scroller = gtk::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .css_classes(["settings-dialog-scroller"])
+        .build();
+    scroller.set_has_frame(false);
+    content_area.append(&scroller);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    scroller.set_child(Some(&content));
     content.set_spacing(12);
     content.set_margin_top(16);
     content.set_margin_bottom(16);
