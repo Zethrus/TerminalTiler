@@ -1,8 +1,11 @@
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::collections::BTreeMap;
     use std::ffi::c_void;
     use std::mem;
     use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
 
     use windows_sys::Win32::Foundation::{
@@ -62,7 +65,7 @@ mod imp {
     use crate::logging;
     use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
     use crate::model::preset::ApplicationDensity;
-    use crate::storage::session_store::{SavedSession, SavedTab};
+    use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
@@ -94,11 +97,16 @@ mod imp {
     const ID_WORKSPACE_MOVE_LEFT: isize = 1006;
     const ID_WORKSPACE_MOVE_RIGHT: isize = 1007;
     const ID_WORKSPACE_CLOSE_TAB: isize = 1008;
+    const ID_WORKSPACE_SHOW_LAUNCHER: isize = 1009;
     const ID_TAB_BUTTON_BASE: isize = 3000;
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
+    static NEXT_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
+    static SESSION_REGISTRY: OnceLock<Mutex<WorkspaceSessionRegistry>> = OnceLock::new();
 
     struct WorkspaceWindowState {
+        window_id: usize,
+        session_store: SessionStore,
         tabs: Vec<SavedTab>,
         active_tab_index: usize,
         runtime: WindowsRuntime,
@@ -112,11 +120,18 @@ mod imp {
         move_left_hwnd: HWND,
         move_right_hwnd: HWND,
         close_tab_hwnd: HWND,
+        show_launcher_hwnd: HWND,
         tab_button_hwnds: Vec<HWND>,
         is_fullscreen: bool,
         saved_window_rect: RECT,
         saved_window_style: isize,
         panes: Vec<Box<PaneState>>,
+    }
+
+    #[derive(Default)]
+    struct WorkspaceSessionRegistry {
+        windows: BTreeMap<usize, SavedSession>,
+        active_window_id: Option<usize>,
     }
 
     struct PaneState {
@@ -458,6 +473,8 @@ mod imp {
             })
             .unwrap_or_else(|| "TerminalTiler Workspace".to_string());
         let state = Box::new(WorkspaceWindowState {
+            window_id: NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed),
+            session_store: SessionStore::new(),
             tabs,
             active_tab_index,
             runtime: runtime.clone(),
@@ -471,6 +488,7 @@ mod imp {
             move_left_hwnd: ptr::null_mut(),
             move_right_hwnd: ptr::null_mut(),
             close_tab_hwnd: ptr::null_mut(),
+            show_launcher_hwnd: ptr::null_mut(),
             tab_button_hwnds: Vec::new(),
             is_fullscreen: false,
             saved_window_rect: unsafe { mem::zeroed() },
@@ -568,6 +586,12 @@ mod imp {
                 }
                 0
             }
+            WM_SETFOCUS => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    save_workspace_session_state(state);
+                }
+                0
+            }
             WM_SIZE => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     layout_controls(hwnd, state);
@@ -588,6 +612,9 @@ mod imp {
                         ID_WORKSPACE_MOVE_LEFT => move_active_tab(hwnd, state, -1),
                         ID_WORKSPACE_MOVE_RIGHT => move_active_tab(hwnd, state, 1),
                         ID_WORKSPACE_CLOSE_TAB => close_active_tab(hwnd, state),
+                        ID_WORKSPACE_SHOW_LAUNCHER => {
+                            let _ = crate::windows::app::show_primary_shell_window();
+                        }
                         id if id >= ID_TAB_BUTTON_BASE => {
                             let index = (id - ID_TAB_BUTTON_BASE) as usize;
                             switch_active_tab(hwnd, state, index);
@@ -613,7 +640,12 @@ mod imp {
                 }
                 0
             }
-            WM_DESTROY => 0,
+            WM_DESTROY => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    remove_workspace_session_state(state.window_id, &state.session_store);
+                }
+                0
+            }
             WM_NCDESTROY => {
                 let state_ptr = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) }
                     as *mut WorkspaceWindowState;
@@ -903,6 +935,15 @@ mod imp {
             ID_WORKSPACE_CLOSE_TAB,
             ptr::null_mut(),
         );
+        state.show_launcher_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Show Launcher",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_SHOW_LAUNCHER,
+            ptr::null_mut(),
+        );
 
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         for control in [
@@ -915,6 +956,7 @@ mod imp {
             state.move_left_hwnd,
             state.move_right_hwnd,
             state.close_tab_hwnd,
+            state.show_launcher_hwnd,
         ] {
             if !control.is_null() {
                 unsafe {
@@ -936,7 +978,7 @@ mod imp {
         let button_gap = 8;
         let buttons_width = (HEADER_BUTTON_WIDTH * 4) + (button_gap * 3);
         let title_width = (bounds.width() - (OUTER_MARGIN * 2) - buttons_width - 12).max(240);
-        let tab_action_width = HEADER_BUTTON_WIDTH * 3 + (button_gap * 2);
+        let tab_action_width = HEADER_BUTTON_WIDTH * 4 + (button_gap * 3);
         unsafe {
             SetWindowPos(
                 state.title_hwnd,
@@ -1035,6 +1077,15 @@ mod imp {
                 state.close_tab_hwnd,
                 ptr::null_mut(),
                 tab_action_left + (HEADER_BUTTON_WIDTH + button_gap) * 2,
+                tab_row_y,
+                HEADER_BUTTON_WIDTH,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.show_launcher_hwnd,
+                ptr::null_mut(),
+                tab_action_left + (HEADER_BUTTON_WIDTH + button_gap) * 3,
                 tab_row_y,
                 HEADER_BUTTON_WIDTH,
                 HEADER_BUTTON_HEIGHT,
@@ -1144,6 +1195,78 @@ mod imp {
 
     fn active_tab_mut(state: &mut WorkspaceWindowState) -> &mut SavedTab {
         &mut state.tabs[state.active_tab_index]
+    }
+
+    fn session_registry() -> &'static Mutex<WorkspaceSessionRegistry> {
+        SESSION_REGISTRY.get_or_init(|| Mutex::new(WorkspaceSessionRegistry::default()))
+    }
+
+    fn current_saved_session(state: &WorkspaceWindowState) -> SavedSession {
+        SavedSession {
+            tabs: state.tabs.clone(),
+            active_tab_index: state.active_tab_index,
+        }
+    }
+
+    fn persist_workspace_registry(
+        registry: &WorkspaceSessionRegistry,
+        session_store: &SessionStore,
+    ) {
+        if registry.windows.is_empty() {
+            session_store.clear();
+            return;
+        }
+
+        let active_window_id = registry
+            .active_window_id
+            .filter(|id| registry.windows.contains_key(id))
+            .or_else(|| registry.windows.keys().next().copied());
+
+        let mut tabs = Vec::new();
+        let mut active_tab_index = 0usize;
+        let mut current_offset = 0usize;
+
+        for (window_id, session) in &registry.windows {
+            if Some(*window_id) == active_window_id {
+                active_tab_index = current_offset
+                    + session
+                        .active_tab_index
+                        .min(session.tabs.len().saturating_sub(1));
+            }
+            current_offset += session.tabs.len();
+            tabs.extend(session.tabs.clone());
+        }
+
+        session_store.save(&SavedSession {
+            tabs,
+            active_tab_index,
+        });
+    }
+
+    fn save_workspace_session_state(state: &WorkspaceWindowState) {
+        let registry_lock = session_registry().lock();
+        let Ok(mut registry) = registry_lock else {
+            logging::error("workspace session registry lock poisoned while saving");
+            return;
+        };
+        registry
+            .windows
+            .insert(state.window_id, current_saved_session(state));
+        registry.active_window_id = Some(state.window_id);
+        persist_workspace_registry(&registry, &state.session_store);
+    }
+
+    fn remove_workspace_session_state(window_id: usize, session_store: &SessionStore) {
+        let registry_lock = session_registry().lock();
+        let Ok(mut registry) = registry_lock else {
+            logging::error("workspace session registry lock poisoned while removing");
+            return;
+        };
+        registry.windows.remove(&window_id);
+        if registry.active_window_id == Some(window_id) {
+            registry.active_window_id = registry.windows.keys().next_back().copied();
+        }
+        persist_workspace_registry(&registry, session_store);
     }
 
     fn rebuild_tab_buttons(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -1277,6 +1400,7 @@ mod imp {
         update_tab_action_buttons(state);
         layout_controls(hwnd, state);
         spawn_pane_sessions(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn switch_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState, index: usize) {
@@ -1298,6 +1422,7 @@ mod imp {
         rebuild_tab_buttons(hwnd, state);
         update_tab_action_buttons(state);
         layout_controls(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn close_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -1360,6 +1485,7 @@ mod imp {
         }
         rebuild_tab_buttons(hwnd, state);
         layout_controls(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn adjust_terminal_zoom(hwnd: HWND, state: &mut WorkspaceWindowState, delta: i32) {
@@ -1372,6 +1498,7 @@ mod imp {
         }
         active_tab_mut(state).terminal_zoom_steps = next_steps;
         apply_workspace_terminal_presentation(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn cycle_workspace_density(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -1389,6 +1516,7 @@ mod imp {
         );
         apply_workspace_terminal_presentation(hwnd, state);
         rebuild_tab_buttons(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn apply_workspace_terminal_presentation(hwnd: HWND, state: &mut WorkspaceWindowState) {

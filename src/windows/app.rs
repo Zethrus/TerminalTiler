@@ -6,6 +6,7 @@ mod imp {
     use std::mem;
     use std::path::PathBuf;
     use std::ptr;
+    use std::sync::atomic::{AtomicIsize, Ordering};
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
@@ -88,6 +89,7 @@ mod imp {
     const TRAY_MENU_SHOW: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
     const TRAY_MENU_QUIT: usize = 3;
+    static PRIMARY_SHELL_HWND: AtomicIsize = AtomicIsize::new(0);
 
     pub fn run() -> ExitCode {
         logging::init();
@@ -195,6 +197,8 @@ mod imp {
             }
             return Err("CreateWindowExW returned null".into());
         }
+
+        PRIMARY_SHELL_HWND.store(hwnd as isize, Ordering::Relaxed);
 
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
@@ -324,6 +328,9 @@ mod imp {
             WM_DESTROY => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     remove_tray_icon(hwnd, state);
+                }
+                if PRIMARY_SHELL_HWND.load(Ordering::Relaxed) == hwnd as isize {
+                    PRIMARY_SHELL_HWND.store(0, Ordering::Relaxed);
                 }
                 unsafe {
                     PostQuitMessage(0);
@@ -2034,11 +2041,30 @@ mod imp {
             _ => crate::model::preset::ApplicationDensity::Compact,
         }
     }
+
+    pub(crate) fn show_primary_shell_window() -> bool {
+        let hwnd = PRIMARY_SHELL_HWND.load(Ordering::Relaxed) as HWND;
+        if hwnd.is_null() {
+            return false;
+        }
+
+        if let Some(state) = unsafe { state_mut(hwnd) } {
+            restore_window_from_tray(hwnd, state);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 pub fn run() -> ExitCode {
     imp::run()
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn show_primary_shell_window() -> bool {
+    imp::show_primary_shell_window()
 }
 
 #[cfg(not(target_os = "windows"))]
