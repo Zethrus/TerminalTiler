@@ -1,9 +1,18 @@
+use std::collections::VecDeque;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VtColor {
     DefaultForeground,
     DefaultBackground,
     Indexed(u8),
     Rgb(u8, u8, u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseTrackingMode {
+    Disabled,
+    Click,
+    Drag,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,17 +56,38 @@ pub struct VtPosition {
 }
 
 #[derive(Clone, Debug)]
+struct SavedScreen {
+    cells: Vec<VtCell>,
+    history: VecDeque<Vec<VtCell>>,
+    viewport_offset: usize,
+    cursor_col: usize,
+    cursor_row: usize,
+    saved_cursor_col: usize,
+    saved_cursor_row: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct VtBuffer {
     columns: usize,
     rows: usize,
     cells: Vec<VtCell>,
+    history: VecDeque<Vec<VtCell>>,
+    viewport_offset: usize,
     cursor_col: usize,
     cursor_row: usize,
     saved_cursor_col: usize,
     saved_cursor_row: usize,
     style: VtStyle,
     cursor_visible: bool,
+    application_cursor_keys: bool,
+    bracketed_paste: bool,
+    alternate_screen: bool,
+    mouse_tracking: MouseTrackingMode,
+    sgr_mouse_mode: bool,
     window_title: Option<String>,
+    current_working_directory: Option<String>,
+    pending_input: Vec<u8>,
+    primary_screen: Option<SavedScreen>,
     parser_state: ParserState,
 }
 
@@ -79,13 +109,23 @@ impl VtBuffer {
             columns,
             rows,
             cells: vec![VtCell::default(); columns * rows],
+            history: VecDeque::new(),
+            viewport_offset: 0,
             cursor_col: 0,
             cursor_row: 0,
             saved_cursor_col: 0,
             saved_cursor_row: 0,
             style: VtStyle::default(),
             cursor_visible: true,
+            application_cursor_keys: false,
+            bracketed_paste: false,
+            alternate_screen: false,
+            mouse_tracking: MouseTrackingMode::Disabled,
+            sgr_mouse_mode: false,
             window_title: None,
+            current_working_directory: None,
+            pending_input: Vec::new(),
+            primary_screen: None,
             parser_state: ParserState::Ground,
         }
     }
@@ -106,8 +146,120 @@ impl VtBuffer {
         self.window_title.as_deref()
     }
 
+    pub fn current_working_directory(&self) -> Option<&str> {
+        self.current_working_directory.as_deref()
+    }
+
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
+    }
+
+    pub fn application_cursor_keys(&self) -> bool {
+        self.application_cursor_keys
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
+    }
+
+    pub fn mouse_tracking(&self) -> MouseTrackingMode {
+        self.mouse_tracking
+    }
+
+    pub fn sgr_mouse_mode(&self) -> bool {
+        self.sgr_mouse_mode
+    }
+
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
+    pub fn viewport_offset(&self) -> usize {
+        self.viewport_offset
+    }
+
+    pub fn take_pending_input(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending_input)
+    }
+
+    pub fn has_selection(&self, start: VtPosition, end: VtPosition) -> bool {
+        start != end
+    }
+
+    pub fn scroll_viewport(&mut self, delta_rows: isize) -> bool {
+        if self.alternate_screen || delta_rows == 0 {
+            return false;
+        }
+
+        let previous = self.viewport_offset;
+        let max_offset = self.history.len();
+        if delta_rows > 0 {
+            self.viewport_offset = (self.viewport_offset + delta_rows as usize).min(max_offset);
+        } else {
+            self.viewport_offset = self.viewport_offset.saturating_sub((-delta_rows) as usize);
+        }
+
+        self.viewport_offset != previous
+    }
+
+    pub fn reset_viewport(&mut self) -> bool {
+        if self.viewport_offset == 0 {
+            return false;
+        }
+        self.viewport_offset = 0;
+        true
+    }
+
+    pub fn word_selection_at(&self, position: VtPosition) -> (VtPosition, VtPosition) {
+        let row = position.row.min(self.rows.saturating_sub(1));
+        let column = position.column.min(self.columns.saturating_sub(1));
+        let current = self.visible_cell(row, column).ch;
+
+        if current == ' ' {
+            return (VtPosition { row, column }, VtPosition { row, column });
+        }
+
+        let predicate = |ch: char| classify_word_char(ch) == classify_word_char(current);
+        let mut start = column;
+        while start > 0 {
+            let next = self.visible_cell(row, start - 1).ch;
+            if !predicate(next) {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut end = column;
+        while end + 1 < self.columns {
+            let next = self.visible_cell(row, end + 1).ch;
+            if !predicate(next) {
+                break;
+            }
+            end += 1;
+        }
+
+        (
+            VtPosition { row, column: start },
+            VtPosition { row, column: end },
+        )
+    }
+
+    pub fn visible_cell(&self, row: usize, column: usize) -> VtCell {
+        let row = row.min(self.rows.saturating_sub(1));
+        let column = column.min(self.columns.saturating_sub(1));
+        let global_row = self.viewport_start_row() + row;
+        self.global_cell(global_row, column)
+    }
+
+    pub fn cursor_in_view(&self) -> Option<(usize, usize)> {
+        let global_cursor_row = self.history.len() + self.cursor_row;
+        let viewport_start = self.viewport_start_row();
+        let viewport_end = viewport_start + self.rows;
+        if global_cursor_row < viewport_start || global_cursor_row >= viewport_end {
+            None
+        } else {
+            Some((self.cursor_col, global_cursor_row - viewport_start))
+        }
     }
 
     pub fn cell(&self, row: usize, column: usize) -> Option<&VtCell> {
@@ -123,6 +275,10 @@ impl VtBuffer {
         let rows = rows.max(1);
         if columns == self.columns && rows == self.rows {
             return;
+        }
+
+        for line in &mut self.history {
+            resize_line(line, columns);
         }
 
         let mut resized = vec![VtCell::default(); columns * rows];
@@ -143,6 +299,7 @@ impl VtBuffer {
         self.cursor_row = self.cursor_row.min(self.rows - 1);
         self.saved_cursor_col = self.saved_cursor_col.min(self.columns - 1);
         self.saved_cursor_row = self.saved_cursor_row.min(self.rows - 1);
+        self.viewport_offset = self.viewport_offset.min(self.history.len());
     }
 
     pub fn process(&mut self, input: &str) {
@@ -201,7 +358,7 @@ impl VtBuffer {
             };
             let mut line = String::new();
             for column in first_column..=last_column {
-                line.push(self.cell(row, column).copied().unwrap_or_default().ch);
+                line.push(self.visible_cell(row, column).ch);
             }
             while line.ends_with(' ') {
                 line.pop();
@@ -329,7 +486,18 @@ impl VtBuffer {
             }
             'S' => self.scroll_up(param_or(&values, 0, 1)),
             'T' => self.scroll_down(param_or(&values, 0, 1)),
+            'a' => {
+                self.cursor_col =
+                    (self.cursor_col + param_or(&values, 0, 1)).min(self.columns.saturating_sub(1))
+            }
+            'b' => self.repeat_last_character(param_or(&values, 0, 1)),
+            'e' => {
+                self.cursor_row =
+                    (self.cursor_row + param_or(&values, 0, 1)).min(self.rows.saturating_sub(1))
+            }
             'm' => self.apply_sgr(&values),
+            'c' => self.apply_device_attributes(prefix, &values),
+            'n' => self.apply_device_status_report(prefix, &values),
             's' => {
                 self.saved_cursor_col = self.cursor_col;
                 self.saved_cursor_row = self.cursor_row;
@@ -349,9 +517,16 @@ impl VtBuffer {
             return;
         };
 
-        if matches!(command, "0" | "1" | "2") {
-            let title = value.trim();
-            self.window_title = (!title.is_empty()).then(|| title.to_string());
+        match command {
+            "0" | "1" | "2" => {
+                let title = value.trim();
+                self.window_title = (!title.is_empty()).then(|| title.to_string());
+            }
+            "7" => {
+                let cwd = value.trim();
+                self.current_working_directory = parse_osc7_path(cwd);
+            }
+            _ => {}
         }
     }
 
@@ -399,10 +574,96 @@ impl VtBuffer {
 
     fn apply_private_mode(&mut self, values: &[usize], enabled: bool) {
         for value in values {
-            if *value == 25 {
-                self.cursor_visible = enabled;
+            match *value {
+                1 => self.application_cursor_keys = enabled,
+                25 => self.cursor_visible = enabled,
+                2004 => self.bracketed_paste = enabled,
+                1000 => {
+                    if enabled {
+                        self.mouse_tracking = MouseTrackingMode::Click;
+                    } else if self.mouse_tracking == MouseTrackingMode::Click {
+                        self.mouse_tracking = MouseTrackingMode::Disabled;
+                    }
+                }
+                1002 | 1003 => {
+                    if enabled {
+                        self.mouse_tracking = MouseTrackingMode::Drag;
+                    } else if self.mouse_tracking == MouseTrackingMode::Drag {
+                        self.mouse_tracking = MouseTrackingMode::Disabled;
+                    }
+                }
+                1006 => self.sgr_mouse_mode = enabled,
+                47 | 1047 | 1049 => self.set_alternate_screen(enabled),
+                _ => {}
             }
         }
+    }
+
+    fn apply_device_attributes(&mut self, prefix: Option<char>, values: &[usize]) {
+        let primary_request = prefix.is_none() && values.is_empty();
+        let secondary_request =
+            prefix == Some('>') && (values.is_empty() || values.first().copied() == Some(0));
+
+        if primary_request {
+            self.queue_response("\u{1b}[?1;2c");
+        } else if secondary_request {
+            self.queue_response("\u{1b}[>0;10;1c");
+        }
+    }
+
+    fn apply_device_status_report(&mut self, prefix: Option<char>, values: &[usize]) {
+        let Some(code) = values.first().copied() else {
+            return;
+        };
+
+        match (prefix, code) {
+            (None, 5) => self.queue_response("\u{1b}[0n"),
+            (None, 6) => self.queue_response(&format!(
+                "\u{1b}[{};{}R",
+                self.cursor_row + 1,
+                self.cursor_col + 1
+            )),
+            _ => {}
+        }
+    }
+
+    fn queue_response(&mut self, response: &str) {
+        self.pending_input.extend_from_slice(response.as_bytes());
+    }
+
+    fn set_alternate_screen(&mut self, enabled: bool) {
+        if enabled == self.alternate_screen {
+            return;
+        }
+
+        if enabled {
+            self.primary_screen = Some(SavedScreen {
+                cells: std::mem::take(&mut self.cells),
+                history: std::mem::take(&mut self.history),
+                viewport_offset: self.viewport_offset,
+                cursor_col: self.cursor_col,
+                cursor_row: self.cursor_row,
+                saved_cursor_col: self.saved_cursor_col,
+                saved_cursor_row: self.saved_cursor_row,
+            });
+            self.cells = vec![VtCell::default(); self.columns * self.rows];
+            self.history.clear();
+            self.viewport_offset = 0;
+            self.cursor_col = 0;
+            self.cursor_row = 0;
+            self.saved_cursor_col = 0;
+            self.saved_cursor_row = 0;
+        } else if let Some(saved) = self.primary_screen.take() {
+            self.cells = saved.cells;
+            self.history = saved.history;
+            self.viewport_offset = saved.viewport_offset.min(self.history.len());
+            self.cursor_col = saved.cursor_col.min(self.columns.saturating_sub(1));
+            self.cursor_row = saved.cursor_row.min(self.rows.saturating_sub(1));
+            self.saved_cursor_col = saved.saved_cursor_col.min(self.columns.saturating_sub(1));
+            self.saved_cursor_row = saved.saved_cursor_row.min(self.rows.saturating_sub(1));
+        }
+
+        self.alternate_screen = enabled;
     }
 
     fn write_character(&mut self, character: char) {
@@ -510,6 +771,15 @@ impl VtBuffer {
             return;
         }
 
+        if !self.alternate_screen {
+            for row in 0..lines {
+                self.push_history_row(row);
+            }
+            if self.viewport_offset > 0 {
+                self.viewport_offset = (self.viewport_offset + lines).min(self.history.len());
+            }
+        }
+
         for row in 0..(self.rows - lines) {
             self.copy_row(row + lines, row);
         }
@@ -587,6 +857,49 @@ impl VtBuffer {
             self.cells[(row * self.columns) + column] = VtCell::default();
         }
     }
+
+    fn repeat_last_character(&mut self, count: usize) {
+        let index = self.cursor_col.saturating_sub(1);
+        let character = self
+            .cells
+            .get((self.cursor_row * self.columns) + index)
+            .copied()
+            .unwrap_or_default();
+        if character.ch == ' ' {
+            return;
+        }
+
+        for _ in 0..count {
+            self.write_character(character.ch);
+        }
+    }
+
+    fn push_history_row(&mut self, row: usize) {
+        let start = row * self.columns;
+        let end = start + self.columns;
+        self.history.push_back(self.cells[start..end].to_vec());
+        while self.history.len() > 10_000 {
+            self.history.pop_front();
+        }
+    }
+
+    fn viewport_start_row(&self) -> usize {
+        let total_rows = self.history.len() + self.rows;
+        total_rows.saturating_sub(self.rows + self.viewport_offset)
+    }
+
+    fn global_cell(&self, global_row: usize, column: usize) -> VtCell {
+        if global_row < self.history.len() {
+            self.history
+                .get(global_row)
+                .and_then(|line| line.get(column))
+                .copied()
+                .unwrap_or_default()
+        } else {
+            let screen_row = global_row.saturating_sub(self.history.len());
+            self.cell(screen_row, column).copied().unwrap_or_default()
+        }
+    }
 }
 
 fn parse_csi_params(params: &str) -> Vec<usize> {
@@ -643,9 +956,41 @@ fn normalize_positions(start: VtPosition, end: VtPosition) -> (VtPosition, VtPos
     }
 }
 
+fn resize_line(line: &mut Vec<VtCell>, columns: usize) {
+    if line.len() > columns {
+        line.truncate(columns);
+    } else if line.len() < columns {
+        line.resize(columns, VtCell::default());
+    }
+}
+
+fn parse_osc7_path(value: &str) -> Option<String> {
+    let value = value.strip_prefix("file://")?;
+    let path_start = value.find('/')?;
+    let path = &value[path_start..];
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WordClass {
+    Space,
+    Symbol,
+    Word,
+}
+
+fn classify_word_char(ch: char) -> WordClass {
+    if ch.is_whitespace() {
+        WordClass::Space
+    } else if ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':' | '~') {
+        WordClass::Word
+    } else {
+        WordClass::Symbol
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{VtBuffer, VtColor, VtPosition};
+    use super::{MouseTrackingMode, VtBuffer, VtColor, VtPosition};
 
     #[test]
     fn writes_text_and_wraps_lines() {
@@ -722,5 +1067,74 @@ mod tests {
         assert_eq!(styled.style.fg, VtColor::Indexed(202));
         assert_eq!(styled.style.bg, VtColor::Rgb(1, 2, 3));
         assert!(!buffer.cursor_visible());
+    }
+
+    #[test]
+    fn tracks_private_modes_and_reports_terminal_status() {
+        let mut buffer = VtBuffer::new(8, 2);
+        buffer.process("\u{1b}[?1h\u{1b}[?2004h");
+        assert!(buffer.application_cursor_keys());
+        assert!(buffer.bracketed_paste());
+
+        buffer.process("\u{1b}[2;4H\u{1b}[5n\u{1b}[6n\u{1b}[c\u{1b}[>c");
+        let response =
+            String::from_utf8(buffer.take_pending_input()).expect("terminal response bytes");
+        assert_eq!(response, "\u{1b}[0n\u{1b}[2;4R\u{1b}[?1;2c\u{1b}[>0;10;1c");
+    }
+
+    #[test]
+    fn restores_primary_screen_after_alternate_screen() {
+        let mut buffer = VtBuffer::new(4, 2);
+        buffer.process("main");
+        buffer.process("\u{1b}[?1049h");
+        buffer.process("alt");
+        assert_eq!(buffer.cell(0, 0).unwrap().ch, 'a');
+        buffer.process("\u{1b}[?1049l");
+        assert_eq!(buffer.cell(0, 0).unwrap().ch, 'm');
+        assert_eq!(buffer.cell(0, 3).unwrap().ch, 'n');
+    }
+
+    #[test]
+    fn expands_word_selection_for_paths() {
+        let mut buffer = VtBuffer::new(24, 1);
+        buffer.process("cd ~/src/project-name");
+        let (start, end) = buffer.word_selection_at(VtPosition { row: 0, column: 8 });
+        assert_eq!(buffer.selection_text(start, end), "~/src/project-name");
+    }
+
+    #[test]
+    fn keeps_primary_scrollback_and_supports_viewport_scrolling() {
+        let mut buffer = VtBuffer::new(3, 2);
+        buffer.process("abcde");
+        buffer.process("fgh");
+
+        assert!(buffer.scroll_viewport(1));
+        assert_eq!(buffer.visible_cell(0, 0).ch, 'a');
+        assert_eq!(buffer.visible_cell(0, 1).ch, 'b');
+        assert_eq!(buffer.visible_cell(1, 0).ch, 'd');
+        assert!(buffer.reset_viewport());
+    }
+
+    #[test]
+    fn parses_osc7_current_directory() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}]7;file://wsl.localhost/Ubuntu/home/user/project\u{7}");
+        assert_eq!(
+            buffer.current_working_directory(),
+            Some("/Ubuntu/home/user/project")
+        );
+    }
+
+    #[test]
+    fn tracks_mouse_modes() {
+        let mut buffer = VtBuffer::new(4, 1);
+        buffer.process("\u{1b}[?1000h\u{1b}[?1006h");
+        assert_eq!(buffer.mouse_tracking(), MouseTrackingMode::Click);
+        assert!(buffer.sgr_mouse_mode());
+        buffer.process("\u{1b}[?1002h");
+        assert_eq!(buffer.mouse_tracking(), MouseTrackingMode::Drag);
+        buffer.process("\u{1b}[?1002l\u{1b}[?1006l");
+        assert_eq!(buffer.mouse_tracking(), MouseTrackingMode::Disabled);
+        assert!(!buffer.sgr_mouse_mode());
     }
 }

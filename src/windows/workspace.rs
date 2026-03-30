@@ -7,14 +7,15 @@ mod imp {
 
     use windows_sys::Win32::Foundation::{
         COLORREF, CloseHandle, GlobalFree, HANDLE, HANDLE_FLAG_INHERIT, HINSTANCE, HWND, LPARAM,
-        LRESULT, RECT, SIZE, SetHandleInformation, WPARAM,
+        LRESULT, POINT, RECT, SIZE, SetHandleInformation, WPARAM,
     };
     use windows_sys::Win32::Graphics::Gdi::{
-        BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontW,
-        CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DeleteObject, EndPaint, FF_MODERN,
-        FIXED_PITCH, FW_NORMAL, FillRect, GetDC, GetStockObject, GetTextExtentPoint32W,
-        GetTextMetricsW, HBRUSH, HFONT, HGDIOBJ, InvalidateRect, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-        ReleaseDC, SelectObject, SetBkColor, SetTextColor, TEXTMETRICW, TextOutW, UpdateWindow,
+        BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, ClientToScreen,
+        CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DeleteObject, EndPaint,
+        FF_MODERN, FIXED_PITCH, FW_NORMAL, FillRect, GetDC, GetDeviceCaps, GetStockObject,
+        GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HFONT, HGDIOBJ, InvalidateRect, LOGPIXELSY,
+        OUT_DEFAULT_PRECIS, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkColor,
+        SetTextColor, TEXTMETRICW, TextOutW, UpdateWindow,
     };
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
@@ -35,24 +36,30 @@ mod imp {
         InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
         PROCESS_INFORMATION, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
     };
+    use windows_sys::Win32::UI::Controls::SetScrollInfo;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, SetFocus, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT,
         VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, GWLP_USERDATA,
-        GetClientRect, GetWindowLongPtrW, HMENU, IDC_ARROW, LoadCursorW, PostMessageW,
-        RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-        SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
-        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+        AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
+        CreateWindowExW, DefWindowProcW, DestroyMenu, GWLP_USERDATA, GetClientRect,
+        GetWindowLongPtrW, HMENU, IDC_ARROW, LoadCursorW, MF_GRAYED, MF_STRING, PostMessageW,
+        RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
+        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
+        SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP,
+        WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
+        WM_PAINT, WM_RBUTTONUP, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
     use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
+    use crate::model::preset::ApplicationDensity;
     use crate::storage::session_store::{SavedSession, SavedTab};
-    use crate::windows::vt::{VtBuffer, VtColor, VtPosition, VtStyle};
+    use crate::windows::vt::{MouseTrackingMode, VtBuffer, VtColor, VtPosition, VtStyle};
     use crate::windows::wsl::{self, WslLaunchCommand};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
@@ -65,9 +72,12 @@ mod imp {
     const PANE_TITLE_HEIGHT: i32 = 20;
     const MIN_PANE_CHARS_X: i16 = 40;
     const MIN_PANE_CHARS_Y: i16 = 12;
-    const DEFAULT_FONT_HEIGHT: i32 = 16;
-    const DEFAULT_FONT_FACE: &str = "Consolas";
+    const DEFAULT_FONT_FACE: &str = "JetBrains Mono";
     const CF_UNICODETEXT: u32 = 13;
+    const MIN_TERMINAL_FONT_POINTS: i32 = 7;
+    const MAX_TERMINAL_FONT_POINTS: i32 = 20;
+    const MENU_COPY_SELECTION: usize = 1;
+    const MENU_PASTE_CLIPBOARD: usize = 2;
 
     struct WorkspaceWindowState {
         tab: SavedTab,
@@ -87,9 +97,11 @@ mod imp {
         cell_width: i32,
         cell_height: i32,
         baseline_offset: i32,
+        line_height_scale: f64,
         selection_anchor: Option<VtPosition>,
         selection_focus: Option<VtPosition>,
         selecting: bool,
+        pressed_mouse_button: Option<u8>,
         session: Option<PaneSession>,
     }
 
@@ -454,7 +466,7 @@ mod imp {
     ) -> Result<(), String> {
         let class_name_wide = wide(class_name);
         let window_class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             lpszClassName: class_name_wide.as_ptr(),
@@ -583,6 +595,10 @@ mod imp {
             WM_LBUTTONDOWN => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     unsafe { SetFocus(hwnd) };
+                    if forward_mouse_event(pane, lparam, MouseEvent::ButtonPress(0)) {
+                        pane.pressed_mouse_button = Some(0);
+                        return 0;
+                    }
                     let position = pane_position_from_lparam(pane, lparam);
                     pane.selection_anchor = Some(position);
                     pane.selection_focus = Some(position);
@@ -591,8 +607,28 @@ mod imp {
                 }
                 0
             }
+            WM_LBUTTONDBLCLK => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    unsafe { SetFocus(hwnd) };
+                    let position = pane_position_from_lparam(pane, lparam);
+                    let (start, end) = pane.terminal.word_selection_at(position);
+                    pane.selection_anchor = Some(start);
+                    pane.selection_focus = Some(end);
+                    pane.selecting = false;
+                    unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+                }
+                0
+            }
             WM_MOUSEMOVE => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.pressed_mouse_button.is_some()
+                        && (pane.terminal.mouse_tracking() == MouseTrackingMode::Drag
+                            || pane.terminal.mouse_tracking() == MouseTrackingMode::Click)
+                        && (wparam & 0x0001) != 0
+                        && forward_mouse_event(pane, lparam, MouseEvent::Motion)
+                    {
+                        return 0;
+                    }
                     if pane.selecting {
                         pane.selection_focus = Some(pane_position_from_lparam(pane, lparam));
                         unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
@@ -600,13 +636,46 @@ mod imp {
                 }
                 0
             }
+            WM_MOUSEWHEEL => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.terminal.mouse_tracking() != MouseTrackingMode::Disabled {
+                        let delta = (((wparam >> 16) & 0xffff) as i16) as i32;
+                        let event = if delta > 0 {
+                            MouseEvent::WheelUp
+                        } else {
+                            MouseEvent::WheelDown
+                        };
+                        let _ = forward_mouse_event_from_screen(hwnd, pane, lparam, event);
+                        return 0;
+                    }
+                    let delta = (((wparam >> 16) & 0xffff) as i16) as i32;
+                    let rows = (delta / 120) * 3;
+                    if rows != 0 && pane.terminal.scroll_viewport(rows as isize) {
+                        update_pane_scrollbar(pane);
+                        unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+                    }
+                }
+                0
+            }
             WM_LBUTTONUP => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.pressed_mouse_button.take().is_some()
+                        && forward_mouse_event(pane, lparam, MouseEvent::ButtonRelease)
+                    {
+                        return 0;
+                    }
                     if pane.selecting {
                         pane.selection_focus = Some(pane_position_from_lparam(pane, lparam));
                         pane.selecting = false;
                         unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
                     }
+                }
+                0
+            }
+            WM_RBUTTONUP => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    unsafe { SetFocus(hwnd) };
+                    show_pane_context_menu(hwnd, pane, lparam);
                 }
                 0
             }
@@ -619,6 +688,12 @@ mod imp {
             WM_KEYDOWN => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_key_input(pane, wparam as u16);
+                }
+                0
+            }
+            WM_VSCROLL => {
+                if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    handle_scrollbar_input(hwnd, pane, wparam);
                 }
                 0
             }
@@ -667,6 +742,9 @@ mod imp {
         }
 
         let tile_specs = state.tab.preset.layout.tile_specs();
+        let font_points =
+            effective_terminal_font_points(state.tab.preset.density, state.tab.terminal_zoom_steps);
+        let line_height_scale = state.tab.preset.density.terminal_line_height_scale();
         state.panes = Vec::with_capacity(tile_specs.len());
         for tile in tile_specs {
             let mut pane = Box::new(PaneState {
@@ -675,13 +753,15 @@ mod imp {
                 output_hwnd: ptr::null_mut(),
                 terminal: VtBuffer::new(80, 24),
                 focused: false,
-                font: create_terminal_font(),
+                font: create_terminal_font(font_points),
                 cell_width: 9,
                 cell_height: 18,
                 baseline_offset: 1,
+                line_height_scale,
                 selection_anchor: None,
                 selection_focus: None,
                 selecting: false,
+                pressed_mouse_button: None,
                 session: None,
             });
             pane.title_hwnd = create_child_window(
@@ -698,7 +778,7 @@ mod imp {
                 hwnd,
                 PANE_CLASS,
                 "",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL,
                 0,
                 0,
                 pane_ptr.cast(),
@@ -709,6 +789,7 @@ mod imp {
                 }
             }
             update_terminal_metrics(&mut pane);
+            update_pane_scrollbar(&pane);
             state.panes.push(pane);
         }
 
@@ -777,6 +858,7 @@ mod imp {
 
             let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
             pane.terminal.resize(columns as usize, rows as usize);
+            update_pane_scrollbar(pane);
             if let Some(session) = pane.session.as_ref() {
                 session.resize(columns, rows);
             }
@@ -828,6 +910,7 @@ mod imp {
                         .process(&format!("Could not spawn tile process.\r\n\r\n{error}\r\n"));
                 }
             }
+            update_pane_scrollbar(pane);
 
             unsafe {
                 InvalidateRect(pane.output_hwnd, ptr::null(), 1);
@@ -841,13 +924,23 @@ mod imp {
         };
 
         pane.terminal.process(chunk);
-        if let Some(title) = pane.terminal.window_title() {
-            unsafe {
-                SetWindowTextW(
-                    pane.title_hwnd,
-                    wide(&format!("{}  •  {}", pane.tile.title, title)).as_ptr(),
-                );
-            }
+        let pending_input = pane.terminal.take_pending_input();
+        if !pending_input.is_empty()
+            && let Some(session) = pane.session.as_ref()
+            && let Err(error) = session.write_input(&pending_input)
+        {
+            logging::error(format!("pane control response write failed: {error}"));
+        }
+        update_pane_scrollbar(pane);
+        let header = if let Some(title) = pane.terminal.window_title() {
+            format!("{}  •  {}", pane.tile.title, title)
+        } else if let Some(cwd) = pane.terminal.current_working_directory() {
+            format!("{}  •  {}", pane.tile.title, cwd)
+        } else {
+            format!("{}  •  {}", pane.tile.title, pane.tile.agent_label)
+        };
+        unsafe {
+            SetWindowTextW(pane.title_hwnd, wide(&header).as_ptr());
         }
         unsafe {
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
@@ -862,6 +955,7 @@ mod imp {
         pane.session = None;
         pane.terminal
             .process("\r\n\r\n[terminal session exited]\r\n");
+        update_pane_scrollbar(pane);
         unsafe {
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
         }
@@ -896,12 +990,12 @@ mod imp {
             let mut column = 0usize;
             while column < pane.terminal.columns() {
                 let mut text = String::new();
-                let cell = *pane.terminal.cell(row, column).unwrap();
+                let cell = pane.terminal.visible_cell(row, column);
                 let style =
                     resolved_style(cell.style, selection_contains(pane, row, column), false);
                 let start_column = column;
                 while column < pane.terminal.columns() {
-                    let next = *pane.terminal.cell(row, column).unwrap();
+                    let next = pane.terminal.visible_cell(row, column);
                     if resolved_style(next.style, selection_contains(pane, row, column), false)
                         != style
                     {
@@ -935,35 +1029,36 @@ mod imp {
             }
         }
 
-        if pane.focused && pane.terminal.cursor_visible() {
-            let (cursor_col, cursor_row) = pane.terminal.cursor();
-            if let Some(cell) = pane.terminal.cell(cursor_row, cursor_col) {
-                let cursor_style = resolved_style(
-                    cell.style,
-                    selection_contains(pane, cursor_row, cursor_col),
-                    true,
+        if pane.focused
+            && pane.terminal.cursor_visible()
+            && let Some((cursor_col, cursor_row)) = pane.terminal.cursor_in_view()
+        {
+            let cell = pane.terminal.visible_cell(cursor_row, cursor_col);
+            let cursor_style = resolved_style(
+                cell.style,
+                selection_contains(pane, cursor_row, cursor_col),
+                true,
+            );
+            let cursor_rect = RECT {
+                left: (cursor_col as i32) * pane.cell_width,
+                top: (cursor_row as i32) * pane.cell_height,
+                right: ((cursor_col + 1) as i32) * pane.cell_width,
+                bottom: ((cursor_row + 1) as i32) * pane.cell_height,
+            };
+            fill_rect_color(hdc, cursor_rect, cursor_style.bg);
+            unsafe {
+                SetTextColor(hdc, cursor_style.fg);
+                SetBkColor(hdc, cursor_style.bg);
+            }
+            let text_wide = wide_no_nul(&cell.ch.to_string());
+            unsafe {
+                TextOutW(
+                    hdc,
+                    cursor_rect.left,
+                    cursor_rect.top + pane.baseline_offset,
+                    text_wide.as_ptr(),
+                    text_wide.len() as i32,
                 );
-                let cursor_rect = RECT {
-                    left: (cursor_col as i32) * pane.cell_width,
-                    top: (cursor_row as i32) * pane.cell_height,
-                    right: ((cursor_col + 1) as i32) * pane.cell_width,
-                    bottom: ((cursor_row + 1) as i32) * pane.cell_height,
-                };
-                fill_rect_color(hdc, cursor_rect, cursor_style.bg);
-                unsafe {
-                    SetTextColor(hdc, cursor_style.fg);
-                    SetBkColor(hdc, cursor_style.bg);
-                }
-                let text_wide = wide_no_nul(&cell.ch.to_string());
-                unsafe {
-                    TextOutW(
-                        hdc,
-                        cursor_rect.left,
-                        cursor_rect.top + pane.baseline_offset,
-                        text_wide.as_ptr(),
-                        text_wide.len() as i32,
-                    );
-                }
             }
         }
 
@@ -997,6 +1092,7 @@ mod imp {
                 character.encode_utf8(&mut encoded).as_bytes().to_vec()
             }
         };
+        let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
         let Some(session) = pane.session.as_ref() else {
             return;
@@ -1017,12 +1113,12 @@ mod imp {
         }
 
         let sequence = match virtual_key {
-            VK_LEFT => Some("\u{1b}[D"),
-            VK_RIGHT => Some("\u{1b}[C"),
-            VK_UP => Some("\u{1b}[A"),
-            VK_DOWN => Some("\u{1b}[B"),
-            VK_HOME => Some("\u{1b}[H"),
-            VK_END => Some("\u{1b}[F"),
+            VK_LEFT => Some(terminal_key_sequence(pane, "\u{1b}[D", "\u{1b}OD")),
+            VK_RIGHT => Some(terminal_key_sequence(pane, "\u{1b}[C", "\u{1b}OC")),
+            VK_UP => Some(terminal_key_sequence(pane, "\u{1b}[A", "\u{1b}OA")),
+            VK_DOWN => Some(terminal_key_sequence(pane, "\u{1b}[B", "\u{1b}OB")),
+            VK_HOME => Some(terminal_key_sequence(pane, "\u{1b}[H", "\u{1b}OH")),
+            VK_END => Some(terminal_key_sequence(pane, "\u{1b}[F", "\u{1b}OF")),
             VK_INSERT => Some("\u{1b}[2~"),
             VK_DELETE => Some("\u{1b}[3~"),
             VK_PRIOR => Some("\u{1b}[5~"),
@@ -1031,6 +1127,7 @@ mod imp {
         };
 
         if let Some(sequence) = sequence {
+            let _ = pane.terminal.reset_viewport();
             clear_selection(pane);
             let Some(session) = pane.session.as_ref() else {
                 return;
@@ -1147,10 +1244,32 @@ mod imp {
         if value == 0 { 0 } else { 55 + (value * 40) }
     }
 
-    fn create_terminal_font() -> HFONT {
+    fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+        let base_points = density.terminal_font_points();
+        (base_points + zoom_steps).clamp(MIN_TERMINAL_FONT_POINTS, MAX_TERMINAL_FONT_POINTS)
+            - base_points
+    }
+
+    fn effective_terminal_font_points(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+        density.terminal_font_points() + clamp_terminal_zoom_steps(density, zoom_steps)
+    }
+
+    fn create_terminal_font(font_points: i32) -> HFONT {
+        let hdc = unsafe { GetDC(ptr::null_mut()) };
+        let dpi_y = if hdc.is_null() {
+            96
+        } else {
+            let dpi = unsafe { GetDeviceCaps(hdc, LOGPIXELSY as i32) };
+            unsafe {
+                ReleaseDC(ptr::null_mut(), hdc);
+            }
+            dpi.max(96)
+        };
+        let pixel_height = -((font_points.max(1) * dpi_y + 36) / 72);
+
         unsafe {
             CreateFontW(
-                -DEFAULT_FONT_HEIGHT,
+                pixel_height,
                 0,
                 0,
                 0,
@@ -1187,7 +1306,9 @@ mod imp {
             let average_width = (size.cx / (sample.len() as i32)).max(metrics.tmAveCharWidth);
             let draw_height = size.cy.max(metrics.tmHeight - metrics.tmInternalLeading);
             pane.cell_width = average_width.max(1);
-            pane.cell_height = (draw_height + metrics.tmExternalLeading.max(2)).max(1);
+            pane.cell_height = ((draw_height as f64 * pane.line_height_scale).round() as i32)
+                .max(draw_height + metrics.tmExternalLeading.max(1))
+                .max(1);
             pane.baseline_offset = ((pane.cell_height - draw_height) / 2).max(0);
         }
 
@@ -1256,6 +1377,228 @@ mod imp {
         (unsafe { GetKeyState(virtual_key as i32) }) < 0
     }
 
+    fn terminal_key_sequence<'a>(
+        pane: &PaneState,
+        normal_sequence: &'a str,
+        application_sequence: &'a str,
+    ) -> &'a str {
+        if pane.terminal.application_cursor_keys() {
+            application_sequence
+        } else {
+            normal_sequence
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MouseEvent {
+        ButtonPress(u8),
+        ButtonRelease,
+        Motion,
+        WheelUp,
+        WheelDown,
+    }
+
+    fn forward_mouse_event(pane: &mut PaneState, lparam: LPARAM, event: MouseEvent) -> bool {
+        if pane.terminal.mouse_tracking() == MouseTrackingMode::Disabled {
+            return false;
+        }
+        if matches!(event, MouseEvent::Motion)
+            && pane.terminal.mouse_tracking() != MouseTrackingMode::Drag
+        {
+            return false;
+        }
+
+        let position = pane_position_from_lparam(pane, lparam);
+        let Some(report) = encode_mouse_report(
+            &pane.terminal,
+            event,
+            position.column + 1,
+            position.row + 1,
+            pane.pressed_mouse_button,
+        ) else {
+            return false;
+        };
+
+        let Some(session) = pane.session.as_ref() else {
+            return false;
+        };
+
+        if let Err(error) = session.write_input(report.as_bytes()) {
+            logging::error(format!("pane mouse report write failed: {error}"));
+        }
+        true
+    }
+
+    fn forward_mouse_event_from_screen(
+        hwnd: HWND,
+        pane: &mut PaneState,
+        lparam: LPARAM,
+        event: MouseEvent,
+    ) -> bool {
+        let mut point = POINT {
+            x: ((lparam as i32) & 0xffff) as i16 as i32,
+            y: (((lparam as i32) >> 16) & 0xffff) as i16 as i32,
+        };
+        unsafe {
+            ScreenToClient(hwnd, &mut point);
+        }
+        let client_lparam = ((point.y as u32) << 16 | (point.x as u32 & 0xffff)) as isize;
+        forward_mouse_event(pane, client_lparam, event)
+    }
+
+    fn encode_mouse_report(
+        terminal: &VtBuffer,
+        event: MouseEvent,
+        column: usize,
+        row: usize,
+        pressed_button: Option<u8>,
+    ) -> Option<String> {
+        let mut code = match event {
+            MouseEvent::ButtonPress(button) => button,
+            MouseEvent::ButtonRelease => 3,
+            MouseEvent::Motion => pressed_button.unwrap_or(0).saturating_add(32),
+            MouseEvent::WheelUp => 64,
+            MouseEvent::WheelDown => 65,
+        };
+
+        if matches!(event, MouseEvent::Motion) && pressed_button.is_none() {
+            return None;
+        }
+
+        if terminal.sgr_mouse_mode() {
+            let suffix = match event {
+                MouseEvent::ButtonRelease => "m",
+                _ => "M",
+            };
+            return Some(format!("\u{1b}[<{code};{column};{row}{suffix}"));
+        }
+
+        if matches!(event, MouseEvent::Motion) {
+            code = code.saturating_add(0);
+        }
+        let encoded_column = (column.min(223) as u8).saturating_add(32) as char;
+        let encoded_row = (row.min(223) as u8).saturating_add(32) as char;
+        Some(format!(
+            "\u{1b}[M{}{}{}",
+            (code.saturating_add(32)) as char,
+            encoded_column,
+            encoded_row
+        ))
+    }
+
+    fn update_pane_scrollbar(pane: &PaneState) {
+        let total_rows = pane.terminal.history_len() + pane.terminal.rows();
+        let top_position = pane
+            .terminal
+            .history_len()
+            .saturating_sub(pane.terminal.viewport_offset()) as i32;
+        let info = SCROLLINFO {
+            cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+            fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+            nMin: 0,
+            nMax: total_rows.saturating_sub(1) as i32,
+            nPage: pane.terminal.rows() as u32,
+            nPos: top_position,
+            nTrackPos: top_position,
+        };
+        unsafe {
+            SetScrollInfo(pane.output_hwnd, SB_VERT, &info, 1);
+        }
+    }
+
+    fn handle_scrollbar_input(hwnd: HWND, pane: &mut PaneState, wparam: WPARAM) {
+        let action = (wparam & 0xffff) as i32;
+        let thumb_pos = ((wparam >> 16) & 0xffff) as i32;
+        let max_top = pane.terminal.history_len() as i32;
+        let current_top = pane
+            .terminal
+            .history_len()
+            .saturating_sub(pane.terminal.viewport_offset()) as i32;
+        let page = pane.terminal.rows() as i32;
+
+        let next_top = match action {
+            SB_TOP => 0,
+            SB_BOTTOM => max_top,
+            SB_LINEUP => (current_top - 1).max(0),
+            SB_LINEDOWN => (current_top + 1).min(max_top),
+            SB_PAGEUP => (current_top - page).max(0),
+            SB_PAGEDOWN => (current_top + page).min(max_top),
+            SB_THUMBPOSITION | SB_THUMBTRACK => thumb_pos.clamp(0, max_top),
+            _ => return,
+        };
+
+        let offset = pane
+            .terminal
+            .history_len()
+            .saturating_sub(next_top as usize);
+        if pane
+            .terminal
+            .scroll_viewport(offset as isize - pane.terminal.viewport_offset() as isize)
+        {
+            update_pane_scrollbar(pane);
+            unsafe {
+                InvalidateRect(hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn show_pane_context_menu(hwnd: HWND, pane: &mut PaneState, lparam: LPARAM) {
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
+        }
+
+        let has_selection = pane
+            .selection_anchor
+            .zip(pane.selection_focus)
+            .is_some_and(|(anchor, focus)| pane.terminal.has_selection(anchor, focus));
+        unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING | if has_selection { 0 } else { MF_GRAYED },
+                MENU_COPY_SELECTION,
+                wide("Copy").as_ptr(),
+            );
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                MENU_PASTE_CLIPBOARD,
+                wide("Paste").as_ptr(),
+            );
+        }
+
+        let mut point = POINT {
+            x: ((lparam as i32) & 0xffff) as i16 as i32,
+            y: (((lparam as i32) >> 16) & 0xffff) as i16 as i32,
+        };
+        unsafe {
+            ClientToScreen(hwnd, &mut point);
+        }
+        let command = unsafe {
+            TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                point.x,
+                point.y,
+                0,
+                hwnd,
+                ptr::null(),
+            )
+        };
+        match command as usize {
+            MENU_COPY_SELECTION => {
+                let _ = copy_pane_selection_to_clipboard(pane);
+            }
+            MENU_PASTE_CLIPBOARD => {
+                let _ = paste_clipboard_into_pane(pane);
+            }
+            _ => {}
+        }
+        unsafe {
+            DestroyMenu(menu);
+        }
+    }
+
     fn clear_selection(pane: &mut PaneState) {
         pane.selection_anchor = None;
         pane.selection_focus = None;
@@ -1281,11 +1624,17 @@ mod imp {
             return Ok(());
         };
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
         let Some(session) = pane.session.as_ref() else {
             return Ok(());
         };
-        session.write_input(normalized.as_bytes())
+        if pane.terminal.bracketed_paste() {
+            let wrapped = format!("\u{1b}[200~{normalized}\u{1b}[201~");
+            session.write_input(wrapped.as_bytes())
+        } else {
+            session.write_input(normalized.as_bytes())
+        }
     }
 
     fn write_clipboard_text(text: &str) -> Result<(), String> {
