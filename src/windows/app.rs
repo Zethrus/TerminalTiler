@@ -27,7 +27,7 @@ mod imp {
     use crate::storage::preference_store::PreferenceStore;
     use crate::storage::session_store::{SavedSession, SessionStore};
     use crate::windows::workspace;
-    use crate::windows::wsl::{self, WslRuntime};
+    use crate::windows::wsl::{self, WindowsRuntime};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const WINDOW_TITLE: &str = "TerminalTiler for Windows";
@@ -56,7 +56,7 @@ mod imp {
     struct AppWindowState {
         preference_store: PreferenceStore,
         session_store: SessionStore,
-        runtime: Option<WslRuntime>,
+        runtime: Option<WindowsRuntime>,
         runtime_error: Option<String>,
         session: Option<SavedSession>,
         session_warning: Option<String>,
@@ -237,7 +237,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "BUTTON",
-            "Refresh WSL",
+            "Refresh Runtime",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_REFRESH,
@@ -355,19 +355,23 @@ mod imp {
             return;
         };
 
-        match wsl::collect_session_launch_commands(session, &runtime.selected.name) {
-            Ok(_) => match workspace::open_saved_workspaces(session, &runtime.selected.name) {
+        match wsl::collect_session_launch_commands(session, runtime) {
+            Ok(_) => match workspace::open_saved_workspaces(session, runtime) {
                 Ok((window_count, pane_count)) => {
                     let status = format!(
-                        "Opened {} workspace window(s) with {} owned WSL pane(s) for distro '{}'.",
-                        window_count, pane_count, runtime.selected.name
+                        "Opened {} workspace window(s) with {} owned pane(s) using {}.",
+                        window_count,
+                        pane_count,
+                        runtime.label()
                     );
                     unsafe {
                         SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
                     }
                     logging::info(format!(
-                        "opened {} Windows workspace host window(s) with {} pane(s) for distro '{}'",
-                        window_count, pane_count, runtime.selected.name
+                        "opened {} Windows workspace host window(s) with {} pane(s) using {}",
+                        window_count,
+                        pane_count,
+                        runtime.label()
                     ));
                 }
                 Err(error) => {
@@ -396,26 +400,29 @@ mod imp {
         lines.push(String::new());
 
         if let Some(runtime) = state.runtime.as_ref() {
-            lines.push(format!(
-                "Selected WSL distro: {} (WSL {}, {})",
-                runtime.selected.name, runtime.selected.version, runtime.selected.state
-            ));
-            lines.push(format!(
-                "Installed distros: {}",
-                runtime
-                    .distributions
-                    .iter()
-                    .map(|distribution| distribution.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            lines.push(format!("Active runtime: {}", runtime.label()));
+            lines.push(format!("Runtime status: {}", runtime.selection_reason()));
+            if let WindowsRuntime::Wsl(runtime) = runtime {
+                lines.push(format!(
+                    "Installed distros: {}",
+                    runtime
+                        .distributions
+                        .iter()
+                        .map(|distribution| distribution.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
         } else {
-            lines.push("Selected WSL distro: unavailable".into());
+            lines.push("Active runtime: unavailable".into());
             if let Some(preferred_distribution) = preferred_distribution {
-                lines.push(format!("Configured preference: {}", preferred_distribution));
+                lines.push(format!(
+                    "Configured WSL preference: {}",
+                    preferred_distribution
+                ));
             }
             if let Some(error) = state.runtime_error.as_deref() {
-                lines.push(format!("WSL status: {}", error));
+                lines.push(format!("Runtime status: {}", error));
             }
         }
 
@@ -450,7 +457,9 @@ mod imp {
 
         lines.push(String::new());
         lines.push("Actions:".into());
-        lines.push("- Refresh WSL reloads the preferred distro and saved session state.".into());
+        lines.push(
+            "- Refresh Runtime reloads WSL/PowerShell availability and saved session state.".into(),
+        );
         lines.push(
             "- Open Restored Workspaces opens one native workspace host window per restored tab."
                 .into(),

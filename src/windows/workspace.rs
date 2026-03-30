@@ -64,7 +64,7 @@ mod imp {
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
-    use crate::windows::wsl::{self, WslLaunchCommand};
+    use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsRuntime};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
     const PANE_CLASS: &str = "TerminalTilerWindowsPane";
@@ -87,7 +87,7 @@ mod imp {
 
     struct WorkspaceWindowState {
         tab: SavedTab,
-        distribution: String,
+        runtime: WindowsRuntime,
         title_hwnd: HWND,
         path_hwnd: HWND,
         panes: Vec<Box<PaneState>>,
@@ -155,7 +155,7 @@ mod imp {
         fn spawn(
             window_hwnd: HWND,
             pane_index: usize,
-            command: &WslLaunchCommand,
+            command: &WindowsLaunchCommand,
             columns: i16,
             rows: i16,
         ) -> Result<Self, String> {
@@ -396,19 +396,19 @@ mod imp {
 
     pub fn open_saved_workspaces(
         session: &SavedSession,
-        distribution: &str,
+        runtime: &WindowsRuntime,
     ) -> Result<(usize, usize), String> {
         let mut window_count = 0usize;
         let mut pane_count = 0usize;
         for tab in &session.tabs {
-            open_workspace_window(tab.clone(), distribution)?;
+            open_workspace_window(tab.clone(), runtime)?;
             window_count += 1;
             pane_count += tab.preset.layout.tile_specs().len();
         }
         Ok((window_count, pane_count))
     }
 
-    fn open_workspace_window(tab: SavedTab, distribution: &str) -> Result<(), String> {
+    fn open_workspace_window(tab: SavedTab, runtime: &WindowsRuntime) -> Result<(), String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle for workspace window".into());
@@ -421,7 +421,7 @@ mod imp {
             .unwrap_or_else(|| tab.preset.name.clone());
         let state = Box::new(WorkspaceWindowState {
             tab,
-            distribution: distribution.to_string(),
+            runtime: runtime.clone(),
             title_hwnd: ptr::null_mut(),
             path_hwnd: ptr::null_mut(),
             panes: Vec::new(),
@@ -911,7 +911,7 @@ mod imp {
             let command = match wsl::build_launch_command(
                 &pane.tile,
                 &state.tab.workspace_root,
-                &state.distribution,
+                &state.runtime,
             ) {
                 Ok(command) => command,
                 Err(error) => {
@@ -2016,7 +2016,7 @@ mod imp {
         (columns, rows)
     }
 
-    fn build_windows_command_line(command: &WslLaunchCommand) -> String {
+    fn build_windows_command_line(command: &WindowsLaunchCommand) -> String {
         let mut command_line = quote_windows_arg(&command.program);
         for arg in &command.args {
             command_line.push(' ');
