@@ -11,6 +11,7 @@ use crate::app::logging;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 
+const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
@@ -161,6 +162,18 @@ impl TerminalSession {
         apply_terminal_appearance(&self.terminal, density, zoom_steps);
     }
 
+    pub fn has_selection(&self) -> bool {
+        self.terminal.has_selection()
+    }
+
+    pub fn copy_selection_to_clipboard(&self) -> bool {
+        copy_terminal_selection(&self.terminal)
+    }
+
+    pub fn paste_clipboard(&self) {
+        paste_terminal_clipboard(&self.terminal);
+    }
+
     pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
         let Some(payload) = serialize_dropped_paths(paths) else {
             return false;
@@ -202,25 +215,70 @@ fn apply_terminal_appearance(
     terminal.set_cell_height_scale(density.terminal_line_height_scale());
 }
 
+fn copy_terminal_selection(terminal: &vte4::Terminal) -> bool {
+    if !terminal.has_selection() {
+        return false;
+    }
+
+    terminal.grab_focus();
+    terminal.copy_clipboard_format(vte4::Format::Text);
+    true
+}
+
+fn paste_terminal_clipboard(terminal: &vte4::Terminal) {
+    terminal.grab_focus();
+    terminal.paste_clipboard();
+}
+
 fn install_terminal_shortcuts(terminal: &vte4::Terminal) {
-    let Some(trigger) = gtk::ShortcutTrigger::parse_string(DEFAULT_TERMINAL_PASTE_SHORTCUT) else {
+    let shortcut_controller = gtk::ShortcutController::new();
+    shortcut_controller.set_scope(gtk::ShortcutScope::Local);
+
+    let terminal_for_copy = terminal.clone();
+    let copy_action = gtk::CallbackAction::new(move |_, _| {
+        if copy_terminal_selection(&terminal_for_copy) {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    add_terminal_shortcut(
+        &shortcut_controller,
+        DEFAULT_TERMINAL_COPY_SHORTCUT,
+        "copy",
+        &copy_action,
+    );
+
+    let terminal_for_paste = terminal.clone();
+    let paste_action = gtk::CallbackAction::new(move |_, _| {
+        paste_terminal_clipboard(&terminal_for_paste);
+        glib::Propagation::Stop
+    });
+    add_terminal_shortcut(
+        &shortcut_controller,
+        DEFAULT_TERMINAL_PASTE_SHORTCUT,
+        "paste",
+        &paste_action,
+    );
+
+    terminal.add_controller(shortcut_controller);
+}
+
+fn add_terminal_shortcut(
+    shortcut_controller: &gtk::ShortcutController,
+    accelerator: &str,
+    shortcut_name: &str,
+    action: &gtk::CallbackAction,
+) {
+    let Some(trigger) = gtk::ShortcutTrigger::parse_string(accelerator) else {
         logging::error(format!(
-            "failed to parse terminal paste shortcut '{}'",
-            DEFAULT_TERMINAL_PASTE_SHORTCUT
+            "failed to parse terminal {} shortcut '{}'",
+            shortcut_name, accelerator
         ));
         return;
     };
 
-    let terminal_for_paste = terminal.clone();
-    let paste_action = gtk::CallbackAction::new(move |_, _| {
-        terminal_for_paste.paste_clipboard();
-        glib::Propagation::Stop
-    });
-
-    let shortcut_controller = gtk::ShortcutController::new();
-    shortcut_controller.set_scope(gtk::ShortcutScope::Local);
-    shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(paste_action)));
-    terminal.add_controller(shortcut_controller);
+    shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action.clone())));
 }
 
 fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {

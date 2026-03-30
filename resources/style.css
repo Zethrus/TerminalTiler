@@ -958,6 +958,29 @@ button.destructive-button:hover {
     0 0 28px rgba(240, 179, 75, 0.12);
 }
 
+.terminal-context-popover contents {
+  padding: 0;
+}
+
+.terminal-context-menu {
+  min-width: 168px;
+}
+
+.terminal-context-action {
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+.terminal-context-label {
+  font-size: 12px;
+}
+
+.terminal-context-shortcut {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  opacity: 0.56;
+}
+
 .accent-amber .agent-badge {
   background: rgba(240, 179, 75, 0.18);
 }
