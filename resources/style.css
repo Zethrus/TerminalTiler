@@ -21,17 +21,11 @@ window.window-shell headerbar.app-headerbar {
     0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
-window.window-shell headerbar.app-headerbar button {
+window.window-shell headerbar.app-headerbar button.titlebar-action-button,
+window.window-shell headerbar.app-headerbar button.app-tab-add {
   min-height: 26px;
   min-width: 26px;
   border-radius: 8px;
-}
-
-window.window-shell headerbar.app-headerbar tabbar.app-tab-strip tabbox tab button:not(.close) {
-  min-height: 32px;
-  min-width: 0;
-  padding: 0 6px 0 8px;
-  border-radius: 12px 12px 0 0;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button {
@@ -77,17 +71,11 @@ window.profile-comfortable headerbar.app-headerbar {
   padding: 5px 12px;
 }
 
-window.profile-comfortable headerbar.app-headerbar button {
+window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button,
+window.profile-comfortable headerbar.app-headerbar button.app-tab-add {
   min-height: 34px;
   min-width: 34px;
   border-radius: 10px;
-}
-
-window.profile-comfortable headerbar.app-headerbar tabbar.app-tab-strip tabbox tab button:not(.close) {
-  min-height: 32px;
-  min-width: 0;
-  padding: 0 6px 0 8px;
-  border-radius: 12px 12px 0 0;
 }
 
 window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button {
@@ -239,17 +227,11 @@ window.profile-compact headerbar.app-headerbar {
   padding: 1px 6px;
 }
 
-window.profile-compact headerbar.app-headerbar button {
+window.profile-compact headerbar.app-headerbar button.titlebar-action-button,
+window.profile-compact headerbar.app-headerbar button.app-tab-add {
   min-height: 24px;
   min-width: 24px;
   border-radius: 7px;
-}
-
-window.profile-compact headerbar.app-headerbar tabbar.app-tab-strip tabbox tab button:not(.close) {
-  min-height: 32px;
-  min-width: 0;
-  padding: 0 6px 0 8px;
-  border-radius: 12px 12px 0 0;
 }
 
 window.profile-compact headerbar.app-headerbar button.titlebar-action-button {
