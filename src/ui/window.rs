@@ -23,6 +23,7 @@ type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
+type TabStripControllerHandle = Rc<RefCell<TabStripController>>;
 
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
@@ -126,6 +127,31 @@ struct RestoreSessionContext {
     active_tab_id: Rc<Cell<usize>>,
     forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
     suppress_empty_replacement: Rc<Cell<bool>>,
+}
+
+#[derive(Clone)]
+struct TabStripItem {
+    tab_id: usize,
+    shell: gtk::Box,
+    title_label: gtk::Label,
+}
+
+struct TabStripDragState {
+    dragged_id: usize,
+    origin_index: usize,
+    preview_index: usize,
+}
+
+struct TabStripController {
+    tabs_box: gtk::Box,
+    items: Vec<TabStripItem>,
+    order: Vec<usize>,
+    placeholder: gtk::Box,
+    drag_state: Option<TabStripDragState>,
+    select_tab: SelectTabHandle,
+    close_tab: TabActionHandle,
+    request_tab_rename: TabActionHandle,
+    reorder_tab: ReorderTabHandle,
 }
 
 pub fn present(
@@ -258,6 +284,22 @@ pub fn present(
         current_shortcuts.workspace_zoom_out_shortcut.clone(),
     ));
     let quit_requested = Rc::new(Cell::new(false));
+    let tab_strip_controller = create_tab_strip_controller(
+        &title.tabs_box,
+        select_tab.clone(),
+        close_tab.clone(),
+        request_tab_rename.clone(),
+        reorder_tab.clone(),
+    );
+    let refresh_tab_strip: Rc<dyn Fn()> = {
+        let controller = tab_strip_controller.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        Rc::new(move || {
+            let tabs = tabs.borrow();
+            sync_tab_strip(&controller, &tabs, active_tab_id.get());
+        })
+    };
     let fullscreen_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
@@ -283,27 +325,6 @@ pub fn present(
     }
 
     {
-        let refresh_tab_strip = {
-            let tabs_box = title.tabs_box.clone();
-            let tabs = tabs.clone();
-            let active_tab_id = active_tab_id.clone();
-            let select_tab = select_tab.clone();
-            let close_tab = close_tab.clone();
-            let request_tab_rename = request_tab_rename.clone();
-            let reorder_tab = reorder_tab.clone();
-            Rc::new(move || {
-                render_tab_strip(
-                    &tabs_box,
-                    &tabs,
-                    active_tab_id.get(),
-                    &select_tab,
-                    &close_tab,
-                    &request_tab_rename,
-                    &reorder_tab,
-                );
-            })
-        };
-
         let title_root_for_select = title.root.clone();
         let tab_view_for_select = tab_view.clone();
         let header_for_select = header.clone();
@@ -405,26 +426,7 @@ pub fn present(
         let tab_view_for_rename = tab_view.clone();
         let active_for_rename = active_tab_id.clone();
         let select_for_rename = select_tab.clone();
-        let refresh_tab_strip_for_rename = {
-            let tabs_box = title.tabs_box.clone();
-            let tabs = tabs.clone();
-            let active_tab_id = active_tab_id.clone();
-            let select_tab = select_tab.clone();
-            let close_tab = close_tab.clone();
-            let request_tab_rename = request_tab_rename.clone();
-            let reorder_tab = reorder_tab.clone();
-            Rc::new(move || {
-                render_tab_strip(
-                    &tabs_box,
-                    &tabs,
-                    active_tab_id.get(),
-                    &select_tab,
-                    &close_tab,
-                    &request_tab_rename,
-                    &reorder_tab,
-                );
-            })
-        };
+        let refresh_tab_strip_for_rename = refresh_tab_strip.clone();
 
         *apply_tab_rename.borrow_mut() = Some(Box::new(move |tab_id, requested_title| {
             let requested_title = requested_title
@@ -507,26 +509,7 @@ pub fn present(
         let tabs_for_reorder = tabs.clone();
         let active_for_reorder = active_tab_id.clone();
         let select_for_reorder = select_tab.clone();
-        let refresh_tab_strip_for_reorder = {
-            let tabs_box = title.tabs_box.clone();
-            let tabs = tabs.clone();
-            let active_tab_id = active_tab_id.clone();
-            let select_tab = select_tab.clone();
-            let close_tab = close_tab.clone();
-            let request_tab_rename = request_tab_rename.clone();
-            let reorder_tab = reorder_tab.clone();
-            Rc::new(move || {
-                render_tab_strip(
-                    &tabs_box,
-                    &tabs,
-                    active_tab_id.get(),
-                    &select_tab,
-                    &close_tab,
-                    &request_tab_rename,
-                    &reorder_tab,
-                );
-            })
-        };
+        let refresh_tab_strip_for_reorder = refresh_tab_strip.clone();
         tab_view.connect_page_reordered(move |_, page, position| {
             let moved_id = {
                 let tabs = tabs_for_reorder.borrow();
@@ -563,26 +546,7 @@ pub fn present(
         let tabs_for_workspace = tabs.clone();
         let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
-        let refresh_tab_strip_for_workspace = {
-            let tabs_box = title.tabs_box.clone();
-            let tabs = tabs.clone();
-            let active_tab_id = active_tab_id.clone();
-            let select_tab = select_tab.clone();
-            let close_tab = close_tab.clone();
-            let request_tab_rename = request_tab_rename.clone();
-            let reorder_tab = reorder_tab.clone();
-            Rc::new(move || {
-                render_tab_strip(
-                    &tabs_box,
-                    &tabs,
-                    active_tab_id.get(),
-                    &select_tab,
-                    &close_tab,
-                    &request_tab_rename,
-                    &reorder_tab,
-                );
-            })
-        };
+        let refresh_tab_strip_for_workspace = refresh_tab_strip.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -878,26 +842,7 @@ pub fn present(
         let close_tab_for_add = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
         let select_for_add = select_tab.clone();
-        let refresh_tab_strip_for_add = {
-            let tabs_box = title.tabs_box.clone();
-            let tabs = tabs.clone();
-            let active_tab_id = active_tab_id.clone();
-            let select_tab = select_tab.clone();
-            let close_tab = close_tab.clone();
-            let request_tab_rename = request_tab_rename.clone();
-            let reorder_tab = reorder_tab.clone();
-            Rc::new(move || {
-                render_tab_strip(
-                    &tabs_box,
-                    &tabs,
-                    active_tab_id.get(),
-                    &select_tab,
-                    &close_tab,
-                    &request_tab_rename,
-                    &reorder_tab,
-                );
-            })
-        };
+        let refresh_tab_strip_for_add = refresh_tab_strip.clone();
 
         *add_workspace_tab.borrow_mut() = Some(Box::new(move || {
             let tab_id = next_tab_id.get();
@@ -1567,12 +1512,6 @@ fn sync_tab_page_metadata(tab_view: &adw::TabView, tab: &WorkspaceTab) {
     page.set_icon(Some(&icon));
 }
 
-fn clear_box_children(container: &gtk::Box) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
-    }
-}
-
 fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -1611,45 +1550,109 @@ fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
     shell
 }
 
-fn render_tab_strip(
-    tabs_box: &gtk::Box,
-    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
-    active_tab_id: usize,
-    select_tab: &SelectTabHandle,
-    close_tab: &TabActionHandle,
-    request_tab_rename: &TabActionHandle,
-    reorder_tab: &ReorderTabHandle,
-) {
-    clear_box_children(tabs_box);
+fn build_tab_placeholder() -> gtk::Box {
+    let placeholder = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .build();
+    placeholder.add_css_class("app-tab-shell");
+    placeholder.add_css_class("app-tab-placeholder");
+    placeholder
+}
 
-    let items = tabs
-        .borrow()
-        .iter()
-        .enumerate()
-        .map(|(index, tab)| {
-            (
-                index,
-                tab.id,
-                tab_display_title(tab),
-                tab.subtitle.clone(),
-                tab.id == active_tab_id,
-            )
-        })
-        .collect::<Vec<_>>();
+fn preview_index_for_pointer(slots: &[(f64, f64)], x: f64) -> usize {
+    for (index, (start, width)) in slots.iter().enumerate() {
+        if x < *start + (*width / 2.0) {
+            return index;
+        }
+    }
+    slots.len()
+}
 
-    for (index, tab_id, title, tooltip, is_active) in items {
+impl TabStripController {
+    fn new(
+        tabs_box: gtk::Box,
+        select_tab: SelectTabHandle,
+        close_tab: TabActionHandle,
+        request_tab_rename: TabActionHandle,
+        reorder_tab: ReorderTabHandle,
+    ) -> Self {
+        Self {
+            tabs_box,
+            items: Vec::new(),
+            order: Vec::new(),
+            placeholder: build_tab_placeholder(),
+            drag_state: None,
+            select_tab,
+            close_tab,
+            request_tab_rename,
+            reorder_tab,
+        }
+    }
+
+    fn sync(
+        &mut self,
+        controller: &TabStripControllerHandle,
+        tabs: &[WorkspaceTab],
+        active_tab_id: usize,
+    ) {
+        self.order = tabs.iter().map(|tab| tab.id).collect();
+
+        let stale_ids = self
+            .items
+            .iter()
+            .filter(|item| !self.order.contains(&item.tab_id))
+            .map(|item| item.tab_id)
+            .collect::<Vec<_>>();
+        for stale_id in stale_ids {
+            if let Some(index) = self.items.iter().position(|item| item.tab_id == stale_id) {
+                let item = self.items.remove(index);
+                self.tabs_box.remove(&item.shell);
+            }
+        }
+
+        for tab in tabs {
+            if self.find_item(tab.id).is_none() {
+                let item = self.build_item(controller, tab.id);
+                self.tabs_box.append(&item.shell);
+                self.items.push(item);
+            }
+        }
+
+        for tab in tabs {
+            if let Some(item) = self.find_item(tab.id) {
+                let title = tab_display_title(tab);
+                item.title_label.set_label(&title);
+                item.shell.set_tooltip_text(Some(&tab.subtitle));
+                item.shell.remove_css_class("is-active");
+                item.shell.remove_css_class("is-inactive");
+                item.shell.add_css_class(if tab.id == active_tab_id {
+                    "is-active"
+                } else {
+                    "is-inactive"
+                });
+            }
+        }
+
+        if let Some(drag_state) = self.drag_state.as_ref()
+            && !self.order.contains(&drag_state.dragged_id)
+        {
+            self.clear_drag_state();
+        }
+
+        if self.drag_state.is_none() {
+            self.reorder_shells_to_model_order();
+            self.detach_placeholder();
+        }
+    }
+
+    fn build_item(&self, controller: &TabStripControllerHandle, tab_id: usize) -> TabStripItem {
         let shell = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(0)
-            .tooltip_text(&tooltip)
             .build();
         shell.add_css_class("app-tab-shell");
-        shell.add_css_class(if is_active {
-            "is-active"
-        } else {
-            "is-inactive"
-        });
-        shell.set_width_request(142);
+        shell.add_css_class("is-inactive");
 
         let select_button = gtk::Button::new();
         select_button.add_css_class("app-tab-select");
@@ -1663,8 +1666,7 @@ fn render_tab_strip(
             .build();
         let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
         icon.add_css_class("app-tab-icon");
-        let label = gtk::Label::builder()
-            .label(&title)
+        let title_label = gtk::Label::builder()
             .xalign(0.0)
             .hexpand(true)
             .single_line_mode(true)
@@ -1672,19 +1674,19 @@ fn render_tab_strip(
             .width_chars(14)
             .max_width_chars(14)
             .build();
-        label.add_css_class("app-tab-title");
+        title_label.add_css_class("app-tab-title");
         select_row.append(&icon);
-        select_row.append(&label);
+        select_row.append(&title_label);
         select_button.set_child(Some(&select_row));
 
-        let select_handle = select_tab.clone();
+        let select_handle = self.select_tab.clone();
         select_button.connect_clicked(move |_| {
             if let Some(select) = select_handle.borrow().as_ref() {
                 select(tab_id);
             }
         });
 
-        let rename_handle = request_tab_rename.clone();
+        let rename_handle = self.request_tab_rename.clone();
         let rename_click = gtk::GestureClick::builder()
             .button(1)
             .propagation_phase(gtk::PropagationPhase::Capture)
@@ -1699,13 +1701,12 @@ fn render_tab_strip(
             }
         });
         select_button.add_controller(rename_click);
-
         shell.append(&select_button);
 
         let close_button = gtk::Button::from_icon_name("window-close-symbolic");
         close_button.add_css_class("app-tab-close");
         close_button.set_focus_on_click(false);
-        let close_handle = close_tab.clone();
+        let close_handle = self.close_tab.clone();
         close_button.connect_clicked(move |_| {
             if let Some(close) = close_handle.borrow().as_ref() {
                 close(tab_id);
@@ -1717,7 +1718,7 @@ fn render_tab_strip(
             .button(2)
             .propagation_phase(gtk::PropagationPhase::Capture)
             .build();
-        let close_handle = close_tab.clone();
+        let close_handle = self.close_tab.clone();
         middle_close.connect_pressed(move |gesture, _, _, _| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
             if let Some(close) = close_handle.borrow().as_ref() {
@@ -1731,74 +1732,272 @@ fn render_tab_strip(
         drag_source.connect_prepare(move |_, _, _| {
             Some(gdk::ContentProvider::for_value(&(tab_id as u32).to_value()))
         });
+        let controller_for_begin = controller.clone();
         let shell_for_begin = shell.clone();
-        let title_for_begin = title.clone();
+        let label_for_begin = title_label.clone();
         drag_source.connect_drag_begin(move |_, drag| {
-            shell_for_begin.add_css_class("is-dragging");
-            let icon = gtk::DragIcon::for_drag(drag);
-            let preview = build_tab_drag_preview(&title_for_begin, is_active);
-            icon.set_child(Some(&preview));
+            let title = label_for_begin.text().to_string();
+            let is_active = shell_for_begin.has_css_class("is-active");
+            controller_for_begin
+                .borrow_mut()
+                .begin_drag(tab_id, drag, &title, is_active);
         });
-        let shell_for_end = shell.clone();
+        let controller_for_cancel = controller.clone();
+        drag_source.connect_drag_cancel(move |_, _, _| {
+            controller_for_cancel.borrow_mut().cancel_drag(tab_id);
+            false
+        });
+        let controller_for_end = controller.clone();
         drag_source.connect_drag_end(move |_, _, _| {
-            shell_for_end.remove_css_class("is-dragging");
+            controller_for_end.borrow_mut().finish_drag(tab_id);
         });
         shell.add_controller(drag_source);
 
-        let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
-        let shell_for_motion = shell.clone();
-        drop_target.connect_motion(move |_, _, _| {
-            shell_for_motion.add_css_class("is-drop-target");
+        TabStripItem {
+            tab_id,
+            shell,
+            title_label,
+        }
+    }
+
+    fn find_item(&self, tab_id: usize) -> Option<TabStripItem> {
+        self.items.iter().find(|item| item.tab_id == tab_id).cloned()
+    }
+
+    fn reorder_shells_to_model_order(&self) {
+        let mut previous: Option<gtk::Widget> = None;
+        for tab_id in &self.order {
+            let Some(item) = self.find_item(*tab_id) else {
+                continue;
+            };
+            let sibling = previous.as_ref();
+            self.tabs_box.reorder_child_after(&item.shell, sibling);
+            previous = Some(item.shell.clone().upcast());
+        }
+    }
+
+    fn begin_drag(&mut self, tab_id: usize, drag: &gdk::Drag, title: &str, is_active: bool) {
+        if self.drag_state.is_some() {
+            return;
+        }
+
+        let Some(item) = self.find_item(tab_id) else {
+            return;
+        };
+        let Some(origin_index) = self.order.iter().position(|id| *id == tab_id) else {
+            return;
+        };
+
+        let placeholder_width = if item.shell.allocated_width() > 0 {
+            item.shell.allocated_width()
+        } else {
+            142
+        };
+        let placeholder_height = if item.shell.allocated_height() > 0 {
+            item.shell.allocated_height()
+        } else {
+            30
+        };
+
+        let icon = gtk::DragIcon::for_drag(drag);
+        let preview = build_tab_drag_preview(title, is_active);
+        icon.set_child(Some(&preview));
+
+        item.shell.add_css_class("is-lifted-source");
+        item.shell.add_css_class("is-dragging");
+        item.shell.set_opacity(0.0);
+        item.shell.set_width_request(0);
+
+        self.placeholder.set_width_request(placeholder_width);
+        self.placeholder.set_height_request(placeholder_height);
+        self.attach_placeholder();
+        self.reorder_placeholder(origin_index, tab_id);
+
+        self.drag_state = Some(TabStripDragState {
+            dragged_id: tab_id,
+            origin_index,
+            preview_index: origin_index,
+        });
+    }
+
+    fn attach_placeholder(&self) {
+        if self.placeholder.parent().is_none() {
+            self.tabs_box.append(&self.placeholder);
+        }
+    }
+
+    fn detach_placeholder(&self) {
+        if self.placeholder.parent().is_some() {
+            self.tabs_box.remove(&self.placeholder);
+        }
+    }
+
+    fn reorder_placeholder(&self, preview_index: usize, dragged_id: usize) {
+        let widget: gtk::Widget = self.placeholder.clone().upcast();
+        self.reorder_widget_for_preview(&widget, preview_index, dragged_id);
+    }
+
+    fn reorder_widget_for_preview(
+        &self,
+        widget: &gtk::Widget,
+        preview_index: usize,
+        dragged_id: usize,
+    ) {
+        let previous = if preview_index == 0 {
+            None
+        } else {
+            self.order
+                .iter()
+                .copied()
+                .filter(|tab_id| *tab_id != dragged_id)
+                .nth(preview_index - 1)
+                .and_then(|tab_id| self.find_item(tab_id))
+                .map(|item| item.shell.upcast::<gtk::Widget>())
+        };
+        self.tabs_box.reorder_child_after(widget, previous.as_ref());
+    }
+
+    fn update_preview_for_x(&mut self, x: f64) -> bool {
+        let Some((dragged_id, current_preview_index)) = self
+            .drag_state
+            .as_ref()
+            .map(|state| (state.dragged_id, state.preview_index))
+        else {
+            return false;
+        };
+
+        let slots = self
+            .order
+            .iter()
+            .copied()
+            .filter(|tab_id| *tab_id != dragged_id)
+            .filter_map(|tab_id| self.find_item(tab_id))
+            .map(|item| {
+                let allocation = item.shell.allocation();
+                (f64::from(allocation.x()), f64::from(allocation.width()))
+            })
+            .collect::<Vec<_>>();
+
+        let preview_index = preview_index_for_pointer(&slots, x);
+        if preview_index == current_preview_index {
+            return false;
+        }
+
+        if let Some(drag_state) = self.drag_state.as_mut() {
+            drag_state.preview_index = preview_index;
+        }
+        self.reorder_placeholder(preview_index, dragged_id);
+        true
+    }
+
+    fn commit_drop(&mut self, value: &glib::Value, x: f64) -> bool {
+        let Ok(moved_id) = value.get::<u32>() else {
+            return false;
+        };
+        let moved_id = moved_id as usize;
+        let Some(drag_state) = self.drag_state.as_ref() else {
+            return false;
+        };
+        if moved_id != drag_state.dragged_id {
+            return false;
+        }
+
+        self.update_preview_for_x(x);
+        let (origin_index, preview_index) = match self.drag_state.as_ref() {
+            Some(state) => (state.origin_index, state.preview_index),
+            None => return false,
+        };
+
+        if let Some(item) = self.find_item(moved_id) {
+            let widget: gtk::Widget = item.shell.clone().upcast();
+            self.reorder_widget_for_preview(&widget, preview_index, moved_id);
+        }
+
+        self.clear_drag_state();
+
+        if preview_index != origin_index
+            && let Some(reorder) = self.reorder_tab.borrow().as_ref()
+        {
+            reorder(moved_id, preview_index);
+        }
+
+        true
+    }
+
+    fn cancel_drag(&mut self, tab_id: usize) {
+        if self
+            .drag_state
+            .as_ref()
+            .map(|state| state.dragged_id == tab_id)
+            .unwrap_or(false)
+        {
+            self.clear_drag_state();
+        }
+    }
+
+    fn finish_drag(&mut self, tab_id: usize) {
+        self.cancel_drag(tab_id);
+    }
+
+    fn clear_drag_state(&mut self) {
+        if let Some(drag_state) = self.drag_state.take()
+            && let Some(item) = self.find_item(drag_state.dragged_id)
+        {
+            item.shell.remove_css_class("is-lifted-source");
+            item.shell.remove_css_class("is-dragging");
+            item.shell.set_opacity(1.0);
+            item.shell.set_width_request(-1);
+        }
+
+        self.placeholder.set_width_request(-1);
+        self.placeholder.set_height_request(-1);
+        self.detach_placeholder();
+    }
+}
+
+fn create_tab_strip_controller(
+    tabs_box: &gtk::Box,
+    select_tab: SelectTabHandle,
+    close_tab: TabActionHandle,
+    request_tab_rename: TabActionHandle,
+    reorder_tab: ReorderTabHandle,
+) -> TabStripControllerHandle {
+    let controller = Rc::new(RefCell::new(TabStripController::new(
+        tabs_box.clone(),
+        select_tab,
+        close_tab,
+        request_tab_rename,
+        reorder_tab,
+    )));
+
+    let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+    {
+        let controller_for_motion = controller.clone();
+        drop_target.connect_motion(move |_, x, _| {
+            if controller_for_motion.borrow().drag_state.is_none() {
+                return gdk::DragAction::empty();
+            }
+            controller_for_motion.borrow_mut().update_preview_for_x(x);
             gdk::DragAction::MOVE
         });
-        let shell_for_leave = shell.clone();
-        drop_target.connect_leave(move |_| {
-            shell_for_leave.remove_css_class("is-drop-target");
-        });
-        let shell_for_drop = shell.clone();
-        let tabs_for_drop = tabs.clone();
-        let reorder_handle = reorder_tab.clone();
-        drop_target.connect_drop(move |_, value, x, _| {
-            shell_for_drop.remove_css_class("is-drop-target");
-
-            let Ok(moved_id) = value.get::<u32>() else {
-                return false;
-            };
-            let moved_id = moved_id as usize;
-            if moved_id == tab_id {
-                return false;
-            }
-
-            let position = {
-                let tabs = tabs_for_drop.borrow();
-                let Some(current_index) = tabs.iter().position(|tab| tab.id == moved_id) else {
-                    return false;
-                };
-                let before = x < f64::from(shell_for_drop.allocated_width().max(1)) / 2.0;
-                if before {
-                    if current_index < index {
-                        index.saturating_sub(1)
-                    } else {
-                        index
-                    }
-                } else if current_index < index {
-                    index
-                } else {
-                    index + 1
-                }
-            };
-
-            if let Some(reorder) = reorder_handle.borrow().as_ref() {
-                reorder(moved_id, position);
-                return true;
-            }
-
-            false
-        });
-        shell.add_controller(drop_target);
-
-        tabs_box.append(&shell);
     }
+    {
+        let controller_for_drop = controller.clone();
+        drop_target.connect_drop(move |_, value, x, _| {
+            controller_for_drop.borrow_mut().commit_drop(value, x)
+        });
+    }
+    tabs_box.add_controller(drop_target);
+
+    controller
+}
+
+fn sync_tab_strip(
+    controller: &TabStripControllerHandle,
+    tabs: &[WorkspaceTab],
+    active_tab_id: usize,
+) {
+    controller.borrow_mut().sync(controller, tabs, active_tab_id);
 }
 
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
@@ -2612,7 +2811,9 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspaceTab, move_item_to_position, move_tab_to_position};
+    use super::{
+        WorkspaceTab, move_item_to_position, move_tab_to_position, preview_index_for_pointer,
+    };
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
         tabs.to_vec()
@@ -2665,5 +2866,33 @@ mod tests {
         let moved = move_tab_to_position(&mut tabs, 99, 0);
 
         assert!(!moved);
+    }
+
+    #[test]
+    fn preview_index_is_before_first_tab_when_pointer_is_left_of_first_midpoint() {
+        let slots = vec![(0.0, 100.0), (110.0, 100.0)];
+
+        assert_eq!(preview_index_for_pointer(&slots, 20.0), 0);
+    }
+
+    #[test]
+    fn preview_index_moves_between_tabs_after_crossing_first_midpoint() {
+        let slots = vec![(0.0, 100.0), (110.0, 100.0)];
+
+        assert_eq!(preview_index_for_pointer(&slots, 70.0), 1);
+    }
+
+    #[test]
+    fn preview_index_stays_before_second_tab_on_left_half() {
+        let slots = vec![(0.0, 100.0), (110.0, 100.0)];
+
+        assert_eq!(preview_index_for_pointer(&slots, 140.0), 1);
+    }
+
+    #[test]
+    fn preview_index_is_after_last_tab_when_pointer_is_past_all_midpoints() {
+        let slots = vec![(0.0, 100.0), (110.0, 100.0)];
+
+        assert_eq!(preview_index_for_pointer(&slots, 190.0), 2);
     }
 }

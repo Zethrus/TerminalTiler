@@ -576,6 +576,23 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
     transform 140ms ease;
 }
 
+window.window-shell .app-tab-shell.app-tab-placeholder {
+  min-width: 0;
+  max-width: none;
+  border: 1px dashed rgba(236, 154, 83, 0.52);
+  background: rgba(236, 154, 83, 0.10);
+  box-shadow: inset 0 0 0 1px rgba(236, 154, 83, 0.18);
+}
+
+window.window-shell .app-tab-shell.is-lifted-source {
+  min-width: 0;
+  max-width: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
 .app-tab-shell.is-active {
   background:
     linear-gradient(180deg, rgba(205, 98, 40, 0.98), rgba(173, 74, 28, 0.96)),
@@ -1821,6 +1838,12 @@ window.window-shell.theme-light .app-tab-shell.is-active {
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.20),
     0 8px 18px rgba(15, 23, 42, 0.10);
+}
+
+window.window-shell.theme-light .app-tab-shell.app-tab-placeholder {
+  border-color: rgba(190, 85, 32, 0.38);
+  background: rgba(190, 85, 32, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(190, 85, 32, 0.14);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab {
