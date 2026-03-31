@@ -19,11 +19,13 @@ pub struct TileView {
 pub fn build(
     tile: &TileSpec,
     workspace_root: &Path,
+    use_dark_palette: bool,
     density: ApplicationDensity,
     zoom_steps: i32,
     on_swap: Rc<dyn Fn(String, String)>,
 ) -> TileView {
-    let session = TerminalSession::spawn(tile, workspace_root, density, zoom_steps);
+    let session =
+        TerminalSession::spawn(tile, workspace_root, use_dark_palette, density, zoom_steps);
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

@@ -177,6 +177,22 @@ fn persist_dialog_size(dialog: &gtk::Dialog, on_size_changed: &Rc<dyn Fn(i32, i3
     }
 }
 
+fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &gtk::Dialog) {
+    dialog.add_css_class("settings-dialog-window");
+    for class_name in [
+        "theme-light",
+        "theme-dark",
+        "profile-comfortable",
+        "profile-standard",
+        "profile-compact",
+    ] {
+        dialog.remove_css_class(class_name);
+        if window.has_css_class(class_name) {
+            dialog.add_css_class(class_name);
+        }
+    }
+}
+
 #[allow(deprecated)]
 pub fn present(
     window: &adw::ApplicationWindow,
@@ -215,6 +231,7 @@ pub fn present(
         .default_height(default_height)
         .resizable(true)
         .build();
+    sync_dialog_chrome_classes(window, &dialog);
     dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.set_default_response(gtk::ResponseType::Close);
 
@@ -998,7 +1015,10 @@ fn build_shortcut_capture_control(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .valign(gtk::Align::Center)
-        .css_classes(["settings-shortcut-control-shell", "settings-shortcut-controls"])
+        .css_classes([
+            "settings-shortcut-control-shell",
+            "settings-shortcut-controls",
+        ])
         .build();
     shell.append(value_label);
     shell.append(record_button);

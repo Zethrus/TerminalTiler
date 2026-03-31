@@ -54,6 +54,18 @@ fn apply_window_density(window: &adw::ApplicationWindow, density: Option<Applica
     }
 }
 
+fn resolved_theme_uses_dark_palette(theme: ThemeMode) -> bool {
+    match theme {
+        ThemeMode::System => adw::StyleManager::default().is_dark(),
+        ThemeMode::Light => false,
+        ThemeMode::Dark => true,
+    }
+}
+
+fn window_uses_dark_theme(window: &adw::ApplicationWindow) -> bool {
+    window.has_css_class("theme-dark")
+}
+
 fn shortcut_display_label(
     _window: &adw::ApplicationWindow,
     accelerator: &str,
@@ -134,10 +146,7 @@ pub fn present(
     header.set_centering_policy(adw::CenteringPolicy::Loose);
     header.add_css_class("app-headerbar");
 
-    let tab_view = adw::TabView::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .build();
+    let tab_view = adw::TabView::builder().hexpand(true).vexpand(true).build();
     let title = TitleChrome::new(&tab_view);
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
@@ -283,26 +292,35 @@ pub fn present(
         let preference_store_for_select = preference_store.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
-            let (is_workspace, preset_for_profile) = {
+            let (is_workspace, workspace_profile) = {
                 let tabs = tabs_for_sync.borrow();
                 let active = tabs
                     .iter()
                     .find(|tab| tab.id == tab_id)
                     .cloned()
                     .expect("active workspace tab should exist");
-                (
-                    matches!(active.content, TabContent::Workspace(_)),
-                    match active.content {
-                        TabContent::LaunchDeck => None,
-                        TabContent::Workspace(workspace) => Some(workspace.preset),
-                    },
-                )
+                match active.content {
+                    TabContent::LaunchDeck => (false, None),
+                    TabContent::Workspace(workspace) => (
+                        true,
+                        Some((
+                            workspace.preset,
+                            workspace.runtime,
+                            workspace.terminal_zoom_steps,
+                        )),
+                    ),
+                }
             };
 
             active_for_select.set(tab_id);
 
-            if let Some(preset) = preset_for_profile.as_ref() {
+            if let Some((preset, runtime, terminal_zoom_steps)) = workspace_profile.as_ref() {
                 apply_shell_profile(&header_for_select, &window_for_select, preset);
+                runtime.apply_appearance(
+                    window_uses_dark_theme(&window_for_select),
+                    preset.density,
+                    *terminal_zoom_steps,
+                );
             } else {
                 apply_launch_profile(
                     &header_for_select,
@@ -512,6 +530,7 @@ pub fn present(
                 let built_workspace = workspace_view::build_with_layout_change_handler(
                     &preset,
                     &workspace_root,
+                    resolved_theme_uses_dark_palette(preset.theme),
                     terminal_zoom_steps,
                     {
                         let tabs_for_workspace = tabs_for_workspace.clone();
@@ -892,300 +911,302 @@ pub fn present(
                 },
                 settings_dialog::SettingsDialogActions {
                     on_theme_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let refresh_handle = refresh_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    move |theme| {
-                        preference_store.save_default_theme(theme);
-                        logging::info(format!(
-                            "updated application settings default_theme={}",
-                            theme.label()
-                        ));
-                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
-                            refresh();
+                        let preference_store = preference_store_for_settings.clone();
+                        let refresh_handle = refresh_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        move |theme| {
+                            preference_store.save_default_theme(theme);
+                            logging::info(format!(
+                                "updated application settings default_theme={}",
+                                theme.label()
+                            ));
+                            if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                                refresh();
+                            }
+                            show_toast(
+                                &toast_overlay,
+                                &format!("Default theme set to {}", theme.label()),
+                            );
                         }
-                        show_toast(
-                            &toast_overlay,
-                            &format!("Default theme set to {}", theme.label()),
-                        );
-                    }
-                }),
+                    }),
                     on_density_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let refresh_handle = refresh_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    move |density| {
-                        preference_store.save_default_density(density);
-                        logging::info(format!(
-                            "updated application settings default_density={}",
-                            density.label()
-                        ));
-                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
-                            refresh();
+                        let preference_store = preference_store_for_settings.clone();
+                        let refresh_handle = refresh_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        move |density| {
+                            preference_store.save_default_density(density);
+                            logging::info(format!(
+                                "updated application settings default_density={}",
+                                density.label()
+                            ));
+                            if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                                refresh();
+                            }
+                            show_toast(
+                                &toast_overlay,
+                                &format!("Default density set to {}", density.label()),
+                            );
                         }
-                        show_toast(
-                            &toast_overlay,
-                            &format!("Default density set to {}", density.label()),
-                        );
-                    }
-                }),
+                    }),
                     on_close_to_background_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let current_close_to_background = current_close_to_background.clone();
-                    let sync_close_to_background_notice = sync_close_to_background_notice.clone();
-                    let tray_controller = tray_controller.clone();
-                    move |close_to_background| {
-                        preference_store.save_close_to_background(close_to_background);
-                        current_close_to_background.set(close_to_background);
-                        sync_close_to_background_notice();
-                        logging::info(format!(
-                            "updated application settings close_to_background={}",
-                            close_to_background
-                        ));
-                        show_toast(
-                            &toast_overlay,
-                            if close_to_background {
-                                if tray_controller.is_available() {
-                                    "Close button now hides TerminalTiler to the background"
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let current_close_to_background = current_close_to_background.clone();
+                        let sync_close_to_background_notice =
+                            sync_close_to_background_notice.clone();
+                        let tray_controller = tray_controller.clone();
+                        move |close_to_background| {
+                            preference_store.save_close_to_background(close_to_background);
+                            current_close_to_background.set(close_to_background);
+                            sync_close_to_background_notice();
+                            logging::info(format!(
+                                "updated application settings close_to_background={}",
+                                close_to_background
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                if close_to_background {
+                                    if tray_controller.is_available() {
+                                        "Close button now hides TerminalTiler to the background"
+                                    } else {
+                                        "Close-to-background is enabled, but no tray watcher is available right now. Closing will still quit normally"
+                                    }
                                 } else {
-                                    "Close-to-background is enabled, but no tray watcher is available right now. Closing will still quit normally"
-                                }
-                            } else {
-                                "Close button now quits TerminalTiler"
-                            },
-                        );
-                    }
-                }),
-                    on_fullscreen_shortcut_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let tabs = tabs_for_settings.clone();
-                    let active_tab_id = active_for_settings.clone();
-                    let title_root = title_root_for_settings.clone();
-                    let fullscreen_button = fullscreen_button_for_settings.clone();
-                    let window = window_for_settings.clone();
-                    let controller_handle = fullscreen_shortcut_controller.clone();
-                    let current_shortcut = current_fullscreen_shortcut.clone();
-                    move |shortcut| {
-                        preference_store.save_workspace_fullscreen_shortcut(&shortcut);
-                        current_shortcut.replace(shortcut.clone());
-                        install_workspace_fullscreen_shortcut(
-                            &window,
-                            &controller_handle,
-                            &tabs,
-                            &active_tab_id,
-                            &shortcut,
-                        );
-                        sync_fullscreen_chrome(
-                            &window,
-                            title_root.upcast_ref(),
-                            &fullscreen_button,
-                            active_tab_is_workspace(&tabs, active_tab_id.get()),
-                            current_shortcut.borrow().as_str(),
-                        );
-                        logging::info(format!(
-                            "updated application settings workspace_fullscreen_shortcut={}",
-                            shortcut
-                        ));
-                        show_toast(
-                            &toast_overlay,
-                            &format!(
-                                "Fullscreen shortcut set to {}",
-                                shortcut_display_label(
-                                    &window,
-                                    &shortcut,
-                                    DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT,
-                                )
-                            ),
-                        );
-                    }
-                }),
-                    on_density_shortcut_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let tabs = tabs_for_settings.clone();
-                    let active_tab_id = active_for_settings.clone();
-                    let window = window_for_settings.clone();
-                    let controller_handle = density_shortcut_controller.clone();
-                    let current_shortcut = current_density_shortcut.clone();
-                    move |shortcut| {
-                        preference_store.save_workspace_density_shortcut(&shortcut);
-                        current_shortcut.replace(shortcut.clone());
-                        install_workspace_density_shortcut(
-                            &window,
-                            &controller_handle,
-                            &tabs,
-                            &active_tab_id,
-                            &shortcut,
-                        );
-                        logging::info(format!(
-                            "updated application settings workspace_density_shortcut={}",
-                            shortcut
-                        ));
-                        show_toast(
-                            &toast_overlay,
-                            &format!(
-                                "Density shortcut set to {}",
-                                shortcut_display_label(
-                                    &window,
-                                    &shortcut,
-                                    DEFAULT_WORKSPACE_DENSITY_SHORTCUT,
-                                )
-                            ),
-                        );
-                    }
-                }),
-                    on_zoom_in_shortcut_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let tabs = tabs_for_settings.clone();
-                    let active_tab_id = active_for_settings.clone();
-                    let window = window_for_settings.clone();
-                    let controller_handle = zoom_in_shortcut_controller.clone();
-                    let current_shortcut = current_zoom_in_shortcut.clone();
-                    move |shortcut| {
-                        preference_store.save_workspace_zoom_in_shortcut(&shortcut);
-                        current_shortcut.replace(shortcut.clone());
-                        install_workspace_zoom_in_shortcut(
-                            &window,
-                            &controller_handle,
-                            &tabs,
-                            &active_tab_id,
-                            &shortcut,
-                        );
-                        logging::info(format!(
-                            "updated application settings workspace_zoom_in_shortcut={}",
-                            shortcut
-                        ));
-                        show_toast(
-                            &toast_overlay,
-                            &format!(
-                                "Zoom in shortcut set to {}",
-                                shortcut_display_label(
-                                    &window,
-                                    &shortcut,
-                                    DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT,
-                                )
-                            ),
-                        );
-                    }
-                }),
-                    on_zoom_out_shortcut_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let tabs = tabs_for_settings.clone();
-                    let active_tab_id = active_for_settings.clone();
-                    let window = window_for_settings.clone();
-                    let controller_handle = zoom_out_shortcut_controller.clone();
-                    let current_shortcut = current_zoom_out_shortcut.clone();
-                    move |shortcut| {
-                        preference_store.save_workspace_zoom_out_shortcut(&shortcut);
-                        current_shortcut.replace(shortcut.clone());
-                        install_workspace_zoom_out_shortcut(
-                            &window,
-                            &controller_handle,
-                            &tabs,
-                            &active_tab_id,
-                            &shortcut,
-                        );
-                        logging::info(format!(
-                            "updated application settings workspace_zoom_out_shortcut={}",
-                            shortcut
-                        ));
-                        show_toast(
-                            &toast_overlay,
-                            &format!(
-                                "Zoom out shortcut set to {}",
-                                shortcut_display_label(
-                                    &window,
-                                    &shortcut,
-                                    DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT,
-                                )
-                            ),
-                        );
-                    }
-                }),
-                    on_reset_defaults: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    let refresh_handle = refresh_for_settings.clone();
-                    let toast_overlay = toast_overlay_for_settings.clone();
-                    let tabs = tabs_for_settings.clone();
-                    let active_tab_id = active_for_settings.clone();
-                    let title_root = title_root_for_settings.clone();
-                    let fullscreen_button = fullscreen_button_for_settings.clone();
-                    let window = window_for_settings.clone();
-                    let fullscreen_controller = fullscreen_shortcut_controller.clone();
-                    let density_controller = density_shortcut_controller.clone();
-                    let zoom_in_controller = zoom_in_shortcut_controller.clone();
-                    let zoom_out_controller = zoom_out_shortcut_controller.clone();
-                    let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-                    let current_density_shortcut = current_density_shortcut.clone();
-                    let current_close_to_background = current_close_to_background.clone();
-                    let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-                    let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-                    let sync_close_to_background_notice = sync_close_to_background_notice.clone();
-                    move || {
-                        let defaults = AppPreferences::default();
-                        preference_store.save(&defaults);
-                        current_fullscreen_shortcut
-                            .replace(defaults.workspace_fullscreen_shortcut.clone());
-                        current_density_shortcut
-                            .replace(defaults.workspace_density_shortcut.clone());
-                        current_close_to_background.set(defaults.close_to_background);
-                        sync_close_to_background_notice();
-                        current_zoom_in_shortcut
-                            .replace(defaults.workspace_zoom_in_shortcut.clone());
-                        current_zoom_out_shortcut
-                            .replace(defaults.workspace_zoom_out_shortcut.clone());
-                        install_workspace_fullscreen_shortcut(
-                            &window,
-                            &fullscreen_controller,
-                            &tabs,
-                            &active_tab_id,
-                            &defaults.workspace_fullscreen_shortcut,
-                        );
-                        install_workspace_density_shortcut(
-                            &window,
-                            &density_controller,
-                            &tabs,
-                            &active_tab_id,
-                            &defaults.workspace_density_shortcut,
-                        );
-                        install_workspace_zoom_in_shortcut(
-                            &window,
-                            &zoom_in_controller,
-                            &tabs,
-                            &active_tab_id,
-                            &defaults.workspace_zoom_in_shortcut,
-                        );
-                        install_workspace_zoom_out_shortcut(
-                            &window,
-                            &zoom_out_controller,
-                            &tabs,
-                            &active_tab_id,
-                            &defaults.workspace_zoom_out_shortcut,
-                        );
-                        sync_fullscreen_chrome(
-                            &window,
-                            title_root.upcast_ref(),
-                            &fullscreen_button,
-                            active_tab_is_workspace(&tabs, active_tab_id.get()),
-                            current_fullscreen_shortcut.borrow().as_str(),
-                        );
-                        logging::info("reset application settings to defaults");
-                        if let Some(refresh) = refresh_handle.borrow().as_ref() {
-                            refresh();
+                                    "Close button now quits TerminalTiler"
+                                },
+                            );
                         }
-                        show_toast(&toast_overlay, "Application defaults reset");
-                    }
-                }),
+                    }),
+                    on_fullscreen_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let title_root = title_root_for_settings.clone();
+                        let fullscreen_button = fullscreen_button_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = fullscreen_shortcut_controller.clone();
+                        let current_shortcut = current_fullscreen_shortcut.clone();
+                        move |shortcut| {
+                            preference_store.save_workspace_fullscreen_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_workspace_fullscreen_shortcut(
+                                &window,
+                                &controller_handle,
+                                &tabs,
+                                &active_tab_id,
+                                &shortcut,
+                            );
+                            sync_fullscreen_chrome(
+                                &window,
+                                title_root.upcast_ref(),
+                                &fullscreen_button,
+                                active_tab_is_workspace(&tabs, active_tab_id.get()),
+                                current_shortcut.borrow().as_str(),
+                            );
+                            logging::info(format!(
+                                "updated application settings workspace_fullscreen_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Fullscreen shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
+                    on_density_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = density_shortcut_controller.clone();
+                        let current_shortcut = current_density_shortcut.clone();
+                        move |shortcut| {
+                            preference_store.save_workspace_density_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_workspace_density_shortcut(
+                                &window,
+                                &controller_handle,
+                                &tabs,
+                                &active_tab_id,
+                                &shortcut,
+                            );
+                            logging::info(format!(
+                                "updated application settings workspace_density_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Density shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_WORKSPACE_DENSITY_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
+                    on_zoom_in_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = zoom_in_shortcut_controller.clone();
+                        let current_shortcut = current_zoom_in_shortcut.clone();
+                        move |shortcut| {
+                            preference_store.save_workspace_zoom_in_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_workspace_zoom_in_shortcut(
+                                &window,
+                                &controller_handle,
+                                &tabs,
+                                &active_tab_id,
+                                &shortcut,
+                            );
+                            logging::info(format!(
+                                "updated application settings workspace_zoom_in_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Zoom in shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
+                    on_zoom_out_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = zoom_out_shortcut_controller.clone();
+                        let current_shortcut = current_zoom_out_shortcut.clone();
+                        move |shortcut| {
+                            preference_store.save_workspace_zoom_out_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_workspace_zoom_out_shortcut(
+                                &window,
+                                &controller_handle,
+                                &tabs,
+                                &active_tab_id,
+                                &shortcut,
+                            );
+                            logging::info(format!(
+                                "updated application settings workspace_zoom_out_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Zoom out shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
+                    on_reset_defaults: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let refresh_handle = refresh_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let title_root = title_root_for_settings.clone();
+                        let fullscreen_button = fullscreen_button_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let fullscreen_controller = fullscreen_shortcut_controller.clone();
+                        let density_controller = density_shortcut_controller.clone();
+                        let zoom_in_controller = zoom_in_shortcut_controller.clone();
+                        let zoom_out_controller = zoom_out_shortcut_controller.clone();
+                        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+                        let current_density_shortcut = current_density_shortcut.clone();
+                        let current_close_to_background = current_close_to_background.clone();
+                        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+                        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+                        let sync_close_to_background_notice =
+                            sync_close_to_background_notice.clone();
+                        move || {
+                            let defaults = AppPreferences::default();
+                            preference_store.save(&defaults);
+                            current_fullscreen_shortcut
+                                .replace(defaults.workspace_fullscreen_shortcut.clone());
+                            current_density_shortcut
+                                .replace(defaults.workspace_density_shortcut.clone());
+                            current_close_to_background.set(defaults.close_to_background);
+                            sync_close_to_background_notice();
+                            current_zoom_in_shortcut
+                                .replace(defaults.workspace_zoom_in_shortcut.clone());
+                            current_zoom_out_shortcut
+                                .replace(defaults.workspace_zoom_out_shortcut.clone());
+                            install_workspace_fullscreen_shortcut(
+                                &window,
+                                &fullscreen_controller,
+                                &tabs,
+                                &active_tab_id,
+                                &defaults.workspace_fullscreen_shortcut,
+                            );
+                            install_workspace_density_shortcut(
+                                &window,
+                                &density_controller,
+                                &tabs,
+                                &active_tab_id,
+                                &defaults.workspace_density_shortcut,
+                            );
+                            install_workspace_zoom_in_shortcut(
+                                &window,
+                                &zoom_in_controller,
+                                &tabs,
+                                &active_tab_id,
+                                &defaults.workspace_zoom_in_shortcut,
+                            );
+                            install_workspace_zoom_out_shortcut(
+                                &window,
+                                &zoom_out_controller,
+                                &tabs,
+                                &active_tab_id,
+                                &defaults.workspace_zoom_out_shortcut,
+                            );
+                            sync_fullscreen_chrome(
+                                &window,
+                                title_root.upcast_ref(),
+                                &fullscreen_button,
+                                active_tab_is_workspace(&tabs, active_tab_id.get()),
+                                current_fullscreen_shortcut.borrow().as_str(),
+                            );
+                            logging::info("reset application settings to defaults");
+                            if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                                refresh();
+                            }
+                            show_toast(&toast_overlay, "Application defaults reset");
+                        }
+                    }),
                     on_size_changed: Rc::new({
-                    let preference_store = preference_store_for_settings.clone();
-                    move |width, height| {
-                        preference_store.save_settings_dialog_size(width, height);
-                    }
-                }),
+                        let preference_store = preference_store_for_settings.clone();
+                        move |width, height| {
+                            preference_store.save_settings_dialog_size(width, height);
+                        }
+                    }),
                 },
             );
         })
@@ -1492,7 +1513,9 @@ fn tab_id_at_point(
 
     let mut tab_widgets = Vec::new();
     collect_tab_widgets(tab_bar.upcast_ref(), &mut tab_widgets);
-    let position = tab_widgets.iter().position(|widget| widget == &tab_widget)?;
+    let position = tab_widgets
+        .iter()
+        .position(|widget| widget == &tab_widget)?;
     tabs.borrow().get(position).map(|tab| tab.id)
 }
 
@@ -1612,6 +1635,7 @@ fn restore_saved_session(
         let built_workspace = workspace_view::build_with_layout_change_handler(
             &preset,
             &workspace_root,
+            resolved_theme_uses_dark_palette(preset.theme),
             terminal_zoom_steps,
             {
                 let tabs = context.tabs.clone();
@@ -1819,7 +1843,11 @@ fn cycle_active_workspace_density(
         )
     };
 
-    runtime.apply_density(next_density, terminal_zoom_steps);
+    runtime.apply_appearance(
+        window_uses_dark_theme(window),
+        next_density,
+        terminal_zoom_steps,
+    );
     apply_window_density(window, Some(next_density));
     logging::info(format!(
         "cycled workspace density preset='{}' density={}",
@@ -1830,6 +1858,7 @@ fn cycle_active_workspace_density(
 }
 
 fn adjust_active_workspace_zoom(
+    window: &adw::ApplicationWindow,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     delta: i32,
@@ -1857,7 +1886,7 @@ fn adjust_active_workspace_zoom(
         )
     };
 
-    runtime.apply_density(density, terminal_zoom_steps);
+    runtime.apply_appearance(window_uses_dark_theme(window), density, terminal_zoom_steps);
     logging::info(format!(
         "adjusted workspace terminal zoom preset='{}' zoom_steps={}",
         workspace_name, terminal_zoom_steps
@@ -2039,14 +2068,20 @@ fn install_workspace_zoom_in_shortcut(
 ) {
     let tabs_for_shortcut = tabs.clone();
     let active_for_shortcut = active_tab_id.clone();
+    let window_for_shortcut = window.clone();
     install_shortcut_controller(
         window,
         controller_handle,
         "workspace_zoom_in",
         &zoom_in_shortcut_accelerators(shortcut),
         move || {
-            if adjust_active_workspace_zoom(&tabs_for_shortcut, active_for_shortcut.get(), 1)
-                .is_some()
+            if adjust_active_workspace_zoom(
+                &window_for_shortcut,
+                &tabs_for_shortcut,
+                active_for_shortcut.get(),
+                1,
+            )
+            .is_some()
             {
                 glib::Propagation::Stop
             } else {
@@ -2065,14 +2100,20 @@ fn install_workspace_zoom_out_shortcut(
 ) {
     let tabs_for_shortcut = tabs.clone();
     let active_for_shortcut = active_tab_id.clone();
+    let window_for_shortcut = window.clone();
     install_shortcut_controller(
         window,
         controller_handle,
         "workspace_zoom_out",
         &zoom_out_shortcut_accelerators(shortcut),
         move || {
-            if adjust_active_workspace_zoom(&tabs_for_shortcut, active_for_shortcut.get(), -1)
-                .is_some()
+            if adjust_active_workspace_zoom(
+                &window_for_shortcut,
+                &tabs_for_shortcut,
+                active_for_shortcut.get(),
+                -1,
+            )
+            .is_some()
             {
                 glib::Propagation::Stop
             } else {
@@ -2278,7 +2319,7 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{move_item_to_position, move_tab_to_position, WorkspaceTab};
+    use super::{WorkspaceTab, move_item_to_position, move_tab_to_position};
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
         tabs.to_vec()

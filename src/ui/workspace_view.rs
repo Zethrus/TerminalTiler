@@ -28,9 +28,15 @@ pub struct WorkspaceRuntime {
 }
 
 impl WorkspaceRuntime {
-    pub fn apply_density(&self, density: ApplicationDensity, zoom_steps: i32) {
+    pub fn apply_appearance(
+        &self,
+        use_dark_palette: bool,
+        density: ApplicationDensity,
+        zoom_steps: i32,
+    ) {
         for tile in self.inner.tiles.borrow().iter() {
-            tile.session.apply_density(density, zoom_steps);
+            tile.session
+                .apply_appearance(use_dark_palette, density, zoom_steps);
         }
     }
 
@@ -51,7 +57,8 @@ impl WorkspaceRuntime {
 
         {
             let mut tiles = self.inner.tiles.borrow_mut();
-            let Some(dragged_index) = tiles.iter().position(|tile| tile.tile.id == dragged_id) else {
+            let Some(dragged_index) = tiles.iter().position(|tile| tile.tile.id == dragged_id)
+            else {
                 return false;
             };
             let Some(target_index) = tiles.iter().position(|tile| tile.tile.id == target_id) else {
@@ -80,6 +87,7 @@ pub struct WorkspaceView {
 pub fn build_with_layout_change_handler(
     preset: &WorkspacePreset,
     workspace_root: &Path,
+    use_dark_palette: bool,
     zoom_steps: i32,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
@@ -142,6 +150,7 @@ pub fn build_with_layout_change_handler(
             let tile_view = tile_view::build(
                 &tile,
                 workspace_root,
+                use_dark_palette,
                 preset.density,
                 zoom_steps,
                 on_swap.clone(),
