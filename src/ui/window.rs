@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, gio, glib, pango};
 
 use crate::app::tray::TrayController;
 use crate::logging;
@@ -120,6 +120,7 @@ struct RestoreSessionContext {
     tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
     next_tab_id: Rc<Cell<usize>>,
     tab_view: adw::TabView,
+    tab_bar: adw::TabBar,
     select_tab: SelectTabHandle,
     active_tab_id: Rc<Cell<usize>>,
     forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
@@ -150,6 +151,12 @@ pub fn present(
     let title = TitleChrome::new(&tab_view);
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
+    let refresh_native_tab_bar_layout: Rc<dyn Fn()> = {
+        let tab_bar = title.tab_bar.clone();
+        Rc::new(move || {
+            schedule_native_tab_bar_layout(&tab_bar);
+        })
+    };
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&tab_view));
@@ -379,6 +386,7 @@ pub fn present(
         let tab_view_for_rename = tab_view.clone();
         let active_for_rename = active_tab_id.clone();
         let select_for_rename = select_tab.clone();
+        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
 
         *apply_tab_rename.borrow_mut() = Some(Box::new(move |tab_id, requested_title| {
             let requested_title = requested_title
@@ -402,6 +410,7 @@ pub fn present(
                     sync_tab_page_metadata(&tab_view_for_rename, tab);
                 }
             }
+            refresh_native_tab_bar_layout();
 
             logging::info(format!(
                 "workspace tab {} renamed to '{}'",
@@ -523,6 +532,7 @@ pub fn present(
         let tabs_for_workspace = tabs.clone();
         let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
+        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -576,6 +586,7 @@ pub fn present(
                         sync_tab_page_metadata(&tab_view_for_workspace, tab);
                     }
                 }
+                refresh_native_tab_bar_layout();
 
                 logging::info(format!(
                     "workspace tab {} launched preset='{}' root='{}'",
@@ -817,6 +828,7 @@ pub fn present(
         let close_tab_for_add = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
         let select_for_add = select_tab.clone();
+        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
 
         *add_workspace_tab.borrow_mut() = Some(Box::new(move || {
             let tab_id = next_tab_id.get();
@@ -842,6 +854,7 @@ pub fn present(
             };
             tab_view_for_add.append(&page_shell);
             sync_tab_page_metadata(&tab_view_for_add, &tab);
+            refresh_native_tab_bar_layout();
 
             rebuild_launch_tab(
                 tab_id,
@@ -1393,6 +1406,7 @@ pub fn present(
                         tabs: tabs_for_restore.clone(),
                         next_tab_id: next_tab_id_for_restore.clone(),
                         tab_view: tab_view_for_restore.clone(),
+                        tab_bar: title.tab_bar.clone(),
                         select_tab: select_for_restore.clone(),
                         active_tab_id: active_for_restore.clone(),
                         forced_tab_closes: forced_tab_closes.clone(),
@@ -1485,6 +1499,22 @@ fn sync_tab_page_metadata(tab_view: &adw::TabView, tab: &WorkspaceTab) {
     page.set_icon(Some(&icon));
 }
 
+fn configure_native_tab_content(widget: &gtk::Widget) {
+    if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+        label.set_single_line_mode(true);
+        label.set_ellipsize(pango::EllipsizeMode::End);
+        label.set_width_chars(12);
+        label.set_max_width_chars(12);
+        label.set_xalign(0.0);
+    }
+
+    let mut child = widget.first_child();
+    while let Some(next) = child {
+        configure_native_tab_content(&next);
+        child = next.next_sibling();
+    }
+}
+
 fn collect_tab_widgets(widget: &gtk::Widget, tab_widgets: &mut Vec<gtk::Widget>) {
     if widget.has_css_class("tab") {
         tab_widgets.push(widget.clone());
@@ -1495,6 +1525,19 @@ fn collect_tab_widgets(widget: &gtk::Widget, tab_widgets: &mut Vec<gtk::Widget>)
         collect_tab_widgets(&next, tab_widgets);
         child = next.next_sibling();
     }
+}
+
+fn schedule_native_tab_bar_layout(tab_bar: &adw::TabBar) {
+    let tab_bar = tab_bar.clone();
+    glib::idle_add_local_once(move || {
+        let mut tab_widgets = Vec::new();
+        collect_tab_widgets(tab_bar.upcast_ref(), &mut tab_widgets);
+        for tab_widget in tab_widgets {
+            tab_widget.set_width_request(136);
+            tab_widget.set_hexpand(false);
+            configure_native_tab_content(&tab_widget);
+        }
+    });
 }
 
 fn tab_id_at_point(
@@ -1674,6 +1717,7 @@ fn restore_saved_session(
             .expect("restored workspace tab should exist");
         context.tab_view.append(&page_shell);
         sync_tab_page_metadata(&context.tab_view, &tab);
+        schedule_native_tab_bar_layout(&context.tab_bar);
         restored_ids.push(tab_id);
     }
 
