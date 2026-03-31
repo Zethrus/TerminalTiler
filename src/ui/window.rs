@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -16,7 +17,6 @@ use crate::ui::{launch_screen, settings_dialog, workspace_view};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
-type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize, bool)>>>>;
 type RenameTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, Option<String>)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
@@ -75,7 +75,7 @@ struct WorkspaceTab {
     default_title: String,
     custom_title: Option<String>,
     subtitle: String,
-    page_name: String,
+    page_shell: gtk::Box,
     content: TabContent,
     workspace_root: Option<PathBuf>,
 }
@@ -84,13 +84,6 @@ struct WorkspaceTab {
 enum TabContent {
     LaunchDeck,
     Workspace(Box<WorkspaceState>),
-}
-
-#[derive(Clone)]
-struct TabLabel {
-    id: usize,
-    title: String,
-    tile_count: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -103,13 +96,22 @@ struct WorkspaceState {
 #[derive(Clone)]
 struct LaunchTabContext {
     tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
-    stack: gtk::Stack,
     window: adw::ApplicationWindow,
     preference_store: Rc<PreferenceStore>,
     preset_store: Rc<PresetStore>,
     show_workspace_handle: ShowWorkspaceHandle,
     close_tab_handle: TabActionHandle,
     refresh_launch_tabs: VoidHandle,
+}
+
+struct RestoreSessionContext {
+    tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
+    next_tab_id: Rc<Cell<usize>>,
+    tab_view: adw::TabView,
+    select_tab: SelectTabHandle,
+    active_tab_id: Rc<Cell<usize>>,
+    forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
+    suppress_empty_replacement: Rc<Cell<bool>>,
 }
 
 pub fn present(
@@ -131,18 +133,16 @@ pub fn present(
         .build();
     header.add_css_class("app-headerbar");
 
-    let title = TitleChrome::new();
+    let tab_view = adw::TabView::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    let title = TitleChrome::new(&tab_view);
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
 
-    let stack = gtk::Stack::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .transition_type(gtk::StackTransitionType::Crossfade)
-        .build();
-
     let toast_overlay = adw::ToastOverlay::new();
-    toast_overlay.set_child(Some(&stack));
+    toast_overlay.set_child(Some(&tab_view));
 
     let close_to_background_notice = gtk::Revealer::builder()
         .transition_type(gtk::RevealerTransitionType::SlideDown)
@@ -224,11 +224,12 @@ pub fn present(
     let select_tab: SelectTabHandle = Rc::new(RefCell::new(None));
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
-    let reorder_tabs: ReorderTabHandle = Rc::new(RefCell::new(None));
     let apply_tab_rename: RenameTabHandle = Rc::new(RefCell::new(None));
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
     let refresh_launch_tabs: VoidHandle = Rc::new(RefCell::new(None));
     let add_workspace_tab: VoidHandle = Rc::new(RefCell::new(None));
+    let forced_tab_closes = Rc::new(RefCell::new(HashSet::<usize>::new()));
+    let suppress_empty_replacement = Rc::new(Cell::new(false));
     let current_shortcuts = preference_store.load();
     let current_fullscreen_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_fullscreen_shortcut.clone(),
@@ -269,55 +270,35 @@ pub fn present(
     }
 
     {
-        let title_for_select = title.clone();
         let title_root_for_select = title.root.clone();
-        let stack_for_select = stack.clone();
+        let tab_view_for_select = tab_view.clone();
         let header_for_select = header.clone();
         let window_for_select = window.clone();
         let back_for_select = back_button.clone();
         let fullscreen_for_select = fullscreen_button.clone();
         let tabs_for_select = tabs.clone();
+        let tabs_for_sync = tabs.clone();
         let active_for_select = active_tab_id.clone();
         let preference_store_for_select = preference_store.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let select_handle = select_tab.clone();
-        let rename_handle = request_tab_rename.clone();
-        let close_handle = close_tab.clone();
-        let reorder_handle = reorder_tabs.clone();
-
-        *select_tab.borrow_mut() = Some(Box::new(move |tab_id| {
-            let (page_name, is_workspace, preset_for_profile, labels) = {
-                let tabs = tabs_for_select.borrow();
+        let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
+            let (is_workspace, preset_for_profile) = {
+                let tabs = tabs_for_sync.borrow();
                 let active = tabs
                     .iter()
                     .find(|tab| tab.id == tab_id)
                     .cloned()
                     .expect("active workspace tab should exist");
-                let labels = tabs
-                    .iter()
-                    .map(|tab| TabLabel {
-                        id: tab.id,
-                        title: tab_display_title(tab),
-                        tile_count: match &tab.content {
-                            TabContent::Workspace(workspace) => Some(workspace.preset.tile_count()),
-                            TabContent::LaunchDeck => None,
-                        },
-                    })
-                    .collect::<Vec<_>>();
-
                 (
-                    active.page_name,
                     matches!(active.content, TabContent::Workspace(_)),
                     match active.content {
                         TabContent::LaunchDeck => None,
                         TabContent::Workspace(workspace) => Some(workspace.preset),
                     },
-                    labels,
                 )
             };
 
             active_for_select.set(tab_id);
-            stack_for_select.set_visible_child_name(&page_name);
 
             if let Some(preset) = preset_for_profile.as_ref() {
                 apply_shell_profile(&header_for_select, &window_for_select, preset);
@@ -336,46 +317,47 @@ pub fn present(
                 is_workspace,
                 current_fullscreen_shortcut.borrow().as_str(),
             );
-
-            let on_select = Rc::new({
-                let select_handle = select_handle.clone();
-                move |selected_id| {
-                    if let Some(select) = select_handle.borrow().as_ref() {
-                        select(selected_id);
-                    }
+        });
+        {
+            let sync_selected_tab = sync_selected_tab.clone();
+            *select_tab.borrow_mut() = Some(Box::new(move |tab_id| {
+                let page = {
+                    let tabs = tabs_for_select.borrow();
+                    tab_page_for_id(&tab_view_for_select, &tabs, tab_id)
+                };
+                let Some(page) = page else {
+                    return;
+                };
+                let selected_page = tab_view_for_select.selected_page();
+                if selected_page.as_ref() != Some(&page) {
+                    tab_view_for_select.set_selected_page(&page);
+                }
+                sync_selected_tab(tab_id);
+            }));
+        }
+        {
+            let tabs_for_notify = tabs.clone();
+            let select_handle = select_tab.clone();
+            tab_view.connect_selected_page_notify(move |view| {
+                let Some(page) = view.selected_page() else {
+                    return;
+                };
+                let tab_id = {
+                    let tabs = tabs_for_notify.borrow();
+                    tab_id_for_page(&tabs, &page)
+                };
+                if let Some(tab_id) = tab_id
+                    && let Some(select) = select_handle.borrow().as_ref()
+                {
+                    select(tab_id);
                 }
             });
-            let on_rename = Rc::new({
-                let rename_handle = rename_handle.clone();
-                move |selected_id| {
-                    if let Some(rename) = rename_handle.borrow().as_ref() {
-                        rename(selected_id);
-                    }
-                }
-            });
-            let on_close = Rc::new({
-                let close_handle = close_handle.clone();
-                move |selected_id| {
-                    if let Some(close) = close_handle.borrow().as_ref() {
-                        close(selected_id);
-                    }
-                }
-            });
-            let on_reorder = Rc::new({
-                let reorder_handle = reorder_handle.clone();
-                move |dragged_id, target_id, insert_after| {
-                    if let Some(reorder) = reorder_handle.borrow().as_ref() {
-                        reorder(dragged_id, target_id, insert_after);
-                    }
-                }
-            });
-            title_for_select
-                .render_tabs(&labels, tab_id, on_select, on_rename, on_close, on_reorder);
-        }));
+        }
     }
 
     {
         let tabs_for_rename = tabs.clone();
+        let tab_view_for_rename = tab_view.clone();
         let active_for_rename = active_tab_id.clone();
         let select_for_rename = select_tab.clone();
 
@@ -395,6 +377,12 @@ pub fn present(
                 tab.custom_title = requested_title;
                 tab_display_title(tab)
             };
+            {
+                let tabs = tabs_for_rename.borrow();
+                if let Some(tab) = tabs.iter().find(|tab| tab.id == tab_id) {
+                    sync_tab_page_metadata(&tab_view_for_rename, tab);
+                }
+            }
 
             logging::info(format!(
                 "workspace tab {} renamed to '{}'",
@@ -435,25 +423,72 @@ pub fn present(
     }
 
     {
+        let tabs_for_middle_click = tabs.clone();
+        let close_handle = close_tab.clone();
+        let middle_click = gtk::GestureClick::builder()
+            .button(2)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let title_root = title.root.clone();
+        middle_click.connect_pressed(move |gesture, _, x, y| {
+            let Some(tab_id) = tab_id_at_point(&title_root, &tabs_for_middle_click, x, y) else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(close) = close_handle.borrow().as_ref() {
+                close(tab_id);
+            }
+        });
+        title.root.add_controller(middle_click);
+    }
+
+    {
+        let tabs_for_rename_click = tabs.clone();
+        let rename_handle = request_tab_rename.clone();
+        let rename_click = gtk::GestureClick::builder()
+            .button(1)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let title_root = title.root.clone();
+        rename_click.connect_pressed(move |gesture, n_press, x, y| {
+            if n_press != 2 {
+                return;
+            }
+            let Some(tab_id) = tab_id_at_point(&title_root, &tabs_for_rename_click, x, y) else {
+                return;
+            };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(rename) = rename_handle.borrow().as_ref() {
+                rename(tab_id);
+            }
+        });
+        title.root.add_controller(rename_click);
+    }
+
+    {
         let tabs_for_reorder = tabs.clone();
         let active_for_reorder = active_tab_id.clone();
         let select_for_reorder = select_tab.clone();
-
-        *reorder_tabs.borrow_mut() = Some(Box::new(move |dragged_id, target_id, insert_after| {
-            let moved = {
-                let mut tabs = tabs_for_reorder.borrow_mut();
-                reorder_tab_list(&mut tabs, dragged_id, target_id, insert_after)
+        tab_view.connect_page_reordered(move |_, page, position| {
+            let moved_id = {
+                let tabs = tabs_for_reorder.borrow();
+                tab_id_for_page(&tabs, page)
+            };
+            let Some(moved_id) = moved_id else {
+                return;
             };
 
+            let moved = {
+                let mut tabs = tabs_for_reorder.borrow_mut();
+                move_tab_to_position(&mut tabs, moved_id, position.max(0) as usize)
+            };
             if !moved {
                 return;
             }
 
             logging::info(format!(
-                "reordered workspace tab {} around tab {} ({})",
-                dragged_id,
-                target_id,
-                if insert_after { "after" } else { "before" }
+                "reordered workspace tab {} to position {}",
+                moved_id, position
             ));
 
             let active_id = active_for_reorder.get();
@@ -462,12 +497,12 @@ pub fn present(
             {
                 select(active_id);
             }
-        }));
+        });
     }
 
     {
         let tabs_for_workspace = tabs.clone();
-        let stack_for_workspace = stack.clone();
+        let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
 
         *show_workspace_in_tab.borrow_mut() =
@@ -490,7 +525,7 @@ pub fn present(
                         })
                     },
                 );
-                let (page_name, previous_runtime) = {
+                let (page_shell, previous_runtime) = {
                     let mut tabs = tabs_for_workspace.borrow_mut();
                     let tab = tabs
                         .iter_mut()
@@ -507,14 +542,20 @@ pub fn present(
                         terminal_zoom_steps,
                     }));
                     tab.workspace_root = Some(workspace_root.clone());
-                    (tab.page_name.clone(), previous_runtime)
+                    (tab.page_shell.clone(), previous_runtime)
                 };
 
                 if let Some(runtime) = previous_runtime {
                     runtime.terminate_all("replacing workspace view");
                 }
 
-                replace_stack_page(&stack_for_workspace, &page_name, &built_workspace.widget);
+                replace_tab_page_content(&page_shell, &built_workspace.widget);
+                {
+                    let tabs = tabs_for_workspace.borrow();
+                    if let Some(tab) = tabs.iter().find(|tab| tab.id == tab_id) {
+                        sync_tab_page_metadata(&tab_view_for_workspace, tab);
+                    }
+                }
 
                 logging::info(format!(
                     "workspace tab {} launched preset='{}' root='{}'",
@@ -531,7 +572,6 @@ pub fn present(
 
     {
         let tabs_for_refresh = tabs.clone();
-        let stack_for_refresh = stack.clone();
         let window_for_refresh = window.clone();
         let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
@@ -554,7 +594,6 @@ pub fn present(
                     tab_id,
                     &LaunchTabContext {
                         tabs: tabs_for_refresh.clone(),
-                        stack: stack_for_refresh.clone(),
                         window: window_for_refresh.clone(),
                         preference_store: preference_store.clone(),
                         preset_store: preset_store.clone(),
@@ -576,64 +615,22 @@ pub fn present(
 
     {
         let tabs_for_close = tabs.clone();
-        let stack_for_close = stack.clone();
         let active_for_close = active_tab_id.clone();
         let select_for_close = select_tab.clone();
         let add_for_close = add_workspace_tab.clone();
         let window_for_close = window.clone();
+        let forced_tab_closes_for_signal = forced_tab_closes.clone();
+        let suppress_empty_replacement_for_signal = suppress_empty_replacement.clone();
+        tab_view.connect_close_page(move |view, page| {
+            let tab_id = {
+                let tabs = tabs_for_close.borrow();
+                tab_id_for_page(&tabs, page)
+            };
+            let Some(tab_id) = tab_id else {
+                view.close_page_finish(page, true);
+                return glib::Propagation::Stop;
+            };
 
-        let do_close: Rc<dyn Fn(usize)> = Rc::new({
-            let tabs_for_close = tabs_for_close.clone();
-            let stack_for_close = stack_for_close.clone();
-            let active_for_close = active_for_close.clone();
-            let select_for_close = select_for_close.clone();
-            let add_for_close = add_for_close.clone();
-
-            move |tab_id| {
-                let (page_name, runtime, next_active_id, should_create_replacement) = {
-                    let mut tabs = tabs_for_close.borrow_mut();
-                    let Some(index) = tabs.iter().position(|tab| tab.id == tab_id) else {
-                        return;
-                    };
-
-                    let removed = tabs.remove(index);
-                    let runtime = match removed.content {
-                        TabContent::Workspace(workspace) => Some(workspace.runtime),
-                        TabContent::LaunchDeck => None,
-                    };
-                    let next_active_id = if tabs.is_empty() {
-                        None
-                    } else if active_for_close.get() == tab_id {
-                        tabs.get(index).or_else(|| tabs.last()).map(|tab| tab.id)
-                    } else {
-                        Some(active_for_close.get())
-                    };
-
-                    (removed.page_name, runtime, next_active_id, tabs.is_empty())
-                };
-
-                if let Some(runtime) = runtime {
-                    runtime.terminate_all("closing workspace tab");
-                }
-                remove_stack_page(&stack_for_close, &page_name);
-                logging::info(format!("closed workspace tab {}", tab_id));
-
-                if should_create_replacement {
-                    if let Some(add_tab) = add_for_close.borrow().as_ref() {
-                        add_tab();
-                    }
-                    return;
-                }
-
-                if let Some(next_active_id) = next_active_id
-                    && let Some(select) = select_for_close.borrow().as_ref()
-                {
-                    select(next_active_id);
-                }
-            }
-        });
-
-        *close_tab.borrow_mut() = Some(Box::new(move |tab_id| {
             let is_workspace = {
                 let tabs = tabs_for_close.borrow();
                 tabs.iter()
@@ -641,18 +638,83 @@ pub fn present(
                     .map(|tab| matches!(tab.content, TabContent::Workspace(_)))
                     .unwrap_or(false)
             };
+            let force_close = forced_tab_closes_for_signal.borrow_mut().remove(&tab_id);
 
-            if is_workspace {
-                let do_close = do_close.clone();
+            if is_workspace && !force_close {
+                let view = view.clone();
+                let page = page.clone();
+                let forced_tab_closes = forced_tab_closes_for_signal.clone();
                 confirm_destructive_action(
                     &window_for_close,
                     "Close Workspace?",
                     "Running terminal sessions in this workspace will be terminated.",
                     "Close",
-                    move || do_close(tab_id),
+                    move || {
+                        forced_tab_closes.borrow_mut().insert(tab_id);
+                        view.close_page(&page);
+                    },
                 );
-            } else {
-                do_close(tab_id);
+                return glib::Propagation::Stop;
+            }
+
+            let (runtime, next_active_id, should_create_replacement) = {
+                let mut tabs = tabs_for_close.borrow_mut();
+                let Some(index) = tabs.iter().position(|tab| tab.id == tab_id) else {
+                    view.close_page_finish(page, false);
+                    return glib::Propagation::Stop;
+                };
+
+                let removed = tabs.remove(index);
+                let runtime = match removed.content {
+                    TabContent::Workspace(workspace) => Some(workspace.runtime),
+                    TabContent::LaunchDeck => None,
+                };
+                let next_active_id = if tabs.is_empty() {
+                    None
+                } else if active_for_close.get() == tab_id {
+                    tabs.get(index).or_else(|| tabs.last()).map(|tab| tab.id)
+                } else {
+                    Some(active_for_close.get())
+                };
+
+                (runtime, next_active_id, tabs.is_empty())
+            };
+
+            if let Some(runtime) = runtime {
+                runtime.terminate_all("closing workspace tab");
+            }
+            view.close_page_finish(page, true);
+            logging::info(format!("closed workspace tab {}", tab_id));
+
+            if should_create_replacement {
+                active_for_close.set(0);
+                if !suppress_empty_replacement_for_signal.get()
+                    && let Some(add_tab) = add_for_close.borrow().as_ref()
+                {
+                    add_tab();
+                }
+                return glib::Propagation::Stop;
+            }
+
+            if let Some(next_active_id) = next_active_id
+                && let Some(select) = select_for_close.borrow().as_ref()
+            {
+                select(next_active_id);
+            }
+            glib::Propagation::Stop
+        });
+    }
+
+    {
+        let tabs_for_close = tabs.clone();
+        let tab_view_for_close = tab_view.clone();
+        *close_tab.borrow_mut() = Some(Box::new(move |tab_id| {
+            let page = {
+                let tabs = tabs_for_close.borrow();
+                tab_page_for_id(&tab_view_for_close, &tabs, tab_id)
+            };
+            if let Some(page) = page {
+                tab_view_for_close.close_page(&page);
             }
         }));
     }
@@ -727,7 +789,7 @@ pub fn present(
     {
         let tabs_for_add = tabs.clone();
         let next_tab_id = next_tab_id.clone();
-        let stack_for_add = stack.clone();
+        let tab_view_for_add = tab_view.clone();
         let window_for_add = window.clone();
         let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
@@ -741,21 +803,30 @@ pub fn present(
             next_tab_id.set(tab_id + 1);
 
             let launch_title = format!("Workspace {}", tab_id);
+            let page_shell = build_tab_page_shell();
             tabs_for_add.borrow_mut().push(WorkspaceTab {
                 id: tab_id,
                 default_title: launch_title,
                 custom_title: None,
                 subtitle: "Launch deck".into(),
-                page_name: tab_page_name(tab_id),
+                page_shell: page_shell.clone(),
                 content: TabContent::LaunchDeck,
                 workspace_root: None,
             });
+            let tab = {
+                let tabs = tabs_for_add.borrow();
+                tabs.iter()
+                    .find(|tab| tab.id == tab_id)
+                    .cloned()
+                    .expect("new launch tab should exist")
+            };
+            tab_view_for_add.append(&page_shell);
+            sync_tab_page_metadata(&tab_view_for_add, &tab);
 
             rebuild_launch_tab(
                 tab_id,
                 &LaunchTabContext {
                     tabs: tabs_for_add.clone(),
-                    stack: stack_for_add.clone(),
                     window: window_for_add.clone(),
                     preference_store: preference_store.clone(),
                     preset_store: preset_store.clone(),
@@ -807,16 +878,19 @@ pub fn present(
             let preferences = preference_store_for_settings.load();
             settings_dialog::present(
                 &window_for_settings,
-                preferences.default_theme,
-                preferences.default_density,
-                preferences.close_to_background,
-                preferences.workspace_fullscreen_shortcut,
-                preferences.workspace_density_shortcut,
-                preferences.workspace_zoom_in_shortcut,
-                preferences.workspace_zoom_out_shortcut,
-                preferences.settings_dialog_width,
-                preferences.settings_dialog_height,
-                {
+                settings_dialog::SettingsDialogInput {
+                    default_theme: preferences.default_theme,
+                    default_density: preferences.default_density,
+                    close_to_background: preferences.close_to_background,
+                    workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut,
+                    workspace_density_shortcut: preferences.workspace_density_shortcut,
+                    workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut,
+                    workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut,
+                    settings_dialog_width: preferences.settings_dialog_width,
+                    settings_dialog_height: preferences.settings_dialog_height,
+                },
+                settings_dialog::SettingsDialogActions {
+                    on_theme_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
@@ -834,8 +908,8 @@ pub fn present(
                             &format!("Default theme set to {}", theme.label()),
                         );
                     }
-                },
-                {
+                }),
+                    on_density_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
@@ -853,8 +927,8 @@ pub fn present(
                             &format!("Default density set to {}", density.label()),
                         );
                     }
-                },
-                {
+                }),
+                    on_close_to_background_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let current_close_to_background = current_close_to_background.clone();
@@ -881,8 +955,8 @@ pub fn present(
                             },
                         );
                     }
-                },
-                {
+                }),
+                    on_fullscreen_shortcut_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let tabs = tabs_for_settings.clone();
@@ -925,8 +999,8 @@ pub fn present(
                             ),
                         );
                     }
-                },
-                {
+                }),
+                    on_density_shortcut_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let tabs = tabs_for_settings.clone();
@@ -960,8 +1034,8 @@ pub fn present(
                             ),
                         );
                     }
-                },
-                {
+                }),
+                    on_zoom_in_shortcut_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let tabs = tabs_for_settings.clone();
@@ -995,8 +1069,8 @@ pub fn present(
                             ),
                         );
                     }
-                },
-                {
+                }),
+                    on_zoom_out_shortcut_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
                     let tabs = tabs_for_settings.clone();
@@ -1030,8 +1104,8 @@ pub fn present(
                             ),
                         );
                     }
-                },
-                {
+                }),
+                    on_reset_defaults: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     let refresh_handle = refresh_for_settings.clone();
                     let toast_overlay = toast_overlay_for_settings.clone();
@@ -1104,12 +1178,13 @@ pub fn present(
                         }
                         show_toast(&toast_overlay, "Application defaults reset");
                     }
-                },
-                {
+                }),
+                    on_size_changed: Rc::new({
                     let preference_store = preference_store_for_settings.clone();
                     move |width, height| {
                         preference_store.save_settings_dialog_size(width, height);
                     }
+                }),
                 },
             );
         })
@@ -1150,7 +1225,6 @@ pub fn present(
     }
 
     let tabs_for_back = tabs.clone();
-    let stack_for_back = stack.clone();
     let window_for_back = window.clone();
     let preference_store_for_back = preference_store.clone();
     let preset_store_for_back = preset_store.clone();
@@ -1175,7 +1249,6 @@ pub fn present(
 
         let do_return = {
             let tabs_for_back = tabs_for_back.clone();
-            let stack_for_back = stack_for_back.clone();
             let window_for_back = window_for_back.clone();
             let preference_store_for_back = preference_store_for_back.clone();
             let preset_store_for_back = preset_store_for_back.clone();
@@ -1185,7 +1258,7 @@ pub fn present(
             let select_for_back = select_for_back.clone();
 
             move || {
-                let (page_name, runtime) = {
+                let runtime = {
                     let mut tabs = tabs_for_back.borrow_mut();
                     let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
                         return;
@@ -1197,7 +1270,7 @@ pub fn present(
                     tab.subtitle = "Launch deck".into();
                     tab.content = TabContent::LaunchDeck;
                     tab.workspace_root = None;
-                    (tab.page_name.clone(), runtime)
+                    runtime
                 };
 
                 logging::info(format!("returning workspace tab {} to launch deck", tab_id));
@@ -1205,12 +1278,10 @@ pub fn present(
                 if let Some(runtime) = runtime {
                     runtime.terminate_all("returning workspace tab to templates");
                 }
-                remove_stack_page(&stack_for_back, &page_name);
                 rebuild_launch_tab(
                     tab_id,
                     &LaunchTabContext {
                         tabs: tabs_for_back.clone(),
-                        stack: stack_for_back.clone(),
                         window: window_for_back.clone(),
                         preference_store: preference_store_for_back.clone(),
                         preset_store: preset_store_for_back.clone(),
@@ -1283,7 +1354,7 @@ pub fn present(
         let resume_session = saved_session.clone();
         let tabs_for_restore = tabs.clone();
         let next_tab_id_for_restore = next_tab_id.clone();
-        let stack_for_restore = stack.clone();
+        let tab_view_for_restore = tab_view.clone();
         let select_for_restore = select_tab.clone();
         let active_for_restore = active_tab_id.clone();
         let session_store_for_restore = session_store.clone();
@@ -1296,21 +1367,17 @@ pub fn present(
                 &saved_session,
                 warning.as_deref(),
                 {
-                    let tabs = tabs_for_restore.clone();
-                    let next_tab_id = next_tab_id_for_restore.clone();
-                    let stack = stack_for_restore.clone();
-                    let select_tab = select_for_restore.clone();
-                    let active_tab_id = active_for_restore.clone();
+                    let restore_context = RestoreSessionContext {
+                        tabs: tabs_for_restore.clone(),
+                        next_tab_id: next_tab_id_for_restore.clone(),
+                        tab_view: tab_view_for_restore.clone(),
+                        select_tab: select_for_restore.clone(),
+                        active_tab_id: active_for_restore.clone(),
+                        forced_tab_closes: forced_tab_closes.clone(),
+                        suppress_empty_replacement: suppress_empty_replacement.clone(),
+                    };
                     move || {
-                        restore_saved_session(
-                            &tabs,
-                            &next_tab_id,
-                            &stack,
-                            &select_tab,
-                            &active_tab_id,
-                            resume_session.clone(),
-                            true,
-                        );
+                        restore_saved_session(&restore_context, resume_session.clone(), true);
                     }
                 },
                 move || {
@@ -1339,162 +1406,102 @@ fn tab_display_title(tab: &WorkspaceTab) -> String {
         })
 }
 
-fn reorder_tab_list(
-    tabs: &mut Vec<WorkspaceTab>,
-    dragged_id: usize,
-    target_id: usize,
-    insert_after: bool,
-) -> bool {
-    if dragged_id == target_id {
+fn move_item_to_position<T>(items: &mut Vec<T>, from_index: usize, position: usize) -> bool {
+    if from_index >= items.len() {
         return false;
     }
+    let item = items.remove(from_index);
+    let insert_index = position.min(items.len());
+    items.insert(insert_index, item);
+    from_index != insert_index
+}
 
-    let Some(from_index) = tabs.iter().position(|tab| tab.id == dragged_id) else {
+fn move_tab_to_position(tabs: &mut Vec<WorkspaceTab>, moved_id: usize, position: usize) -> bool {
+    let Some(from_index) = tabs.iter().position(|tab| tab.id == moved_id) else {
         return false;
     };
-    let moved_tab = tabs.remove(from_index);
-    let Some(target_index) = tabs.iter().position(|tab| tab.id == target_id) else {
-        tabs.insert(from_index.min(tabs.len()), moved_tab);
-        return false;
-    };
-
-    let insert_index = if insert_after {
-        (target_index + 1).min(tabs.len())
-    } else {
-        target_index
-    };
-    tabs.insert(insert_index, moved_tab);
-    true
+    move_item_to_position(tabs, from_index, position)
 }
 
-fn attach_tab_drop_target(
-    widget: &impl IsA<gtk::Widget>,
-    shell: &gtk::Box,
-    target_id: usize,
-    on_reorder: Rc<dyn Fn(usize, usize, bool)>,
-    insert_after_override: Option<bool>,
-) {
-    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
-    {
-        let shell = shell.clone();
-        drop_target.connect_enter(move |_, _, _| {
-            shell.add_css_class("is-drop-target");
-            gdk::DragAction::MOVE
-        });
-    }
-    {
-        let shell = shell.clone();
-        drop_target.connect_leave(move |_| {
-            shell.remove_css_class("is-drop-target");
-        });
-    }
-    {
-        let shell = shell.clone();
-        let drop_surface = widget.as_ref().clone();
-        drop_target.connect_drop(move |_, value, x, _| {
-            shell.remove_css_class("is-drop-target");
-
-            let Ok(dragged_id) = value.get::<String>() else {
-                return false;
-            };
-            let Ok(dragged_id) = dragged_id.parse::<usize>() else {
-                return false;
-            };
-
-            let insert_after = insert_after_override.unwrap_or_else(|| {
-                x >= (drop_surface.allocated_width() as f64 / 2.0)
-            });
-            on_reorder(dragged_id, target_id, insert_after);
-            true
-        });
-    }
-    widget.as_ref().add_controller(drop_target);
-}
-
-fn clear_tab_drag_state(tabs_box: &gtk::Box) {
-    let mut child = tabs_box.first_child();
-    while let Some(widget) = child {
-        widget.remove_css_class("is-dragging");
-        widget.remove_css_class("is-drop-target");
-        child = widget.next_sibling();
-    }
-}
-
-fn build_tab_button_content(tab: &TabLabel, is_active: bool) -> gtk::Box {
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(4)
-        .valign(gtk::Align::Center)
-        .build();
-
-    let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
-    icon.add_css_class("app-tab-icon");
-    content.append(&icon);
-
-    let title = gtk::Label::builder()
-        .label(&tab.title)
-        .halign(gtk::Align::Start)
+fn build_tab_page_shell() -> gtk::Box {
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
-        .css_classes(["app-tab-title"])
-        .build();
-    content.append(&title);
-
-    if !is_active && let Some(count) = tab.tile_count {
-        let badge = gtk::Label::builder()
-            .label(count.to_string())
-            .css_classes(["app-tab-badge"])
-            .build();
-        content.append(&badge);
-    }
-
-    content
+        .vexpand(true)
+        .build()
 }
 
-fn build_tab_drag_preview(tab: &TabLabel, is_active: bool, width: i32) -> gtk::Box {
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .css_classes(["app-tab-shell", "app-tab-drag-icon"])
-        .build();
-
-    if is_active {
-        shell.add_css_class("is-active");
-    } else {
-        shell.add_css_class("is-inactive");
+fn replace_tab_page_content(page_shell: &gtk::Box, widget: &gtk::Widget) {
+    while let Some(child) = page_shell.first_child() {
+        page_shell.remove(&child);
     }
-    shell.set_size_request(width.max(142), -1);
+    page_shell.append(widget);
+}
 
-    let button = gtk::Button::builder()
-        .focus_on_click(false)
-        .sensitive(false)
-        .hexpand(true)
-        .css_classes(["flat", "app-tab-select"])
-        .build();
-    button.set_can_target(false);
-    button.set_child(Some(&build_tab_button_content(tab, is_active)));
-    shell.append(&button);
+fn tab_page_for_id(
+    tab_view: &adw::TabView,
+    tabs: &[WorkspaceTab],
+    tab_id: usize,
+) -> Option<adw::TabPage> {
+    tabs.iter()
+        .find(|tab| tab.id == tab_id)
+        .map(|tab| tab_view.page(&tab.page_shell))
+}
 
-    if is_active {
-        let close_button = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
-            .focus_on_click(false)
-            .sensitive(false)
-            .css_classes(["flat", "app-tab-close"])
-            .build();
-        close_button.set_can_target(false);
-        shell.append(&close_button);
+fn tab_id_for_page(tabs: &[WorkspaceTab], page: &adw::TabPage) -> Option<usize> {
+    let page_child = page.child();
+    tabs.iter()
+        .find(|tab| tab.page_shell.clone().upcast::<gtk::Widget>() == page_child)
+        .map(|tab| tab.id)
+}
+
+fn sync_tab_page_metadata(tab_view: &adw::TabView, tab: &WorkspaceTab) {
+    let page = tab_view.page(&tab.page_shell);
+    let icon = gio::ThemedIcon::new("utilities-terminal-symbolic");
+    page.set_title(&tab_display_title(tab));
+    page.set_tooltip(&tab.subtitle);
+    page.set_icon(Some(&icon));
+}
+
+fn collect_tab_widgets(widget: &gtk::Widget, tab_widgets: &mut Vec<gtk::Widget>) {
+    if widget.has_css_class("tab") {
+        tab_widgets.push(widget.clone());
     }
 
-    shell
+    let mut child = widget.first_child();
+    while let Some(next) = child {
+        collect_tab_widgets(&next, tab_widgets);
+        child = next.next_sibling();
+    }
+}
+
+fn tab_id_at_point(
+    tab_bar: &adw::TabBar,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    x: f64,
+    y: f64,
+) -> Option<usize> {
+    let mut picked = tab_bar.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    let tab_widget = loop {
+        if picked.has_css_class("tab") {
+            break picked;
+        }
+        picked = picked.parent()?;
+    };
+
+    let mut tab_widgets = Vec::new();
+    collect_tab_widgets(tab_bar.upcast_ref(), &mut tab_widgets);
+    let position = tab_widgets.iter().position(|widget| widget == &tab_widget)?;
+    tabs.borrow().get(position).map(|tab| tab.id)
 }
 
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
-    let page_name = context
+    let page_shell = context
         .tabs
         .borrow()
         .iter()
         .find(|tab| tab.id == tab_id)
-        .map(|tab| tab.page_name.clone())
+        .map(|tab| tab.page_shell.clone())
         .expect("launch tab should exist");
 
     let load_outcome = context.preset_store.load_presets_with_status();
@@ -1510,109 +1517,92 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let density_preview_window = window.clone();
 
     let launch_surface = launch_screen::build(
-        load_outcome.warning,
-        &presets,
-        preferences.default_theme,
-        preferences.default_density,
-        preset_store,
-        move |theme| {
-            apply_theme_mode(&theme_preview_window, &theme);
+        launch_screen::LaunchScreenInput {
+            load_warning: load_outcome.warning,
+            presets,
+            default_theme: preferences.default_theme,
+            default_density: preferences.default_density,
+            preset_store,
         },
-        {
-            move |density| {
-                apply_window_density(&density_preview_window, Some(density));
-            }
-        },
-        move |preset, workspace_root| {
-            if let Some(show_workspace) = show_workspace_handle.borrow().as_ref() {
-                show_workspace(tab_id, preset, workspace_root);
-            }
-        },
-        {
-            let close_tab_handle = close_tab_handle.clone();
-            move || {
-                if let Some(close) = close_tab_handle.borrow().as_ref() {
-                    close(tab_id);
+        launch_screen::LaunchScreenActions {
+            on_theme_preview: Rc::new(move |theme| {
+                apply_theme_mode(&theme_preview_window, &theme);
+            }),
+            on_density_preview: Rc::new({
+                move |density| {
+                    apply_window_density(&density_preview_window, Some(density));
                 }
-            }
-        },
-        move || {
-            let refresh_for_idle = refresh_handle.clone();
-            glib::idle_add_local_once(move || {
-                if let Some(refresh) = refresh_for_idle.borrow().as_ref() {
-                    refresh();
+            }),
+            on_launch: Rc::new(move |preset, workspace_root| {
+                if let Some(show_workspace) = show_workspace_handle.borrow().as_ref() {
+                    show_workspace(tab_id, preset, workspace_root);
                 }
-            });
+            }),
+            on_cancel: Rc::new({
+                let close_tab_handle = close_tab_handle.clone();
+                move || {
+                    if let Some(close) = close_tab_handle.borrow().as_ref() {
+                        close(tab_id);
+                    }
+                }
+            }),
+            on_presets_changed: Rc::new(move || {
+                let refresh_for_idle = refresh_handle.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(refresh) = refresh_for_idle.borrow().as_ref() {
+                        refresh();
+                    }
+                });
+            }),
         },
     );
 
-    replace_stack_page(&context.stack, &page_name, &launch_surface);
-}
-
-fn replace_stack_page(stack: &gtk::Stack, page_name: &str, widget: &gtk::Widget) {
-    remove_stack_page(stack, page_name);
-    stack.add_named(widget, Some(page_name));
-}
-
-fn remove_stack_page(stack: &gtk::Stack, page_name: &str) {
-    if let Some(existing) = stack.child_by_name(page_name) {
-        stack.remove(&existing);
-    }
-}
-
-fn tab_page_name(tab_id: usize) -> String {
-    format!("workspace-tab-{}", tab_id)
+    replace_tab_page_content(&page_shell, &launch_surface);
 }
 
 fn clear_all_tabs(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
-    stack: &gtk::Stack,
+    tab_view: &adw::TabView,
     active_tab_id: &Cell<usize>,
+    forced_tab_closes: &Rc<RefCell<HashSet<usize>>>,
+    suppress_empty_replacement: &Cell<bool>,
 ) {
-    let (page_names, runtimes) = tabs
-        .borrow()
-        .iter()
-        .map(|tab| {
-            (
-                tab.page_name.clone(),
-                match &tab.content {
-                    TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-                    TabContent::LaunchDeck => None,
-                },
-            )
-        })
-        .unzip::<_, _, Vec<_>, Vec<_>>();
-    tabs.borrow_mut().clear();
+    let tab_ids = tabs.borrow().iter().map(|tab| tab.id).collect::<Vec<_>>();
     active_tab_id.set(0);
-
-    for runtime in runtimes.into_iter().flatten() {
-        runtime.terminate_all("clearing workspace tabs");
+    suppress_empty_replacement.set(true);
+    for tab_id in tab_ids {
+        let page = {
+            let tabs = tabs.borrow();
+            tab_page_for_id(tab_view, &tabs, tab_id)
+        };
+        if let Some(page) = page {
+            forced_tab_closes.borrow_mut().insert(tab_id);
+            tab_view.close_page(&page);
+        }
     }
-
-    for page_name in page_names {
-        remove_stack_page(stack, &page_name);
-    }
+    suppress_empty_replacement.set(false);
 }
 
 fn restore_saved_session(
-    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
-    next_tab_id: &Rc<Cell<usize>>,
-    stack: &gtk::Stack,
-    select_tab: &SelectTabHandle,
-    active_tab_id: &Cell<usize>,
+    context: &RestoreSessionContext,
     saved_session: SavedSession,
     replace_existing: bool,
 ) {
     if replace_existing {
-        clear_all_tabs(tabs, stack, active_tab_id);
+        clear_all_tabs(
+            &context.tabs,
+            &context.tab_view,
+            &context.active_tab_id,
+            &context.forced_tab_closes,
+            &context.suppress_empty_replacement,
+        );
     }
 
     let mut restored_ids = Vec::with_capacity(saved_session.tabs.len());
     for saved_tab in saved_session.tabs {
-        let tab_id = next_tab_id.get();
-        next_tab_id.set(tab_id + 1);
+        let tab_id = context.next_tab_id.get();
+        context.next_tab_id.set(tab_id + 1);
 
-        let page_name = tab_page_name(tab_id);
         let workspace_root = saved_tab.workspace_root;
         let preset = saved_tab.preset;
         let terminal_zoom_steps =
@@ -1623,7 +1613,7 @@ fn restore_saved_session(
             &workspace_root,
             terminal_zoom_steps,
             {
-                let tabs = tabs.clone();
+                let tabs = context.tabs.clone();
                 Rc::new(move |next_layout| {
                     let mut tabs = tabs.borrow_mut();
                     let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
@@ -1635,12 +1625,14 @@ fn restore_saved_session(
                 })
             },
         );
-        tabs.borrow_mut().push(WorkspaceTab {
+        let page_shell = build_tab_page_shell();
+        replace_tab_page_content(&page_shell, &built_workspace.widget);
+        context.tabs.borrow_mut().push(WorkspaceTab {
             id: tab_id,
             default_title: format!("Workspace {}", tab_id),
             custom_title: saved_tab.custom_title,
             subtitle: workspace_root.display().to_string(),
-            page_name: page_name.clone(),
+            page_shell: page_shell.clone(),
             content: TabContent::Workspace(Box::new(WorkspaceState {
                 preset: preset.clone(),
                 runtime: built_workspace.runtime.clone(),
@@ -1648,8 +1640,15 @@ fn restore_saved_session(
             })),
             workspace_root: Some(workspace_root.clone()),
         });
-
-        stack.add_named(&built_workspace.widget, Some(&page_name));
+        let tab = context
+            .tabs
+            .borrow()
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .cloned()
+            .expect("restored workspace tab should exist");
+        context.tab_view.append(&page_shell);
+        sync_tab_page_metadata(&context.tab_view, &tab);
         restored_ids.push(tab_id);
     }
 
@@ -1659,7 +1658,7 @@ fn restore_saved_session(
         .or_else(|| restored_ids.first().copied());
 
     if let Some(active_id) = restored_active_id
-        && let Some(select) = select_tab.borrow().as_ref()
+        && let Some(select) = context.select_tab.borrow().as_ref()
     {
         select(active_id);
     }
@@ -1667,179 +1666,26 @@ fn restore_saved_session(
 
 #[derive(Clone)]
 struct TitleChrome {
-    root: gtk::Box,
-    tabs_box: gtk::Box,
+    root: adw::TabBar,
     add_button: gtk::Button,
 }
 
 impl TitleChrome {
-    fn new() -> Self {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .hexpand(true)
-            .halign(gtk::Align::Center)
-            .css_classes(["app-tab-strip"])
-            .build();
-
-        let tabs_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .build();
+    fn new(tab_view: &adw::TabView) -> Self {
+        let root = adw::TabBar::new();
+        root.set_view(Some(tab_view));
+        root.set_autohide(false);
+        root.set_expand_tabs(false);
+        root.set_hexpand(true);
+        root.set_halign(gtk::Align::Center);
+        root.add_css_class("app-tab-strip");
 
         let add_button = gtk::Button::with_label("+");
         add_button.add_css_class("flat");
         add_button.add_css_class("app-tab-add");
+        root.set_end_action_widget(Some(&add_button));
 
-        root.append(&tabs_box);
-        root.append(&add_button);
-
-        Self {
-            root,
-            tabs_box,
-            add_button,
-        }
-    }
-
-    fn render_tabs(
-        &self,
-        tabs: &[TabLabel],
-        active_id: usize,
-        on_select: Rc<dyn Fn(usize)>,
-        on_rename: Rc<dyn Fn(usize)>,
-        on_close: Rc<dyn Fn(usize)>,
-        on_reorder: Rc<dyn Fn(usize, usize, bool)>,
-    ) {
-        while let Some(child) = self.tabs_box.first_child() {
-            self.tabs_box.remove(&child);
-        }
-
-        for tab in tabs {
-            let is_active = tab.id == active_id;
-
-            let shell = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(0)
-                .css_classes(["app-tab-shell"])
-                .build();
-
-            let button = gtk::Button::builder()
-                .focus_on_click(false)
-                .hexpand(true)
-                .css_classes(["flat", "app-tab-select"])
-                .build();
-            if is_active {
-                shell.add_css_class("is-active");
-            } else {
-                shell.add_css_class("is-inactive");
-            }
-
-            button.set_child(Some(&build_tab_button_content(tab, is_active)));
-
-            let tab_id = tab.id;
-            let on_select = on_select.clone();
-            button.connect_clicked(move |_| {
-                if !is_active {
-                    on_select(tab_id);
-                }
-            });
-
-            let middle_click = gtk::GestureClick::builder().button(2).build();
-            let tab_id = tab.id;
-            let on_close_gesture = on_close.clone();
-            middle_click.connect_pressed(move |gesture, _, _, _| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                on_close_gesture(tab_id);
-            });
-            button.add_controller(middle_click);
-
-            let rename_click = gtk::GestureClick::builder()
-                .button(1)
-                .propagation_phase(gtk::PropagationPhase::Capture)
-                .build();
-            let tab_id = tab.id;
-            let on_rename_gesture = on_rename.clone();
-            rename_click.connect_pressed(move |gesture, n_press, _, _| {
-                if n_press == 2 {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    on_rename_gesture(tab_id);
-                }
-            });
-            shell.add_controller(rename_click);
-
-            let drag_source = gtk::DragSource::builder()
-                .actions(gdk::DragAction::MOVE)
-                .build();
-            let drag_shell = shell.clone();
-            let drag_hotspot = Rc::new(Cell::new((0, 0)));
-            let drag_tab = tab.clone();
-            let tabs_box = self.tabs_box.clone();
-            let tab_id = tab.id;
-            {
-                let drag_shell = drag_shell.clone();
-                let drag_hotspot = drag_hotspot.clone();
-                drag_source.connect_prepare(move |_, x, y| {
-                    let hot_x = x.round().clamp(0.0, drag_shell.allocated_width() as f64) as i32;
-                    let hot_y = y.round().clamp(0.0, drag_shell.allocated_height() as f64) as i32;
-                    drag_hotspot.set((hot_x, hot_y));
-                    Some(gdk::ContentProvider::for_value(
-                        &tab_id.to_string().to_value(),
-                    ))
-                });
-            }
-            {
-                let drag_shell = drag_shell.clone();
-                let drag_tab = drag_tab.clone();
-                let tabs_box = tabs_box.clone();
-                drag_source.connect_drag_begin(move |_, drag| {
-                    clear_tab_drag_state(&tabs_box);
-                    let preview =
-                        build_tab_drag_preview(&drag_tab, is_active, drag_shell.allocated_width());
-                    gtk::DragIcon::for_drag(drag).set_child(Some(&preview));
-                    drag_shell.add_css_class("is-dragging");
-                });
-            }
-            {
-                let tabs_box = tabs_box.clone();
-                drag_source.connect_drag_cancel(move |_, _, _| {
-                    clear_tab_drag_state(&tabs_box);
-                    false
-                });
-            }
-            let tabs_box = self.tabs_box.clone();
-            drag_source.connect_drag_end(move |_, _, _| {
-                clear_tab_drag_state(&tabs_box);
-            });
-            button.add_controller(drag_source);
-
-            shell.append(&button);
-
-            attach_tab_drop_target(&button, &shell, tab.id, on_reorder.clone(), None);
-
-            if is_active {
-                let close_button = gtk::Button::builder()
-                    .icon_name("window-close-symbolic")
-                    .focus_on_click(false)
-                    .css_classes(["flat", "app-tab-close"])
-                    .build();
-                close_button.set_tooltip_text(Some("Close workspace tab"));
-                let tab_id = tab.id;
-                let on_close = on_close.clone();
-                close_button.connect_clicked(move |_| {
-                    on_close(tab_id);
-                });
-                attach_tab_drop_target(
-                    &close_button,
-                    &shell,
-                    tab.id,
-                    on_reorder.clone(),
-                    Some(true),
-                );
-                shell.append(&close_button);
-            }
-
-            self.tabs_box.append(&shell);
-        }
+        Self { root, add_button }
     }
 }
 
@@ -2431,29 +2277,17 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{TabContent, WorkspaceTab, reorder_tab_list};
+    use super::{move_item_to_position, move_tab_to_position, WorkspaceTab};
 
-    fn launch_tab(id: usize) -> WorkspaceTab {
-        WorkspaceTab {
-            id,
-            default_title: format!("Workspace {id}"),
-            custom_title: None,
-            subtitle: String::new(),
-            page_name: format!("workspace-tab-{id}"),
-            content: TabContent::LaunchDeck,
-            workspace_root: None,
-        }
-    }
-
-    fn tab_ids(tabs: &[WorkspaceTab]) -> Vec<usize> {
-        tabs.iter().map(|tab| tab.id).collect()
+    fn tab_ids(tabs: &[usize]) -> Vec<usize> {
+        tabs.to_vec()
     }
 
     #[test]
     fn reorders_tab_before_target() {
-        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+        let mut tabs = vec![1, 2, 3];
 
-        let moved = reorder_tab_list(&mut tabs, 3, 1, false);
+        let moved = move_item_to_position(&mut tabs, 2, 0);
 
         assert!(moved);
         assert_eq!(tab_ids(&tabs), vec![3, 1, 2]);
@@ -2461,31 +2295,40 @@ mod tests {
 
     #[test]
     fn reorders_tab_after_target() {
-        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+        let mut tabs = vec![1, 2, 3];
 
-        let moved = reorder_tab_list(&mut tabs, 1, 3, true);
+        let moved = move_item_to_position(&mut tabs, 0, 2);
 
         assert!(moved);
         assert_eq!(tab_ids(&tabs), vec![2, 3, 1]);
     }
 
     #[test]
-    fn ignores_reorder_when_dragging_onto_same_tab() {
-        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+    fn ignores_reorder_when_moving_to_same_position() {
+        let mut tabs = vec![1, 2, 3];
 
-        let moved = reorder_tab_list(&mut tabs, 2, 2, true);
+        let moved = move_item_to_position(&mut tabs, 1, 1);
 
         assert!(!moved);
         assert_eq!(tab_ids(&tabs), vec![1, 2, 3]);
     }
 
     #[test]
-    fn ignores_reorder_for_unknown_target() {
-        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+    fn ignores_reorder_for_unknown_tab() {
+        let mut tabs = vec![1, 2, 3];
 
-        let moved = reorder_tab_list(&mut tabs, 2, 99, false);
+        let moved = move_item_to_position(&mut tabs, 99, 0);
 
         assert!(!moved);
         assert_eq!(tab_ids(&tabs), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn ignores_reorder_for_unknown_tab_id() {
+        let mut tabs: Vec<WorkspaceTab> = Vec::new();
+
+        let moved = move_tab_to_position(&mut tabs, 99, 0);
+
+        assert!(!moved);
     }
 }

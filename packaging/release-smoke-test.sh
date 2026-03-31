@@ -56,6 +56,9 @@ SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-deb.sh"
 echo "==> building AppImage"
 SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-appimage.sh"
 
+test -f "$DEB_PATH"
+test -f "$APPIMAGE_PATH"
+
 echo "==> preparing smoke-test sandbox"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR/deb" "$BUILD_DIR/appimage"

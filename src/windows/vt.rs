@@ -176,6 +176,7 @@ impl VtBuffer {
         self.rows
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor(&self) -> (usize, usize) {
         (self.cursor_col, self.cursor_row)
     }
@@ -216,6 +217,7 @@ impl VtBuffer {
         self.application_cursor_keys
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn autowrap(&self) -> bool {
         self.autowrap
     }

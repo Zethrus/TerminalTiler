@@ -10,7 +10,7 @@ mod storage;
 mod terminal;
 #[cfg(target_os = "linux")]
 mod ui;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "linux")]

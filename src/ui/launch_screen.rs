@@ -29,36 +29,48 @@ struct TileEditorPanel {
     scroller: gtk::ScrolledWindow,
 }
 
-pub fn build<F, G, H, I, C>(
-    load_warning: Option<String>,
-    presets: &[WorkspacePreset],
-    default_theme: ThemeMode,
-    default_density: ApplicationDensity,
-    preset_store: PresetStore,
-    on_theme_preview: H,
-    on_density_preview: I,
-    on_launch: F,
-    on_cancel: C,
-    on_presets_changed: G,
-) -> gtk::Widget
-where
-    F: Fn(WorkspacePreset, PathBuf) + 'static,
-    G: Fn() + 'static,
-    H: Fn(ThemeMode) + 'static,
-    I: Fn(ApplicationDensity) + 'static,
-    C: Fn() + 'static,
-{
+pub struct LaunchScreenInput {
+    pub load_warning: Option<String>,
+    pub presets: Vec<WorkspacePreset>,
+    pub default_theme: ThemeMode,
+    pub default_density: ApplicationDensity,
+    pub preset_store: PresetStore,
+}
+
+#[derive(Clone)]
+pub struct LaunchScreenActions {
+    pub on_theme_preview: Rc<dyn Fn(ThemeMode)>,
+    pub on_density_preview: Rc<dyn Fn(ApplicationDensity)>,
+    pub on_launch: Rc<dyn Fn(WorkspacePreset, PathBuf)>,
+    pub on_cancel: Rc<dyn Fn()>,
+    pub on_presets_changed: Rc<dyn Fn()>,
+}
+
+pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Widget {
+    let LaunchScreenInput {
+        load_warning,
+        presets,
+        default_theme,
+        default_density,
+        preset_store,
+    } = input;
+    let LaunchScreenActions {
+        on_theme_preview,
+        on_density_preview,
+        on_launch,
+        on_cancel,
+        on_presets_changed,
+    } = actions;
     let current_dir = std::env::current_dir()
         .ok()
         .or_else(home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
     let templates = builtin_templates();
-    let presets = Rc::new(presets.to_vec());
-    let launch_callback = Rc::new(on_launch);
-    let theme_preview_callback = Rc::new(on_theme_preview);
-    let density_preview_callback = Rc::new(on_density_preview);
+    let presets = Rc::new(presets);
+    let launch_callback = on_launch;
+    let theme_preview_callback = on_theme_preview;
+    let density_preview_callback = on_density_preview;
     let preset_store = Rc::new(preset_store);
-    let on_presets_changed: Rc<dyn Fn()> = Rc::new(on_presets_changed);
     let selected: Rc<Cell<Selection>> = Rc::new(Cell::new(Selection::Template(0)));
     let chosen_theme: Rc<Cell<ThemeMode>> = Rc::new(Cell::new(default_theme));
     let chosen_density: Rc<Cell<ApplicationDensity>> = Rc::new(Cell::new(default_density));
@@ -415,7 +427,6 @@ where
             let density_strip = density_strip.clone();
             let edit_preset_button_handle = edit_preset_button_handle.clone();
             let density_preview_callback = density_preview_callback.clone();
-            let default_theme = default_theme;
             let label = template.label;
             let subtitle = template.subtitle;
             let tile_count = template.tile_count;

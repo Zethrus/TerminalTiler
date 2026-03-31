@@ -75,7 +75,8 @@ The packaging scripts produce self-contained runtime bundles:
 
 - `packaging/build-appimage.sh` generates a fresh AppDir under `packaging/.build/appimage`, bundles GTK/libadwaita/VTE shared libraries, GSettings schemas, and gdk-pixbuf loaders, then runs `appimagetool`
 - `packaging/build-deb.sh` stages the application under `packaging/.build/deb-root/opt/terminaltiler`, bundles the same runtime payload, and installs a launcher at `/usr/bin/terminaltiler`
-- `packaging/build-in-container.sh` runs the packaging flow inside a pinned Debian 12 build container for reproducible Linux release artifacts
+- `packaging/build-linux-release.sh` builds the release binary once, then emits both Linux artifacts with one shared semantic version
+- `packaging/build-in-container.sh` runs the Linux packaging flow inside a pinned Debian 12 build container for reproducible release artifacts
 - `packaging/release-smoke-test.sh` validates AppStream metadata, builds both artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
 - `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload, emits a portable zip, and generates an NSIS installer
 - `packaging/windows-smoke-test.ps1` validates the portable zip and installer, then performs timed launch smoke tests against both packaged Windows outputs
@@ -91,6 +92,7 @@ By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2
 You can override the generated version inputs when needed:
 
 ```bash
+PACKAGE_VERSION=0.2.0 bash packaging/build-linux-release.sh
 PACKAGE_VERSION=0.2.0 bash packaging/build-deb.sh
 LAST_SUCCESSFUL_VERSION=0.3.9 bash packaging/build-appimage.sh
 ```
@@ -106,7 +108,13 @@ The resulting Windows installer and portable zip target Windows 11. At runtime t
 
 Both artifact formats now also ship reverse-DNS desktop metadata at `usr/share/applications/dev.zethrus.terminaltiler.desktop` and AppStream metadata at `usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml` for cleaner distribution tooling integration.
 
-The preferred release path is now:
+For local paired Linux artifacts, use:
+
+```bash
+bash packaging/build-linux-release.sh
+```
+
+The preferred pinned release path is:
 
 ```bash
 bash packaging/release-verify.sh

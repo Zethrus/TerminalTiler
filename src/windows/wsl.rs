@@ -101,6 +101,7 @@ pub fn collect_session_launch_commands(
     Ok(commands)
 }
 
+#[allow(dead_code)]
 pub fn spawn_launch_command(command: &WindowsLaunchCommand) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
 
-APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler.AppDir"
+APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppDir"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 TARGET_BIN="$TARGET_DIR/release/terminaltiler"
 APP_PREFIX="$APPDIR/usr"
@@ -50,7 +50,27 @@ chmod +x "$APPDIR/AppRun"
 rm -f "$TEMP_APPIMAGE" "$OUTPUT_APPIMAGE"
 (
   cd "$(dirname "$APPDIR")"
-  APPIMAGE_EXTRACT_AND_RUN=1 appimagetool --no-appstream "$APPDIR"
+  local_appdir="$(basename "$APPDIR")"
+  local_output="$(basename "$TEMP_APPIMAGE")"
+  set +e
+  appimagetool_output="$(
+    APPIMAGE_EXTRACT_AND_RUN=1 appimagetool --no-appstream "$local_appdir" "$local_output" 2>&1
+  )"
+  appimagetool_status=$?
+  set -e
+
+  if [[ -n "$appimagetool_output" ]]; then
+    while IFS= read -r line; do
+      if [[ "$line" == "$APPDIR should be packaged as $local_output" ]]; then
+        continue
+      fi
+      printf '%s\n' "$line"
+    done <<< "$appimagetool_output"
+  fi
+
+  if [[ $appimagetool_status -ne 0 ]]; then
+    exit "$appimagetool_status"
+  fi
 )
 mv "$TEMP_APPIMAGE" "$OUTPUT_APPIMAGE"
 update_latest_symlink "$OUTPUT_APPIMAGE" "$LATEST_APPIMAGE"

@@ -45,6 +45,7 @@ impl ApplicationDensity {
         }
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn css_class(&self) -> &'static str {
         match self {
             Self::Comfortable => "profile-comfortable",
@@ -105,10 +106,12 @@ pub struct WorkspacePreset {
 }
 
 impl WorkspacePreset {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn tile_count(&self) -> usize {
         self.layout.tile_count()
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn template_badge(&self) -> String {
         format!("{} tiles", self.tile_count())
     }

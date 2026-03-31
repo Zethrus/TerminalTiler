@@ -7,6 +7,7 @@ use uuid::Uuid;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
 pub fn atomic_write_private(path: &Path, contents: &str) -> io::Result<()> {

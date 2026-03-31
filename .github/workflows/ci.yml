@@ -64,6 +64,7 @@ jobs:
       - name: Lint packaging scripts
         run: |
           shellcheck -x \
+            packaging/build-linux-release.sh \
             packaging/build-appimage.sh \
             packaging/build-deb.sh \
             packaging/build-in-container.sh \

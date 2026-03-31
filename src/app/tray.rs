@@ -70,7 +70,7 @@ impl TrayController {
 
     pub fn shutdown(&self) {
         if let Some(handle) = self.handle.borrow_mut().take() {
-            let _ = handle.shutdown().wait();
+            handle.shutdown().wait();
         }
     }
 }

@@ -31,9 +31,8 @@ CONTAINER_TOOL="$(pick_container_tool)"
 CONTAINER_SCRIPT="$(cat <<'EOF'
 set -euo pipefail
 export CARGO_TARGET_DIR=/workspace/packaging/.build/container-target
-cargo build --release
-SKIP_CARGO_BUILD=1 bash packaging/build-deb.sh
-SKIP_CARGO_BUILD=1 bash packaging/build-appimage.sh
+export IN_PACKAGING_CONTAINER=1
+bash packaging/build-linux-release.sh
 chown -R "$HOST_UID:$HOST_GID" /workspace/dist /workspace/packaging/.build
 EOF
 )"

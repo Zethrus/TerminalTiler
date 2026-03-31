@@ -7,6 +7,57 @@ use std::cell::{Cell, RefCell};
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SettingsState {
+    theme: ThemeMode,
+    density: ApplicationDensity,
+    close_to_background: bool,
+    fullscreen_shortcut: String,
+    density_shortcut: String,
+    zoom_in_shortcut: String,
+    zoom_out_shortcut: String,
+}
+
+impl SettingsState {
+    fn defaults() -> Self {
+        let defaults = AppPreferences::default();
+        Self {
+            theme: defaults.default_theme,
+            density: defaults.default_density,
+            close_to_background: defaults.close_to_background,
+            fullscreen_shortcut: defaults.workspace_fullscreen_shortcut,
+            density_shortcut: defaults.workspace_density_shortcut,
+            zoom_in_shortcut: defaults.workspace_zoom_in_shortcut,
+            zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
+        }
+    }
+}
+
+pub struct SettingsDialogInput {
+    pub default_theme: ThemeMode,
+    pub default_density: ApplicationDensity,
+    pub close_to_background: bool,
+    pub workspace_fullscreen_shortcut: String,
+    pub workspace_density_shortcut: String,
+    pub workspace_zoom_in_shortcut: String,
+    pub workspace_zoom_out_shortcut: String,
+    pub settings_dialog_width: i32,
+    pub settings_dialog_height: i32,
+}
+
+#[derive(Clone)]
+pub struct SettingsDialogActions {
+    pub on_theme_changed: Rc<dyn Fn(ThemeMode)>,
+    pub on_density_changed: Rc<dyn Fn(ApplicationDensity)>,
+    pub on_close_to_background_changed: Rc<dyn Fn(bool)>,
+    pub on_fullscreen_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_density_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_zoom_in_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_reset_defaults: Rc<dyn Fn()>,
+    pub on_size_changed: Rc<dyn Fn(i32, i32)>,
+}
+
 fn shortcut_display_label(shortcut: &str) -> String {
     gtk::accelerator_parse(shortcut)
         .map(|(key, modifiers)| gtk::accelerator_get_label(key, modifiers).to_string())
@@ -37,9 +88,9 @@ fn fallback_shortcut_key_from_keycode(
     keycode: u32,
 ) -> Option<(gdk::Key, gdk::ModifierType)> {
     display.map_keycode(keycode).and_then(|entries| {
-        entries
+        let mapped_entries = entries
             .into_iter()
-            .filter_map(|(keymap_key, mapped_key)| {
+            .map(|(keymap_key, mapped_key)| {
                 let priority = match mapped_key.name().as_deref() {
                     Some(name) if name.starts_with("KP_") => 0,
                     _ if mapped_key.to_unicode().is_some() => 1,
@@ -50,8 +101,11 @@ fn fallback_shortcut_key_from_keycode(
                 } else {
                     gdk::ModifierType::empty()
                 };
-                Some((priority, keymap_key.level(), mapped_key, consumed))
+                (priority, keymap_key.level(), mapped_key, consumed)
             })
+            .collect::<Vec<_>>();
+        mapped_entries
+            .into_iter()
             .min_by_key(|(priority, level, _, _)| (*priority, *level))
             .map(|(_, _, mapped_key, consumed)| (mapped_key, consumed))
     })
@@ -94,26 +148,8 @@ fn normalize_captured_shortcut(
     Some((shortcut, label))
 }
 
-fn sync_reset_button_state(
-    reset_button: &gtk::Button,
-    theme: ThemeMode,
-    density: ApplicationDensity,
-    close_to_background: bool,
-    fullscreen_shortcut: &str,
-    density_shortcut: &str,
-    zoom_in_shortcut: &str,
-    zoom_out_shortcut: &str,
-) {
-    let defaults = AppPreferences::default();
-    reset_button.set_sensitive(
-        theme != defaults.default_theme
-            || density != defaults.default_density
-            || close_to_background != defaults.close_to_background
-            || fullscreen_shortcut != defaults.workspace_fullscreen_shortcut
-            || density_shortcut != defaults.workspace_density_shortcut
-            || zoom_in_shortcut != defaults.workspace_zoom_in_shortcut
-            || zoom_out_shortcut != defaults.workspace_zoom_out_shortcut,
-    );
+fn sync_reset_button_state(reset_button: &gtk::Button, current: &SettingsState) {
+    reset_button.set_sensitive(current != &SettingsState::defaults());
 }
 
 fn default_settings_dialog_size(
@@ -142,37 +178,33 @@ fn persist_dialog_size(dialog: &gtk::Dialog, on_size_changed: &Rc<dyn Fn(i32, i3
 }
 
 #[allow(deprecated)]
-pub fn present<F, G, H, I, J, K, L, M, N>(
+pub fn present(
     window: &adw::ApplicationWindow,
-    default_theme: ThemeMode,
-    default_density: ApplicationDensity,
-    close_to_background: bool,
-    workspace_fullscreen_shortcut: String,
-    workspace_density_shortcut: String,
-    workspace_zoom_in_shortcut: String,
-    workspace_zoom_out_shortcut: String,
-    settings_dialog_width: i32,
-    settings_dialog_height: i32,
-    on_theme_changed: F,
-    on_density_changed: G,
-    on_close_to_background_changed: H,
-    on_fullscreen_shortcut_changed: I,
-    on_density_shortcut_changed: J,
-    on_zoom_in_shortcut_changed: K,
-    on_zoom_out_shortcut_changed: L,
-    on_reset_defaults: M,
-    on_size_changed: N,
-) where
-    F: Fn(ThemeMode) + 'static,
-    G: Fn(ApplicationDensity) + 'static,
-    H: Fn(bool) + 'static,
-    I: Fn(String) + 'static,
-    J: Fn(String) + 'static,
-    K: Fn(String) + 'static,
-    L: Fn(String) + 'static,
-    M: Fn() + 'static,
-    N: Fn(i32, i32) + 'static,
-{
+    input: SettingsDialogInput,
+    actions: SettingsDialogActions,
+) {
+    let SettingsDialogInput {
+        default_theme,
+        default_density,
+        close_to_background,
+        workspace_fullscreen_shortcut,
+        workspace_density_shortcut,
+        workspace_zoom_in_shortcut,
+        workspace_zoom_out_shortcut,
+        settings_dialog_width,
+        settings_dialog_height,
+    } = input;
+    let SettingsDialogActions {
+        on_theme_changed,
+        on_density_changed,
+        on_close_to_background_changed,
+        on_fullscreen_shortcut_changed,
+        on_density_shortcut_changed,
+        on_zoom_in_shortcut_changed,
+        on_zoom_out_shortcut_changed,
+        on_reset_defaults,
+        on_size_changed,
+    } = actions;
     let (default_width, default_height) =
         default_settings_dialog_size(window, settings_dialog_width, settings_dialog_height);
     let dialog = gtk::Dialog::builder()
@@ -220,28 +252,43 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
     reset_button.add_css_class("settings-reset-button");
-    sync_reset_button_state(
-        &reset_button,
-        current_theme.get(),
-        current_density.get(),
-        current_close_to_background.get(),
-        current_fullscreen_shortcut.borrow().as_str(),
-        current_density_shortcut.borrow().as_str(),
-        current_zoom_in_shortcut.borrow().as_str(),
-        current_zoom_out_shortcut.borrow().as_str(),
-    );
+    let sync_reset_button: Rc<dyn Fn()> = {
+        let current_theme = current_theme.clone();
+        let current_density = current_density.clone();
+        let current_close_to_background = current_close_to_background.clone();
+        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let current_density_shortcut = current_density_shortcut.clone();
+        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
+        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let reset_button = reset_button.clone();
+        Rc::new(move || {
+            sync_reset_button_state(
+                &reset_button,
+                &SettingsState {
+                    theme: current_theme.get(),
+                    density: current_density.get(),
+                    close_to_background: current_close_to_background.get(),
+                    fullscreen_shortcut: current_fullscreen_shortcut.borrow().clone(),
+                    density_shortcut: current_density_shortcut.borrow().clone(),
+                    zoom_in_shortcut: current_zoom_in_shortcut.borrow().clone(),
+                    zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
+                },
+            );
+        })
+    };
+    sync_reset_button();
 
     content.append(&build_settings_summary(&reset_button));
 
-    let theme_callback = Rc::new(on_theme_changed);
-    let density_callback = Rc::new(on_density_changed);
-    let close_to_background_callback = Rc::new(on_close_to_background_changed);
-    let fullscreen_shortcut_callback = Rc::new(on_fullscreen_shortcut_changed);
-    let density_shortcut_callback = Rc::new(on_density_shortcut_changed);
-    let zoom_in_shortcut_callback = Rc::new(on_zoom_in_shortcut_changed);
-    let zoom_out_shortcut_callback = Rc::new(on_zoom_out_shortcut_changed);
-    let reset_callback = Rc::new(on_reset_defaults);
-    let size_changed_callback: Rc<dyn Fn(i32, i32)> = Rc::new(on_size_changed);
+    let theme_callback = on_theme_changed;
+    let density_callback = on_density_changed;
+    let close_to_background_callback = on_close_to_background_changed;
+    let fullscreen_shortcut_callback = on_fullscreen_shortcut_changed;
+    let density_shortcut_callback = on_density_shortcut_changed;
+    let zoom_in_shortcut_callback = on_zoom_in_shortcut_changed;
+    let zoom_out_shortcut_callback = on_zoom_out_shortcut_changed;
+    let reset_callback = on_reset_defaults;
+    let size_changed_callback = on_size_changed;
 
     let theme_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -274,29 +321,14 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
 
         let current_theme = current_theme.clone();
         let theme_strip_ref = theme_strip.clone();
-        let current_density = current_density.clone();
-        let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let theme_callback = theme_callback.clone();
         button.connect_clicked(move |_| {
             if current_theme.get() != mode {
                 current_theme.set(mode);
                 theme_callback(mode);
                 sync_theme_strip_active(&theme_strip_ref, mode);
-                sync_reset_button_state(
-                    &reset_button,
-                    mode,
-                    current_density.get(),
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
         });
         theme_strip.append(&button);
@@ -334,29 +366,14 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
 
         let current_density = current_density.clone();
         let density_strip_ref = density_strip.clone();
-        let current_theme = current_theme.clone();
-        let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let density_callback = density_callback.clone();
         button.connect_clicked(move |_| {
             if current_density.get() != density {
                 current_density.set(density);
                 density_callback(density);
                 sync_density_strip_active(&density_strip_ref, density);
-                sync_reset_button_state(
-                    &reset_button,
-                    current_theme.get(),
-                    density,
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
         });
         density_strip.append(&button);
@@ -420,14 +437,8 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
     close_to_background_switch.add_css_class("settings-toggle-switch");
     let suppress_close_to_background_signal = Rc::new(Cell::new(false));
     {
-        let current_theme = current_theme.clone();
-        let current_density = current_density.clone();
         let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let callback = close_to_background_callback.clone();
         let suppress_signal = suppress_close_to_background_signal.clone();
         close_to_background_switch.connect_active_notify(move |switch| {
@@ -442,16 +453,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
 
             current_close_to_background.set(is_active);
             callback(is_active);
-            sync_reset_button_state(
-                &reset_button,
-                current_theme.get(),
-                current_density.get(),
-                is_active,
-                current_fullscreen_shortcut.borrow().as_str(),
-                current_density_shortcut.borrow().as_str(),
-                current_zoom_in_shortcut.borrow().as_str(),
-                current_zoom_out_shortcut.borrow().as_str(),
-            );
+            sync_reset_button();
         });
     }
     background_row.append(&close_to_background_switch);
@@ -495,14 +497,8 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         build_shortcut_capture_control(&fullscreen_capture_label, &fullscreen_record_button);
     let fullscreen_recording = Rc::new(Cell::new(false));
     {
-        let current_theme = current_theme.clone();
-        let current_density = current_density.clone();
-        let current_close_to_background = current_close_to_background.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let status = fullscreen_status.clone();
         let capture_label = fullscreen_capture_label.clone();
         let record_button = fullscreen_record_button.clone();
@@ -538,16 +534,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             if current_fullscreen_shortcut.borrow().as_str() != shortcut {
                 current_fullscreen_shortcut.replace(shortcut.clone());
                 callback(shortcut);
-                sync_reset_button_state(
-                    &reset_button,
-                    current_theme.get(),
-                    current_density.get(),
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
             glib::Propagation::Stop
         });
@@ -613,14 +600,8 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         build_shortcut_capture_control(&density_capture_label, &density_record_button);
     let density_recording = Rc::new(Cell::new(false));
     {
-        let current_theme = current_theme.clone();
-        let current_density = current_density.clone();
-        let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let status = density_status.clone();
         let capture_label = density_capture_label.clone();
         let record_button = density_record_button.clone();
@@ -656,16 +637,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             if current_density_shortcut.borrow().as_str() != shortcut {
                 current_density_shortcut.replace(shortcut.clone());
                 callback(shortcut);
-                sync_reset_button_state(
-                    &reset_button,
-                    current_theme.get(),
-                    current_density.get(),
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
             glib::Propagation::Stop
         });
@@ -731,14 +703,8 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         build_shortcut_capture_control(&zoom_in_capture_label, &zoom_in_record_button);
     let zoom_in_recording = Rc::new(Cell::new(false));
     {
-        let current_theme = current_theme.clone();
-        let current_density = current_density.clone();
-        let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let status = zoom_in_status.clone();
         let capture_label = zoom_in_capture_label.clone();
         let record_button = zoom_in_record_button.clone();
@@ -774,16 +740,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             if current_zoom_in_shortcut.borrow().as_str() != shortcut {
                 current_zoom_in_shortcut.replace(shortcut.clone());
                 callback(shortcut);
-                sync_reset_button_state(
-                    &reset_button,
-                    current_theme.get(),
-                    current_density.get(),
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
             glib::Propagation::Stop
         });
@@ -849,14 +806,8 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         build_shortcut_capture_control(&zoom_out_capture_label, &zoom_out_record_button);
     let zoom_out_recording = Rc::new(Cell::new(false));
     {
-        let current_theme = current_theme.clone();
-        let current_density = current_density.clone();
-        let current_close_to_background = current_close_to_background.clone();
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let current_density_shortcut = current_density_shortcut.clone();
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let reset_button = reset_button.clone();
+        let sync_reset_button = sync_reset_button.clone();
         let status = zoom_out_status.clone();
         let capture_label = zoom_out_capture_label.clone();
         let record_button = zoom_out_record_button.clone();
@@ -892,16 +843,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             if current_zoom_out_shortcut.borrow().as_str() != shortcut {
                 current_zoom_out_shortcut.replace(shortcut.clone());
                 callback(shortcut);
-                sync_reset_button_state(
-                    &reset_button,
-                    current_theme.get(),
-                    current_density.get(),
-                    current_close_to_background.get(),
-                    current_fullscreen_shortcut.borrow().as_str(),
-                    current_density_shortcut.borrow().as_str(),
-                    current_zoom_in_shortcut.borrow().as_str(),
-                    current_zoom_out_shortcut.borrow().as_str(),
-                );
+                sync_reset_button();
             }
             glib::Propagation::Stop
         });
@@ -1025,16 +967,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             set_recorder_idle(&density_record_button, &density_status);
             set_recorder_idle(&zoom_in_record_button, &zoom_in_status);
             set_recorder_idle(&zoom_out_record_button, &zoom_out_status);
-            sync_reset_button_state(
-                &reset_button,
-                defaults.default_theme,
-                defaults.default_density,
-                defaults.close_to_background,
-                &defaults.workspace_fullscreen_shortcut,
-                &defaults.workspace_density_shortcut,
-                &defaults.workspace_zoom_in_shortcut,
-                &defaults.workspace_zoom_out_shortcut,
-            );
+            sync_reset_button();
             reset_callback();
         });
     }

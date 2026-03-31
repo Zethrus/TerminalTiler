@@ -21,6 +21,7 @@ pub enum WorkingDirectory {
 }
 
 impl WorkingDirectory {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn resolve(&self, workspace_root: &Path) -> PathBuf {
         match self {
             Self::Home => home_dir().unwrap_or_else(|| workspace_root.to_path_buf()),

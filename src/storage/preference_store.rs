@@ -249,24 +249,28 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_workspace_fullscreen_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.workspace_fullscreen_shortcut = shortcut.trim().to_string();
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_workspace_density_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.workspace_density_shortcut = shortcut.trim().to_string();
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_workspace_zoom_in_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.workspace_zoom_in_shortcut = shortcut.trim().to_string();
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_workspace_zoom_out_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.workspace_zoom_out_shortcut = shortcut.trim().to_string();
