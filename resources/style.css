@@ -474,11 +474,11 @@ tabbar.app-tab-strip {
 }
 
 tabbar.app-tab-strip tabbox tab {
-  min-width: 112px;
-  max-width: 112px;
+  min-width: 136px;
+  max-width: 136px;
   min-height: 32px;
   margin: 0 6px 0 0;
-  padding: 0 8px 0 10px;
+  padding: 0 6px 0 8px;
   border-radius: 12px 12px 0 0;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -530,7 +530,7 @@ tabbar.app-tab-strip tabbox tab button.close {
   min-width: 20px;
   min-height: 20px;
   padding: 0;
-  margin: 0 1px 0 6px;
+  margin: 0 1px 0 4px;
   border-radius: 7px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.03);
