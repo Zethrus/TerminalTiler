@@ -1677,8 +1677,8 @@ impl TitleChrome {
         root.set_view(Some(tab_view));
         root.set_autohide(false);
         root.set_expand_tabs(false);
-        root.set_hexpand(true);
-        root.set_halign(gtk::Align::Fill);
+        root.set_hexpand(false);
+        root.set_halign(gtk::Align::Center);
         root.add_css_class("app-tab-strip");
 
         let add_button = gtk::Button::with_label("+");
