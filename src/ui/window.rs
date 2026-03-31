@@ -1676,7 +1676,7 @@ impl TitleChrome {
         let root = adw::TabBar::new();
         root.set_view(Some(tab_view));
         root.set_autohide(false);
-        root.set_expand_tabs(true);
+        root.set_expand_tabs(false);
         root.set_hexpand(true);
         root.set_halign(gtk::Align::Fill);
         root.add_css_class("app-tab-strip");
