@@ -131,6 +131,7 @@ pub fn present(
         .show_start_title_buttons(true)
         .show_end_title_buttons(true)
         .build();
+    header.set_centering_policy(adw::CenteringPolicy::Loose);
     header.add_css_class("app-headerbar");
 
     let tab_view = adw::TabView::builder()
@@ -1675,9 +1676,9 @@ impl TitleChrome {
         let root = adw::TabBar::new();
         root.set_view(Some(tab_view));
         root.set_autohide(false);
-        root.set_expand_tabs(false);
+        root.set_expand_tabs(true);
         root.set_hexpand(true);
-        root.set_halign(gtk::Align::Center);
+        root.set_halign(gtk::Align::Fill);
         root.add_css_class("app-tab-strip");
 
         let add_button = gtk::Button::with_label("+");
