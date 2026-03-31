@@ -1411,6 +1411,83 @@ fn attach_tab_drop_target(
     widget.as_ref().add_controller(drop_target);
 }
 
+fn clear_tab_drag_state(tabs_box: &gtk::Box) {
+    let mut child = tabs_box.first_child();
+    while let Some(widget) = child {
+        widget.remove_css_class("is-dragging");
+        widget.remove_css_class("is-drop-target");
+        child = widget.next_sibling();
+    }
+}
+
+fn build_tab_button_content(tab: &TabLabel, is_active: bool) -> gtk::Box {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+    icon.add_css_class("app-tab-icon");
+    content.append(&icon);
+
+    let title = gtk::Label::builder()
+        .label(&tab.title)
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .css_classes(["app-tab-title"])
+        .build();
+    content.append(&title);
+
+    if !is_active && let Some(count) = tab.tile_count {
+        let badge = gtk::Label::builder()
+            .label(count.to_string())
+            .css_classes(["app-tab-badge"])
+            .build();
+        content.append(&badge);
+    }
+
+    content
+}
+
+fn build_tab_drag_preview(tab: &TabLabel, is_active: bool, width: i32) -> gtk::Box {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .css_classes(["app-tab-shell", "app-tab-drag-icon"])
+        .build();
+
+    if is_active {
+        shell.add_css_class("is-active");
+    } else {
+        shell.add_css_class("is-inactive");
+    }
+    shell.set_size_request(width.max(142), -1);
+
+    let button = gtk::Button::builder()
+        .focus_on_click(false)
+        .sensitive(false)
+        .hexpand(true)
+        .css_classes(["flat", "app-tab-select"])
+        .build();
+    button.set_can_target(false);
+    button.set_child(Some(&build_tab_button_content(tab, is_active)));
+    shell.append(&button);
+
+    if is_active {
+        let close_button = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .focus_on_click(false)
+            .sensitive(false)
+            .css_classes(["flat", "app-tab-close"])
+            .build();
+        close_button.set_can_target(false);
+        shell.append(&close_button);
+    }
+
+    shell
+}
+
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let page_name = context
         .tabs
@@ -1657,33 +1734,7 @@ impl TitleChrome {
                 shell.add_css_class("is-inactive");
             }
 
-            let content = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(4)
-                .valign(gtk::Align::Center)
-                .build();
-
-            let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
-            icon.add_css_class("app-tab-icon");
-            content.append(&icon);
-
-            let title = gtk::Label::builder()
-                .label(&tab.title)
-                .halign(gtk::Align::Start)
-                .hexpand(true)
-                .css_classes(["app-tab-title"])
-                .build();
-            content.append(&title);
-
-            if !is_active && let Some(count) = tab.tile_count {
-                let badge = gtk::Label::builder()
-                    .label(count.to_string())
-                    .css_classes(["app-tab-badge"])
-                    .build();
-                content.append(&badge);
-            }
-
-            button.set_child(Some(&content));
+            button.set_child(Some(&build_tab_button_content(tab, is_active)));
 
             let tab_id = tab.id;
             let on_select = on_select.clone();
@@ -1721,6 +1772,8 @@ impl TitleChrome {
                 .build();
             let drag_shell = shell.clone();
             let drag_hotspot = Rc::new(Cell::new((0, 0)));
+            let drag_tab = tab.clone();
+            let tabs_box = self.tabs_box.clone();
             let tab_id = tab.id;
             {
                 let drag_shell = drag_shell.clone();
@@ -1736,17 +1789,26 @@ impl TitleChrome {
             }
             {
                 let drag_shell = drag_shell.clone();
-                let drag_hotspot = drag_hotspot.clone();
-                drag_source.connect_drag_begin(move |source, _| {
-                    let (hot_x, hot_y) = drag_hotspot.get();
-                    let paintable = gtk::WidgetPaintable::new(Some(&drag_shell));
-                    source.set_icon(Some(&paintable), hot_x, hot_y);
+                let drag_tab = drag_tab.clone();
+                let tabs_box = tabs_box.clone();
+                drag_source.connect_drag_begin(move |_, drag| {
+                    clear_tab_drag_state(&tabs_box);
+                    let preview =
+                        build_tab_drag_preview(&drag_tab, is_active, drag_shell.allocated_width());
+                    gtk::DragIcon::for_drag(drag).set_child(Some(&preview));
                     drag_shell.add_css_class("is-dragging");
                 });
             }
-            let drag_shell = shell.clone();
+            {
+                let tabs_box = tabs_box.clone();
+                drag_source.connect_drag_cancel(move |_, _, _| {
+                    clear_tab_drag_state(&tabs_box);
+                    false
+                });
+            }
+            let tabs_box = self.tabs_box.clone();
             drag_source.connect_drag_end(move |_, _, _| {
-                drag_shell.remove_css_class("is-dragging");
+                clear_tab_drag_state(&tabs_box);
             });
             button.add_controller(drag_source);
 
