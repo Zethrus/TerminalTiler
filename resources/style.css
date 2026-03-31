@@ -467,6 +467,7 @@ window.profile-standard .app-tab-shell {
 }
 
 .app-tab-strip {
+  min-width: 0;
   margin: 0 4px;
 }
 
@@ -559,12 +560,13 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
   border-color: rgba(255, 255, 255, 0.08);
 }
 
-windowhandle.app-title-handle {
+.app-title-handle {
   min-width: 0;
 }
 
 .app-tab-shell {
   min-width: 142px;
+  max-width: 142px;
   min-height: 30px;
   border-radius: 12px 12px 0 0;
   transition:
@@ -616,6 +618,7 @@ windowhandle.app-title-handle {
 button.app-tab-select {
   min-width: 0;
   min-height: 30px;
+  margin: 0;
   padding: 2px 8px 2px 12px;
   background: transparent;
   border: none;
@@ -632,6 +635,7 @@ button.app-tab-select {
   color: #ffffff;
   font-size: 12px;
   font-weight: 700;
+  min-width: 72px;
 }
 
 .app-tab-shell.is-inactive .app-tab-title {
@@ -663,10 +667,17 @@ button.app-tab-close {
   background: rgba(255, 255, 255, 0.03);
   color: rgba(255, 255, 255, 0.64);
   -gtk-icon-size: 12px;
+  opacity: 0;
   transition:
+    opacity 140ms ease,
     background 140ms ease,
     border-color 140ms ease,
     color 140ms ease;
+}
+
+.app-tab-shell:hover button.app-tab-close,
+.app-tab-shell.is-active button.app-tab-close {
+  opacity: 1;
 }
 
 button.app-tab-close:hover {

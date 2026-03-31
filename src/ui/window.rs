@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
 use crate::app::tray::TrayController;
@@ -18,6 +19,7 @@ use crate::ui::{launch_screen, settings_dialog, workspace_view};
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type RenameTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, Option<String>)>>>>;
+type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
@@ -120,7 +122,6 @@ struct RestoreSessionContext {
     tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
     next_tab_id: Rc<Cell<usize>>,
     tab_view: adw::TabView,
-    tab_bar: adw::TabBar,
     select_tab: SelectTabHandle,
     active_tab_id: Rc<Cell<usize>>,
     forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
@@ -151,12 +152,6 @@ pub fn present(
     let title = TitleChrome::new(&tab_view);
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
-    let refresh_native_tab_bar_layout: Rc<dyn Fn()> = {
-        let tab_bar = title.tab_bar.clone();
-        Rc::new(move || {
-            schedule_native_tab_bar_layout(&tab_bar);
-        })
-    };
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&tab_view));
@@ -242,6 +237,7 @@ pub fn present(
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
     let apply_tab_rename: RenameTabHandle = Rc::new(RefCell::new(None));
+    let reorder_tab: ReorderTabHandle = Rc::new(RefCell::new(None));
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
     let refresh_launch_tabs: VoidHandle = Rc::new(RefCell::new(None));
     let add_workspace_tab: VoidHandle = Rc::new(RefCell::new(None));
@@ -287,6 +283,27 @@ pub fn present(
     }
 
     {
+        let refresh_tab_strip = {
+            let tabs_box = title.tabs_box.clone();
+            let tabs = tabs.clone();
+            let active_tab_id = active_tab_id.clone();
+            let select_tab = select_tab.clone();
+            let close_tab = close_tab.clone();
+            let request_tab_rename = request_tab_rename.clone();
+            let reorder_tab = reorder_tab.clone();
+            Rc::new(move || {
+                render_tab_strip(
+                    &tabs_box,
+                    &tabs,
+                    active_tab_id.get(),
+                    &select_tab,
+                    &close_tab,
+                    &request_tab_rename,
+                    &reorder_tab,
+                );
+            })
+        };
+
         let title_root_for_select = title.root.clone();
         let tab_view_for_select = tab_view.clone();
         let header_for_select = header.clone();
@@ -298,6 +315,7 @@ pub fn present(
         let active_for_select = active_tab_id.clone();
         let preference_store_for_select = preference_store.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
+        let refresh_tab_strip_for_select = refresh_tab_strip.clone();
         let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
             let (is_workspace, workspace_profile) = {
                 let tabs = tabs_for_sync.borrow();
@@ -343,6 +361,7 @@ pub fn present(
                 is_workspace,
                 current_fullscreen_shortcut.borrow().as_str(),
             );
+            refresh_tab_strip_for_select();
         });
         {
             let sync_selected_tab = sync_selected_tab.clone();
@@ -386,7 +405,26 @@ pub fn present(
         let tab_view_for_rename = tab_view.clone();
         let active_for_rename = active_tab_id.clone();
         let select_for_rename = select_tab.clone();
-        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
+        let refresh_tab_strip_for_rename = {
+            let tabs_box = title.tabs_box.clone();
+            let tabs = tabs.clone();
+            let active_tab_id = active_tab_id.clone();
+            let select_tab = select_tab.clone();
+            let close_tab = close_tab.clone();
+            let request_tab_rename = request_tab_rename.clone();
+            let reorder_tab = reorder_tab.clone();
+            Rc::new(move || {
+                render_tab_strip(
+                    &tabs_box,
+                    &tabs,
+                    active_tab_id.get(),
+                    &select_tab,
+                    &close_tab,
+                    &request_tab_rename,
+                    &reorder_tab,
+                );
+            })
+        };
 
         *apply_tab_rename.borrow_mut() = Some(Box::new(move |tab_id, requested_title| {
             let requested_title = requested_title
@@ -410,7 +448,7 @@ pub fn present(
                     sync_tab_page_metadata(&tab_view_for_rename, tab);
                 }
             }
-            refresh_native_tab_bar_layout();
+            refresh_tab_strip_for_rename();
 
             logging::info(format!(
                 "workspace tab {} renamed to '{}'",
@@ -451,52 +489,44 @@ pub fn present(
     }
 
     {
-        let tabs_for_middle_click = tabs.clone();
-        let close_handle = close_tab.clone();
-        let middle_click = gtk::GestureClick::builder()
-            .button(2)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        let title_root = title.tab_bar.clone();
-        middle_click.connect_pressed(move |gesture, _, x, y| {
-            let Some(tab_id) = tab_id_at_point(&title_root, &tabs_for_middle_click, x, y) else {
+        let tabs_for_reorder = tabs.clone();
+        let tab_view_for_reorder = tab_view.clone();
+        *reorder_tab.borrow_mut() = Some(Box::new(move |tab_id, position| {
+            let page = {
+                let tabs = tabs_for_reorder.borrow();
+                tab_page_for_id(&tab_view_for_reorder, &tabs, tab_id)
+            };
+            let Some(page) = page else {
                 return;
             };
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if let Some(close) = close_handle.borrow().as_ref() {
-                close(tab_id);
-            }
-        });
-        title.tab_bar.add_controller(middle_click);
-    }
-
-    {
-        let tabs_for_rename_click = tabs.clone();
-        let rename_handle = request_tab_rename.clone();
-        let rename_click = gtk::GestureClick::builder()
-            .button(1)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        let title_root = title.tab_bar.clone();
-        rename_click.connect_pressed(move |gesture, n_press, x, y| {
-            if n_press != 2 {
-                return;
-            }
-            let Some(tab_id) = tab_id_at_point(&title_root, &tabs_for_rename_click, x, y) else {
-                return;
-            };
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if let Some(rename) = rename_handle.borrow().as_ref() {
-                rename(tab_id);
-            }
-        });
-        title.tab_bar.add_controller(rename_click);
+            let _ = tab_view_for_reorder.reorder_page(&page, position as i32);
+        }));
     }
 
     {
         let tabs_for_reorder = tabs.clone();
         let active_for_reorder = active_tab_id.clone();
         let select_for_reorder = select_tab.clone();
+        let refresh_tab_strip_for_reorder = {
+            let tabs_box = title.tabs_box.clone();
+            let tabs = tabs.clone();
+            let active_tab_id = active_tab_id.clone();
+            let select_tab = select_tab.clone();
+            let close_tab = close_tab.clone();
+            let request_tab_rename = request_tab_rename.clone();
+            let reorder_tab = reorder_tab.clone();
+            Rc::new(move || {
+                render_tab_strip(
+                    &tabs_box,
+                    &tabs,
+                    active_tab_id.get(),
+                    &select_tab,
+                    &close_tab,
+                    &request_tab_rename,
+                    &reorder_tab,
+                );
+            })
+        };
         tab_view.connect_page_reordered(move |_, page, position| {
             let moved_id = {
                 let tabs = tabs_for_reorder.borrow();
@@ -525,6 +555,7 @@ pub fn present(
             {
                 select(active_id);
             }
+            refresh_tab_strip_for_reorder();
         });
     }
 
@@ -532,7 +563,26 @@ pub fn present(
         let tabs_for_workspace = tabs.clone();
         let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
-        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
+        let refresh_tab_strip_for_workspace = {
+            let tabs_box = title.tabs_box.clone();
+            let tabs = tabs.clone();
+            let active_tab_id = active_tab_id.clone();
+            let select_tab = select_tab.clone();
+            let close_tab = close_tab.clone();
+            let request_tab_rename = request_tab_rename.clone();
+            let reorder_tab = reorder_tab.clone();
+            Rc::new(move || {
+                render_tab_strip(
+                    &tabs_box,
+                    &tabs,
+                    active_tab_id.get(),
+                    &select_tab,
+                    &close_tab,
+                    &request_tab_rename,
+                    &reorder_tab,
+                );
+            })
+        };
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -586,7 +636,7 @@ pub fn present(
                         sync_tab_page_metadata(&tab_view_for_workspace, tab);
                     }
                 }
-                refresh_native_tab_bar_layout();
+                refresh_tab_strip_for_workspace();
 
                 logging::info(format!(
                     "workspace tab {} launched preset='{}' root='{}'",
@@ -828,7 +878,26 @@ pub fn present(
         let close_tab_for_add = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
         let select_for_add = select_tab.clone();
-        let refresh_native_tab_bar_layout = refresh_native_tab_bar_layout.clone();
+        let refresh_tab_strip_for_add = {
+            let tabs_box = title.tabs_box.clone();
+            let tabs = tabs.clone();
+            let active_tab_id = active_tab_id.clone();
+            let select_tab = select_tab.clone();
+            let close_tab = close_tab.clone();
+            let request_tab_rename = request_tab_rename.clone();
+            let reorder_tab = reorder_tab.clone();
+            Rc::new(move || {
+                render_tab_strip(
+                    &tabs_box,
+                    &tabs,
+                    active_tab_id.get(),
+                    &select_tab,
+                    &close_tab,
+                    &request_tab_rename,
+                    &reorder_tab,
+                );
+            })
+        };
 
         *add_workspace_tab.borrow_mut() = Some(Box::new(move || {
             let tab_id = next_tab_id.get();
@@ -854,7 +923,7 @@ pub fn present(
             };
             tab_view_for_add.append(&page_shell);
             sync_tab_page_metadata(&tab_view_for_add, &tab);
-            refresh_native_tab_bar_layout();
+            refresh_tab_strip_for_add();
 
             rebuild_launch_tab(
                 tab_id,
@@ -1406,7 +1475,6 @@ pub fn present(
                         tabs: tabs_for_restore.clone(),
                         next_tab_id: next_tab_id_for_restore.clone(),
                         tab_view: tab_view_for_restore.clone(),
-                        tab_bar: title.tab_bar.clone(),
                         select_tab: select_for_restore.clone(),
                         active_tab_id: active_for_restore.clone(),
                         forced_tab_closes: forced_tab_closes.clone(),
@@ -1499,67 +1567,238 @@ fn sync_tab_page_metadata(tab_view: &adw::TabView, tab: &WorkspaceTab) {
     page.set_icon(Some(&icon));
 }
 
-fn configure_native_tab_content(widget: &gtk::Widget) {
-    if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
-        label.set_single_line_mode(true);
-        label.set_ellipsize(pango::EllipsizeMode::End);
-        label.set_width_chars(12);
-        label.set_max_width_chars(12);
-        label.set_xalign(0.0);
-    }
-
-    let mut child = widget.first_child();
-    while let Some(next) = child {
-        configure_native_tab_content(&next);
-        child = next.next_sibling();
+fn clear_box_children(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
     }
 }
 
-fn collect_tab_widgets(widget: &gtk::Widget, tab_widgets: &mut Vec<gtk::Widget>) {
-    if widget.has_css_class("tab") {
-        tab_widgets.push(widget.clone());
-    }
-
-    let mut child = widget.first_child();
-    while let Some(next) = child {
-        collect_tab_widgets(&next, tab_widgets);
-        child = next.next_sibling();
-    }
-}
-
-fn schedule_native_tab_bar_layout(tab_bar: &adw::TabBar) {
-    let tab_bar = tab_bar.clone();
-    glib::idle_add_local_once(move || {
-        let mut tab_widgets = Vec::new();
-        collect_tab_widgets(tab_bar.upcast_ref(), &mut tab_widgets);
-        for tab_widget in tab_widgets {
-            tab_widget.set_width_request(136);
-            tab_widget.set_hexpand(false);
-            configure_native_tab_content(&tab_widget);
-        }
+fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .build();
+    shell.add_css_class("app-tab-shell");
+    shell.add_css_class(if is_active {
+        "is-active"
+    } else {
+        "is-inactive"
     });
+    shell.add_css_class("app-tab-drag-icon");
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(4)
+        .margin_bottom(4)
+        .build();
+    let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+    icon.add_css_class("app-tab-icon");
+    let label = gtk::Label::builder()
+        .label(title)
+        .xalign(0.0)
+        .single_line_mode(true)
+        .ellipsize(pango::EllipsizeMode::End)
+        .width_chars(14)
+        .max_width_chars(14)
+        .build();
+    label.add_css_class("app-tab-title");
+    content.append(&icon);
+    content.append(&label);
+    shell.append(&content);
+    shell
 }
 
-fn tab_id_at_point(
-    tab_bar: &adw::TabBar,
+fn render_tab_strip(
+    tabs_box: &gtk::Box,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
-    x: f64,
-    y: f64,
-) -> Option<usize> {
-    let mut picked = tab_bar.pick(x, y, gtk::PickFlags::DEFAULT)?;
-    let tab_widget = loop {
-        if picked.has_css_class("tab") {
-            break picked;
-        }
-        picked = picked.parent()?;
-    };
+    active_tab_id: usize,
+    select_tab: &SelectTabHandle,
+    close_tab: &TabActionHandle,
+    request_tab_rename: &TabActionHandle,
+    reorder_tab: &ReorderTabHandle,
+) {
+    clear_box_children(tabs_box);
 
-    let mut tab_widgets = Vec::new();
-    collect_tab_widgets(tab_bar.upcast_ref(), &mut tab_widgets);
-    let position = tab_widgets
+    let items = tabs
+        .borrow()
         .iter()
-        .position(|widget| widget == &tab_widget)?;
-    tabs.borrow().get(position).map(|tab| tab.id)
+        .enumerate()
+        .map(|(index, tab)| {
+            (
+                index,
+                tab.id,
+                tab_display_title(tab),
+                tab.subtitle.clone(),
+                tab.id == active_tab_id,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (index, tab_id, title, tooltip, is_active) in items {
+        let shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(0)
+            .tooltip_text(&tooltip)
+            .build();
+        shell.add_css_class("app-tab-shell");
+        shell.add_css_class(if is_active {
+            "is-active"
+        } else {
+            "is-inactive"
+        });
+        shell.set_width_request(142);
+
+        let select_button = gtk::Button::new();
+        select_button.add_css_class("app-tab-select");
+        select_button.set_hexpand(true);
+        select_button.set_focus_on_click(false);
+
+        let select_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .hexpand(true)
+            .build();
+        let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+        icon.add_css_class("app-tab-icon");
+        let label = gtk::Label::builder()
+            .label(&title)
+            .xalign(0.0)
+            .hexpand(true)
+            .single_line_mode(true)
+            .ellipsize(pango::EllipsizeMode::End)
+            .width_chars(14)
+            .max_width_chars(14)
+            .build();
+        label.add_css_class("app-tab-title");
+        select_row.append(&icon);
+        select_row.append(&label);
+        select_button.set_child(Some(&select_row));
+
+        let select_handle = select_tab.clone();
+        select_button.connect_clicked(move |_| {
+            if let Some(select) = select_handle.borrow().as_ref() {
+                select(tab_id);
+            }
+        });
+
+        let rename_handle = request_tab_rename.clone();
+        let rename_click = gtk::GestureClick::builder()
+            .button(1)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        rename_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press != 2 {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(rename) = rename_handle.borrow().as_ref() {
+                rename(tab_id);
+            }
+        });
+        select_button.add_controller(rename_click);
+
+        shell.append(&select_button);
+
+        let close_button = gtk::Button::from_icon_name("window-close-symbolic");
+        close_button.add_css_class("app-tab-close");
+        close_button.set_focus_on_click(false);
+        let close_handle = close_tab.clone();
+        close_button.connect_clicked(move |_| {
+            if let Some(close) = close_handle.borrow().as_ref() {
+                close(tab_id);
+            }
+        });
+        shell.append(&close_button);
+
+        let middle_close = gtk::GestureClick::builder()
+            .button(2)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        let close_handle = close_tab.clone();
+        middle_close.connect_pressed(move |gesture, _, _, _| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(close) = close_handle.borrow().as_ref() {
+                close(tab_id);
+            }
+        });
+        shell.add_controller(middle_close);
+
+        let drag_source = gtk::DragSource::new();
+        drag_source.set_actions(gdk::DragAction::MOVE);
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gdk::ContentProvider::for_value(&(tab_id as u32).to_value()))
+        });
+        let shell_for_begin = shell.clone();
+        let title_for_begin = title.clone();
+        drag_source.connect_drag_begin(move |_, drag| {
+            shell_for_begin.add_css_class("is-dragging");
+            let icon = gtk::DragIcon::for_drag(drag);
+            let preview = build_tab_drag_preview(&title_for_begin, is_active);
+            icon.set_child(Some(&preview));
+        });
+        let shell_for_end = shell.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            shell_for_end.remove_css_class("is-dragging");
+        });
+        shell.add_controller(drag_source);
+
+        let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+        let shell_for_motion = shell.clone();
+        drop_target.connect_motion(move |_, _, _| {
+            shell_for_motion.add_css_class("is-drop-target");
+            gdk::DragAction::MOVE
+        });
+        let shell_for_leave = shell.clone();
+        drop_target.connect_leave(move |_| {
+            shell_for_leave.remove_css_class("is-drop-target");
+        });
+        let shell_for_drop = shell.clone();
+        let tabs_for_drop = tabs.clone();
+        let reorder_handle = reorder_tab.clone();
+        drop_target.connect_drop(move |_, value, x, _| {
+            shell_for_drop.remove_css_class("is-drop-target");
+
+            let Ok(moved_id) = value.get::<u32>() else {
+                return false;
+            };
+            let moved_id = moved_id as usize;
+            if moved_id == tab_id {
+                return false;
+            }
+
+            let position = {
+                let tabs = tabs_for_drop.borrow();
+                let Some(current_index) = tabs.iter().position(|tab| tab.id == moved_id) else {
+                    return false;
+                };
+                let before = x < f64::from(shell_for_drop.allocated_width().max(1)) / 2.0;
+                if before {
+                    if current_index < index {
+                        index.saturating_sub(1)
+                    } else {
+                        index
+                    }
+                } else if current_index < index {
+                    index
+                } else {
+                    index + 1
+                }
+            };
+
+            if let Some(reorder) = reorder_handle.borrow().as_ref() {
+                reorder(moved_id, position);
+                return true;
+            }
+
+            false
+        });
+        shell.add_controller(drop_target);
+
+        tabs_box.append(&shell);
+    }
 }
 
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
@@ -1717,7 +1956,6 @@ fn restore_saved_session(
             .expect("restored workspace tab should exist");
         context.tab_view.append(&page_shell);
         sync_tab_page_metadata(&context.tab_view, &tab);
-        schedule_native_tab_bar_layout(&context.tab_bar);
         restored_ids.push(tab_id);
     }
 
@@ -1736,39 +1974,34 @@ fn restore_saved_session(
 #[derive(Clone)]
 struct TitleChrome {
     root: gtk::Box,
-    tab_bar: adw::TabBar,
+    tabs_box: gtk::Box,
     add_button: gtk::Button,
 }
 
 impl TitleChrome {
-    fn new(tab_view: &adw::TabView) -> Self {
+    fn new(_tab_view: &adw::TabView) -> Self {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .hexpand(true)
-            .halign(gtk::Align::Fill)
+            .spacing(6)
+            .halign(gtk::Align::Center)
             .build();
 
-        let tab_bar = adw::TabBar::new();
-        tab_bar.set_view(Some(tab_view));
-        tab_bar.set_autohide(false);
-        tab_bar.set_expand_tabs(false);
-        tab_bar.set_hexpand(false);
-        tab_bar.set_halign(gtk::Align::Center);
-        tab_bar.add_css_class("app-tab-strip");
+        let tabs_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk::Align::Center)
+            .build();
+        tabs_box.add_css_class("app-tab-strip");
 
         let add_button = gtk::Button::with_label("+");
         add_button.add_css_class("flat");
         add_button.add_css_class("app-tab-add");
-        tab_bar.set_end_action_widget(Some(&add_button));
-
-        let centering_shell = gtk::CenterBox::new();
-        centering_shell.set_center_widget(Some(&tab_bar));
-        centering_shell.set_hexpand(true);
-        root.append(&centering_shell);
+        root.append(&tabs_box);
+        root.append(&add_button);
 
         Self {
             root,
-            tab_bar,
+            tabs_box,
             add_button,
         }
     }
