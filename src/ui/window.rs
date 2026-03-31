@@ -146,12 +146,10 @@ struct TabStripController {
     tabs_box: gtk::Box,
     items: Vec<TabStripItem>,
     order: Vec<usize>,
-    placeholder: gtk::Box,
     drag_state: Option<TabStripDragState>,
     select_tab: SelectTabHandle,
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
-    reorder_tab: ReorderTabHandle,
 }
 
 pub fn present(
@@ -1550,16 +1548,6 @@ fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
     shell
 }
 
-fn build_tab_placeholder() -> gtk::Box {
-    let placeholder = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .build();
-    placeholder.add_css_class("app-tab-shell");
-    placeholder.add_css_class("app-tab-placeholder");
-    placeholder
-}
-
 fn preview_index_for_pointer(slots: &[(f64, f64)], x: f64) -> usize {
     for (index, (start, width)) in slots.iter().enumerate() {
         if x < *start + (*width / 2.0) {
@@ -1575,18 +1563,15 @@ impl TabStripController {
         select_tab: SelectTabHandle,
         close_tab: TabActionHandle,
         request_tab_rename: TabActionHandle,
-        reorder_tab: ReorderTabHandle,
     ) -> Self {
         Self {
             tabs_box,
             items: Vec::new(),
             order: Vec::new(),
-            placeholder: build_tab_placeholder(),
             drag_state: None,
             select_tab,
             close_tab,
             request_tab_rename,
-            reorder_tab,
         }
     }
 
@@ -1642,7 +1627,6 @@ impl TabStripController {
 
         if self.drag_state.is_none() {
             self.reorder_shells_to_model_order();
-            self.detach_placeholder();
         }
     }
 
@@ -1751,7 +1735,7 @@ impl TabStripController {
         drag_source.connect_drag_end(move |_, _, _| {
             controller_for_end.borrow_mut().finish_drag(tab_id);
         });
-        shell.add_controller(drag_source);
+        select_button.add_controller(drag_source);
 
         TabStripItem {
             tab_id,
@@ -1788,53 +1772,19 @@ impl TabStripController {
             return;
         };
 
-        let placeholder_width = if item.shell.allocated_width() > 0 {
-            item.shell.allocated_width()
-        } else {
-            142
-        };
-        let placeholder_height = if item.shell.allocated_height() > 0 {
-            item.shell.allocated_height()
-        } else {
-            30
-        };
-
         let icon = gtk::DragIcon::for_drag(drag);
         let preview = build_tab_drag_preview(title, is_active);
         icon.set_child(Some(&preview));
 
         item.shell.add_css_class("is-lifted-source");
-        item.shell.add_css_class("is-dragging");
-        item.shell.set_opacity(0.0);
-        item.shell.set_width_request(0);
-
-        self.placeholder.set_width_request(placeholder_width);
-        self.placeholder.set_height_request(placeholder_height);
-        self.attach_placeholder();
-        self.reorder_placeholder(origin_index, tab_id);
+        item.shell.add_css_class("is-preview-slot");
+        self.reorder_widget_for_preview(&item.shell.clone().upcast(), origin_index, tab_id);
 
         self.drag_state = Some(TabStripDragState {
             dragged_id: tab_id,
             origin_index,
             preview_index: origin_index,
         });
-    }
-
-    fn attach_placeholder(&self) {
-        if self.placeholder.parent().is_none() {
-            self.tabs_box.append(&self.placeholder);
-        }
-    }
-
-    fn detach_placeholder(&self) {
-        if self.placeholder.parent().is_some() {
-            self.tabs_box.remove(&self.placeholder);
-        }
-    }
-
-    fn reorder_placeholder(&self, preview_index: usize, dragged_id: usize) {
-        let widget: gtk::Widget = self.placeholder.clone().upcast();
-        self.reorder_widget_for_preview(&widget, preview_index, dragged_id);
     }
 
     fn reorder_widget_for_preview(
@@ -1886,42 +1836,37 @@ impl TabStripController {
         if let Some(drag_state) = self.drag_state.as_mut() {
             drag_state.preview_index = preview_index;
         }
-        self.reorder_placeholder(preview_index, dragged_id);
+        if let Some(item) = self.find_item(dragged_id) {
+            self.reorder_widget_for_preview(&item.shell.clone().upcast(), preview_index, dragged_id);
+        }
         true
     }
 
-    fn commit_drop(&mut self, value: &glib::Value, x: f64) -> bool {
+    fn prepare_drop(&mut self, value: &glib::Value, x: f64) -> Result<Option<(usize, usize)>, ()> {
         let Ok(moved_id) = value.get::<u32>() else {
-            return false;
+            return Err(());
         };
         let moved_id = moved_id as usize;
         let Some(drag_state) = self.drag_state.as_ref() else {
-            return false;
+            return Err(());
         };
         if moved_id != drag_state.dragged_id {
-            return false;
+            return Err(());
         }
 
         self.update_preview_for_x(x);
         let (origin_index, preview_index) = match self.drag_state.as_ref() {
             Some(state) => (state.origin_index, state.preview_index),
-            None => return false,
+            None => return Err(()),
         };
-
-        if let Some(item) = self.find_item(moved_id) {
-            let widget: gtk::Widget = item.shell.clone().upcast();
-            self.reorder_widget_for_preview(&widget, preview_index, moved_id);
-        }
 
         self.clear_drag_state();
 
-        if preview_index != origin_index
-            && let Some(reorder) = self.reorder_tab.borrow().as_ref()
-        {
-            reorder(moved_id, preview_index);
+        if preview_index != origin_index {
+            Ok(Some((moved_id, preview_index)))
+        } else {
+            Ok(None)
         }
-
-        true
     }
 
     fn cancel_drag(&mut self, tab_id: usize) {
@@ -1944,14 +1889,8 @@ impl TabStripController {
             && let Some(item) = self.find_item(drag_state.dragged_id)
         {
             item.shell.remove_css_class("is-lifted-source");
-            item.shell.remove_css_class("is-dragging");
-            item.shell.set_opacity(1.0);
-            item.shell.set_width_request(-1);
+            item.shell.remove_css_class("is-preview-slot");
         }
-
-        self.placeholder.set_width_request(-1);
-        self.placeholder.set_height_request(-1);
-        self.detach_placeholder();
     }
 }
 
@@ -1967,7 +1906,6 @@ fn create_tab_strip_controller(
         select_tab,
         close_tab,
         request_tab_rename,
-        reorder_tab,
     )));
 
     let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
@@ -1983,8 +1921,22 @@ fn create_tab_strip_controller(
     }
     {
         let controller_for_drop = controller.clone();
+        let reorder_handle = reorder_tab.clone();
         drop_target.connect_drop(move |_, value, x, _| {
-            controller_for_drop.borrow_mut().commit_drop(value, x)
+            let drop_result = {
+                let mut controller = controller_for_drop.borrow_mut();
+                controller.prepare_drop(value, x)
+            };
+            match drop_result {
+                Ok(Some((moved_id, preview_index))) => {
+                    if let Some(reorder) = reorder_handle.borrow().as_ref() {
+                        reorder(moved_id, preview_index);
+                    }
+                    true
+                }
+                Ok(None) => true,
+                Err(()) => false,
+            }
         });
     }
     tabs_box.add_controller(drop_target);

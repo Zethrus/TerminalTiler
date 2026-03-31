@@ -479,7 +479,6 @@ tabbar.app-tab-strip {
 
 tabbar.app-tab-strip tabbox tab {
   min-width: 136px;
-  max-width: 136px;
   min-height: 32px;
   margin: 0 6px 0 0;
   padding: 0 6px 0 8px;
@@ -566,7 +565,6 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
 
 .app-tab-shell {
   min-width: 142px;
-  max-width: 142px;
   min-height: 30px;
   border-radius: 12px 12px 0 0;
   transition:
@@ -576,21 +574,19 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
     transform 140ms ease;
 }
 
-window.window-shell .app-tab-shell.app-tab-placeholder {
-  min-width: 0;
-  max-width: none;
+window.window-shell .app-tab-shell.is-preview-slot {
   border: 1px dashed rgba(236, 154, 83, 0.52);
   background: rgba(236, 154, 83, 0.10);
   box-shadow: inset 0 0 0 1px rgba(236, 154, 83, 0.18);
 }
 
 window.window-shell .app-tab-shell.is-lifted-source {
-  min-width: 0;
-  max-width: 0;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
   transform: none;
+}
+
+window.window-shell .app-tab-shell.is-preview-slot .app-tab-select,
+window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
+  opacity: 0;
 }
 
 .app-tab-shell.is-active {
@@ -1323,7 +1319,6 @@ button.destructive-button:hover {
 }
 
 .settings-copy {
-  max-width: 58ch;
 }
 
 .settings-inline-note {
@@ -1357,7 +1352,6 @@ button.destructive-button:hover {
 }
 
 .settings-shortcut-note {
-  max-width: 42ch;
 }
 
 .settings-shortcut-chip {
@@ -1367,7 +1361,6 @@ button.destructive-button:hover {
   min-height: 26px;
   padding-left: 10px;
   padding-right: 10px;
-  text-align: center;
 }
 
 .settings-shortcut-record-button {
@@ -1404,7 +1397,6 @@ button.destructive-button:hover {
 }
 
 .settings-help-copy {
-  max-width: 28ch;
 }
 
 .settings-help-eyebrow {
@@ -1551,7 +1543,6 @@ button.destructive-button:hover {
 
 .settings-summary-copy,
 .launch-overview-copy {
-  max-width: 56ch;
   color: rgba(255, 255, 255, 0.70);
 }
 
@@ -1582,7 +1573,6 @@ button.destructive-button:hover {
 }
 
 .settings-section-copy {
-  max-width: 60ch;
 }
 
 .settings-inline-note {
@@ -1617,7 +1607,6 @@ button.destructive-button:hover {
 
 .settings-shortcut-note,
 .launch-setting-note {
-  max-width: 46ch;
 }
 
 .launch-setting-note,
@@ -1662,7 +1651,6 @@ button.destructive-button:hover {
 }
 
 .launch-overview-copy {
-  max-width: 48ch;
 }
 
 .launch-browse-button {
@@ -1840,7 +1828,7 @@ window.window-shell.theme-light .app-tab-shell.is-active {
     0 8px 18px rgba(15, 23, 42, 0.10);
 }
 
-window.window-shell.theme-light .app-tab-shell.app-tab-placeholder {
+window.window-shell.theme-light .app-tab-shell.is-preview-slot {
   border-color: rgba(190, 85, 32, 0.38);
   background: rgba(190, 85, 32, 0.08);
   box-shadow: inset 0 0 0 1px rgba(190, 85, 32, 0.14);
