@@ -516,7 +516,7 @@ tabbar.app-tab-strip tabbox tab label {
   color: rgba(255, 255, 255, 0.92);
   font-size: 12px;
   font-weight: 700;
-  min-width: 0;
+  min-width: 72px;
 }
 
 tabbar.app-tab-strip tabbox tab:selected image,

@@ -448,7 +448,7 @@ pub fn present(
             .button(2)
             .propagation_phase(gtk::PropagationPhase::Capture)
             .build();
-        let title_root = title.root.clone();
+        let title_root = title.tab_bar.clone();
         middle_click.connect_pressed(move |gesture, _, x, y| {
             let Some(tab_id) = tab_id_at_point(&title_root, &tabs_for_middle_click, x, y) else {
                 return;
@@ -458,7 +458,7 @@ pub fn present(
                 close(tab_id);
             }
         });
-        title.root.add_controller(middle_click);
+        title.tab_bar.add_controller(middle_click);
     }
 
     {
@@ -468,7 +468,7 @@ pub fn present(
             .button(1)
             .propagation_phase(gtk::PropagationPhase::Capture)
             .build();
-        let title_root = title.root.clone();
+        let title_root = title.tab_bar.clone();
         rename_click.connect_pressed(move |gesture, n_press, x, y| {
             if n_press != 2 {
                 return;
@@ -481,7 +481,7 @@ pub fn present(
                 rename(tab_id);
             }
         });
-        title.root.add_controller(rename_click);
+        title.tab_bar.add_controller(rename_click);
     }
 
     {
@@ -1691,26 +1691,42 @@ fn restore_saved_session(
 
 #[derive(Clone)]
 struct TitleChrome {
-    root: adw::TabBar,
+    root: gtk::Box,
+    tab_bar: adw::TabBar,
     add_button: gtk::Button,
 }
 
 impl TitleChrome {
     fn new(tab_view: &adw::TabView) -> Self {
-        let root = adw::TabBar::new();
-        root.set_view(Some(tab_view));
-        root.set_autohide(false);
-        root.set_expand_tabs(false);
-        root.set_hexpand(false);
-        root.set_halign(gtk::Align::Center);
-        root.add_css_class("app-tab-strip");
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .hexpand(true)
+            .halign(gtk::Align::Fill)
+            .build();
+
+        let tab_bar = adw::TabBar::new();
+        tab_bar.set_view(Some(tab_view));
+        tab_bar.set_autohide(false);
+        tab_bar.set_expand_tabs(false);
+        tab_bar.set_hexpand(false);
+        tab_bar.set_halign(gtk::Align::Center);
+        tab_bar.add_css_class("app-tab-strip");
 
         let add_button = gtk::Button::with_label("+");
         add_button.add_css_class("flat");
         add_button.add_css_class("app-tab-add");
-        root.set_end_action_widget(Some(&add_button));
+        tab_bar.set_end_action_widget(Some(&add_button));
 
-        Self { root, add_button }
+        let centering_shell = gtk::CenterBox::new();
+        centering_shell.set_center_widget(Some(&tab_bar));
+        centering_shell.set_hexpand(true);
+        root.append(&centering_shell);
+
+        Self {
+            root,
+            tab_bar,
+            add_button,
+        }
     }
 }
 
