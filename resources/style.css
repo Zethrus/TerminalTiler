@@ -1269,16 +1269,30 @@ button.destructive-button:hover {
   color: rgba(255, 255, 255, 0.68);
 }
 
+.launch-config-stage .field-hint {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .launch-config-stage .eyebrow,
 .settings-dialog-content .eyebrow {
   color: rgba(241, 193, 104, 0.84);
   letter-spacing: 0.18em;
 }
 
+.launch-config-stage .eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
 .launch-config-stage .section-title,
 .settings-dialog-content .section-title {
   color: #fbfaf6;
   letter-spacing: -0.01em;
+}
+
+.launch-config-stage .section-title {
+  font-size: 17px;
 }
 
 .launch-config-stage .workspace-path entry,
@@ -1353,6 +1367,11 @@ button.destructive-button:hover {
   color: rgba(255, 255, 255, 0.70);
 }
 
+.launch-overview-copy {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .settings-meta-chip,
 .launch-meta-chip {
   min-height: 24px;
@@ -1413,6 +1432,14 @@ button.destructive-button:hover {
   max-width: 46ch;
 }
 
+.launch-setting-note,
+.launch-config-stage .config-subtitle,
+.launch-config-stage .selection-summary-subtitle,
+.launch-config-stage .card-meta {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .settings-shortcut-trailing {
   margin-left: 0;
 }
@@ -1460,7 +1487,8 @@ button.destructive-button:hover {
 }
 
 .launch-setting-title {
-  font-size: 10px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
 }
 
 .launch-selection-summary {
