@@ -87,7 +87,7 @@ where
         .hexpand(true)
         .halign(gtk::Align::Fill)
         .valign(gtk::Align::Start)
-        .css_classes(["launch-stage"])
+        .css_classes(["launch-stage", "launch-config-stage"])
         .build();
     root.append(&stage);
 
@@ -134,13 +134,18 @@ where
     let path_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
-        .css_classes(["workspace-path-row"])
+        .css_classes(["workspace-path-row", "launch-field-row"])
         .build();
     path_row.append(&path_entry);
 
     let browse_button = gtk::Button::builder()
         .label("Browse")
-        .css_classes(["pill-button", "secondary-button", "workspace-browse-button"])
+        .css_classes([
+            "pill-button",
+            "secondary-button",
+            "workspace-browse-button",
+            "launch-browse-button",
+        ])
         .valign(gtk::Align::Center)
         .build();
     path_row.append(&browse_button);
@@ -249,7 +254,7 @@ where
     let options_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
-        .css_classes(["config-panel", "appearance-panel"])
+        .css_classes(["config-panel", "appearance-panel", "launch-appearance-panel"])
         .build();
     stage.append(&options_panel);
     options_panel.append(&build_section_header(
@@ -265,19 +270,6 @@ where
         .build();
 
     {
-        let theme_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-
-        let theme_label = gtk::Label::builder()
-            .label("Theme")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["eyebrow"])
-            .build();
-        theme_row.append(&theme_label);
-
         for (mode, label) in [
             (ThemeMode::System, "System"),
             (ThemeMode::Light, "Light"),
@@ -300,8 +292,11 @@ where
             });
             theme_strip.append(&btn);
         }
-        theme_row.append(&theme_strip);
-        options_panel.append(&theme_row);
+        options_panel.append(&build_launch_control_row(
+            "Theme",
+            "Preview the overall shell before you launch the workspace.",
+            &theme_strip,
+        ));
     }
 
     let density_strip = gtk::Box::builder()
@@ -311,25 +306,6 @@ where
         .build();
 
     {
-        let density_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .build();
-
-        let density_label = gtk::Label::builder()
-            .label("Density")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["eyebrow"])
-            .build();
-        density_row.append(&density_label);
-
-        let density_hint = gtk::Label::builder()
-            .label("Density changes panel spacing, titlebars, and terminal shell size.")
-            .halign(gtk::Align::Start)
-            .css_classes(["field-hint"])
-            .build();
-
         for (density, label) in [
             (ApplicationDensity::Comfortable, "Comfortable"),
             (ApplicationDensity::Standard, "Standard"),
@@ -351,9 +327,11 @@ where
             });
             density_strip.append(&btn);
         }
-        density_row.append(&density_strip);
-        options_panel.append(&density_row);
-        options_panel.append(&density_hint);
+        options_panel.append(&build_launch_control_row(
+            "Density",
+            "Density changes panel spacing, titlebars, and terminal shell size.",
+            &density_strip,
+        ));
     }
 
     let summary = build_selection_summary();
@@ -486,7 +464,7 @@ where
         let presets_section = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(10)
-            .css_classes(["config-panel", "presets-section"])
+            .css_classes(["config-panel", "presets-section", "launch-presets-panel"])
             .build();
         stage.append(&presets_section);
         presets_section.append(&build_section_header(
@@ -741,7 +719,7 @@ where
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
         .hexpand(true)
-        .css_classes(["action-bar-bottom"])
+        .css_classes(["action-bar-bottom", "launch-action-bar"])
         .build();
     stage.append(&action_bar);
 
@@ -811,27 +789,55 @@ where
 
 fn build_header() -> gtk::Widget {
     let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(16)
+        .halign(gtk::Align::Fill)
+        .css_classes(["launch-header", "config-panel", "launch-overview"])
+        .build();
+
+    let icon = gtk::Box::builder()
+        .width_request(44)
+        .height_request(44)
+        .valign(gtk::Align::Start)
+        .css_classes(["launch-overview-icon"])
+        .build();
+    icon.append(&gtk::Image::from_icon_name("utilities-terminal-symbolic"));
+    card.append(&icon);
+
+    let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .halign(gtk::Align::Center)
-        .css_classes(["launch-header"])
+        .spacing(4)
+        .hexpand(true)
+        .css_classes(["launch-overview-body"])
         .build();
-
-    let title = gtk::Label::builder()
-        .label("Configure Layout")
-        .halign(gtk::Align::Center)
-        .wrap(true)
-        .css_classes(["hero-title", "config-title"])
-        .build();
-    let body = gtk::Label::builder()
-        .label("Pick a starting layout, then tune the tiles you want to open.")
-        .halign(gtk::Align::Center)
-        .wrap(true)
-        .css_classes(["hero-body", "config-subtitle"])
-        .build();
-
-    card.append(&title);
+    body.append(
+        &gtk::Label::builder()
+            .label("Configure Layout")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["hero-title", "config-title", "launch-overview-title"])
+            .build(),
+    );
+    body.append(
+        &gtk::Label::builder()
+            .label("Pick a starting layout, preview the shell, then tune the tiles you want to open.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["hero-body", "config-subtitle", "launch-overview-copy"])
+            .build(),
+    );
     card.append(&body);
+
+    let meta = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .valign(gtk::Align::Center)
+        .css_classes(["launch-overview-meta"])
+        .build();
+    meta.append(&build_launch_meta_chip("4-step flow"));
+    meta.append(&build_launch_meta_chip("Live preview"));
+    card.append(&meta);
+
     card.upcast()
 }
 
@@ -875,7 +881,7 @@ where
     let button = gtk::Button::builder()
         .hexpand(true)
         .halign(gtk::Align::Fill)
-        .css_classes(["preset-card", "template-button"])
+        .css_classes(["preset-card", "template-button", "launch-template-card"])
         .build();
 
     let content = gtk::Box::builder()
@@ -963,7 +969,7 @@ fn build_selection_summary() -> SelectionSummary {
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
-        .css_classes(["selection-summary", "config-panel"])
+        .css_classes(["selection-summary", "config-panel", "launch-selection-summary"])
         .build();
 
     let icon_box = gtk::Box::builder()
@@ -1018,7 +1024,7 @@ where
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
-        .css_classes(["preset-card-compact"])
+        .css_classes(["preset-card-compact", "launch-preset-card"])
         .build();
 
     let top_row = gtk::Box::builder()
@@ -1198,6 +1204,48 @@ fn build_tile_editor_panel() -> TileEditorPanel {
         rows,
         scroller,
     }
+}
+
+fn build_launch_control_row(title: &str, note: &str, control: &impl IsA<gtk::Widget>) -> gtk::Widget {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(14)
+        .css_classes(["launch-setting-row"])
+        .build();
+
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .css_classes(["launch-setting-copy"])
+        .build();
+    text.append(
+        &gtk::Label::builder()
+            .label(title)
+            .halign(gtk::Align::Start)
+            .css_classes(["eyebrow", "launch-setting-title"])
+            .build(),
+    );
+    text.append(
+        &gtk::Label::builder()
+            .label(note)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint", "launch-setting-note"])
+            .build(),
+    );
+    row.append(&text);
+    row.append(control);
+    row.upcast()
+}
+
+fn build_launch_meta_chip(label: &str) -> gtk::Widget {
+    gtk::Label::builder()
+        .label(label)
+        .halign(gtk::Align::End)
+        .css_classes(["status-chip", "launch-meta-chip"])
+        .build()
+        .upcast()
 }
 
 fn refresh_tile_editor(panel: &TileEditorPanel, layout_state: &Rc<RefCell<LayoutNode>>) {

@@ -219,6 +219,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
     let reset_button = gtk::Button::with_label("Reset Defaults");
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
+    reset_button.add_css_class("settings-reset-button");
     sync_reset_button_state(
         &reset_button,
         current_theme.get(),
@@ -230,57 +231,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         current_zoom_out_shortcut.borrow().as_str(),
     );
 
-    let intro = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .css_classes(["config-panel", "settings-section", "settings-hero"])
-        .build();
-
-    let intro_icon = gtk::Box::builder()
-        .width_request(42)
-        .height_request(42)
-        .valign(gtk::Align::Start)
-        .css_classes(["settings-hero-icon"])
-        .build();
-    intro_icon.append(&gtk::Image::from_icon_name("preferences-system-symbolic"));
-    intro.append(&intro_icon);
-
-    let intro_body = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .hexpand(true)
-        .build();
-    intro.append(&intro_body);
-
-    let intro_top = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
-        .build();
-    let title = gtk::Label::builder()
-        .label("Application Settings")
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["section-title", "settings-title"])
-        .build();
-    intro_top.append(&title);
-    intro_top.append(&build_meta_chip("Saved automatically"));
-    intro_body.append(&intro_top);
-
-    let body = gtk::Label::builder()
-        .label("Set defaults for new launch tabs and keep a few high-value controls close at hand. Running workspaces keep their own preset theme, and workspace shortcuts only affect the active workspace.")
-        .halign(gtk::Align::Start)
-        .wrap(true)
-        .css_classes(["field-hint", "settings-copy"])
-        .build();
-    intro_body.append(&body);
-
-    let intro_note = gtk::Label::builder()
-        .label("Launch defaults are immediate. Running workspace zoom is session-scoped and restored with saved workspaces.")
-        .halign(gtk::Align::Start)
-        .css_classes(["settings-inline-note"])
-        .build();
-    intro_body.append(&intro_note);
-    content.append(&intro);
+    content.append(&build_settings_summary(&reset_button));
 
     let theme_callback = Rc::new(on_theme_changed);
     let density_callback = Rc::new(on_density_changed);
@@ -435,7 +386,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
     let background_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
-        .css_classes(["settings-shortcut-row"])
+        .css_classes(["settings-toggle-row"])
         .build();
     let background_text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -466,6 +417,7 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         .valign(gtk::Align::Center)
         .active(close_to_background)
         .build();
+    close_to_background_switch.add_css_class("settings-toggle-switch");
     let suppress_close_to_background_signal = Rc::new(Cell::new(false));
     {
         let current_theme = current_theme.clone();
@@ -635,11 +587,6 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         &["F11", "<Shift>F11", "<Ctrl>F11"],
     ));
 
-    shortcuts_section.append(
-        &gtk::Separator::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .build(),
-    );
     let density_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .css_classes([
@@ -758,11 +705,6 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         &["<Ctrl><Shift>D", "<Shift>F8", "<Alt><Super>D"],
     ));
 
-    shortcuts_section.append(
-        &gtk::Separator::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .build(),
-    );
     let zoom_in_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .css_classes([
@@ -881,11 +823,6 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
     ));
 
-    shortcuts_section.append(
-        &gtk::Separator::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .build(),
-    );
     let zoom_out_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .css_classes([
@@ -1004,20 +941,6 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
         &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
     ));
 
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .css_classes(["settings-actions"])
-        .build();
-    actions.append(
-        &gtk::Label::builder()
-            .label("Defaults apply immediately to new launch tabs.")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["field-hint", "settings-footer-note"])
-            .build(),
-    );
-
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -1115,9 +1038,6 @@ pub fn present<F, G, H, I, J, K, L, M, N>(
             reset_callback();
         });
     }
-    actions.append(&reset_button);
-    content.append(&actions);
-
     {
         let size_changed_callback = size_changed_callback.clone();
         dialog.connect_response(move |dialog, _| {
@@ -1145,7 +1065,7 @@ fn build_shortcut_capture_control(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .valign(gtk::Align::Center)
-        .css_classes(["settings-shortcut-control-shell"])
+        .css_classes(["settings-shortcut-control-shell", "settings-shortcut-controls"])
         .build();
     shell.append(value_label);
     shell.append(record_button);
@@ -1161,10 +1081,11 @@ fn build_shortcut_entry_row(
 ) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
+        .spacing(10)
+        .css_classes(["settings-shortcut-card"])
         .build();
 
-    let row = gtk::Box::builder()
+    let top = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
         .valign(gtk::Align::Center)
@@ -1173,7 +1094,7 @@ fn build_shortcut_entry_row(
 
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
+        .spacing(4)
         .hexpand(true)
         .build();
     text.append(
@@ -1194,19 +1115,19 @@ fn build_shortcut_entry_row(
             .css_classes(["field-hint", "settings-shortcut-note"])
             .build(),
     );
-    row.append(&text);
+    top.append(&text);
+    top.append(&build_shortcut_help_button(label, examples));
+    shell.append(&top);
 
-    let trailing = gtk::Box::builder()
+    let controls = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .valign(gtk::Align::Center)
         .css_classes(["settings-shortcut-trailing"])
         .build();
-    trailing.append(control);
-    trailing.append(&build_shortcut_help_button(label, examples));
-    row.append(&trailing);
+    controls.append(control);
+    shell.append(&controls);
 
-    shell.append(&row);
     shell.append(status);
     shell.upcast()
 }
@@ -1281,11 +1202,13 @@ fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(6)
+        .css_classes(["settings-section-header"])
         .build();
 
     let top = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
+        .css_classes(["settings-section-top"])
         .build();
     top.append(
         &gtk::Label::builder()
@@ -1303,9 +1226,62 @@ fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
             .label(body)
             .halign(gtk::Align::Start)
             .wrap(true)
-            .css_classes(["field-hint", "settings-copy"])
+            .css_classes(["field-hint", "settings-copy", "settings-section-copy"])
             .build(),
     );
+
+    shell.upcast()
+}
+
+fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(14)
+        .css_classes(["config-panel", "settings-section", "settings-summary"])
+        .build();
+
+    let icon = gtk::Box::builder()
+        .width_request(40)
+        .height_request(40)
+        .valign(gtk::Align::Start)
+        .css_classes(["settings-summary-icon"])
+        .build();
+    icon.append(&gtk::Image::from_icon_name("preferences-system-symbolic"));
+    shell.append(&icon);
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .css_classes(["settings-summary-body"])
+        .build();
+    body.append(
+        &gtk::Label::builder()
+            .label("Application Settings")
+            .halign(gtk::Align::Start)
+            .css_classes(["section-title", "settings-title", "settings-summary-title"])
+            .build(),
+    );
+    body.append(
+        &gtk::Label::builder()
+            .label("Set launch defaults, tray behavior, and workspace shortcuts in one place. Changes apply immediately, while workspace zoom stays session-scoped.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-copy", "settings-summary-copy"])
+            .build(),
+    );
+    shell.append(&body);
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .valign(gtk::Align::Center)
+        .css_classes(["settings-summary-actions"])
+        .build();
+    actions.append(&build_meta_chip("Saved automatically"));
+    actions.append(&build_meta_chip("Defaults live"));
+    actions.append(reset_button);
+    shell.append(&actions);
 
     shell.upcast()
 }
