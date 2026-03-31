@@ -1367,6 +1367,50 @@ fn reorder_tab_list(
     true
 }
 
+fn attach_tab_drop_target(
+    widget: &impl IsA<gtk::Widget>,
+    shell: &gtk::Box,
+    target_id: usize,
+    on_reorder: Rc<dyn Fn(usize, usize, bool)>,
+    insert_after_override: Option<bool>,
+) {
+    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+    {
+        let shell = shell.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gdk::DragAction::MOVE
+        });
+    }
+    {
+        let shell = shell.clone();
+        drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let drop_surface = widget.as_ref().clone();
+        drop_target.connect_drop(move |_, value, x, _| {
+            shell.remove_css_class("is-drop-target");
+
+            let Ok(dragged_id) = value.get::<String>() else {
+                return false;
+            };
+            let Ok(dragged_id) = dragged_id.parse::<usize>() else {
+                return false;
+            };
+
+            let insert_after = insert_after_override.unwrap_or_else(|| {
+                x >= (drop_surface.allocated_width() as f64 / 2.0)
+            });
+            on_reorder(dragged_id, target_id, insert_after);
+            true
+        });
+    }
+    widget.as_ref().add_controller(drop_target);
+}
+
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let page_name = context
         .tabs
@@ -1676,15 +1720,30 @@ impl TitleChrome {
                 .actions(gdk::DragAction::MOVE)
                 .build();
             let drag_shell = shell.clone();
+            let drag_hotspot = Rc::new(Cell::new((0, 0)));
             let tab_id = tab.id;
-            drag_source.connect_prepare(move |_, _, _| {
-                Some(gdk::ContentProvider::for_value(
-                    &tab_id.to_string().to_value(),
-                ))
-            });
-            drag_source.connect_drag_begin(move |_, _| {
-                drag_shell.add_css_class("is-dragging");
-            });
+            {
+                let drag_shell = drag_shell.clone();
+                let drag_hotspot = drag_hotspot.clone();
+                drag_source.connect_prepare(move |_, x, y| {
+                    let hot_x = x.round().clamp(0.0, drag_shell.allocated_width() as f64) as i32;
+                    let hot_y = y.round().clamp(0.0, drag_shell.allocated_height() as f64) as i32;
+                    drag_hotspot.set((hot_x, hot_y));
+                    Some(gdk::ContentProvider::for_value(
+                        &tab_id.to_string().to_value(),
+                    ))
+                });
+            }
+            {
+                let drag_shell = drag_shell.clone();
+                let drag_hotspot = drag_hotspot.clone();
+                drag_source.connect_drag_begin(move |source, _| {
+                    let (hot_x, hot_y) = drag_hotspot.get();
+                    let paintable = gtk::WidgetPaintable::new(Some(&drag_shell));
+                    source.set_icon(Some(&paintable), hot_x, hot_y);
+                    drag_shell.add_css_class("is-dragging");
+                });
+            }
             let drag_shell = shell.clone();
             drag_source.connect_drag_end(move |_, _, _| {
                 drag_shell.remove_css_class("is-dragging");
@@ -1692,6 +1751,8 @@ impl TitleChrome {
             button.add_controller(drag_source);
 
             shell.append(&button);
+
+            attach_tab_drop_target(&button, &shell, tab.id, on_reorder.clone(), None);
 
             if is_active {
                 let close_button = gtk::Button::builder()
@@ -1705,36 +1766,15 @@ impl TitleChrome {
                 close_button.connect_clicked(move |_| {
                     on_close(tab_id);
                 });
+                attach_tab_drop_target(
+                    &close_button,
+                    &shell,
+                    tab.id,
+                    on_reorder.clone(),
+                    Some(true),
+                );
                 shell.append(&close_button);
             }
-
-            let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
-            let drop_shell = shell.clone();
-            drop_target.connect_enter(move |_, _, _| {
-                drop_shell.add_css_class("is-drop-target");
-                gdk::DragAction::MOVE
-            });
-            let drop_shell = shell.clone();
-            drop_target.connect_leave(move |_| {
-                drop_shell.remove_css_class("is-drop-target");
-            });
-            let drop_shell = shell.clone();
-            let on_reorder = on_reorder.clone();
-            let target_id = tab.id;
-            drop_target.connect_drop(move |_, value, x, _| {
-                drop_shell.remove_css_class("is-drop-target");
-
-                let Ok(dragged_id) = value.get::<String>() else {
-                    return false;
-                };
-                let Ok(dragged_id) = dragged_id.parse::<usize>() else {
-                    return false;
-                };
-                let insert_after = x >= (drop_shell.allocated_width() as f64 / 2.0);
-                on_reorder(dragged_id, target_id, insert_after);
-                true
-            });
-            shell.add_controller(drop_target);
 
             self.tabs_box.append(&shell);
         }
@@ -2325,4 +2365,65 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
         dialog.close();
     });
     dialog.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TabContent, WorkspaceTab, reorder_tab_list};
+
+    fn launch_tab(id: usize) -> WorkspaceTab {
+        WorkspaceTab {
+            id,
+            default_title: format!("Workspace {id}"),
+            custom_title: None,
+            subtitle: String::new(),
+            page_name: format!("workspace-tab-{id}"),
+            content: TabContent::LaunchDeck,
+            workspace_root: None,
+        }
+    }
+
+    fn tab_ids(tabs: &[WorkspaceTab]) -> Vec<usize> {
+        tabs.iter().map(|tab| tab.id).collect()
+    }
+
+    #[test]
+    fn reorders_tab_before_target() {
+        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+
+        let moved = reorder_tab_list(&mut tabs, 3, 1, false);
+
+        assert!(moved);
+        assert_eq!(tab_ids(&tabs), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn reorders_tab_after_target() {
+        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+
+        let moved = reorder_tab_list(&mut tabs, 1, 3, true);
+
+        assert!(moved);
+        assert_eq!(tab_ids(&tabs), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn ignores_reorder_when_dragging_onto_same_tab() {
+        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+
+        let moved = reorder_tab_list(&mut tabs, 2, 2, true);
+
+        assert!(!moved);
+        assert_eq!(tab_ids(&tabs), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn ignores_reorder_for_unknown_target() {
+        let mut tabs = vec![launch_tab(1), launch_tab(2), launch_tab(3)];
+
+        let moved = reorder_tab_list(&mut tabs, 2, 99, false);
+
+        assert!(!moved);
+        assert_eq!(tab_ids(&tabs), vec![1, 2, 3]);
+    }
 }
