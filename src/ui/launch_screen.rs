@@ -266,7 +266,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     let options_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
-        .css_classes(["config-panel", "appearance-panel", "launch-appearance-panel"])
+        .css_classes([
+            "config-panel",
+            "appearance-panel",
+            "launch-appearance-panel",
+        ])
         .build();
     stage.append(&options_panel);
     options_panel.append(&build_section_header(
@@ -831,7 +835,9 @@ fn build_header() -> gtk::Widget {
     );
     body.append(
         &gtk::Label::builder()
-            .label("Pick a starting layout, preview the shell, then tune the tiles you want to open.")
+            .label(
+                "Pick a starting layout, preview the shell, then tune the tiles you want to open.",
+            )
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["hero-body", "config-subtitle", "launch-overview-copy"])
@@ -980,7 +986,11 @@ fn build_selection_summary() -> SelectionSummary {
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
-        .css_classes(["selection-summary", "config-panel", "launch-selection-summary"])
+        .css_classes([
+            "selection-summary",
+            "config-panel",
+            "launch-selection-summary",
+        ])
         .build();
 
     let icon_box = gtk::Box::builder()
@@ -1097,58 +1107,64 @@ where
     });
     top_row.append(&button);
 
-    if !is_builtin_preset_id(&preset.id) {
-        let delete_button = gtk::Button::from_icon_name("window-close-symbolic");
-        delete_button.add_css_class("flat");
-        delete_button.add_css_class("preset-delete-button");
-        delete_button.add_css_class("destructive-button");
-        delete_button.set_valign(gtk::Align::Start);
-        delete_button.set_tooltip_text(Some("Delete preset"));
+    let delete_button = gtk::Button::from_icon_name("window-close-symbolic");
+    delete_button.add_css_class("flat");
+    delete_button.add_css_class("preset-delete-button");
+    delete_button.add_css_class("destructive-button");
+    delete_button.set_valign(gtk::Align::Start);
+    delete_button.set_tooltip_text(Some("Delete preset"));
 
-        let preset_id = preset.id.clone();
-        let preset_name = preset.name.clone();
+    let preset_id = preset.id.clone();
+    let preset_name = preset.name.clone();
+    let preset_store = preset_store.clone();
+    let on_presets_changed = on_presets_changed.clone();
+    let is_builtin = is_builtin_preset_id(&preset.id);
+
+    delete_button.connect_clicked(move |button| {
+        let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+
+        let preset_id = preset_id.clone();
         let preset_store = preset_store.clone();
         let on_presets_changed = on_presets_changed.clone();
 
-        delete_button.connect_clicked(move |button| {
-            let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+        let dialog = adw::MessageDialog::builder()
+            .modal(true)
+            .heading("Delete Preset?")
+            .body(if is_builtin {
+                format!(
+                    "\"{}\" will be removed. You can restore the shipped presets from Settings later.",
+                    preset_name
+                )
+            } else {
+                format!("\"{}\" will be permanently removed.", preset_name)
+            })
+            .build();
 
-            let preset_id = preset_id.clone();
-            let preset_store = preset_store.clone();
-            let on_presets_changed = on_presets_changed.clone();
+        if let Some(ref win) = window {
+            dialog.set_transient_for(Some(win));
+        }
 
-            let dialog = adw::MessageDialog::builder()
-                .modal(true)
-                .heading("Delete Preset?")
-                .body(format!("\"{}\" will be permanently removed.", preset_name))
-                .build();
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete");
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
 
-            if let Some(ref win) = window {
-                dialog.set_transient_for(Some(win));
-            }
-
-            dialog.add_response("cancel", "Cancel");
-            dialog.add_response("delete", "Delete");
-            dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-            dialog.set_default_response(Some("cancel"));
-            dialog.set_close_response("cancel");
-
-            dialog.connect_response(None, move |dialog, response| {
-                if response == "delete" {
-                    if let Err(err) = preset_store.delete_preset(&preset_id) {
-                        logging::error(format!("Failed to delete preset: {}", err));
-                    } else {
-                        on_presets_changed();
-                    }
+        dialog.connect_response(None, move |dialog, response| {
+            if response == "delete" {
+                if let Err(err) = preset_store.delete_preset(&preset_id) {
+                    logging::error(format!("Failed to delete preset: {}", err));
+                } else {
+                    on_presets_changed();
                 }
-                dialog.close();
-            });
-
-            dialog.present();
+            }
+            dialog.close();
         });
 
-        top_row.append(&delete_button);
-    }
+        dialog.present();
+    });
+
+    top_row.append(&delete_button);
 
     shell.upcast()
 }
@@ -1217,7 +1233,11 @@ fn build_tile_editor_panel() -> TileEditorPanel {
     }
 }
 
-fn build_launch_control_row(title: &str, note: &str, control: &impl IsA<gtk::Widget>) -> gtk::Widget {
+fn build_launch_control_row(
+    title: &str,
+    note: &str,
+    control: &impl IsA<gtk::Widget>,
+) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(14)

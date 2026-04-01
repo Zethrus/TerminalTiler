@@ -6,7 +6,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::logging;
-use crate::model::preset::{WorkspacePreset, builtin_presets};
+use crate::model::preset::{WorkspacePreset, builtin_presets, is_builtin_preset_id};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
 const STORE_VERSION: u32 = 1;
@@ -141,6 +141,25 @@ impl PresetStore {
         self.write_presets_to_path(path, &presets)
     }
 
+    pub fn reset_builtin_presets(&self) -> io::Result<()> {
+        let Some(path) = &self.path else {
+            return Err(io::Error::other(
+                "TerminalTiler config directory is unavailable",
+            ));
+        };
+
+        let user_presets = self
+            .load_presets()
+            .into_iter()
+            .filter(|preset| !is_builtin_preset_id(&preset.id))
+            .collect::<Vec<_>>();
+
+        let mut presets = builtin_presets();
+        presets.extend(user_presets);
+
+        self.write_presets_to_path(path, &presets)
+    }
+
     fn write_presets_to_path(
         &self,
         path: &std::path::Path,
@@ -174,5 +193,135 @@ impl PresetStore {
             presets: builtin_presets(),
             warning: Some(warning),
         }
+    }
+}
+
+#[cfg(test)]
+impl PresetStore {
+    fn from_path(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PresetStore;
+    use crate::model::layout::{WorkingDirectory, tile};
+    use crate::model::preset::{
+        ApplicationDensity, ThemeMode, WorkspacePreset, builtin_presets, is_builtin_preset_id,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("terminaltiler-{prefix}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn custom_preset(id: &str, name: &str) -> WorkspacePreset {
+        WorkspacePreset {
+            id: id.into(),
+            name: name.into(),
+            description: format!("{name} description"),
+            tags: vec!["custom".into()],
+            root_label: "Workspace root".into(),
+            theme: ThemeMode::Light,
+            density: ApplicationDensity::Comfortable,
+            layout: tile(
+                "custom-tile",
+                "Custom Tile",
+                "Custom Terminal",
+                "accent-cyan",
+                WorkingDirectory::WorkspaceRoot,
+                Some("bash"),
+            ),
+        }
+    }
+
+    #[test]
+    fn deletes_builtin_presets() {
+        let dir = temp_dir("preset-delete-builtin");
+        let path = dir.join("presets.toml");
+        let store = PresetStore::from_path(path);
+
+        store.ensure_seeded();
+        store.delete_preset("solo-operator").unwrap();
+
+        let preset_ids = store
+            .load_presets()
+            .into_iter()
+            .map(|preset| preset.id)
+            .collect::<Vec<_>>();
+
+        assert!(!preset_ids.iter().any(|id| id == "solo-operator"));
+        assert!(preset_ids.iter().any(|id| id == "review-pair"));
+        assert!(preset_ids.iter().any(|id| id == "delivery-fleet"));
+    }
+
+    #[test]
+    fn reset_builtin_presets_restores_factory_versions_and_preserves_user_presets() {
+        let dir = temp_dir("preset-reset-builtin");
+        let path = dir.join("presets.toml");
+        let store = PresetStore::from_path(path);
+
+        store.ensure_seeded();
+        let mut modified_builtin = builtin_presets()
+            .into_iter()
+            .find(|preset| preset.id == "review-pair")
+            .unwrap();
+        modified_builtin.name = "Customized Review Pair".into();
+        modified_builtin.tags = vec!["customized".into()];
+
+        store.upsert_preset(modified_builtin).unwrap();
+        store.delete_preset("solo-operator").unwrap();
+        store
+            .upsert_preset(custom_preset("my-preset", "My Preset"))
+            .unwrap();
+        store
+            .upsert_preset(custom_preset("ops-preset", "Ops Preset"))
+            .unwrap();
+
+        store.reset_builtin_presets().unwrap();
+
+        let presets = store.load_presets();
+        let preset_ids = presets
+            .iter()
+            .map(|preset| preset.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            preset_ids,
+            vec![
+                "solo-operator",
+                "review-pair",
+                "delivery-fleet",
+                "my-preset",
+                "ops-preset",
+            ]
+        );
+
+        let builtin = builtin_presets();
+        for expected in &builtin {
+            let restored = presets
+                .iter()
+                .find(|preset| preset.id == expected.id)
+                .unwrap();
+            assert_eq!(restored.name, expected.name);
+            assert_eq!(restored.description, expected.description);
+            assert_eq!(restored.tags, expected.tags);
+            assert_eq!(restored.root_label, expected.root_label);
+        }
+
+        let user_presets = presets
+            .iter()
+            .filter(|preset| !is_builtin_preset_id(&preset.id))
+            .collect::<Vec<_>>();
+        assert_eq!(user_presets.len(), 2);
+        assert_eq!(user_presets[0].id, "my-preset");
+        assert_eq!(user_presets[0].name, "My Preset");
+        assert_eq!(user_presets[1].id, "ops-preset");
+        assert_eq!(user_presets[1].name, "Ops Preset");
     }
 }

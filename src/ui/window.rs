@@ -901,6 +901,7 @@ pub fn present(
     let open_settings_dialog: Rc<dyn Fn()> = {
         let window_for_settings = window.clone();
         let preference_store_for_settings = preference_store.clone();
+        let preset_store_for_settings = preset_store.clone();
         let refresh_for_settings = refresh_launch_tabs.clone();
         let toast_overlay_for_settings = toast_overlay.clone();
         let tabs_for_settings = tabs.clone();
@@ -1224,6 +1225,30 @@ pub fn present(
                                 refresh();
                             }
                             show_toast(&toast_overlay, "Application defaults reset");
+                        }
+                    }),
+                    on_reset_builtin_presets: Rc::new({
+                        let preset_store = preset_store_for_settings.clone();
+                        let refresh_handle = refresh_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        move || match preset_store.reset_builtin_presets() {
+                            Ok(()) => {
+                                logging::info("reset builtin saved presets to factory defaults");
+                                if let Some(refresh) = refresh_handle.borrow().as_ref() {
+                                    refresh();
+                                }
+                                show_toast(&toast_overlay, "Default saved presets restored");
+                            }
+                            Err(error) => {
+                                logging::error(format!(
+                                    "failed to reset builtin saved presets: {}",
+                                    error
+                                ));
+                                show_toast(
+                                    &toast_overlay,
+                                    "Failed to restore default saved presets",
+                                );
+                            }
                         }
                     }),
                     on_size_changed: Rc::new({
@@ -1745,7 +1770,10 @@ impl TabStripController {
     }
 
     fn find_item(&self, tab_id: usize) -> Option<TabStripItem> {
-        self.items.iter().find(|item| item.tab_id == tab_id).cloned()
+        self.items
+            .iter()
+            .find(|item| item.tab_id == tab_id)
+            .cloned()
     }
 
     fn reorder_shells_to_model_order(&self) {
@@ -1837,7 +1865,11 @@ impl TabStripController {
             drag_state.preview_index = preview_index;
         }
         if let Some(item) = self.find_item(dragged_id) {
-            self.reorder_widget_for_preview(&item.shell.clone().upcast(), preview_index, dragged_id);
+            self.reorder_widget_for_preview(
+                &item.shell.clone().upcast(),
+                preview_index,
+                dragged_id,
+            );
         }
         true
     }
@@ -1949,7 +1981,9 @@ fn sync_tab_strip(
     tabs: &[WorkspaceTab],
     active_tab_id: usize,
 ) {
-    controller.borrow_mut().sync(controller, tabs, active_tab_id);
+    controller
+        .borrow_mut()
+        .sync(controller, tabs, active_tab_id);
 }
 
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {

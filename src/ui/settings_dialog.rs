@@ -55,6 +55,7 @@ pub struct SettingsDialogActions {
     pub on_zoom_in_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_reset_defaults: Rc<dyn Fn()>,
+    pub on_reset_builtin_presets: Rc<dyn Fn()>,
     pub on_size_changed: Rc<dyn Fn(i32, i32)>,
 }
 
@@ -219,6 +220,7 @@ pub fn present(
         on_zoom_in_shortcut_changed,
         on_zoom_out_shortcut_changed,
         on_reset_defaults,
+        on_reset_builtin_presets,
         on_size_changed,
     } = actions;
     let (default_width, default_height) =
@@ -475,6 +477,28 @@ pub fn present(
     }
     background_row.append(&close_to_background_switch);
     background_section.append(&background_row);
+
+    let presets_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["config-panel", "settings-section"])
+        .build();
+    content.append(&presets_section);
+
+    presets_section.append(&build_section_header(
+        "Saved Presets",
+        "Factory restore",
+        "Restore the shipped saved presets after deleting or editing them. User-created presets are kept exactly as they are.",
+    ));
+    presets_section.append(&build_settings_action_row(
+        "Reset default saved presets",
+        "Replaces the built-in saved presets with the original shipped versions and leaves every user preset untouched.",
+        "Reset Default Saved Presets",
+        {
+            let callback = on_reset_builtin_presets.clone();
+            move || callback()
+        },
+    ));
 
     let shortcuts_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1182,6 +1206,55 @@ fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
             .css_classes(["field-hint", "settings-copy", "settings-section-copy"])
             .build(),
     );
+
+    shell.upcast()
+}
+
+fn build_settings_action_row<F>(
+    title: &str,
+    note: &str,
+    button_label: &str,
+    on_click: F,
+) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    text.append(
+        &gtk::Label::builder()
+            .label(title)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    text.append(
+        &gtk::Label::builder()
+            .label(note)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    shell.append(&text);
+
+    let button = gtk::Button::with_label(button_label);
+    button.add_css_class("pill-button");
+    button.add_css_class("secondary-button");
+    button.connect_clicked(move |_| on_click());
+    shell.append(&button);
 
     shell.upcast()
 }

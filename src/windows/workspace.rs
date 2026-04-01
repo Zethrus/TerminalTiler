@@ -43,8 +43,7 @@ mod imp {
     use windows_sys::Win32::UI::Controls::SetScrollInfo;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DELETE,
-        VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT,
-        VK_UP,
+        VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
     };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -53,14 +52,14 @@ mod imp {
         GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
         GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
         PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
-        SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
-        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
-        WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
+        SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW,
+        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
+        WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
+        WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
+        WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
@@ -1711,7 +1710,12 @@ mod imp {
             return;
         };
 
-        if reorder_tab_index(state, drag.dragged_index, drag.target_index, drag.insert_after) {
+        if reorder_tab_index(
+            state,
+            drag.dragged_index,
+            drag.target_index,
+            drag.insert_after,
+        ) {
             rebuild_tab_buttons(hwnd, state);
             update_tab_action_buttons(state);
             layout_controls(hwnd, state);
@@ -1745,7 +1749,8 @@ mod imp {
         let tab = state.tabs.remove(dragged_index);
         let insert_index = insert_index.min(state.tabs.len());
         state.tabs.insert(insert_index, tab);
-        state.active_tab_index = remap_active_index_after_move(active_index, dragged_index, insert_index);
+        state.active_tab_index =
+            remap_active_index_after_move(active_index, dragged_index, insert_index);
         true
     }
 
@@ -1827,10 +1832,18 @@ mod imp {
         dragged_pane_id: usize,
         target_pane_id: usize,
     ) {
-        let Some(dragged_index) = state.panes.iter().position(|pane| pane.id == dragged_pane_id) else {
+        let Some(dragged_index) = state
+            .panes
+            .iter()
+            .position(|pane| pane.id == dragged_pane_id)
+        else {
             return;
         };
-        let Some(target_index) = state.panes.iter().position(|pane| pane.id == target_pane_id) else {
+        let Some(target_index) = state
+            .panes
+            .iter()
+            .position(|pane| pane.id == target_pane_id)
+        else {
             return;
         };
         if dragged_index == target_index {
@@ -2342,25 +2355,25 @@ mod imp {
             right: 0,
             bottom: 0,
         });
-        let (title, drop_state) = if let Some(state) = unsafe { window_state_mut(button.parent_hwnd) }
-        {
-            let title = state
-                .tabs
-                .get(button.index)
-                .map(|tab| {
-                    tab.custom_title
-                        .clone()
-                        .unwrap_or_else(|| tab.preset.name.clone())
-                })
-                .unwrap_or_else(|| "Workspace".to_string());
-            let drop_state = state.tab_drag.as_ref().and_then(|drag| {
-                (drag.target_index == button.index && drag.dragged_index != button.index)
-                    .then_some(drag.insert_after)
-            });
-            (title, drop_state)
-        } else {
-            ("Workspace".to_string(), None)
-        };
+        let (title, drop_state) =
+            if let Some(state) = unsafe { window_state_mut(button.parent_hwnd) } {
+                let title = state
+                    .tabs
+                    .get(button.index)
+                    .map(|tab| {
+                        tab.custom_title
+                            .clone()
+                            .unwrap_or_else(|| tab.preset.name.clone())
+                    })
+                    .unwrap_or_else(|| "Workspace".to_string());
+                let drop_state = state.tab_drag.as_ref().and_then(|drag| {
+                    (drag.target_index == button.index && drag.dragged_index != button.index)
+                        .then_some(drag.insert_after)
+                });
+                (title, drop_state)
+            } else {
+                ("Workspace".to_string(), None)
+            };
 
         let background = if button.active {
             rgb(67, 95, 132)
