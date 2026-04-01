@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,6 +18,8 @@ const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
+const MAX_TRANSCRIPT_OUTPUT_LINES: usize = 4_000;
+const MAX_TRANSCRIPT_INPUT_LINES: usize = 100;
 const DARK_TERMINAL_PALETTE: [&str; 16] = [
     "#0f1724", "#c9575f", "#78a062", "#d6a04b", "#6b8cff", "#b28cf0", "#5eb8c8", "#d7dde8",
     "#334155", "#ef7c86", "#91be78", "#e6bb6a", "#8fa7ff", "#c8a6f6", "#7ccad7", "#f8fafc",
@@ -42,6 +45,8 @@ pub struct TerminalSession {
     terminal: vte4::Terminal,
     state: Rc<RefCell<TerminalSessionState>>,
     descriptor: Rc<str>,
+    launch_spec: Rc<TerminalLaunchSpec>,
+    transcript: Rc<RefCell<TranscriptBuffer>>,
 }
 
 #[derive(Default)]
@@ -49,6 +54,8 @@ struct TerminalSessionState {
     child_pid: Option<libc::pid_t>,
     exited: bool,
     termination_requested: bool,
+    last_exit_status: Option<i32>,
+    auto_reconnect_attempts: u8,
     kill_timeout: Option<glib::SourceId>,
 }
 
@@ -57,6 +64,83 @@ impl TerminalSessionState {
         if let Some(source_id) = self.kill_timeout.take() {
             source_id.remove();
         }
+    }
+}
+
+struct TerminalLaunchSpec {
+    working_directory: String,
+    argv: Vec<String>,
+    envv: Vec<String>,
+}
+
+#[derive(Default)]
+struct TranscriptBuffer {
+    output_lines: VecDeque<String>,
+    input_lines: VecDeque<String>,
+}
+
+impl TranscriptBuffer {
+    fn replace_output(&mut self, snapshot: &str) {
+        self.output_lines = snapshot
+            .replace('\r', "")
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .rev()
+            .take(MAX_TRANSCRIPT_OUTPUT_LINES)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+    }
+
+    fn push_input(&mut self, text: &str) {
+        for line in text
+            .replace('\r', "")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            self.input_lines.push_back(line.to_string());
+            while self.input_lines.len() > MAX_TRANSCRIPT_INPUT_LINES {
+                self.input_lines.pop_front();
+            }
+        }
+    }
+
+    fn recent_output(&self, row_count: usize) -> String {
+        self.output_lines
+            .iter()
+            .rev()
+            .take(row_count)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn recent_transcript(&self, line_count: usize) -> String {
+        let mut lines = self
+            .output_lines
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if !self.input_lines.is_empty() {
+            lines.push(String::from("[input]"));
+            lines.extend(self.input_lines.iter().map(|line| format!("> {line}")));
+        }
+        lines
+            .into_iter()
+            .rev()
+            .take(line_count)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -81,6 +165,7 @@ impl TerminalSession {
 
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));
+        let transcript = Rc::new(RefCell::new(TranscriptBuffer::default()));
         let descriptor: Rc<str> = format!(
             "tile='{}' agent='{}' dir='{}'",
             tile.title,
@@ -96,6 +181,7 @@ impl TerminalSession {
                 let mut state = state.borrow_mut();
                 state.exited = true;
                 state.child_pid = None;
+                state.last_exit_status = Some(status);
                 state.clear_kill_timeout();
                 logging::info(format!(
                     "terminal child exited status={} {}",
@@ -104,41 +190,185 @@ impl TerminalSession {
             });
         }
 
+        let launch_spec = if let Some(error) = validate_working_dir(&working_dir) {
+            report_spawn_problem(&terminal, &descriptor, &error);
+            mark_state_exited(&state);
+            Rc::new(TerminalLaunchSpec {
+                working_directory: working_dir.display().to_string(),
+                argv: Vec::new(),
+                envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+            })
+        } else {
+            match resolve_tile_launch(tile, workspace_root, assets) {
+                Ok(resolved_launch) => {
+                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+                    Rc::new(TerminalLaunchSpec {
+                        working_directory: working_dir.display().to_string(),
+                        argv: build_spawn_argv(&shell, resolved_launch.command.as_deref()),
+                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                    })
+                }
+                Err(error) => {
+                    report_spawn_problem(&terminal, &descriptor, &error);
+                    mark_state_exited(&state);
+                    Rc::new(TerminalLaunchSpec {
+                        working_directory: working_dir.display().to_string(),
+                        argv: Vec::new(),
+                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                    })
+                }
+            }
+        };
+
         let session = Self {
             terminal: terminal.clone(),
             state,
             descriptor,
+            launch_spec,
+            transcript,
         };
 
-        if let Some(error) = validate_working_dir(&working_dir) {
-            session.report_spawn_problem(&error);
-            session.mark_exited();
-            return session;
+        if !session.launch_spec.argv.is_empty() {
+            session.spawn_from_spec();
         }
 
-        let resolved_launch = match resolve_tile_launch(tile, workspace_root, assets) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                session.report_spawn_problem(&error);
-                session.mark_exited();
-                return session;
-            }
+        session
+    }
+
+    pub fn widget(&self) -> vte4::Terminal {
+        self.terminal.clone()
+    }
+
+    pub fn terminate(&self, reason: &str) {
+        request_process_termination(&self.state, &self.descriptor, reason);
+    }
+
+    pub fn apply_appearance(
+        &self,
+        use_dark_palette: bool,
+        density: ApplicationDensity,
+        zoom_steps: i32,
+    ) {
+        apply_terminal_appearance(&self.terminal, use_dark_palette, density, zoom_steps);
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.terminal.has_selection()
+    }
+
+    pub fn copy_selection_to_clipboard(&self) -> bool {
+        copy_terminal_selection(&self.terminal)
+    }
+
+    pub fn paste_clipboard(&self) {
+        paste_terminal_clipboard(&self.terminal);
+    }
+
+    pub fn send_text(&self, text: &str) {
+        self.transcript.borrow_mut().push_input(text);
+        self.terminal.grab_focus();
+        self.terminal.feed_child(text.as_bytes());
+    }
+
+    pub fn recent_output(&self, row_count: i64) -> String {
+        self.refresh_output_snapshot();
+        self.transcript
+            .borrow()
+            .recent_output(row_count.max(0) as usize)
+    }
+
+    pub fn recent_transcript(&self, line_count: usize) -> String {
+        self.refresh_output_snapshot();
+        self.transcript.borrow().recent_transcript(line_count)
+    }
+
+    pub fn last_exit_status(&self) -> Option<i32> {
+        self.state.borrow().last_exit_status
+    }
+
+    pub fn termination_requested(&self) -> bool {
+        self.state.borrow().termination_requested
+    }
+
+    pub fn auto_reconnect_attempts(&self) -> u8 {
+        self.state.borrow().auto_reconnect_attempts
+    }
+
+    pub fn register_auto_reconnect_attempt(&self) -> u8 {
+        let mut state = self.state.borrow_mut();
+        state.auto_reconnect_attempts = state.auto_reconnect_attempts.saturating_add(1);
+        state.auto_reconnect_attempts
+    }
+
+    pub fn reset_auto_reconnect_attempts(&self) {
+        self.state.borrow_mut().auto_reconnect_attempts = 0;
+    }
+
+    pub fn reconnect(&self) -> Result<(), String> {
+        if let Some(error) = validate_working_dir(Path::new(&self.launch_spec.working_directory)) {
+            self.report_spawn_problem(&error);
+            self.mark_exited();
+            return Err(error);
+        }
+
+        self.terminal
+            .feed(b"\r\n[terminaltiler] reconnecting terminal session\r\n");
+        self.spawn_from_spec();
+        Ok(())
+    }
+
+    pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
+        let Some(payload) = serialize_dropped_paths(paths) else {
+            return false;
         };
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        let argv = build_spawn_argv(&shell, resolved_launch.command.as_deref());
-        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let envv = ["TERM=xterm-256color", "COLORTERM=truecolor"];
-        let working_dir_label = working_dir.display().to_string();
-        let state_for_spawn = session.state.clone();
-        let descriptor_for_spawn = session.descriptor.clone();
-        let terminal_for_error = session.terminal.clone();
+        self.transcript.borrow_mut().push_input(&payload);
+        self.terminal.grab_focus();
+        self.terminal.paste_text(&payload);
+        true
+    }
 
-        terminal.spawn_async(
+    fn mark_exited(&self) {
+        mark_state_exited(&self.state);
+    }
+
+    fn report_spawn_problem(&self, message: &str) {
+        report_spawn_problem(&self.terminal, &self.descriptor, message);
+    }
+
+    fn spawn_from_spec(&self) {
+        if self.launch_spec.argv.is_empty() {
+            return;
+        }
+        let argv_refs = self
+            .launch_spec
+            .argv
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let env_refs = self
+            .launch_spec
+            .envv
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        {
+            let mut state = self.state.borrow_mut();
+            state.exited = false;
+            state.child_pid = None;
+            state.last_exit_status = None;
+            state.termination_requested = false;
+            state.clear_kill_timeout();
+        }
+        let state_for_spawn = self.state.clone();
+        let descriptor_for_spawn = self.descriptor.clone();
+        let terminal_for_error = self.terminal.clone();
+
+        self.terminal.spawn_async(
             vte4::PtyFlags::DEFAULT,
-            Some(working_dir_label.as_str()),
+            Some(self.launch_spec.working_directory.as_str()),
             &argv_refs,
-            &envv,
+            &env_refs,
             glib::SpawnFlags::SEARCH_PATH,
             || unsafe {
                 libc::setsid();
@@ -178,65 +408,20 @@ impl TerminalSession {
                 }
             },
         );
-
-        session
     }
 
-    pub fn widget(&self) -> vte4::Terminal {
-        self.terminal.clone()
-    }
-
-    pub fn terminate(&self, reason: &str) {
-        request_process_termination(&self.state, &self.descriptor, reason);
-    }
-
-    pub fn apply_appearance(
-        &self,
-        use_dark_palette: bool,
-        density: ApplicationDensity,
-        zoom_steps: i32,
-    ) {
-        apply_terminal_appearance(&self.terminal, use_dark_palette, density, zoom_steps);
-    }
-
-    pub fn has_selection(&self) -> bool {
-        self.terminal.has_selection()
-    }
-
-    pub fn copy_selection_to_clipboard(&self) -> bool {
-        copy_terminal_selection(&self.terminal)
-    }
-
-    pub fn paste_clipboard(&self) {
-        paste_terminal_clipboard(&self.terminal);
-    }
-
-    pub fn send_text(&self, text: &str) {
-        self.terminal.grab_focus();
-        self.terminal.feed_child(text.as_bytes());
-    }
-
-    pub fn recent_output(&self, row_count: i64) -> String {
-        let _ = row_count;
-        String::new()
-    }
-
-    pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
-        let Some(payload) = serialize_dropped_paths(paths) else {
-            return false;
-        };
-
-        self.terminal.grab_focus();
-        self.terminal.paste_text(&payload);
-        true
-    }
-
-    fn mark_exited(&self) {
-        mark_state_exited(&self.state);
-    }
-
-    fn report_spawn_problem(&self, message: &str) {
-        report_spawn_problem(&self.terminal, &self.descriptor, message);
+    fn refresh_output_snapshot(&self) {
+        let stream = gio::MemoryOutputStream::new_resizable();
+        if self
+            .terminal
+            .write_contents_sync(&stream, vte4::WriteFlags::Default, None::<&gio::Cancellable>)
+            .is_err()
+        {
+            return;
+        }
+        let bytes = stream.steal_as_bytes();
+        let snapshot = String::from_utf8_lossy(bytes.as_ref()).into_owned();
+        self.transcript.borrow_mut().replace_output(&snapshot);
     }
 }
 
@@ -381,6 +566,7 @@ fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {
     let mut state = state.borrow_mut();
     state.exited = true;
     state.child_pid = None;
+    state.last_exit_status = None;
     state.clear_kill_timeout();
 }
 

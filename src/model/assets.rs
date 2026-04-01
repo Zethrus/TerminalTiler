@@ -8,6 +8,93 @@ pub enum ConnectionKind {
     Wsl,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunbookConfirmPolicy {
+    Always,
+    #[default]
+    MultiPaneOrRemote,
+    Never,
+}
+
+impl RunbookConfirmPolicy {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Always => "Always confirm",
+            Self::MultiPaneOrRemote => "Confirm for multi-pane or remote",
+            Self::Never => "Never confirm",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RunbookVariable {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub default_value: Option<String>,
+    #[serde(default = "default_runbook_variable_required")]
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
+pub enum RunbookTarget {
+    AllPanes,
+    PaneGroup(String),
+    Role(String),
+    ConnectionProfile(String),
+}
+
+impl Default for RunbookTarget {
+    fn default() -> Self {
+        Self::AllPanes
+    }
+}
+
+impl RunbookTarget {
+    pub fn label(&self) -> String {
+        match self {
+            Self::AllPanes => "All panes".into(),
+            Self::PaneGroup(group) => format!("Pane group: {group}"),
+            Self::Role(role_id) => format!("Role: {role_id}"),
+            Self::ConnectionProfile(profile_id) => format!("Connection: {profile_id}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct RunbookStep {
+    pub id: String,
+    pub label: String,
+    pub command: String,
+    #[serde(default = "default_runbook_step_newline")]
+    pub append_newline: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Runbook {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub target: RunbookTarget,
+    #[serde(default)]
+    pub variables: Vec<RunbookVariable>,
+    #[serde(default)]
+    pub steps: Vec<RunbookStep>,
+    #[serde(default)]
+    pub confirm_policy: RunbookConfirmPolicy,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
 pub enum TileConnectionTarget {
@@ -109,6 +196,8 @@ pub struct AgentRoleTemplate {
     #[serde(default)]
     pub default_pane_groups: Vec<String>,
     #[serde(default)]
+    pub default_reconnect_policy: crate::model::layout::ReconnectPolicy,
+    #[serde(default)]
     pub default_output_helpers: Vec<OutputHelperRule>,
 }
 
@@ -146,6 +235,8 @@ pub struct WorkspaceAssets {
     pub inventory_groups: Vec<InventoryGroup>,
     #[serde(default)]
     pub role_templates: Vec<AgentRoleTemplate>,
+    #[serde(default)]
+    pub runbooks: Vec<Runbook>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -187,6 +278,14 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+fn default_runbook_variable_required() -> bool {
+    true
+}
+
+fn default_runbook_step_newline() -> bool {
+    true
+}
+
 fn default_output_severity() -> OutputSeverity {
     OutputSeverity::Warning
 }
@@ -207,6 +306,7 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             default_startup_command: Some("codex".into()),
             default_connection_profile_id: None,
             default_pane_groups: vec!["planning".into()],
+            default_reconnect_policy: crate::model::layout::ReconnectPolicy::Manual,
             default_output_helpers: vec![OutputHelperRule {
                 id: "planner-error".into(),
                 label: "Planning error".into(),
@@ -225,6 +325,7 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             default_startup_command: Some("bash".into()),
             default_connection_profile_id: None,
             default_pane_groups: vec!["delivery".into()],
+            default_reconnect_policy: crate::model::layout::ReconnectPolicy::OnAbnormalExit,
             default_output_helpers: vec![
                 OutputHelperRule {
                     id: "compile-error".into(),
@@ -252,6 +353,7 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             default_startup_command: Some("bash".into()),
             default_connection_profile_id: None,
             default_pane_groups: vec!["review".into()],
+            default_reconnect_policy: crate::model::layout::ReconnectPolicy::Manual,
             default_output_helpers: vec![OutputHelperRule {
                 id: "qa-warning".into(),
                 label: "QA warning".into(),
@@ -270,6 +372,7 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             default_startup_command: Some("bash".into()),
             default_connection_profile_id: None,
             default_pane_groups: vec!["ops".into()],
+            default_reconnect_policy: crate::model::layout::ReconnectPolicy::OnAbnormalExit,
             default_output_helpers: vec![
                 OutputHelperRule {
                     id: "ssh-failure".into(),
@@ -297,6 +400,7 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             default_startup_command: Some("bash".into()),
             default_connection_profile_id: None,
             default_pane_groups: vec!["delivery".into()],
+            default_reconnect_policy: crate::model::layout::ReconnectPolicy::OnAbnormalExit,
             default_output_helpers: vec![OutputHelperRule {
                 id: "release-error".into(),
                 label: "Release error".into(),

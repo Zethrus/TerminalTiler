@@ -500,8 +500,7 @@ mod tests {
         build_launch_command, build_powershell_script, build_wsl_shell_script,
         collect_session_launch_commands, parse_verbose_list, resolve_wsl_runtime,
     };
-    use crate::model::layout::TileSpec;
-    use crate::model::layout::WorkingDirectory;
+    use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use crate::storage::session_store::{SavedSession, SavedTab};
     use std::path::PathBuf;
@@ -531,6 +530,11 @@ mod tests {
             accent_class: "accent-cyan".into(),
             working_directory,
             startup_command: startup_command.map(str::to_owned),
+            connection_target: Default::default(),
+            pane_groups: Vec::new(),
+            reconnect_policy: ReconnectPolicy::Manual,
+            applied_role_id: None,
+            output_helpers: Vec::new(),
         }
     }
 

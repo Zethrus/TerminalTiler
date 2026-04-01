@@ -54,7 +54,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{BroadcastTarget, saved_groups_for_tiles};
-    use crate::model::layout::{TileSpec, WorkingDirectory};
+    use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
 
     fn tile(id: &str, groups: &[&str]) -> TileSpec {
         TileSpec {
@@ -66,6 +66,7 @@ mod tests {
             startup_command: None,
             connection_target: Default::default(),
             pane_groups: groups.iter().map(|value| value.to_string()).collect(),
+            reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: None,
             output_helpers: Vec::new(),
         }

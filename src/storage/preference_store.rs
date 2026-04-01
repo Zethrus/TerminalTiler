@@ -15,6 +15,7 @@ const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
+const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const DEFAULT_SETTINGS_DIALOG_WIDTH: i32 = 528;
 const DEFAULT_SETTINGS_DIALOG_HEIGHT: i32 = 760;
 const DEFAULT_CLOSE_TO_BACKGROUND: bool = false;
@@ -30,6 +31,7 @@ pub struct AppPreferences {
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
     pub workspace_zoom_out_shortcut: String,
+    pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
 }
@@ -60,6 +62,8 @@ struct PreferenceDocument {
     workspace_zoom_in_shortcut: String,
     #[serde(default = "default_zoom_out_shortcut")]
     workspace_zoom_out_shortcut: String,
+    #[serde(default = "default_command_palette_shortcut")]
+    command_palette_shortcut: String,
     #[serde(default = "default_settings_dialog_width")]
     settings_dialog_width: i32,
     #[serde(default = "default_settings_dialog_height")]
@@ -92,6 +96,10 @@ fn default_zoom_in_shortcut() -> String {
 
 fn default_zoom_out_shortcut() -> String {
     DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT.into()
+}
+
+fn default_command_palette_shortcut() -> String {
+    DEFAULT_COMMAND_PALETTE_SHORTCUT.into()
 }
 
 fn default_settings_dialog_width() -> i32 {
@@ -163,6 +171,14 @@ fn normalize_zoom_out_shortcut(shortcut: &str) -> String {
     }
 }
 
+fn normalize_command_palette_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "ctrl-shift-p" => "<Ctrl><Shift>P".into(),
+        "ctrl-p" => "<Ctrl>P".into(),
+        other => other.to_string(),
+    }
+}
+
 impl PreferenceStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
@@ -210,6 +226,9 @@ impl PreferenceStore {
                 ),
                 workspace_zoom_out_shortcut: normalize_zoom_out_shortcut(
                     &document.workspace_zoom_out_shortcut,
+                ),
+                command_palette_shortcut: normalize_command_palette_shortcut(
+                    &document.command_palette_shortcut,
                 ),
                 settings_dialog_width: normalize_settings_dialog_width(
                     document.settings_dialog_width,
@@ -288,6 +307,13 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn save_command_palette_shortcut(&self, shortcut: &str) {
+        let mut preferences = self.load();
+        preferences.command_palette_shortcut = shortcut.trim().to_string();
+        self.save(&preferences);
+    }
+
     pub fn save_settings_dialog_size(&self, width: i32, height: i32) {
         let mut preferences = self.load();
         preferences.settings_dialog_width = normalize_settings_dialog_width(width);
@@ -313,6 +339,7 @@ impl PreferenceStore {
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
             workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
             workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
+            command_palette_shortcut: preferences.command_palette_shortcut.clone(),
             settings_dialog_width: preferences.settings_dialog_width,
             settings_dialog_height: preferences.settings_dialog_height,
         };
@@ -363,6 +390,7 @@ impl Default for AppPreferences {
             workspace_density_shortcut: default_density_shortcut(),
             workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
             workspace_zoom_out_shortcut: default_zoom_out_shortcut(),
+            command_palette_shortcut: default_command_palette_shortcut(),
             settings_dialog_width: default_settings_dialog_width(),
             settings_dialog_height: default_settings_dialog_height(),
         }
@@ -404,6 +432,7 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
     }
@@ -423,6 +452,7 @@ mod tests {
             workspace_density_shortcut: "<Shift>F8".into(),
             workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
             workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+            command_palette_shortcut: "<Ctrl>P".into(),
             settings_dialog_width: 640,
             settings_dialog_height: 540,
         });
@@ -439,6 +469,7 @@ mod tests {
                 workspace_density_shortcut: "<Shift>F8".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+                command_palette_shortcut: "<Ctrl>P".into(),
                 settings_dialog_width: 640,
                 settings_dialog_height: 540,
             }
@@ -465,6 +496,7 @@ mod tests {
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>minus".into(),
+                command_palette_shortcut: "<Ctrl><Shift>P".into(),
                 settings_dialog_width: 528,
                 settings_dialog_height: 760,
             }
@@ -487,6 +519,7 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
     }
@@ -543,6 +576,7 @@ mod tests {
             store.load().workspace_zoom_out_shortcut,
             "<Ctrl>KP_Subtract"
         );
+        assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
     }
@@ -561,6 +595,21 @@ mod tests {
 
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl><Alt>KP_Add");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Alt>KP_Subtract");
+    }
+
+    #[test]
+    fn normalizes_legacy_command_palette_shortcut() {
+        let dir = temp_dir("pref-command-palette-shortcut");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\ncommand_palette_shortcut = \"ctrl-shift-p\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
     }
 
     #[test]

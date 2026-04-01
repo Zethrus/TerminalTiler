@@ -154,7 +154,7 @@ mod tests {
     use crate::model::assets::{
         ConnectionKind, ConnectionProfile, InventoryHost, TileConnectionTarget, WorkspaceAssets,
     };
-    use crate::model::layout::{TileSpec, WorkingDirectory};
+    use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
 
     fn tile() -> TileSpec {
         TileSpec {
@@ -166,6 +166,7 @@ mod tests {
             startup_command: Some("echo hello".into()),
             connection_target: TileConnectionTarget::Local,
             pane_groups: Vec::new(),
+            reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: None,
             output_helpers: Vec::new(),
         }

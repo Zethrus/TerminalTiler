@@ -1,19 +1,23 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::logging;
 use crate::model::assets::{WorkspaceAssets, builtin_role_templates};
+use crate::model::workspace_config::{ConfigScope, WorkspaceConfig};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::workspace_config_store::WorkspaceConfigStore;
 
 const STORE_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
 pub struct AssetStore {
     path: Option<PathBuf>,
+    workspace_config_store: WorkspaceConfigStore,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -27,6 +31,8 @@ struct AssetDocument {
     inventory_groups: Vec<crate::model::assets::InventoryGroup>,
     #[serde(default = "builtin_role_templates")]
     role_templates: Vec<crate::model::assets::AgentRoleTemplate>,
+    #[serde(default)]
+    runbooks: Vec<crate::model::assets::Runbook>,
 }
 
 #[derive(Debug)]
@@ -39,7 +45,10 @@ impl AssetStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
             .map(|dirs| dirs.config_dir().join("workspace-assets.toml"));
-        Self { path }
+        Self {
+            path,
+            workspace_config_store: WorkspaceConfigStore::new(),
+        }
     }
 
     pub fn ensure_seeded(&self) {
@@ -56,6 +65,15 @@ impl AssetStore {
 
     pub fn load_assets(&self) -> WorkspaceAssets {
         self.load_assets_with_status().assets
+    }
+
+    pub fn load_assets_for_workspace_root(&self, workspace_root: &Path) -> AssetLoadOutcome {
+        let global = self.load_assets_with_status();
+        let workspace = self.workspace_config_store.load_for_root(workspace_root);
+        AssetLoadOutcome {
+            assets: merge_builtins(merge_workspace_assets(&global.assets, &workspace.config.assets)),
+            warning: combine_warnings(global.warning, workspace.warning),
+        }
     }
 
     pub fn load_assets_with_status(&self) -> AssetLoadOutcome {
@@ -96,6 +114,7 @@ impl AssetStore {
                     inventory_hosts: document.inventory_hosts,
                     inventory_groups: document.inventory_groups,
                     role_templates: document.role_templates,
+                    runbooks: document.runbooks,
                 }),
                 warning: None,
             },
@@ -121,6 +140,29 @@ impl AssetStore {
         self.write_assets_to_path(path, assets)
     }
 
+    pub fn load_workspace_config(&self, workspace_root: &Path) -> WorkspaceConfig {
+        self.workspace_config_store.load_for_root(workspace_root).config
+    }
+
+    pub fn save_assets_for_scope(
+        &self,
+        assets: &WorkspaceAssets,
+        scope: ConfigScope,
+        workspace_root: Option<&Path>,
+    ) -> io::Result<()> {
+        match scope {
+            ConfigScope::Global => self.save_assets(assets),
+            ConfigScope::Workspace => {
+                let workspace_root = workspace_root.ok_or_else(|| {
+                    io::Error::other("workspace root is required for workspace scoped assets")
+                })?;
+                let mut config = self.workspace_config_store.load_for_root(workspace_root).config;
+                config.assets = assets.clone();
+                self.workspace_config_store.save_for_root(workspace_root, &config)
+            }
+        }
+    }
+
     fn write_assets_to_path(&self, path: &std::path::Path, assets: &WorkspaceAssets) -> io::Result<()> {
         let document = AssetDocument {
             version: STORE_VERSION,
@@ -132,8 +174,10 @@ impl AssetStore {
                 inventory_hosts: Vec::new(),
                 inventory_groups: Vec::new(),
                 role_templates: assets.role_templates.clone(),
+                runbooks: Vec::new(),
             })
             .role_templates,
+            runbooks: assets.runbooks.clone(),
         };
         let serialized = toml::to_string_pretty(&document)
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -175,4 +219,55 @@ fn merge_builtins(mut assets: WorkspaceAssets) -> WorkspaceAssets {
         }
     }
     assets
+}
+
+fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) if !second.trim().is_empty() => {
+            Some(format!("{first}\n{second}"))
+        }
+        (Some(first), _) => Some(first),
+        (_, Some(second)) => Some(second),
+        (None, None) => None,
+    }
+}
+
+fn merge_workspace_assets(global: &WorkspaceAssets, workspace: &WorkspaceAssets) -> WorkspaceAssets {
+    WorkspaceAssets {
+        connection_profiles: merge_by_id(
+            &global.connection_profiles,
+            &workspace.connection_profiles,
+            |item| item.id.as_str(),
+        ),
+        inventory_hosts: merge_by_id(&global.inventory_hosts, &workspace.inventory_hosts, |item| {
+            item.id.as_str()
+        }),
+        inventory_groups: merge_by_id(
+            &global.inventory_groups,
+            &workspace.inventory_groups,
+            |item| item.id.as_str(),
+        ),
+        role_templates: merge_by_id(&global.role_templates, &workspace.role_templates, |item| {
+            item.id.as_str()
+        }),
+        runbooks: merge_by_id(&global.runbooks, &workspace.runbooks, |item| item.id.as_str()),
+    }
+}
+
+fn merge_by_id<T, F>(global: &[T], workspace: &[T], id_of: F) -> Vec<T>
+where
+    T: Clone,
+    F: Fn(&T) -> &str,
+{
+    let workspace_ids = workspace
+        .iter()
+        .map(|item| id_of(item).to_string())
+        .collect::<HashSet<_>>();
+    let mut merged = global
+        .iter()
+        .filter(|item| !workspace_ids.contains(id_of(item)))
+        .cloned()
+        .collect::<Vec<_>>();
+    merged.extend(workspace.iter().cloned());
+    merged
 }

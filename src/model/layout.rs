@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 use crate::model::assets::{OutputHelperRule, TileConnectionTarget};
 use crate::platform::home_dir;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReconnectPolicy {
+    #[default]
+    Manual,
+    OnAbnormalExit,
+    Always,
+}
+
+impl ReconnectPolicy {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Manual => "Manual",
+            Self::OnAbnormalExit => "On abnormal exit",
+            Self::Always => "Always",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SplitAxis {
@@ -55,6 +74,8 @@ pub struct TileSpec {
     #[serde(default)]
     pub pane_groups: Vec<String>,
     #[serde(default)]
+    pub reconnect_policy: ReconnectPolicy,
+    #[serde(default)]
     pub applied_role_id: Option<String>,
     #[serde(default)]
     pub output_helpers: Vec<OutputHelperRule>,
@@ -69,11 +90,12 @@ impl TileSpec {
     #[allow(dead_code)]
     pub fn summary_line(&self) -> String {
         format!(
-            "{}  •  {}  •  {}  •  {}",
+            "{}  •  {}  •  {}  •  {}  •  {}",
             self.title,
             self.agent_label,
             self.working_directory.short_label(),
-            self.startup_label()
+            self.startup_label(),
+            self.reconnect_policy.label()
         )
     }
 }
@@ -200,6 +222,7 @@ pub fn tile(
         startup_command: startup_command.map(str::to_owned),
         connection_target: TileConnectionTarget::Local,
         pane_groups: Vec::new(),
+        reconnect_policy: ReconnectPolicy::Manual,
         applied_role_id: None,
         output_helpers: Vec::new(),
     })
@@ -215,6 +238,7 @@ pub fn default_tile_spec(index: usize) -> TileSpec {
         startup_command: None,
         connection_target: TileConnectionTarget::Local,
         pane_groups: Vec::new(),
+        reconnect_policy: ReconnectPolicy::Manual,
         applied_role_id: None,
         output_helpers: Vec::new(),
     }
