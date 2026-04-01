@@ -1,9 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use vte4::prelude::TerminalExt;
 
 use crate::model::assets::{Runbook, WorkspaceAssets};
 use crate::model::layout::LayoutNode;
@@ -115,26 +116,18 @@ impl WorkspaceRuntime {
     }
 
     pub fn reconnect_tile(&self, tile_id: &str) -> Result<(), String> {
-        let Some(tile) = self
-            .inner
-            .tiles
-            .borrow()
-            .iter()
-            .find(|tile| tile.tile.id == tile_id)
-        else {
+        let session = {
+            let tiles = self.inner.tiles.borrow();
+            tiles
+                .iter()
+                .find(|tile| tile.tile.id == tile_id)
+                .map(|tile| tile.session.clone())
+        };
+        let Some(session) = session else {
             return Err(format!("Pane '{tile_id}' is missing."));
         };
-        tile.session.reset_auto_reconnect_attempts();
-        tile.session.reconnect()
-    }
-
-    pub fn tile_transcript(&self, tile_id: &str, line_count: usize) -> Option<String> {
-        self.inner
-            .tiles
-            .borrow()
-            .iter()
-            .find(|tile| tile.tile.id == tile_id)
-            .map(|tile| tile.session.recent_transcript(line_count))
+        session.reset_auto_reconnect_attempts();
+        session.reconnect()
     }
 
     pub fn swap_tiles(&self, dragged_id: &str, target_id: &str) -> bool {
@@ -338,7 +331,6 @@ pub fn build_with_layout_change_handler(
                 title: "Quick send executed".into(),
                 detail: format!("Sent quick command to {} pane(s).", sent),
                 pane_id: None,
-                unread: true,
                 allows_reconnect: false,
             });
         });
@@ -467,7 +459,10 @@ fn bind_alert_ui(
     let runtime = runtime.clone();
     let alert_store_for_refresh = alert_store.clone();
     let refresh = Rc::new(move || {
-        alert_button.set_label(&format!("Alerts ({})", alert_store_for_refresh.unread_count()));
+        alert_button.set_label(&format!(
+            "Alerts ({})",
+            alert_store_for_refresh.unread_count()
+        ));
         while let Some(child) = alert_list.first_child() {
             alert_list.remove(&child);
         }
@@ -505,11 +500,12 @@ fn bind_alert_ui(
                     .label("Jump")
                     .css_classes(["flat"])
                     .build();
-                let runtime = runtime.clone();
+                let runtime_for_jump = runtime.clone();
                 let alert_store = alert_store_for_refresh.clone();
                 let alert_id = alert.id;
+                let pane_id_for_jump = pane_id.clone();
                 jump_button.connect_clicked(move |_| {
-                    runtime.focus_tile(&pane_id);
+                    runtime_for_jump.focus_tile(&pane_id_for_jump);
                     alert_store.mark_read(alert_id);
                 });
                 actions.append(&jump_button);
@@ -519,11 +515,12 @@ fn bind_alert_ui(
                         .label("Reconnect")
                         .css_classes(["flat"])
                         .build();
-                    let runtime = runtime.clone();
+                    let runtime_for_reconnect = runtime.clone();
                     let alert_store = alert_store_for_refresh.clone();
                     let alert_id = alert.id;
+                    let pane_id_for_reconnect = pane_id.clone();
                     reconnect_button.connect_clicked(move |_| {
-                        let _ = runtime.reconnect_tile(&pane_id);
+                        let _ = runtime_for_reconnect.reconnect_tile(&pane_id_for_reconnect);
                         alert_store.mark_read(alert_id);
                     });
                     actions.append(&reconnect_button);
@@ -621,10 +618,8 @@ fn install_tile_alert_hooks(
                                 AlertSeverity::Info,
                                 format!("{} reconnect scheduled", tile.title),
                             );
-                            reconnect_alert.detail = format!(
-                                "Attempt {} ran after {} second(s).",
-                                attempt, delay
-                            );
+                            reconnect_alert.detail =
+                                format!("Attempt {} ran after {} second(s).", attempt, delay);
                             reconnect_alert.pane_id = Some(tile.id.clone());
                             reconnect_alert.allows_reconnect = true;
                             alert_store.push(reconnect_alert);
@@ -669,12 +664,23 @@ fn present_runbook_dialog(
     alert_store: &AlertStore,
     broadcast_state: &gtk::Label,
 ) {
-    if runbook.variables.is_empty() && runbook.confirm_policy == crate::model::assets::RunbookConfirmPolicy::Never {
-        execute_runbook(runbook, &HashMap::new(), runtime, alert_store, broadcast_state);
+    if runbook.variables.is_empty()
+        && runbook.confirm_policy == crate::model::assets::RunbookConfirmPolicy::Never
+    {
+        execute_runbook(
+            runbook,
+            &HashMap::new(),
+            runtime,
+            alert_store,
+            broadcast_state,
+        );
         return;
     }
 
-    let Some(window) = button.root().and_then(|root| root.downcast::<gtk::Window>().ok()) else {
+    let Some(window) = button
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+    else {
         return;
     };
     let dialog = gtk::Dialog::builder()
@@ -756,7 +762,13 @@ fn present_runbook_dialog(
                 .iter()
                 .map(|(id, entry)| (id.clone(), entry.text().to_string()))
                 .collect::<HashMap<_, _>>();
-            execute_runbook(&runbook, &variables, &runtime, &alert_store, &broadcast_state);
+            execute_runbook(
+                &runbook,
+                &variables,
+                &runtime,
+                &alert_store,
+                &broadcast_state,
+            );
         }
         dialog.close();
     });
@@ -773,10 +785,7 @@ fn execute_runbook(
     match resolve_runbook(runbook, variables, &runtime.tile_specs()) {
         Ok(resolved) => {
             let sent = runtime.run_runbook(&resolved);
-            broadcast_state.set_text(&format!(
-                "{}  •  sent to {}",
-                resolved.target_label, sent
-            ));
+            broadcast_state.set_text(&format!("{}  •  sent to {}", resolved.target_label, sent));
             let mut alert = AlertEventInput::new(
                 AlertSourceKind::Runbook,
                 AlertSeverity::Info,

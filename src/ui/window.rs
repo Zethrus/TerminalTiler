@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -16,7 +16,7 @@ use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
-use crate::ui::{launch_screen, settings_dialog, workspace_view};
+use crate::ui::{assets_manager, command_palette, launch_screen, settings_dialog, workspace_view};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -31,6 +31,7 @@ const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
+const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 
 fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     let manager = adw::StyleManager::default();
@@ -117,6 +118,7 @@ enum TabContent {
 #[derive(Clone)]
 struct WorkspaceState {
     preset: WorkspacePreset,
+    assets: crate::model::assets::WorkspaceAssets,
     runtime: workspace_view::WorkspaceRuntime,
     terminal_zoom_steps: i32,
 }
@@ -286,6 +288,13 @@ pub fn present(
     settings_button.set_tooltip_text(Some("Application settings"));
     header.pack_end(&settings_button);
 
+    let assets_button = gtk::Button::from_icon_name("folder-saved-search-symbolic");
+    assets_button.add_css_class("flat");
+    assets_button.add_css_class("titlebar-action-button");
+    assets_button.add_css_class("titlebar-icon-button");
+    assets_button.set_tooltip_text(Some("Assets manager"));
+    header.pack_end(&assets_button);
+
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
     let next_tab_id = Rc::new(Cell::new(1usize));
     let active_tab_id = Rc::new(Cell::new(0usize));
@@ -313,6 +322,9 @@ pub fn present(
     let current_zoom_out_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_zoom_out_shortcut.clone(),
     ));
+    let current_command_palette_shortcut = Rc::new(RefCell::new(
+        current_shortcuts.command_palette_shortcut.clone(),
+    ));
     let quit_requested = Rc::new(Cell::new(false));
     let tab_strip_controller = create_tab_strip_controller(
         &title.tabs_box,
@@ -334,6 +346,7 @@ pub fn present(
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let command_palette_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let sync_close_to_background_notice: Rc<dyn Fn()> = {
         let close_to_background_notice = close_to_background_notice.clone();
         let current_close_to_background = current_close_to_background.clone();
@@ -582,7 +595,9 @@ pub fn present(
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
                 let terminal_zoom_steps = 0;
-                let assets = asset_store.load_assets();
+                let assets = asset_store
+                    .load_assets_for_workspace_root(&workspace_root)
+                    .assets;
                 let built_workspace = workspace_view::build_with_layout_change_handler(
                     &preset,
                     &workspace_root,
@@ -615,6 +630,7 @@ pub fn present(
                     tab.subtitle = workspace_root.display().to_string();
                     tab.content = TabContent::Workspace(Box::new(WorkspaceState {
                         preset: preset.clone(),
+                        assets: assets.clone(),
                         runtime: built_workspace.runtime.clone(),
                         terminal_zoom_steps,
                     }));
@@ -951,11 +967,13 @@ pub fn present(
         let density_shortcut_controller = density_shortcut_controller.clone();
         let zoom_in_shortcut_controller = zoom_in_shortcut_controller.clone();
         let zoom_out_shortcut_controller = zoom_out_shortcut_controller.clone();
+        let command_palette_shortcut_controller = command_palette_shortcut_controller.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
         let current_close_to_background = current_close_to_background.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let sync_close_to_background_notice = sync_close_to_background_notice.clone();
         let tray_controller = tray_controller.clone();
 
@@ -971,6 +989,7 @@ pub fn present(
                     workspace_density_shortcut: preferences.workspace_density_shortcut,
                     workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut,
                     workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut,
+                    command_palette_shortcut: preferences.command_palette_shortcut,
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
                 },
@@ -1191,6 +1210,47 @@ pub fn present(
                             );
                         }
                     }),
+                    on_command_palette_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = command_palette_shortcut_controller.clone();
+                        let current_shortcut = current_command_palette_shortcut.clone();
+                        move |shortcut| {
+                            preference_store.save_command_palette_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_command_palette_shortcut(
+                                &window,
+                                &controller_handle,
+                                &shortcut,
+                                Rc::new({
+                                    let window = window.clone();
+                                    move || {
+                                        let _ = gio::prelude::ActionGroupExt::activate_action(
+                                            &window,
+                                            "win.open-command-palette",
+                                            None,
+                                        );
+                                    }
+                                }),
+                            );
+                            logging::info(format!(
+                                "updated application settings command_palette_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Command palette shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_COMMAND_PALETTE_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
                     on_reset_defaults: Rc::new({
                         let preference_store = preference_store_for_settings.clone();
                         let refresh_handle = refresh_for_settings.clone();
@@ -1204,11 +1264,15 @@ pub fn present(
                         let density_controller = density_shortcut_controller.clone();
                         let zoom_in_controller = zoom_in_shortcut_controller.clone();
                         let zoom_out_controller = zoom_out_shortcut_controller.clone();
+                        let command_palette_controller =
+                            command_palette_shortcut_controller.clone();
                         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
                         let current_density_shortcut = current_density_shortcut.clone();
                         let current_close_to_background = current_close_to_background.clone();
                         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
                         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+                        let current_command_palette_shortcut =
+                            current_command_palette_shortcut.clone();
                         let sync_close_to_background_notice =
                             sync_close_to_background_notice.clone();
                         move || {
@@ -1224,6 +1288,8 @@ pub fn present(
                                 .replace(defaults.workspace_zoom_in_shortcut.clone());
                             current_zoom_out_shortcut
                                 .replace(defaults.workspace_zoom_out_shortcut.clone());
+                            current_command_palette_shortcut
+                                .replace(defaults.command_palette_shortcut.clone());
                             install_workspace_fullscreen_shortcut(
                                 &window,
                                 &fullscreen_controller,
@@ -1251,6 +1317,21 @@ pub fn present(
                                 &tabs,
                                 &active_tab_id,
                                 &defaults.workspace_zoom_out_shortcut,
+                            );
+                            install_command_palette_shortcut(
+                                &window,
+                                &command_palette_controller,
+                                &defaults.command_palette_shortcut,
+                                Rc::new({
+                                    let window = window.clone();
+                                    move || {
+                                        let _ = gio::prelude::ActionGroupExt::activate_action(
+                                            &window,
+                                            "win.open-command-palette",
+                                            None,
+                                        );
+                                    }
+                                }),
                             );
                             sync_fullscreen_chrome(
                                 &window,
@@ -1306,6 +1387,166 @@ pub fn present(
         settings_button.connect_clicked(move |_| open_settings_dialog());
     }
 
+    let open_assets_manager: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        let asset_store = asset_store.clone();
+        let refresh_launch_tabs = refresh_launch_tabs.clone();
+        Rc::new(move || {
+            let workspace_root = tabs
+                .borrow()
+                .iter()
+                .find(|tab| tab.id == active_tab_id.get())
+                .and_then(|tab| tab.workspace_root.clone())
+                .or_else(|| std::env::current_dir().ok());
+            let refresh_launch_tabs = refresh_launch_tabs.clone();
+            assets_manager::present(
+                &window,
+                asset_store.clone(),
+                workspace_root,
+                Rc::new(move || {
+                    if let Some(refresh) = refresh_launch_tabs.borrow().as_ref() {
+                        refresh();
+                    }
+                }),
+            );
+        })
+    };
+
+    {
+        let open_assets_manager = open_assets_manager.clone();
+        assets_button.connect_clicked(move |_| open_assets_manager());
+    }
+
+    let open_command_palette: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        let add_workspace_tab = add_workspace_tab.clone();
+        let select_tab = select_tab.clone();
+        let request_tab_rename = request_tab_rename.clone();
+        let open_settings_dialog = open_settings_dialog.clone();
+        let open_assets_manager = open_assets_manager.clone();
+        Rc::new(move || {
+            let snapshot = tabs.borrow().clone();
+            let active_id = active_tab_id.get();
+            let mut actions = vec![
+                command_palette::PaletteAction {
+                    title: "Open Settings".into(),
+                    subtitle: "Application preferences and shortcuts.".into(),
+                    on_activate: Rc::new({
+                        let open_settings_dialog = open_settings_dialog.clone();
+                        move || open_settings_dialog()
+                    }),
+                },
+                command_palette::PaletteAction {
+                    title: "Open Assets Manager".into(),
+                    subtitle: "Edit global or workspace scoped assets.".into(),
+                    on_activate: Rc::new({
+                        let open_assets_manager = open_assets_manager.clone();
+                        move || open_assets_manager()
+                    }),
+                },
+                command_palette::PaletteAction {
+                    title: "New Tab".into(),
+                    subtitle: "Open a fresh launch deck tab.".into(),
+                    on_activate: Rc::new({
+                        let add_workspace_tab = add_workspace_tab.clone();
+                        move || {
+                            if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
+                                add_tab();
+                            }
+                        }
+                    }),
+                },
+            ];
+
+            for tab in &snapshot {
+                let tab_id = tab.id;
+                let title = tab_display_title(tab);
+                let subtitle = tab.subtitle.clone();
+                actions.push(command_palette::PaletteAction {
+                    title: format!("Switch to {title}"),
+                    subtitle,
+                    on_activate: Rc::new({
+                        let select_tab = select_tab.clone();
+                        move || {
+                            if let Some(select) = select_tab.borrow().as_ref() {
+                                select(tab_id);
+                            }
+                        }
+                    }),
+                });
+            }
+
+            if let Some(active_tab) = snapshot.iter().find(|tab| tab.id == active_id) {
+                actions.push(command_palette::PaletteAction {
+                    title: "Rename Active Tab".into(),
+                    subtitle: "Set a custom workspace title.".into(),
+                    on_activate: Rc::new({
+                        let request_tab_rename = request_tab_rename.clone();
+                        move || {
+                            if let Some(rename) = request_tab_rename.borrow().as_ref() {
+                                rename(active_id);
+                            }
+                        }
+                    }),
+                });
+
+                if let TabContent::Workspace(workspace) = &active_tab.content {
+                    let runtime_for_alert_focus = workspace.runtime.clone();
+                    actions.push(command_palette::PaletteAction {
+                        title: "Focus Next Alert".into(),
+                        subtitle: "Jump to the next unread workspace alert.".into(),
+                        on_activate: Rc::new(move || {
+                            let alert_store = runtime_for_alert_focus.alert_store();
+                            if let Some(alert) = alert_store
+                                .snapshot()
+                                .into_iter()
+                                .find(|alert| alert.unread && alert.pane_id.is_some())
+                            {
+                                if let Some(pane_id) = alert.pane_id {
+                                    runtime_for_alert_focus.focus_tile(&pane_id);
+                                }
+                                alert_store.mark_read(alert.id);
+                            }
+                        }),
+                    });
+
+                    for runbook in workspace
+                        .assets
+                        .runbooks
+                        .iter()
+                        .filter(|runbook| runbook.variables.is_empty())
+                    {
+                        let runbook = runbook.clone();
+                        let runtime = workspace.runtime.clone();
+                        actions.push(command_palette::PaletteAction {
+                            title: format!("Run Runbook: {}", runbook.name),
+                            subtitle: if runbook.description.trim().is_empty() {
+                                runbook.target.label()
+                            } else {
+                                runbook.description.clone()
+                            },
+                            on_activate: Rc::new(move || {
+                                if let Ok(resolved) = crate::services::runbooks::resolve_runbook(
+                                    &runbook,
+                                    &HashMap::new(),
+                                    &runtime.tile_specs(),
+                                ) {
+                                    runtime.run_runbook(&resolved);
+                                }
+                            }),
+                        });
+                    }
+                }
+            }
+
+            command_palette::present(&window, actions);
+        })
+    };
+
     {
         let open_settings_dialog = open_settings_dialog.clone();
         close_to_background_notice_button.connect_clicked(move |_| open_settings_dialog());
@@ -1315,6 +1556,20 @@ pub fn present(
         let open_settings_dialog = open_settings_dialog.clone();
         let action = gio::SimpleAction::new("open-settings", None);
         action.connect_activate(move |_, _| open_settings_dialog());
+        window.add_action(&action);
+    }
+
+    {
+        let open_assets_manager = open_assets_manager.clone();
+        let action = gio::SimpleAction::new("open-assets", None);
+        action.connect_activate(move |_, _| open_assets_manager());
+        window.add_action(&action);
+    }
+
+    {
+        let open_command_palette = open_command_palette.clone();
+        let action = gio::SimpleAction::new("open-command-palette", None);
+        action.connect_activate(move |_, _| open_command_palette());
         window.add_action(&action);
     }
 
@@ -1330,6 +1585,13 @@ pub fn present(
         });
         window.add_action(&action);
     }
+
+    install_command_palette_shortcut(
+        &window,
+        &command_palette_shortcut_controller,
+        current_command_palette_shortcut.borrow().as_str(),
+        open_command_palette.clone(),
+    );
 
     if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
         add_tab();
@@ -2061,7 +2323,10 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
         .expect("launch tab should exist");
 
     let load_outcome = context.preset_store.load_presets_with_status();
-    let asset_outcome = context.asset_store.load_assets_with_status();
+    let asset_outcome = std::env::current_dir()
+        .ok()
+        .map(|root| context.asset_store.load_assets_for_workspace_root(&root))
+        .unwrap_or_else(|| context.asset_store.load_assets_with_status());
     let presets = load_outcome.presets;
     let preferences = context.preference_store.load();
     let preset_store = context.preset_store.as_ref().clone();
@@ -2166,7 +2431,10 @@ fn restore_saved_session(
         let preset = saved_tab.preset;
         let terminal_zoom_steps =
             clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
-        let assets = context.asset_store.load_assets();
+        let assets = context
+            .asset_store
+            .load_assets_for_workspace_root(&workspace_root)
+            .assets;
 
         let built_workspace = workspace_view::build_with_layout_change_handler(
             &preset,
@@ -2197,6 +2465,7 @@ fn restore_saved_session(
             page_shell: page_shell.clone(),
             content: TabContent::Workspace(Box::new(WorkspaceState {
                 preset: preset.clone(),
+                assets: assets.clone(),
                 runtime: built_workspace.runtime.clone(),
                 terminal_zoom_steps,
             })),
@@ -2530,6 +2799,16 @@ fn zoom_out_shortcut_accelerators(shortcut: &str) -> Vec<String> {
     )
 }
 
+fn command_palette_shortcut_accelerators(shortcut: &str) -> Vec<String> {
+    equivalent_shortcut_accelerators(
+        shortcut,
+        &[
+            &["<Ctrl><Shift>P", "<Primary><Shift>P", "<Control><Shift>P"],
+            &["<Ctrl>P", "<Primary>P", "<Control>P"],
+        ],
+    )
+}
+
 fn equivalent_shortcut_accelerators(shortcut: &str, families: &[&[&str]]) -> Vec<String> {
     let trimmed = shortcut.trim();
     let mut accelerators = vec![trimmed.to_string()];
@@ -2542,6 +2821,24 @@ fn equivalent_shortcut_accelerators(shortcut: &str, families: &[&[&str]]) -> Vec
     }
 
     accelerators
+}
+
+fn install_command_palette_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    shortcut: &str,
+    open_command_palette: Rc<dyn Fn()>,
+) {
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        "command_palette",
+        &command_palette_shortcut_accelerators(shortcut),
+        move || {
+            open_command_palette();
+            glib::Propagation::Stop
+        },
+    );
 }
 
 fn install_workspace_fullscreen_shortcut(

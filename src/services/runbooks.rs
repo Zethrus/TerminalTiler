@@ -20,11 +20,15 @@ pub fn resolve_runbook(
     variables: &HashMap<String, String>,
     tiles: &[TileSpec],
 ) -> Result<ResolvedRunbook, String> {
-    let matching_tile_ids = match &runbook.target {
+    let matching_tile_ids: BTreeSet<String> = match &runbook.target {
         RunbookTarget::AllPanes => tiles.iter().map(|tile| tile.id.clone()).collect(),
         RunbookTarget::PaneGroup(group) => tiles
             .iter()
-            .filter(|tile| tile.pane_groups.iter().any(|pane_group| pane_group == group))
+            .filter(|tile| {
+                tile.pane_groups
+                    .iter()
+                    .any(|pane_group| pane_group == group)
+            })
             .map(|tile| tile.id.clone())
             .collect(),
         RunbookTarget::Role(role_id) => tiles
@@ -95,8 +99,8 @@ pub fn resolve_runbook(
 }
 
 fn render_variables(command: &str, variables: &HashMap<String, String>) -> Result<String, String> {
-    let variable_pattern = Regex::new(r"\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}")
-        .map_err(|error| error.to_string())?;
+    let variable_pattern =
+        Regex::new(r"\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}").map_err(|error| error.to_string())?;
     let mut rendered = String::new();
     let mut last_end = 0;
     for captures in variable_pattern.captures_iter(command) {

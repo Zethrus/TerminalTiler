@@ -7,7 +7,7 @@ use gtk::gio;
 use uuid::Uuid;
 
 use crate::logging;
-use crate::model::assets::{AgentRoleTemplate, RestoreLaunchMode, WorkspaceAssets};
+use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
     LayoutNode, LayoutTemplate, SplitAxis, TileSpec, builtin_templates, generate_layout,
 };
@@ -15,6 +15,10 @@ use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_bu
 use crate::platform::{home_dir, resolve_workspace_root};
 use crate::services::layout_editor::{close_tile, split_tile};
 use crate::services::project_suggestions::detect_project_suggestions;
+use crate::services::tile_draft::{
+    apply_project_suggestion as apply_suggestion_to_layout, apply_role_to_tile, resize_layout,
+    resolve_role,
+};
 use crate::storage::preset_store::PresetStore;
 
 #[derive(Clone, Copy, Debug)]
@@ -1404,9 +1408,13 @@ fn refresh_tile_editor(
         });
 
     for (index, tile) in tile_specs.iter().enumerate() {
-        panel
-            .rows
-            .append(&build_tile_editor_row(index, tile, panel, layout_state, assets));
+        panel.rows.append(&build_tile_editor_row(
+            index,
+            tile,
+            panel,
+            layout_state,
+            assets,
+        ));
     }
 }
 
@@ -1455,13 +1463,21 @@ fn rebuild_suggestion_panel<F>(
         let role_names = suggestion
             .role_ids
             .iter()
-            .filter_map(|role_id| assets.role_templates.iter().find(|role| role.id == *role_id))
+            .filter_map(|role_id| {
+                assets
+                    .role_templates
+                    .iter()
+                    .find(|role| role.id == *role_id)
+            })
             .map(|role| role.name.clone())
             .collect::<Vec<_>>()
             .join(", ");
         content.append(
             &gtk::Label::builder()
-                .label(format!("{} tiles  •  {}", suggestion.tile_count, role_names))
+                .label(format!(
+                    "{} tiles  •  {}",
+                    suggestion.tile_count, role_names
+                ))
                 .halign(gtk::Align::Start)
                 .css_classes(["card-meta"])
                 .build(),
@@ -1484,21 +1500,11 @@ fn apply_project_suggestion(
     assets: &Rc<WorkspaceAssets>,
     session_name_entry: &gtk::Entry,
 ) {
-    let mut layout = resize_layout(&layout_state.borrow(), suggestion.tile_count);
-    let mut specs = layout.tile_specs();
-    for (index, tile) in specs.iter_mut().enumerate() {
-        if let Some(role_id) = suggestion.role_ids.get(index)
-            && let Some(role) = resolve_role(assets, Some(role_id.as_str()))
-        {
-            apply_role_to_tile(tile, role);
-        }
-        if let Some(command) = suggestion.startup_commands.get(index).cloned().flatten() {
-            tile.startup_command = Some(command);
-        }
-    }
-    layout = layout.with_tile_specs(&specs);
+    let layout = apply_suggestion_to_layout(&layout_state.borrow(), suggestion, assets);
     *layout_state.borrow_mut() = layout;
-    tile_editor.tile_count.set_value(suggestion.tile_count as f64);
+    tile_editor
+        .tile_count
+        .set_value(suggestion.tile_count as f64);
     refresh_tile_editor(tile_editor, layout_state, assets);
     summary.name_label.set_text(&suggestion.title);
     summary.subtitle_label.set_text(&suggestion.description);
@@ -1713,9 +1719,12 @@ fn build_tile_editor_row(
         let assets = assets.clone();
         let tile_id = tile.id.clone();
         split_horizontal.connect_clicked(move |_| {
-            if let Some(next_layout) =
-                split_tile(&layout_state.borrow(), &tile_id, SplitAxis::Horizontal, false)
-            {
+            if let Some(next_layout) = split_tile(
+                &layout_state.borrow(),
+                &tile_id,
+                SplitAxis::Horizontal,
+                false,
+            ) {
                 *layout_state.borrow_mut() = next_layout;
                 panel
                     .tile_count
@@ -1749,9 +1758,12 @@ fn build_tile_editor_row(
         let assets = assets.clone();
         let tile_id = tile.id.clone();
         clone_tile.connect_clicked(move |_| {
-            if let Some(next_layout) =
-                split_tile(&layout_state.borrow(), &tile_id, SplitAxis::Horizontal, true)
-            {
+            if let Some(next_layout) = split_tile(
+                &layout_state.borrow(),
+                &tile_id,
+                SplitAxis::Horizontal,
+                true,
+            ) {
                 *layout_state.borrow_mut() = next_layout;
                 panel
                     .tile_count
@@ -1871,59 +1883,6 @@ where
         update(tile);
         *layout_state.borrow_mut() = current_layout.with_tile_specs(&tile_specs);
     }
-}
-
-fn resize_layout(current_layout: &LayoutNode, tile_count: usize) -> LayoutNode {
-    let next_layout = generate_layout(tile_count);
-    let current_tiles = current_layout.tile_specs();
-    let mut next_tiles = next_layout.tile_specs();
-
-    for (index, tile) in next_tiles.iter_mut().enumerate() {
-        if let Some(existing) = current_tiles.get(index) {
-            tile.id = existing.id.clone();
-            tile.title = existing.title.clone();
-            tile.agent_label = existing.agent_label.clone();
-            tile.accent_class = existing.accent_class.clone();
-            tile.working_directory = existing.working_directory.clone();
-            tile.startup_command = existing.startup_command.clone();
-            tile.connection_target = existing.connection_target.clone();
-            tile.pane_groups = existing.pane_groups.clone();
-            tile.applied_role_id = existing.applied_role_id.clone();
-            tile.output_helpers = existing.output_helpers.clone();
-        }
-    }
-
-    next_layout.with_tile_specs(&next_tiles)
-}
-
-fn apply_role_to_tile(tile: &mut TileSpec, role: &AgentRoleTemplate) {
-    tile.applied_role_id = Some(role.id.clone());
-    tile.accent_class = role.accent_class.clone();
-    if let Some(title) = role.default_title.as_deref() {
-        tile.title = title.to_string();
-    }
-    if let Some(agent_label) = role.default_agent_label.as_deref() {
-        tile.agent_label = agent_label.to_string();
-    }
-    if let Some(command) = role.default_startup_command.as_deref() {
-        tile.startup_command = Some(command.to_string());
-    }
-    tile.output_helpers = role.default_output_helpers.clone();
-    if let Some(profile_id) = role.default_connection_profile_id.as_deref() {
-        tile.connection_target =
-            crate::model::assets::TileConnectionTarget::Profile(profile_id.to_string());
-    }
-    if !role.default_pane_groups.is_empty() {
-        tile.pane_groups = role.default_pane_groups.clone();
-    }
-}
-
-fn resolve_role<'a>(
-    assets: &'a WorkspaceAssets,
-    role_id: Option<&str>,
-) -> Option<&'a AgentRoleTemplate> {
-    let role_id = role_id?;
-    assets.role_templates.iter().find(|role| role.id == role_id)
 }
 
 fn tile_editor_hint(tile: &TileSpec, assets: &WorkspaceAssets) -> String {

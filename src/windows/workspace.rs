@@ -4,9 +4,11 @@ mod imp {
     use std::ffi::c_void;
     use std::mem;
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::thread;
+    use std::time::Duration;
 
     use windows_sys::Win32::Foundation::{
         COLORREF, CloseHandle, GlobalFree, HANDLE, HANDLE_FLAG_INHERIT, HINSTANCE, HWND, LPARAM,
@@ -50,26 +52,35 @@ mod imp {
         AppendMenuW, BN_DBLCLK, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
         GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-        GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MF_GRAYED, MF_STRING,
-        PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
-        SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW,
-        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
-        WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-        WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-        WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-        WS_VISIBLE, WS_VSCROLL,
+        GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MB_OK, MF_GRAYED, MF_STRING,
+        MessageBoxW, PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN,
+        SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
+        SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor,
+        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
+        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
+        WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
+    use crate::model::assets::WorkspaceAssets;
     use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
     use crate::model::preset::ApplicationDensity;
+    use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
+    use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
+    use crate::services::launch_resolution::resolve_tile_launch;
+    use crate::services::output_helpers::{helper_summary_text, scan_output};
+    use crate::services::runbooks::resolve_runbook;
+    use crate::storage::asset_store::AssetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+    use crate::transcript::TranscriptBuffer;
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
     use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsRuntime};
+    use crate::windows::{assets_manager, command_palette, runbook_dialog};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
     const PANE_CLASS: &str = "TerminalTilerWindowsPane";
@@ -77,7 +88,8 @@ mod imp {
     const TAB_BUTTON_CLASS: &str = "TerminalTilerWindowsTabButton";
     const WM_PANE_OUTPUT: u32 = WM_APP + 1;
     const WM_PANE_EXIT: u32 = WM_APP + 2;
-    const HEADER_HEIGHT: i32 = 112;
+    const WM_RECONNECT_PANE: u32 = WM_APP + 3;
+    const HEADER_HEIGHT: i32 = 152;
     const OUTER_MARGIN: i32 = 12;
     const PANE_GAP: i32 = 8;
     const PANE_TITLE_HEIGHT: i32 = 20;
@@ -91,6 +103,8 @@ mod imp {
     const MENU_PASTE_CLIPBOARD: usize = 2;
     const MENU_OPEN_LINK: usize = 3;
     const MENU_COPY_LINK: usize = 4;
+    const MENU_RECONNECT: usize = 5;
+    const MENU_SHOW_TRANSCRIPT: usize = 6;
     const ID_WORKSPACE_TITLE: isize = 1001;
     const ID_WORKSPACE_ZOOM_OUT: isize = 1002;
     const ID_WORKSPACE_ZOOM_IN: isize = 1003;
@@ -100,11 +114,18 @@ mod imp {
     const ID_WORKSPACE_MOVE_RIGHT: isize = 1007;
     const ID_WORKSPACE_CLOSE_TAB: isize = 1008;
     const ID_WORKSPACE_SHOW_LAUNCHER: isize = 1009;
+    const ID_WORKSPACE_BROADCAST_TARGET: isize = 1010;
+    const ID_WORKSPACE_BROADCAST_ENTRY: isize = 1011;
+    const ID_WORKSPACE_BROADCAST_SEND: isize = 1012;
+    const ID_WORKSPACE_RUNBOOK: isize = 1013;
+    const ID_WORKSPACE_ALERTS: isize = 1014;
+    const ID_WORKSPACE_COMMAND_PALETTE: isize = 1015;
     const ID_TAB_BUTTON_BASE: isize = 3000;
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
     const EM_SETSEL_MESSAGE: u32 = 0x00B1;
     const SS_NOTIFY_STYLE: u32 = 0x0000_0100;
+    const AUTO_RECONNECT_DELAYS_SECONDS: [u64; 3] = [1, 3, 10];
     static NEXT_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
     static NEXT_PANE_ID: AtomicUsize = AtomicUsize::new(1);
     static SESSION_REGISTRY: OnceLock<Mutex<WorkspaceSessionRegistry>> = OnceLock::new();
@@ -126,6 +147,11 @@ mod imp {
         tabs: Vec<SavedTab>,
         active_tab_index: usize,
         runtime: WindowsRuntime,
+        asset_store: AssetStore,
+        assets: WorkspaceAssets,
+        asset_warning: Option<String>,
+        alert_store: AlertStore,
+        broadcast_target: BroadcastTarget,
         suppress_title_events: bool,
         title_hwnd: HWND,
         path_hwnd: HWND,
@@ -137,6 +163,12 @@ mod imp {
         move_right_hwnd: HWND,
         close_tab_hwnd: HWND,
         show_launcher_hwnd: HWND,
+        broadcast_target_hwnd: HWND,
+        broadcast_entry_hwnd: HWND,
+        broadcast_send_hwnd: HWND,
+        runbook_hwnd: HWND,
+        alerts_hwnd: HWND,
+        command_palette_hwnd: HWND,
         tab_button_hwnds: Vec<HWND>,
         tab_drag: Option<TabDragState>,
         pane_drag: Option<PaneDragState>,
@@ -177,6 +209,10 @@ mod imp {
         selecting: bool,
         pressed_mouse_button: Option<u8>,
         header_press_origin: Option<POINT>,
+        transcript: TranscriptBuffer,
+        last_helper_signature: String,
+        reconnect_attempts: u8,
+        termination_requested: bool,
         session: Option<PaneSession>,
     }
 
@@ -506,6 +542,11 @@ mod imp {
             tabs,
             active_tab_index,
             runtime: runtime.clone(),
+            asset_store: AssetStore::new(),
+            assets: WorkspaceAssets::default(),
+            asset_warning: None,
+            alert_store: AlertStore::default(),
+            broadcast_target: BroadcastTarget::Off,
             suppress_title_events: false,
             title_hwnd: ptr::null_mut(),
             path_hwnd: ptr::null_mut(),
@@ -517,6 +558,12 @@ mod imp {
             move_right_hwnd: ptr::null_mut(),
             close_tab_hwnd: ptr::null_mut(),
             show_launcher_hwnd: ptr::null_mut(),
+            broadcast_target_hwnd: ptr::null_mut(),
+            broadcast_entry_hwnd: ptr::null_mut(),
+            broadcast_send_hwnd: ptr::null_mut(),
+            runbook_hwnd: ptr::null_mut(),
+            alerts_hwnd: ptr::null_mut(),
+            command_palette_hwnd: ptr::null_mut(),
             tab_button_hwnds: Vec::new(),
             tab_drag: None,
             pane_drag: None,
@@ -647,6 +694,11 @@ mod imp {
                         ID_WORKSPACE_SHOW_LAUNCHER => {
                             let _ = crate::windows::app::show_primary_shell_window();
                         }
+                        ID_WORKSPACE_BROADCAST_TARGET => cycle_broadcast_target(state),
+                        ID_WORKSPACE_BROADCAST_SEND => send_broadcast_command(state),
+                        ID_WORKSPACE_RUNBOOK => open_runbook_palette(hwnd, state),
+                        ID_WORKSPACE_ALERTS => open_alert_center(hwnd, state),
+                        ID_WORKSPACE_COMMAND_PALETTE => open_workspace_command_palette(hwnd, state),
                         id if id >= ID_TAB_BUTTON_BASE => {
                             let index = (id - ID_TAB_BUTTON_BASE) as usize;
                             let notification = ((wparam >> 16) & 0xffff) as u32;
@@ -674,6 +726,14 @@ mod imp {
             WM_PANE_EXIT => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     mark_pane_exited(state, wparam as usize);
+                }
+                0
+            }
+            WM_RECONNECT_PANE => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    let pane_id = wparam as usize;
+                    let expected_attempt = lparam as u8;
+                    let _ = reconnect_pane(state, pane_id, Some(expected_attempt));
                 }
                 0
             }
@@ -1139,6 +1199,60 @@ mod imp {
             ID_WORKSPACE_SHOW_LAUNCHER,
             ptr::null_mut(),
         );
+        state.broadcast_target_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Broadcast Off",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_BROADCAST_TARGET,
+            ptr::null_mut(),
+        );
+        state.broadcast_entry_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_BROADCAST_ENTRY,
+            ptr::null_mut(),
+        );
+        state.broadcast_send_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Send",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_BROADCAST_SEND,
+            ptr::null_mut(),
+        );
+        state.runbook_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Runbook",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_RUNBOOK,
+            ptr::null_mut(),
+        );
+        state.alerts_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Alerts (0)",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_ALERTS,
+            ptr::null_mut(),
+        );
+        state.command_palette_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Palette",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_COMMAND_PALETTE,
+            ptr::null_mut(),
+        );
 
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         for control in [
@@ -1152,6 +1266,12 @@ mod imp {
             state.move_right_hwnd,
             state.close_tab_hwnd,
             state.show_launcher_hwnd,
+            state.broadcast_target_hwnd,
+            state.broadcast_entry_hwnd,
+            state.broadcast_send_hwnd,
+            state.runbook_hwnd,
+            state.alerts_hwnd,
+            state.command_palette_hwnd,
         ] {
             if !control.is_null() {
                 unsafe {
@@ -1286,6 +1406,62 @@ mod imp {
                 HEADER_BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
+            let controls_y = tab_row_y + HEADER_BUTTON_HEIGHT + 10;
+            SetWindowPos(
+                state.broadcast_target_hwnd,
+                ptr::null_mut(),
+                OUTER_MARGIN,
+                controls_y,
+                140,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.broadcast_entry_hwnd,
+                ptr::null_mut(),
+                OUTER_MARGIN + 148,
+                controls_y,
+                (bounds.width() - OUTER_MARGIN * 2 - 148 - 88 * 4 - 24).max(180),
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            let right_controls_left = bounds.right - OUTER_MARGIN - (88 * 4) - (button_gap * 3);
+            SetWindowPos(
+                state.broadcast_send_hwnd,
+                ptr::null_mut(),
+                right_controls_left,
+                controls_y,
+                88,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.runbook_hwnd,
+                ptr::null_mut(),
+                right_controls_left + 88 + button_gap,
+                controls_y,
+                88,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.alerts_hwnd,
+                ptr::null_mut(),
+                right_controls_left + (88 + button_gap) * 2,
+                controls_y,
+                88,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.command_palette_hwnd,
+                ptr::null_mut(),
+                right_controls_left + (88 + button_gap) * 3,
+                controls_y,
+                88,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
         }
 
         let layout_bounds = Bounds {
@@ -1338,13 +1514,22 @@ mod imp {
 
     fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
         let workspace_root = active_tab(state).workspace_root.clone();
+        let asset_store = AssetStore::new();
+        let asset_outcome = asset_store.load_assets_for_workspace_root(&workspace_root);
+        if let Some(warning) = asset_outcome.warning.as_deref() {
+            logging::error(format!(
+                "workspace asset warning for '{}': {}",
+                workspace_root.display(),
+                warning
+            ));
+        }
         for pane in state.panes.iter_mut() {
-            let command =
-                match wsl::build_launch_command(&pane.tile, &workspace_root, &state.runtime) {
-                    Ok(command) => command,
+            let resolved_launch =
+                match resolve_tile_launch(&pane.tile, &workspace_root, &asset_outcome.assets) {
+                    Ok(resolved_launch) => resolved_launch,
                     Err(error) => {
                         pane.terminal.process(&format!(
-                            "Could not prepare tile launch.\r\n\r\n{error}\r\n"
+                            "Could not resolve tile launch.\r\n\r\n{error}\r\n"
                         ));
                         unsafe {
                             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
@@ -1352,6 +1537,23 @@ mod imp {
                         continue;
                     }
                 };
+            let command = match wsl::build_launch_command(
+                &pane.tile,
+                &workspace_root,
+                &resolved_launch,
+                &state.runtime,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    pane.terminal.process(&format!(
+                        "Could not prepare tile launch.\r\n\r\n{error}\r\n"
+                    ));
+                    unsafe {
+                        InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+                    }
+                    continue;
+                }
+            };
 
             let output_bounds = client_bounds(pane.output_hwnd).unwrap_or(Bounds {
                 left: 0,
@@ -1366,6 +1568,8 @@ mod imp {
             match PaneSession::spawn(hwnd, pane.id, &command, columns, rows) {
                 Ok(session) => {
                     pane.session = Some(session);
+                    pane.termination_requested = false;
+                    pane.reconnect_attempts = 0;
                     pane.terminal.process(&format!(
                         "[launching {} in {}]\r\n",
                         pane.tile.title, command.working_directory
@@ -1381,6 +1585,396 @@ mod imp {
             unsafe {
                 InvalidateRect(pane.output_hwnd, ptr::null(), 1);
             }
+        }
+    }
+
+    fn refresh_broadcast_controls(state: &WorkspaceWindowState) {
+        unsafe {
+            SetWindowTextW(
+                state.broadcast_target_hwnd,
+                wide(&state.broadcast_target.label()).as_ptr(),
+            );
+            SetWindowTextW(
+                state.runbook_hwnd,
+                wide(if state.assets.runbooks.is_empty() {
+                    "Runbook"
+                } else {
+                    "Runbook..."
+                })
+                .as_ptr(),
+            );
+        }
+    }
+
+    fn refresh_alert_button(state: &WorkspaceWindowState) {
+        unsafe {
+            SetWindowTextW(
+                state.alerts_hwnd,
+                wide(&format!("Alerts ({})", state.alert_store.unread_count())).as_ptr(),
+            );
+        }
+    }
+
+    fn cycle_broadcast_target(state: &mut WorkspaceWindowState) {
+        let mut options = vec![BroadcastTarget::Off, BroadcastTarget::AllPanes];
+        options.extend(
+            saved_groups_for_tiles(&active_tab(state).preset.layout.tile_specs())
+                .into_iter()
+                .map(BroadcastTarget::SavedGroup),
+        );
+        let current_index = options
+            .iter()
+            .position(|candidate| candidate == &state.broadcast_target)
+            .unwrap_or(0);
+        state.broadcast_target = options[(current_index + 1) % options.len()].clone();
+        refresh_broadcast_controls(state);
+    }
+
+    fn send_text_to_pane(pane: &mut PaneState, text: &str) -> bool {
+        let Some(session) = pane.session.as_ref() else {
+            return false;
+        };
+        pane.transcript.push_input(text);
+        if session.write_input(text.as_bytes()).is_ok() {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn send_text_to_target(
+        state: &mut WorkspaceWindowState,
+        target: &BroadcastTarget,
+        text: &str,
+    ) -> usize {
+        let mut sent = 0usize;
+        for pane in state.panes.iter_mut() {
+            if target.includes(&pane.tile) && send_text_to_pane(pane, text) {
+                sent += 1;
+            }
+        }
+        sent
+    }
+
+    fn push_alert(state: &WorkspaceWindowState, input: AlertEventInput) {
+        state.alert_store.push(input);
+        refresh_alert_button(state);
+    }
+
+    fn send_broadcast_command(state: &mut WorkspaceWindowState) {
+        let command = read_window_text(state.broadcast_entry_hwnd);
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        let payload = if command.ends_with('\n') {
+            command.to_string()
+        } else {
+            format!("{command}\n")
+        };
+        let target = state.broadcast_target.clone();
+        let sent = send_text_to_target(state, &target, &payload);
+        let mut alert = AlertEventInput::new(
+            AlertSourceKind::Runbook,
+            AlertSeverity::Info,
+            "Quick send executed",
+        );
+        alert.detail = format!(
+            "Sent quick command to {} pane(s) via {}.",
+            sent,
+            target.label()
+        );
+        push_alert(state, alert);
+    }
+
+    fn execute_runbook(
+        state: &mut WorkspaceWindowState,
+        runbook: &crate::model::assets::Runbook,
+        variables: &std::collections::HashMap<String, String>,
+    ) {
+        match resolve_runbook(
+            runbook,
+            variables,
+            &active_tab(state).preset.layout.tile_specs(),
+        ) {
+            Ok(resolved) => {
+                let mut sent = 0usize;
+                for command in &resolved.commands {
+                    sent += send_text_to_target(state, &resolved.target, command);
+                }
+                let mut alert = AlertEventInput::new(
+                    AlertSourceKind::Runbook,
+                    AlertSeverity::Info,
+                    format!("Runbook '{}' executed", runbook.name),
+                );
+                alert.detail = format!(
+                    "Targeted {} pane(s) with {} step(s), {} send(s) via {}.",
+                    resolved.matching_tile_ids.len(),
+                    resolved.commands.len(),
+                    sent,
+                    resolved.target_label
+                );
+                push_alert(state, alert);
+            }
+            Err(error) => {
+                let mut alert = AlertEventInput::new(
+                    AlertSourceKind::Runbook,
+                    AlertSeverity::Error,
+                    format!("Runbook '{}' failed", runbook.name),
+                );
+                alert.detail = error;
+                push_alert(state, alert);
+            }
+        }
+    }
+
+    fn open_workspace_assets_manager(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let workspace_root = Some(active_tab(state).workspace_root.clone());
+        let on_saved = Rc::new(move || {
+            if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                rebuild_active_tab_content(hwnd, state);
+            }
+        });
+        let _ = assets_manager::present(hwnd, state.asset_store.clone(), workspace_root, on_saved);
+    }
+
+    fn open_runbook_palette(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let mut actions = Vec::new();
+        for runbook in state.assets.runbooks.iter().cloned() {
+            let subtitle = if runbook.description.trim().is_empty() {
+                runbook.target.label()
+            } else {
+                runbook.description.clone()
+            };
+            actions.push(command_palette::PaletteAction {
+                title: format!("Run {}", runbook.name),
+                subtitle,
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                        if runbook.variables.is_empty()
+                            && runbook.confirm_policy
+                                == crate::model::assets::RunbookConfirmPolicy::Never
+                        {
+                            execute_runbook(state, &runbook, &std::collections::HashMap::new());
+                            return;
+                        }
+
+                        let runbook_for_dialog = runbook.clone();
+                        let runbook_for_submit = runbook.clone();
+                        let on_submit = Rc::new(
+                            move |variables: std::collections::HashMap<String, String>| {
+                                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                                    execute_runbook(state, &runbook_for_submit, &variables);
+                                }
+                            },
+                        );
+                        if let Err(error) =
+                            runbook_dialog::present(hwnd, runbook_for_dialog, on_submit)
+                        {
+                            if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                                let mut alert = AlertEventInput::new(
+                                    AlertSourceKind::Runbook,
+                                    AlertSeverity::Error,
+                                    format!("Runbook '{}' failed", runbook.name),
+                                );
+                                alert.detail = error;
+                                push_alert(state, alert);
+                            }
+                        }
+                    }
+                }),
+            });
+        }
+        if actions.is_empty() {
+            let mut alert = AlertEventInput::new(
+                AlertSourceKind::Runbook,
+                AlertSeverity::Info,
+                "No runbooks available",
+            );
+            alert.detail = "The active workspace has no saved runbooks.".into();
+            push_alert(state, alert);
+            return;
+        }
+        let _ = command_palette::present(hwnd, "Runbooks", actions);
+    }
+
+    fn open_alert_center(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let alerts = state.alert_store.snapshot();
+        if alerts.is_empty() {
+            unsafe {
+                MessageBoxW(
+                    hwnd,
+                    wide("There are no workspace alerts.").as_ptr(),
+                    wide("Alert Center").as_ptr(),
+                    MB_OK,
+                );
+            }
+            return;
+        }
+        let mut actions = Vec::new();
+        actions.push(command_palette::PaletteAction {
+            title: "Mark All Read".into(),
+            subtitle: "Clear unread state for every alert.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    state.alert_store.mark_all_read();
+                    refresh_alert_button(state);
+                }
+            }),
+        });
+        for alert in alerts.into_iter().rev() {
+            let title = if alert.unread {
+                format!("[Unread] {}", alert.title)
+            } else {
+                alert.title.clone()
+            };
+            let detail = if alert.detail.trim().is_empty() {
+                "No detail available.".to_string()
+            } else {
+                alert.detail.clone()
+            };
+            let pane_id = alert.pane_id.clone();
+            let alert_id = alert.id;
+            let allows_reconnect = alert.allows_reconnect;
+            actions.push(command_palette::PaletteAction {
+                title,
+                subtitle: detail,
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                        if let Some(pane_id) = pane_id.as_deref() {
+                            if allows_reconnect {
+                                let _ = reconnect_pane(
+                                    state,
+                                    pane_id.parse::<usize>().ok().unwrap_or(0),
+                                    None,
+                                );
+                            } else {
+                                focus_pane(state, pane_id);
+                            }
+                        }
+                        state.alert_store.mark_read(alert_id);
+                        refresh_alert_button(state);
+                    }
+                }),
+            });
+        }
+        let _ = command_palette::present(hwnd, "Alert Center", actions);
+    }
+
+    fn open_workspace_command_palette(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let mut actions = Vec::new();
+        actions.push(command_palette::PaletteAction {
+            title: "Open Alerts".into(),
+            subtitle: "Inspect unread workspace alerts.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    open_alert_center(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
+            title: "Open Runbooks".into(),
+            subtitle: "Execute a saved runbook against the current workspace.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    open_runbook_palette(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
+            title: "Open Assets Manager".into(),
+            subtitle: "Edit connection profiles, inventory, roles, and runbooks.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    open_workspace_assets_manager(hwnd, state);
+                }
+            }),
+        });
+        if let Some(first_unread) = state
+            .alert_store
+            .snapshot()
+            .into_iter()
+            .find(|alert| alert.unread && alert.pane_id.is_some())
+        {
+            let pane_id = first_unread.pane_id.clone().unwrap_or_default();
+            let alert_id = first_unread.id;
+            actions.push(command_palette::PaletteAction {
+                title: "Focus Next Alert".into(),
+                subtitle: "Jump to the next unread pane alert.".into(),
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                        focus_pane(state, &pane_id);
+                        state.alert_store.mark_read(alert_id);
+                        refresh_alert_button(state);
+                    }
+                }),
+            });
+        }
+        let _ = command_palette::present(hwnd, "Workspace Commands", actions);
+    }
+
+    fn focus_pane(state: &WorkspaceWindowState, pane_id: &str) {
+        if let Some(pane) = state
+            .panes
+            .iter()
+            .find(|pane| pane.tile.id == pane_id || pane.id.to_string() == pane_id)
+        {
+            unsafe {
+                SetFocus(pane.output_hwnd);
+            }
+        }
+    }
+
+    fn reconnect_pane(
+        state: &mut WorkspaceWindowState,
+        pane_id: usize,
+        expected_attempt: Option<u8>,
+    ) -> Result<(), String> {
+        let workspace_root = active_tab(state).workspace_root.clone();
+        let asset_outcome = state
+            .asset_store
+            .load_assets_for_workspace_root(&workspace_root);
+        let runtime = state.runtime.clone();
+        let Some(pane) = pane_mut_by_id(state, pane_id) else {
+            return Err(format!("Pane {pane_id} is missing."));
+        };
+        if let Some(expected_attempt) = expected_attempt
+            && pane.reconnect_attempts != expected_attempt
+        {
+            return Ok(());
+        }
+        if let Some(mut session) = pane.session.take() {
+            pane.termination_requested = true;
+            session.terminate();
+        }
+        let resolved = resolve_tile_launch(&pane.tile, &workspace_root, &asset_outcome.assets)?;
+        let command = wsl::build_launch_command(&pane.tile, &workspace_root, &resolved, &runtime)?;
+        let output_bounds = client_bounds(pane.output_hwnd).unwrap_or(Bounds {
+            left: 0,
+            top: 0,
+            right: 720,
+            bottom: 420,
+        });
+        let (columns, rows) =
+            pane_console_size(output_bounds.width(), output_bounds.height(), pane);
+        pane.terminal.resize(columns as usize, rows as usize);
+        pane.termination_requested = false;
+        match PaneSession::spawn(pane.parent_hwnd, pane.id, &command, columns, rows) {
+            Ok(session) => {
+                pane.session = Some(session);
+                pane.reconnect_attempts = 0;
+                pane.terminal.process(&format!(
+                    "\r\n[reconnected {} in {}]\r\n",
+                    pane.tile.title, command.working_directory
+                ));
+                update_pane_scrollbar(pane);
+                unsafe {
+                    InvalidateRect(pane.title_hwnd, ptr::null(), 1);
+                    InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+                }
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -1527,6 +2121,12 @@ mod imp {
 
     fn rebuild_active_tab_content(hwnd: HWND, state: &mut WorkspaceWindowState) {
         destroy_active_panes(state);
+        let asset_outcome = state
+            .asset_store
+            .load_assets_for_workspace_root(&active_tab(state).workspace_root);
+        state.assets = asset_outcome.assets;
+        state.asset_warning = asset_outcome.warning;
+        state.broadcast_target = BroadcastTarget::Off;
 
         let title = active_tab(state)
             .custom_title
@@ -1577,6 +2177,10 @@ mod imp {
                 selecting: false,
                 pressed_mouse_button: None,
                 header_press_origin: None,
+                transcript: TranscriptBuffer::default(),
+                last_helper_signature: String::new(),
+                reconnect_attempts: 0,
+                termination_requested: false,
                 session: None,
             });
             pane.title_hwnd = create_child_window(
@@ -1610,6 +2214,8 @@ mod imp {
 
         rebuild_tab_buttons(hwnd, state);
         update_tab_action_buttons(state);
+        refresh_broadcast_controls(state);
+        refresh_alert_button(state);
         layout_controls(hwnd, state);
         spawn_pane_sessions(hwnd, state);
         save_workspace_session_state(state);
@@ -2070,10 +2676,12 @@ mod imp {
     }
 
     fn append_pane_output(state: &mut WorkspaceWindowState, pane_id: usize, chunk: &str) {
+        let mut alert_to_push = None;
         let Some(pane) = pane_mut_by_id(state, pane_id) else {
             return;
         };
 
+        pane.transcript.push_output(chunk);
         pane.terminal.process(chunk);
         let pending_input = pane.terminal.take_pending_input();
         if !pending_input.is_empty()
@@ -2082,30 +2690,108 @@ mod imp {
         {
             logging::error(format!("pane control response write failed: {error}"));
         }
+        if !pending_input.is_empty() {
+            pane.transcript
+                .push_input(&String::from_utf8_lossy(&pending_input));
+        }
         if let Some(clipboard_text) = pane.terminal.take_pending_clipboard_write()
             && let Err(error) = write_clipboard_text(&clipboard_text)
         {
             logging::error(format!("pane OSC 52 clipboard write failed: {error}"));
         }
+        let recent = pane.transcript.recent_output(48);
+        let matches = scan_output(&pane.tile.output_helpers, &recent);
+        let (summary, severity) = helper_summary_text(&matches);
+        let signature = format!("{}::{:?}", summary, severity);
+        if !matches.is_empty() && pane.last_helper_signature != signature {
+            pane.last_helper_signature = signature;
+            let mut alert = AlertEventInput::new(
+                AlertSourceKind::OutputHelper,
+                match severity.unwrap_or(crate::model::assets::OutputSeverity::Info) {
+                    crate::model::assets::OutputSeverity::Info => AlertSeverity::Info,
+                    crate::model::assets::OutputSeverity::Warning => AlertSeverity::Warning,
+                    crate::model::assets::OutputSeverity::Error => AlertSeverity::Error,
+                },
+                format!("{}: {}", pane.tile.title, summary),
+            );
+            alert.detail = recent;
+            alert.pane_id = Some(pane.id.to_string());
+            alert.allows_reconnect = true;
+            alert_to_push = Some(alert);
+        }
         update_pane_scrollbar(pane);
         unsafe {
             InvalidateRect(pane.title_hwnd, ptr::null(), 1);
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
         }
+        if let Some(alert) = alert_to_push {
+            push_alert(state, alert);
+        }
     }
 
     fn mark_pane_exited(state: &mut WorkspaceWindowState, pane_id: usize) {
+        let mut reconnect_schedule = None;
         let Some(pane) = pane_mut_by_id(state, pane_id) else {
             return;
         };
 
         pane.session = None;
+        pane.transcript.push_output("[terminal session exited]");
         pane.terminal
             .process("\r\n\r\n[terminal session exited]\r\n");
+        let status = pane.terminal.last_command_status().unwrap_or(1);
+        let mut alert = AlertEventInput::new(
+            AlertSourceKind::PaneExit,
+            if status == 0 {
+                AlertSeverity::Info
+            } else {
+                AlertSeverity::Warning
+            },
+            format!("{} exited with status {}", pane.tile.title, status),
+        );
+        alert.detail = pane.transcript.recent_transcript(40);
+        alert.pane_id = Some(pane.id.to_string());
+        alert.allows_reconnect = true;
+        let alert_to_push = Some(alert);
+
+        if !pane.termination_requested && pane.reconnect_attempts < 3 {
+            let should_reconnect = match pane.tile.reconnect_policy {
+                crate::model::layout::ReconnectPolicy::Manual => false,
+                crate::model::layout::ReconnectPolicy::OnAbnormalExit => status != 0,
+                crate::model::layout::ReconnectPolicy::Always => true,
+            };
+            if should_reconnect {
+                pane.reconnect_attempts = pane.reconnect_attempts.saturating_add(1);
+                let attempt = pane.reconnect_attempts;
+                let delay = AUTO_RECONNECT_DELAYS_SECONDS
+                    .get((attempt.saturating_sub(1)) as usize)
+                    .copied()
+                    .unwrap_or(10);
+                let window_hwnd = pane.parent_hwnd as isize;
+                let pane_id = pane.id;
+                reconnect_schedule = Some((window_hwnd, pane_id, attempt, delay));
+            }
+        }
         update_pane_scrollbar(pane);
         unsafe {
             InvalidateRect(pane.title_hwnd, ptr::null(), 1);
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+        }
+        if let Some(alert) = alert_to_push {
+            push_alert(state, alert);
+        }
+        if let Some((window_hwnd, pane_id, attempt, delay)) = reconnect_schedule {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(delay));
+                let _ = unsafe {
+                    PostMessageW(
+                        window_hwnd as HWND,
+                        WM_RECONNECT_PANE,
+                        pane_id,
+                        attempt as LPARAM,
+                    )
+                };
+            });
         }
     }
 
@@ -2456,6 +3142,7 @@ mod imp {
         let Some(session) = pane.session.as_ref() else {
             return;
         };
+        pane.transcript.push_input(&String::from_utf8_lossy(&bytes));
         if let Err(error) = session.write_input(&bytes) {
             logging::error(format!("pane input write failed: {error}"));
         }
@@ -2491,6 +3178,7 @@ mod imp {
             let Some(session) = pane.session.as_ref() else {
                 return;
             };
+            pane.transcript.push_input(sequence);
             if let Err(error) = session.write_input(sequence.as_bytes()) {
                 logging::error(format!("pane special key write failed: {error}"));
             }
@@ -2809,6 +3497,7 @@ mod imp {
             return false;
         };
 
+        pane.transcript.push_input(&report);
         if let Err(error) = session.write_input(report.as_bytes()) {
             logging::error(format!("pane mouse report write failed: {error}"));
         }
@@ -2968,6 +3657,13 @@ mod imp {
                 MENU_PASTE_CLIPBOARD,
                 wide("Paste").as_ptr(),
             );
+            AppendMenuW(menu, MF_STRING, MENU_RECONNECT, wide("Reconnect").as_ptr());
+            AppendMenuW(
+                menu,
+                MF_STRING,
+                MENU_SHOW_TRANSCRIPT,
+                wide("Show Transcript").as_ptr(),
+            );
         }
 
         let mut point = POINT {
@@ -3004,6 +3700,14 @@ mod imp {
             }
             MENU_PASTE_CLIPBOARD => {
                 let _ = paste_clipboard_into_pane(pane);
+            }
+            MENU_RECONNECT => {
+                if let Some(state) = unsafe { window_state_mut(pane.parent_hwnd) } {
+                    let _ = reconnect_pane(state, pane.id, None);
+                }
+            }
+            MENU_SHOW_TRANSCRIPT => {
+                show_transcript_dialog(pane.parent_hwnd, &pane.transcript.recent_transcript(240));
             }
             _ => {}
         }
@@ -3044,9 +3748,27 @@ mod imp {
         };
         if pane.terminal.bracketed_paste() {
             let wrapped = format!("\u{1b}[200~{normalized}\u{1b}[201~");
+            pane.transcript.push_input(&wrapped);
             session.write_input(wrapped.as_bytes())
         } else {
+            pane.transcript.push_input(&normalized);
             session.write_input(normalized.as_bytes())
+        }
+    }
+
+    fn show_transcript_dialog(parent_hwnd: HWND, transcript: &str) {
+        let text = if transcript.trim().is_empty() {
+            "No transcript is available yet."
+        } else {
+            transcript
+        };
+        unsafe {
+            MessageBoxW(
+                parent_hwnd,
+                wide(text).as_ptr(),
+                wide("Recent Transcript").as_ptr(),
+                MB_OK,
+            );
         }
     }
 

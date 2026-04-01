@@ -14,7 +14,6 @@ pub enum AlertSourceKind {
     PaneExit,
     Reconnect,
     Runbook,
-    Spawn,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

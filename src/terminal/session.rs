@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -13,13 +12,12 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::resolve_tile_launch;
+use crate::transcript::TranscriptBuffer;
 
 const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
-const MAX_TRANSCRIPT_OUTPUT_LINES: usize = 4_000;
-const MAX_TRANSCRIPT_INPUT_LINES: usize = 100;
 const DARK_TERMINAL_PALETTE: [&str; 16] = [
     "#0f1724", "#c9575f", "#78a062", "#d6a04b", "#6b8cff", "#b28cf0", "#5eb8c8", "#d7dde8",
     "#334155", "#ef7c86", "#91be78", "#e6bb6a", "#8fa7ff", "#c8a6f6", "#7ccad7", "#f8fafc",
@@ -71,77 +69,6 @@ struct TerminalLaunchSpec {
     working_directory: String,
     argv: Vec<String>,
     envv: Vec<String>,
-}
-
-#[derive(Default)]
-struct TranscriptBuffer {
-    output_lines: VecDeque<String>,
-    input_lines: VecDeque<String>,
-}
-
-impl TranscriptBuffer {
-    fn replace_output(&mut self, snapshot: &str) {
-        self.output_lines = snapshot
-            .replace('\r', "")
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .rev()
-            .take(MAX_TRANSCRIPT_OUTPUT_LINES)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-    }
-
-    fn push_input(&mut self, text: &str) {
-        for line in text
-            .replace('\r', "")
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            self.input_lines.push_back(line.to_string());
-            while self.input_lines.len() > MAX_TRANSCRIPT_INPUT_LINES {
-                self.input_lines.pop_front();
-            }
-        }
-    }
-
-    fn recent_output(&self, row_count: usize) -> String {
-        self.output_lines
-            .iter()
-            .rev()
-            .take(row_count)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn recent_transcript(&self, line_count: usize) -> String {
-        let mut lines = self
-            .output_lines
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        if !self.input_lines.is_empty() {
-            lines.push(String::from("[input]"));
-            lines.extend(self.input_lines.iter().map(|line| format!("> {line}")));
-        }
-        lines
-            .into_iter()
-            .rev()
-            .take(line_count)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 }
 
 impl TerminalSession {
@@ -282,10 +209,6 @@ impl TerminalSession {
         self.transcript.borrow().recent_transcript(line_count)
     }
 
-    pub fn last_exit_status(&self) -> Option<i32> {
-        self.state.borrow().last_exit_status
-    }
-
     pub fn termination_requested(&self) -> bool {
         self.state.borrow().termination_requested
     }
@@ -414,7 +337,11 @@ impl TerminalSession {
         let stream = gio::MemoryOutputStream::new_resizable();
         if self
             .terminal
-            .write_contents_sync(&stream, vte4::WriteFlags::Default, None::<&gio::Cancellable>)
+            .write_contents_sync(
+                &stream,
+                vte4::WriteFlags::Default,
+                None::<&gio::Cancellable>,
+            )
             .is_err()
         {
             return;

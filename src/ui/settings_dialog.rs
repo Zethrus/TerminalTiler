@@ -16,6 +16,7 @@ struct SettingsState {
     density_shortcut: String,
     zoom_in_shortcut: String,
     zoom_out_shortcut: String,
+    command_palette_shortcut: String,
 }
 
 impl SettingsState {
@@ -29,6 +30,7 @@ impl SettingsState {
             density_shortcut: defaults.workspace_density_shortcut,
             zoom_in_shortcut: defaults.workspace_zoom_in_shortcut,
             zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
+            command_palette_shortcut: defaults.command_palette_shortcut,
         }
     }
 }
@@ -41,6 +43,7 @@ pub struct SettingsDialogInput {
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
     pub workspace_zoom_out_shortcut: String,
+    pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
 }
@@ -54,6 +57,7 @@ pub struct SettingsDialogActions {
     pub on_density_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_in_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_command_palette_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_reset_defaults: Rc<dyn Fn()>,
     pub on_reset_builtin_presets: Rc<dyn Fn()>,
     pub on_size_changed: Rc<dyn Fn(i32, i32)>,
@@ -208,6 +212,7 @@ pub fn present(
         workspace_density_shortcut,
         workspace_zoom_in_shortcut,
         workspace_zoom_out_shortcut,
+        command_palette_shortcut,
         settings_dialog_width,
         settings_dialog_height,
     } = input;
@@ -219,6 +224,7 @@ pub fn present(
         on_density_shortcut_changed,
         on_zoom_in_shortcut_changed,
         on_zoom_out_shortcut_changed,
+        on_command_palette_shortcut_changed,
         on_reset_defaults,
         on_reset_builtin_presets,
         on_size_changed,
@@ -267,6 +273,7 @@ pub fn present(
     let current_density_shortcut = Rc::new(RefCell::new(workspace_density_shortcut));
     let current_zoom_in_shortcut = Rc::new(RefCell::new(workspace_zoom_in_shortcut));
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
+    let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
     let reset_button = gtk::Button::with_label("Reset Defaults");
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
@@ -279,6 +286,7 @@ pub fn present(
         let current_density_shortcut = current_density_shortcut.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let reset_button = reset_button.clone();
         Rc::new(move || {
             sync_reset_button_state(
@@ -291,6 +299,7 @@ pub fn present(
                     density_shortcut: current_density_shortcut.borrow().clone(),
                     zoom_in_shortcut: current_zoom_in_shortcut.borrow().clone(),
                     zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
+                    command_palette_shortcut: current_command_palette_shortcut.borrow().clone(),
                 },
             );
         })
@@ -306,6 +315,7 @@ pub fn present(
     let density_shortcut_callback = on_density_shortcut_changed;
     let zoom_in_shortcut_callback = on_zoom_in_shortcut_changed;
     let zoom_out_shortcut_callback = on_zoom_out_shortcut_changed;
+    let command_palette_shortcut_callback = on_command_palette_shortcut_changed;
     let reset_callback = on_reset_defaults;
     let size_changed_callback = on_size_changed;
 
@@ -924,6 +934,111 @@ pub fn present(
         &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
     ));
 
+    let command_palette_status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
+        .visible(false)
+        .build();
+    let command_palette_capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
+        .build();
+    sync_shortcut_capture_label(
+        &command_palette_capture_label,
+        current_command_palette_shortcut.borrow().as_str(),
+    );
+    let command_palette_record_button = gtk::Button::with_label("Record");
+    command_palette_record_button.add_css_class("pill-button");
+    command_palette_record_button.add_css_class("secondary-button");
+    command_palette_record_button.add_css_class("settings-shortcut-record-button");
+    let command_palette_control = build_shortcut_capture_control(
+        &command_palette_capture_label,
+        &command_palette_record_button,
+    );
+    let command_palette_recording = Rc::new(Cell::new(false));
+    {
+        let current_command_palette_shortcut = current_command_palette_shortcut.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let status = command_palette_status.clone();
+        let capture_label = command_palette_capture_label.clone();
+        let record_button = command_palette_record_button.clone();
+        let recording = command_palette_recording.clone();
+        let callback = command_palette_shortcut_callback.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
+                status.set_visible(true);
+                return glib::Propagation::Stop;
+            };
+
+            recording.set(false);
+            set_recorder_idle(&record_button, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
+            if current_command_palette_shortcut.borrow().as_str() != shortcut {
+                current_command_palette_shortcut.replace(shortcut.clone());
+                callback(shortcut);
+                sync_reset_button();
+            }
+            glib::Propagation::Stop
+        });
+        command_palette_record_button.add_controller(key_controller);
+    }
+    {
+        let status = command_palette_status.clone();
+        let record_button = command_palette_record_button.clone();
+        let recording = command_palette_recording.clone();
+        command_palette_record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = command_palette_status.clone();
+        let record_button = command_palette_record_button.clone();
+        let recording = command_palette_recording.clone();
+        command_palette_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button, &status);
+            }
+        });
+    }
+    shortcuts_section.append(&build_shortcut_entry_row(
+        "Open command palette",
+        "Available in launch tabs and workspaces for fast navigation and actions.",
+        &command_palette_control,
+        &command_palette_status,
+        &["<Ctrl><Shift>P", "<Ctrl>P", "<Super>P"],
+    ));
+
     {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -932,6 +1047,7 @@ pub fn present(
         let current_density_shortcut = current_density_shortcut.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
         let close_to_background_switch = close_to_background_switch.clone();
@@ -940,18 +1056,22 @@ pub fn present(
         let density_capture_label = density_capture_label.clone();
         let zoom_in_capture_label = zoom_in_capture_label.clone();
         let zoom_out_capture_label = zoom_out_capture_label.clone();
+        let command_palette_capture_label = command_palette_capture_label.clone();
         let fullscreen_record_button = fullscreen_record_button.clone();
         let density_record_button = density_record_button.clone();
         let zoom_in_record_button = zoom_in_record_button.clone();
         let zoom_out_record_button = zoom_out_record_button.clone();
+        let command_palette_record_button = command_palette_record_button.clone();
         let fullscreen_status = fullscreen_status.clone();
         let density_status = density_status.clone();
         let zoom_in_status = zoom_in_status.clone();
         let zoom_out_status = zoom_out_status.clone();
+        let command_palette_status = command_palette_status.clone();
         let fullscreen_recording = fullscreen_recording.clone();
         let density_recording = density_recording.clone();
         let zoom_in_recording = zoom_in_recording.clone();
         let zoom_out_recording = zoom_out_recording.clone();
+        let command_palette_recording = command_palette_recording.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
@@ -967,7 +1087,9 @@ pub fn present(
                 || current_zoom_in_shortcut.borrow().as_str()
                     != defaults.workspace_zoom_in_shortcut
                 || current_zoom_out_shortcut.borrow().as_str()
-                    != defaults.workspace_zoom_out_shortcut;
+                    != defaults.workspace_zoom_out_shortcut
+                || current_command_palette_shortcut.borrow().as_str()
+                    != defaults.command_palette_shortcut;
             if !changed {
                 return;
             }
@@ -979,6 +1101,7 @@ pub fn present(
             current_density_shortcut.replace(defaults.workspace_density_shortcut.clone());
             current_zoom_in_shortcut.replace(defaults.workspace_zoom_in_shortcut.clone());
             current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
+            current_command_palette_shortcut.replace(defaults.command_palette_shortcut.clone());
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
             suppress_close_to_background_signal.set(true);
@@ -1000,14 +1123,20 @@ pub fn present(
                 &zoom_out_capture_label,
                 &defaults.workspace_zoom_out_shortcut,
             );
+            sync_shortcut_capture_label(
+                &command_palette_capture_label,
+                &defaults.command_palette_shortcut,
+            );
             fullscreen_recording.set(false);
             density_recording.set(false);
             zoom_in_recording.set(false);
             zoom_out_recording.set(false);
+            command_palette_recording.set(false);
             set_recorder_idle(&fullscreen_record_button, &fullscreen_status);
             set_recorder_idle(&density_record_button, &density_status);
             set_recorder_idle(&zoom_in_record_button, &zoom_in_status);
             set_recorder_idle(&zoom_out_record_button, &zoom_out_status);
+            set_recorder_idle(&command_palette_record_button, &command_palette_status);
             sync_reset_button();
             reset_callback();
         });

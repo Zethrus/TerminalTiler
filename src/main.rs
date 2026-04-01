@@ -9,6 +9,7 @@ mod services;
 mod storage;
 #[cfg(target_os = "linux")]
 mod terminal;
+mod transcript;
 #[cfg(target_os = "linux")]
 mod ui;
 #[cfg(target_os = "windows")]

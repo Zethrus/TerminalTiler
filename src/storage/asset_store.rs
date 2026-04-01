@@ -71,7 +71,10 @@ impl AssetStore {
         let global = self.load_assets_with_status();
         let workspace = self.workspace_config_store.load_for_root(workspace_root);
         AssetLoadOutcome {
-            assets: merge_builtins(merge_workspace_assets(&global.assets, &workspace.config.assets)),
+            assets: merge_builtins(merge_workspace_assets(
+                &global.assets,
+                &workspace.config.assets,
+            )),
             warning: combine_warnings(global.warning, workspace.warning),
         }
     }
@@ -141,7 +144,9 @@ impl AssetStore {
     }
 
     pub fn load_workspace_config(&self, workspace_root: &Path) -> WorkspaceConfig {
-        self.workspace_config_store.load_for_root(workspace_root).config
+        self.workspace_config_store
+            .load_for_root(workspace_root)
+            .config
     }
 
     pub fn save_assets_for_scope(
@@ -156,14 +161,22 @@ impl AssetStore {
                 let workspace_root = workspace_root.ok_or_else(|| {
                     io::Error::other("workspace root is required for workspace scoped assets")
                 })?;
-                let mut config = self.workspace_config_store.load_for_root(workspace_root).config;
+                let mut config = self
+                    .workspace_config_store
+                    .load_for_root(workspace_root)
+                    .config;
                 config.assets = assets.clone();
-                self.workspace_config_store.save_for_root(workspace_root, &config)
+                self.workspace_config_store
+                    .save_for_root(workspace_root, &config)
             }
         }
     }
 
-    fn write_assets_to_path(&self, path: &std::path::Path, assets: &WorkspaceAssets) -> io::Result<()> {
+    fn write_assets_to_path(
+        &self,
+        path: &std::path::Path,
+        assets: &WorkspaceAssets,
+    ) -> io::Result<()> {
         let document = AssetDocument {
             version: STORE_VERSION,
             connection_profiles: assets.connection_profiles.clone(),
@@ -214,7 +227,11 @@ fn default_assets() -> WorkspaceAssets {
 
 fn merge_builtins(mut assets: WorkspaceAssets) -> WorkspaceAssets {
     for builtin in builtin_role_templates() {
-        if assets.role_templates.iter().all(|role| role.id != builtin.id) {
+        if assets
+            .role_templates
+            .iter()
+            .all(|role| role.id != builtin.id)
+        {
             assets.role_templates.push(builtin);
         }
     }
@@ -232,16 +249,21 @@ fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<Str
     }
 }
 
-fn merge_workspace_assets(global: &WorkspaceAssets, workspace: &WorkspaceAssets) -> WorkspaceAssets {
+fn merge_workspace_assets(
+    global: &WorkspaceAssets,
+    workspace: &WorkspaceAssets,
+) -> WorkspaceAssets {
     WorkspaceAssets {
         connection_profiles: merge_by_id(
             &global.connection_profiles,
             &workspace.connection_profiles,
             |item| item.id.as_str(),
         ),
-        inventory_hosts: merge_by_id(&global.inventory_hosts, &workspace.inventory_hosts, |item| {
-            item.id.as_str()
-        }),
+        inventory_hosts: merge_by_id(
+            &global.inventory_hosts,
+            &workspace.inventory_hosts,
+            |item| item.id.as_str(),
+        ),
         inventory_groups: merge_by_id(
             &global.inventory_groups,
             &workspace.inventory_groups,
@@ -250,7 +272,9 @@ fn merge_workspace_assets(global: &WorkspaceAssets, workspace: &WorkspaceAssets)
         role_templates: merge_by_id(&global.role_templates, &workspace.role_templates, |item| {
             item.id.as_str()
         }),
-        runbooks: merge_by_id(&global.runbooks, &workspace.runbooks, |item| item.id.as_str()),
+        runbooks: merge_by_id(&global.runbooks, &workspace.runbooks, |item| {
+            item.id.as_str()
+        }),
     }
 }
 

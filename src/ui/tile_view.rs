@@ -283,7 +283,10 @@ fn status_snapshot_for_terminal(
         snapshot.location_label = title.to_string();
     }
     let (matches, shell_label) = if let Some(title) = terminal.window_title() {
-        (scan_output(&tile.output_helpers, title.as_str()), title.to_string())
+        (
+            scan_output(&tile.output_helpers, title.as_str()),
+            title.to_string(),
+        )
     } else {
         let recent = session.recent_output(32);
         let matches = scan_output(&tile.output_helpers, &recent);
@@ -375,6 +378,30 @@ fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSe
     }
     menu.append(&paste_button);
 
+    let reconnect_button = build_terminal_context_button("Reconnect", None);
+    {
+        let session = session.clone();
+        let popover = popover.clone();
+        reconnect_button.connect_clicked(move |_| {
+            session.reset_auto_reconnect_attempts();
+            let _ = session.reconnect();
+            popover.popdown();
+        });
+    }
+    menu.append(&reconnect_button);
+
+    let transcript_button = build_terminal_context_button("Show Transcript", None);
+    {
+        let session = session.clone();
+        let popover = popover.clone();
+        let terminal = terminal.clone();
+        transcript_button.connect_clicked(move |_| {
+            popover.popdown();
+            present_transcript_dialog(&terminal, &session.recent_transcript(240));
+        });
+    }
+    menu.append(&transcript_button);
+
     popover.set_child(Some(&menu));
 
     let right_click = gtk::GestureClick::builder()
@@ -431,4 +458,45 @@ fn build_terminal_context_button(label: &str, shortcut: Option<&str>) -> gtk::Bu
 
     button.set_child(Some(&row));
     button
+}
+
+#[allow(deprecated)]
+fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
+    let Some(window) = terminal
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+    else {
+        return;
+    };
+    let dialog = gtk::Dialog::builder()
+        .modal(true)
+        .transient_for(&window)
+        .title("Recent Transcript")
+        .default_width(820)
+        .default_height(480)
+        .build();
+    dialog.add_button("Close", gtk::ResponseType::Close);
+    let area = dialog.content_area();
+    area.set_spacing(12);
+    area.set_margin_top(16);
+    area.set_margin_bottom(16);
+    area.set_margin_start(16);
+    area.set_margin_end(16);
+    let scroller = gtk::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .build();
+    let text = gtk::TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .monospace(true)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .build();
+    text.buffer().set_text(transcript);
+    scroller.set_child(Some(&text));
+    area.append(&scroller);
+    dialog.connect_response(|dialog, _| dialog.close());
+    dialog.present();
 }

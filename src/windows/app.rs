@@ -6,6 +6,7 @@ mod imp {
     use std::mem;
     use std::path::PathBuf;
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicIsize, Ordering};
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -36,14 +37,19 @@ mod imp {
     };
 
     use crate::logging;
+    use crate::model::assets::ProjectSuggestion;
     use crate::model::layout::{LayoutNode, LayoutTemplate, builtin_templates, generate_layout};
     use crate::model::preset::{WorkspacePreset, is_builtin_preset_id};
     use crate::platform::{home_dir, resolve_workspace_root};
+    use crate::services::project_suggestions::detect_project_suggestions;
+    use crate::services::tile_draft::{apply_project_suggestion, resize_layout};
+    use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SessionStore};
     use crate::windows::workspace;
     use crate::windows::wsl::{self, WindowsRuntime};
+    use crate::windows::{assets_manager, command_palette};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const SETTINGS_WINDOW_CLASS: &str = "TerminalTilerWindowsSettings";
@@ -70,6 +76,11 @@ mod imp {
     const ID_TILE_COUNT: isize = 1019;
     const ID_LABEL_SELECTION_SUMMARY: isize = 1020;
     const ID_SELECTION_SUMMARY: isize = 1021;
+    const ID_LABEL_SUGGESTIONS: isize = 1022;
+    const ID_SUGGESTION_LIST: isize = 1023;
+    const ID_APPLY_SUGGESTION: isize = 1024;
+    const ID_ASSETS_MANAGER: isize = 1025;
+    const ID_COMMAND_PALETTE: isize = 1026;
     const ID_SETTINGS_THEME_LIST: isize = 2001;
     const ID_SETTINGS_DENSITY_LIST: isize = 2002;
     const ID_SETTINGS_CLOSE_BACKGROUND: isize = 2003;
@@ -127,7 +138,10 @@ mod imp {
         runtime_error: Option<String>,
         templates: Vec<LayoutTemplate>,
         presets: Vec<WorkspacePreset>,
+        suggestions: Vec<ProjectSuggestion>,
         preset_warning: Option<String>,
+        asset_store: AssetStore,
+        asset_warning: Option<String>,
         session: Option<SavedSession>,
         session_warning: Option<String>,
         workspace_path_hwnd: HWND,
@@ -136,6 +150,7 @@ mod imp {
         preset_list_hwnd: HWND,
         tile_count_hwnd: HWND,
         selection_summary_hwnd: HWND,
+        suggestion_list_hwnd: HWND,
         status_hwnd: HWND,
         settings_window_hwnd: HWND,
         tray_icon_added: bool,
@@ -149,6 +164,9 @@ mod imp {
         delete_preset_button_hwnd: HWND,
         launch_preset_button_hwnd: HWND,
         launch_button_hwnd: HWND,
+        apply_suggestion_button_hwnd: HWND,
+        assets_button_hwnd: HWND,
+        palette_button_hwnd: HWND,
     }
 
     struct SettingsWindowState {
@@ -173,11 +191,14 @@ mod imp {
             preference_store: PreferenceStore::new(),
             preset_store: PresetStore::new(),
             session_store: SessionStore::new(),
+            asset_store: AssetStore::new(),
             runtime: None,
             runtime_error: None,
             templates: builtin_templates(),
             presets: Vec::new(),
+            suggestions: Vec::new(),
             preset_warning: None,
+            asset_warning: None,
             session: None,
             session_warning: None,
             workspace_path_hwnd: ptr::null_mut(),
@@ -186,6 +207,7 @@ mod imp {
             preset_list_hwnd: ptr::null_mut(),
             tile_count_hwnd: ptr::null_mut(),
             selection_summary_hwnd: ptr::null_mut(),
+            suggestion_list_hwnd: ptr::null_mut(),
             status_hwnd: ptr::null_mut(),
             settings_window_hwnd: ptr::null_mut(),
             tray_icon_added: false,
@@ -199,6 +221,9 @@ mod imp {
             delete_preset_button_hwnd: ptr::null_mut(),
             launch_preset_button_hwnd: ptr::null_mut(),
             launch_button_hwnd: ptr::null_mut(),
+            apply_suggestion_button_hwnd: ptr::null_mut(),
+            assets_button_hwnd: ptr::null_mut(),
+            palette_button_hwnd: ptr::null_mut(),
         });
         let state_ptr = Box::into_raw(state);
 
@@ -362,10 +387,21 @@ mod imp {
                         ID_TILE_COUNT if notification == EN_CHANGE => {
                             sync_tile_count_from_input(state);
                         }
-                        ID_WORKSPACE_PATH | ID_LAUNCH_NAME if notification == EN_CHANGE => {
+                        ID_WORKSPACE_PATH if notification == EN_CHANGE => {
+                            refresh_asset_warning(state);
+                            refresh_suggestions(state);
                             sync_status_text(state);
                         }
+                        ID_LAUNCH_NAME if notification == EN_CHANGE => {
+                            sync_status_text(state);
+                        }
+                        ID_SUGGESTION_LIST if notification == LBN_DBLCLK => {
+                            apply_selected_suggestion(state);
+                        }
                         ID_REFRESH => refresh_state(hwnd, state),
+                        ID_APPLY_SUGGESTION => apply_selected_suggestion(state),
+                        ID_ASSETS_MANAGER => open_assets_manager(hwnd, state),
+                        ID_COMMAND_PALETTE => open_command_palette(hwnd, state),
                         ID_SETTINGS => open_settings_dialog(hwnd, state),
                         ID_SAVE_PRESET => save_selected_preset_as_new(hwnd, state),
                         ID_UPDATE_PRESET => update_selected_preset(hwnd, state),
@@ -588,6 +624,30 @@ mod imp {
             0,
             ID_SELECTION_SUMMARY,
         );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Suggestions",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_SUGGESTIONS,
+        );
+        state.suggestion_list_hwnd = create_child_window(
+            hwnd,
+            "LISTBOX",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY as u32,
+            0,
+            ID_SUGGESTION_LIST,
+        );
+        state.apply_suggestion_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Apply Suggestion",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_APPLY_SUGGESTION,
+        );
         state.status_hwnd = create_child_window(
             hwnd,
             "EDIT",
@@ -651,6 +711,22 @@ mod imp {
             0,
             ID_REFRESH,
         );
+        state.assets_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Assets Manager",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_ASSETS_MANAGER,
+        );
+        state.palette_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Command Palette",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_COMMAND_PALETTE,
+        );
         let _ = create_child_window(
             hwnd,
             "BUTTON",
@@ -678,10 +754,13 @@ mod imp {
             state.tile_count_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_SELECTION_SUMMARY as i32) },
             state.selection_summary_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_SUGGESTIONS as i32) },
+            state.suggestion_list_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_TEMPLATES as i32) },
             state.template_list_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_PRESETS as i32) },
             state.preset_list_hwnd,
+            state.apply_suggestion_button_hwnd,
             state.status_hwnd,
             state.save_preset_button_hwnd,
             state.update_preset_button_hwnd,
@@ -689,6 +768,8 @@ mod imp {
             state.launch_preset_button_hwnd,
             state.launch_button_hwnd,
             unsafe { GetDlgItem(hwnd, ID_REFRESH as i32) },
+            state.assets_button_hwnd,
+            state.palette_button_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS as i32) },
             unsafe { GetDlgItem(hwnd, ID_QUIT as i32) },
         ] {
@@ -700,6 +781,7 @@ mod imp {
         }
 
         populate_template_list(state);
+        populate_suggestion_list(state);
         layout_controls(hwnd, state);
     }
 
@@ -725,9 +807,13 @@ mod imp {
         let column_gap = 12;
         let column_width = ((content_width - column_gap) / 2).max(180);
         let preset_actions_y = list_y + LIST_HEIGHT + 12;
+        let suggestions_label_y = preset_actions_y + BUTTON_HEIGHT + 12;
+        let suggestions_y = suggestions_label_y + LABEL_HEIGHT + 4;
+        let suggestions_height = 96;
+        let suggestions_button_y = suggestions_y + suggestions_height + 10;
         let button_y = height - MARGIN - BUTTON_HEIGHT;
-        let status_y = preset_actions_y + BUTTON_HEIGHT + 12;
-        let status_height = (button_y - status_y - 12).max(120);
+        let status_y = suggestions_button_y + BUTTON_HEIGHT + 12;
+        let status_height = (button_y - status_y - 12).max(88);
 
         unsafe {
             SetWindowPos(
@@ -875,9 +961,54 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_SUGGESTIONS as i32),
+                ptr::null_mut(),
+                MARGIN,
+                suggestions_label_y,
+                content_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.suggestion_list_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                suggestions_y,
+                content_width,
+                suggestions_height,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.apply_suggestion_button_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                suggestions_button_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
                 GetDlgItem(hwnd, ID_REFRESH as i32),
                 ptr::null_mut(),
                 MARGIN,
+                button_y,
+                BUTTON_WIDTH - 12,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.assets_button_hwnd,
+                ptr::null_mut(),
+                MARGIN + BUTTON_WIDTH,
+                button_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.palette_button_hwnd,
+                ptr::null_mut(),
+                MARGIN + (BUTTON_WIDTH * 2) + 12,
                 button_y,
                 BUTTON_WIDTH,
                 BUTTON_HEIGHT,
@@ -886,18 +1017,18 @@ mod imp {
             SetWindowPos(
                 state.launch_preset_button_hwnd,
                 ptr::null_mut(),
-                MARGIN + BUTTON_WIDTH + 12,
+                MARGIN + (BUTTON_WIDTH * 3) + 24,
                 button_y,
-                BUTTON_WIDTH + 20,
+                BUTTON_WIDTH + 12,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
                 state.launch_button_hwnd,
                 ptr::null_mut(),
-                MARGIN + (BUTTON_WIDTH * 2) + 44,
+                MARGIN + (BUTTON_WIDTH * 4) + 48,
                 button_y,
-                BUTTON_WIDTH + 30,
+                BUTTON_WIDTH + 24,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
@@ -937,7 +1068,12 @@ mod imp {
         let preset_outcome = state.preset_store.load_presets_with_status();
         state.presets = preset_outcome.presets;
         state.preset_warning = preset_outcome.warning;
+
+        refresh_asset_warning(state);
+        refresh_suggestions(state);
+
         populate_preset_list(state);
+        populate_suggestion_list(state);
         apply_launcher_selection(state);
 
         let session_outcome = state.session_store.load_with_status();
@@ -954,11 +1090,27 @@ mod imp {
                 state.launch_button_hwnd,
                 (state.runtime.is_some() && state.session.is_some()) as i32,
             );
+            EnableWindow(
+                state.apply_suggestion_button_hwnd,
+                (!state.suggestions.is_empty()) as i32,
+            );
         }
         sync_tray_tooltip(hwnd, state);
         maybe_prompt_startup_resume(hwnd, state);
 
         logging::info("refreshed Windows shell state");
+    }
+
+    fn refresh_asset_warning(state: &mut AppWindowState) {
+        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
+        state.asset_warning = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
+            .ok()
+            .and_then(|workspace_root| {
+                state
+                    .asset_store
+                    .load_assets_for_workspace_root(&workspace_root)
+                    .warning
+            });
     }
 
     fn maybe_prompt_startup_resume(hwnd: HWND, state: &mut AppWindowState) {
@@ -1196,6 +1348,9 @@ mod imp {
         ));
         if let Some(warning) = state.preset_warning.as_deref() {
             lines.push(format!("Preset warning: {}", warning));
+        }
+        if let Some(warning) = state.asset_warning.as_deref() {
+            lines.push(format!("Asset warning: {}", warning));
         }
 
         lines.push(String::new());
@@ -1985,6 +2140,146 @@ mod imp {
         }
     }
 
+    fn populate_suggestion_list(state: &AppWindowState) {
+        unsafe {
+            SendMessageW(state.suggestion_list_hwnd, LB_RESETCONTENT, 0, 0);
+            for suggestion in &state.suggestions {
+                let label = format!(
+                    "{}  •  {} tiles  •  {}",
+                    suggestion.title,
+                    suggestion.tile_count,
+                    suggestion.tags.join(", ")
+                );
+                SendMessageW(
+                    state.suggestion_list_hwnd,
+                    LB_ADDSTRING,
+                    0,
+                    wide(&label).as_ptr() as LPARAM,
+                );
+            }
+            if !state.suggestions.is_empty() {
+                SendMessageW(state.suggestion_list_hwnd, LB_SETCURSEL, 0, 0);
+            }
+        }
+    }
+
+    fn refresh_suggestions(state: &mut AppWindowState) {
+        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
+        state.suggestions = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
+            .ok()
+            .map(|workspace_root| detect_project_suggestions(&workspace_root))
+            .unwrap_or_default();
+        populate_suggestion_list(state);
+    }
+
+    fn apply_selected_suggestion(state: &mut AppWindowState) {
+        if state.suggestions.is_empty() {
+            return;
+        }
+        let index = selected_listbox_index(state.suggestion_list_hwnd)
+            .min(state.suggestions.len().saturating_sub(1));
+        let Some(suggestion) = state.suggestions.get(index).cloned() else {
+            return;
+        };
+        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
+        let assets = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
+            .ok()
+            .map(|workspace_root| {
+                state
+                    .asset_store
+                    .load_assets_for_workspace_root(&workspace_root)
+                    .assets
+            })
+            .unwrap_or_default();
+        state.active_layout = apply_project_suggestion(&state.active_layout, &suggestion, &assets);
+        unsafe {
+            SetWindowTextW(state.session_name_hwnd, wide(&suggestion.title).as_ptr());
+            SetWindowTextW(
+                state.tile_count_hwnd,
+                wide(&suggestion.tile_count.to_string()).as_ptr(),
+            );
+        }
+        sync_status_text(state);
+    }
+
+    fn open_assets_manager(hwnd: HWND, state: &mut AppWindowState) {
+        let workspace_root = resolve_workspace_root(&PathBuf::from(
+            read_window_text(state.workspace_path_hwnd).trim(),
+        ))
+        .ok();
+        let on_saved = Rc::new(move || {
+            if let Some(state) = unsafe { state_mut(hwnd) } {
+                refresh_state(hwnd, state);
+            }
+        });
+        let _ = assets_manager::present(hwnd, state.asset_store.clone(), workspace_root, on_saved);
+    }
+
+    fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
+        let mut actions = Vec::new();
+        actions.push(command_palette::PaletteAction {
+            title: "Refresh Runtime".into(),
+            subtitle: "Probe WSL and PowerShell availability again.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    refresh_state(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
+            title: "Open Settings".into(),
+            subtitle: "Adjust launcher and workspace preferences.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    open_settings_dialog(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
+            title: "Open Assets Manager".into(),
+            subtitle: "Edit global and workspace-local connection and role assets.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    open_assets_manager(hwnd, state);
+                }
+            }),
+        });
+        if let Some(preset) = launcher_preset_snapshot(state) {
+            let preset_name = preset.name.clone();
+            actions.push(command_palette::PaletteAction {
+                title: format!("Launch Workspace: {preset_name}"),
+                subtitle: "Open the current launcher draft as a new workspace window.".into(),
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { state_mut(hwnd) } {
+                        launch_selected_preset(hwnd, state);
+                    }
+                }),
+            });
+        }
+        for suggestion in state.suggestions.iter().cloned() {
+            let title = suggestion.title.clone();
+            actions.push(command_palette::PaletteAction {
+                title: format!("Apply Suggestion: {title}"),
+                subtitle: suggestion.description.clone(),
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { state_mut(hwnd) } {
+                        if let Some(index) = state
+                            .suggestions
+                            .iter()
+                            .position(|candidate| candidate.id == suggestion.id)
+                        {
+                            unsafe {
+                                SendMessageW(state.suggestion_list_hwnd, LB_SETCURSEL, index, 0);
+                            }
+                            apply_selected_suggestion(state);
+                        }
+                    }
+                }),
+            });
+        }
+        let _ = command_palette::present(hwnd, "Command Palette", actions);
+    }
+
     fn apply_launcher_selection(state: &mut AppWindowState) {
         match state.selected_source {
             LaunchSelection::Template(index) => {
@@ -2044,7 +2339,7 @@ mod imp {
             return;
         };
         let tile_count = tile_count.clamp(1, 16);
-        state.active_layout = generate_layout(tile_count);
+        state.active_layout = resize_layout(&state.active_layout, tile_count);
         unsafe {
             SetWindowTextW(
                 state.tile_count_hwnd,

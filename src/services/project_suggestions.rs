@@ -31,7 +31,9 @@ pub fn detect_project_suggestions(workspace_root: &Path) -> Vec<ProjectSuggestio
 }
 
 pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
-    let workspace_config = WorkspaceConfigStore::new().load_for_root(workspace_root).config;
+    let workspace_config = WorkspaceConfigStore::new()
+        .load_for_root(workspace_root)
+        .config;
     let mut report = RepoIntrospectionReport::default();
     let mut tags = BTreeSet::new();
 
@@ -99,7 +101,10 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
                         .and_then(|service| service.test_command.clone())
                         .or_else(|| detect_node_test_command(workspace_root)),
                 ],
-                tags: vec!["javascript".into(), if monorepo { "monorepo" } else { "web" }.into()],
+                tags: vec![
+                    "javascript".into(),
+                    if monorepo { "monorepo" } else { "web" }.into(),
+                ],
             });
         }
     }
@@ -158,14 +163,17 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
         || workspace_root.join("compose.yml").exists()
         || workspace_root.join("compose.yaml").exists();
     let terraform = workspace_root.join(".terraform").exists()
-        || collect_dir_entries(workspace_root, |path| path.extension().is_some_and(|ext| ext == "tf"));
+        || collect_dir_entries(workspace_root, |path| {
+            path.extension().is_some_and(|ext| ext == "tf")
+        });
     let ansible = workspace_root.join("ansible.cfg").exists()
         || workspace_root.join("playbook.yml").exists()
         || workspace_root.join("playbook.yaml").exists()
         || workspace_root.join("inventory").exists();
     let helm = workspace_root.join("Chart.yaml").exists();
     let kubernetes = collect_dir_entries(workspace_root, |path| {
-        path.extension().is_some_and(|ext| ext == "yaml" || ext == "yml")
+        path.extension()
+            .is_some_and(|ext| ext == "yaml" || ext == "yml")
             && fs::read_to_string(path)
                 .map(|content| content.contains("apiVersion:") && content.contains("kind:"))
                 .unwrap_or(false)
@@ -210,7 +218,10 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
     }
 
     report.tags = tags.into_iter().collect();
-    report.suggestions = apply_overrides(report.suggestions, &workspace_config.introspection.suggestion_overrides);
+    report.suggestions = apply_overrides(
+        report.suggestions,
+        &workspace_config.introspection.suggestion_overrides,
+    );
     report
 }
 
@@ -220,7 +231,10 @@ fn apply_overrides(
 ) -> Vec<ProjectSuggestion> {
     let mut suggestions = suggestions;
     for override_item in overrides {
-        if let Some(suggestion) = suggestions.iter_mut().find(|item| item.id == override_item.id) {
+        if let Some(suggestion) = suggestions
+            .iter_mut()
+            .find(|item| item.id == override_item.id)
+        {
             if override_item.disabled {
                 suggestion.tags.push("disabled".into());
                 continue;
@@ -251,7 +265,7 @@ fn detect_cargo_services(workspace_root: &Path, cargo_toml: &Path) -> Vec<Detect
     let Ok(contents) = fs::read_to_string(cargo_toml) else {
         return services;
     };
-    let Ok(value) = contents.parse::<TomlValue>() else {
+    let Ok(value) = toml::from_str::<TomlValue>(&contents) else {
         return services;
     };
 
@@ -374,14 +388,15 @@ fn detect_python_services(workspace_root: &Path, pyproject: &Path) -> Vec<Detect
     let mut services = Vec::new();
     if pyproject.exists()
         && let Ok(contents) = fs::read_to_string(pyproject)
-        && let Ok(value) = contents.parse::<TomlValue>()
+        && let Ok(value) = toml::from_str::<TomlValue>(&contents)
     {
         let project_name = value
             .get("project")
             .and_then(|value| value.get("name"))
             .and_then(|value| value.as_str())
             .or_else(|| {
-                value.get("tool")
+                value
+                    .get("tool")
                     .and_then(|value| value.get("poetry"))
                     .and_then(|value| value.get("name"))
                     .and_then(|value| value.as_str())
@@ -466,7 +481,8 @@ mod tests {
     use super::{detect_project_suggestions, introspect_workspace};
 
     fn temp_root(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("terminaltiler-{name}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("terminaltiler-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("temp root");
         root
@@ -481,7 +497,12 @@ mod tests {
         )
         .expect("cargo manifest");
         let report = introspect_workspace(&root);
-        assert!(report.suggestions.iter().any(|item| item.id == "rust-delivery"));
+        assert!(
+            report
+                .suggestions
+                .iter()
+                .any(|item| item.id == "rust-delivery")
+        );
         assert_eq!(report.services.len(), 2);
         let _ = fs::remove_dir_all(root);
     }

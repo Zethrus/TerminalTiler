@@ -95,7 +95,10 @@ fn remove_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNode> 
             ratio,
             first,
             second,
-        } => match (remove_tile(first, target_tile_id), remove_tile(second, target_tile_id)) {
+        } => match (
+            remove_tile(first, target_tile_id),
+            remove_tile(second, target_tile_id),
+        ) {
             (Some(next_first), Some(next_second)) => Some(LayoutNode::Split {
                 axis: *axis,
                 ratio: *ratio,

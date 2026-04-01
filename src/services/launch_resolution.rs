@@ -1,12 +1,50 @@
 use std::path::Path;
 
-use crate::model::assets::{ConnectionKind, TileConnectionTarget, WorkspaceAssets};
+use crate::model::assets::{
+    ConnectionKind, ConnectionProfile, InventoryHost, TileConnectionTarget, WorkspaceAssets,
+};
 use crate::model::layout::{TileSpec, WorkingDirectory};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedLaunchTransport {
+    DefaultLocal,
+    LocalProfile {
+        profile_id: String,
+        profile_name: String,
+        shell_program: Option<String>,
+        startup_prefix: Option<String>,
+    },
+    SshProfile {
+        profile_id: String,
+        profile_name: String,
+        host_id: String,
+        host_name: String,
+        host: String,
+        user: String,
+        port: u16,
+        provider: String,
+        ssh_key_path: Option<String>,
+        remote_working_directory: String,
+        shell_program: String,
+        startup_prefix: Option<String>,
+    },
+    WslProfile {
+        profile_id: String,
+        profile_name: String,
+        startup_prefix: Option<String>,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub struct ResolvedTileLaunch {
     pub connection_label: String,
     pub command: Option<String>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub startup_command: Option<String>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub transport: ResolvedLaunchTransport,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub remote: bool,
 }
 
 pub fn resolve_tile_launch(
@@ -18,6 +56,9 @@ pub fn resolve_tile_launch(
         TileConnectionTarget::Local => Ok(ResolvedTileLaunch {
             connection_label: "local".into(),
             command: tile.startup_command.clone(),
+            startup_command: tile.startup_command.clone(),
+            transport: ResolvedLaunchTransport::DefaultLocal,
+            remote: false,
         }),
         TileConnectionTarget::Profile(profile_id) => {
             let Some(profile) = assets
@@ -29,15 +70,42 @@ pub fn resolve_tile_launch(
             };
 
             match profile.kind {
-                ConnectionKind::Local => Ok(ResolvedTileLaunch {
-                    connection_label: profile.name.clone(),
-                    command: tile.startup_command.clone().or_else(|| profile.startup_prefix.clone()),
-                }),
+                ConnectionKind::Local => {
+                    let startup_command = tile
+                        .startup_command
+                        .clone()
+                        .or_else(|| profile.startup_prefix.clone());
+                    Ok(ResolvedTileLaunch {
+                        connection_label: profile.name.clone(),
+                        command: startup_command.clone(),
+                        startup_command,
+                        transport: ResolvedLaunchTransport::LocalProfile {
+                            profile_id: profile.id.clone(),
+                            profile_name: profile.name.clone(),
+                            shell_program: profile.shell_program.clone(),
+                            startup_prefix: profile.startup_prefix.clone(),
+                        },
+                        remote: false,
+                    })
+                }
                 ConnectionKind::Ssh => resolve_ssh_launch(tile, workspace_root, assets, profile),
-                ConnectionKind::Wsl => Ok(ResolvedTileLaunch {
-                    connection_label: profile.name.clone(),
-                    command: Some(build_wsl_command(tile, workspace_root, profile)),
-                }),
+                ConnectionKind::Wsl => {
+                    let startup_command = tile
+                        .startup_command
+                        .clone()
+                        .or_else(|| profile.startup_prefix.clone());
+                    Ok(ResolvedTileLaunch {
+                        connection_label: profile.name.clone(),
+                        command: Some(build_wsl_command(tile, workspace_root, profile)),
+                        startup_command,
+                        transport: ResolvedLaunchTransport::WslProfile {
+                            profile_id: profile.id.clone(),
+                            profile_name: profile.name.clone(),
+                            startup_prefix: profile.startup_prefix.clone(),
+                        },
+                        remote: true,
+                    })
+                }
             }
         }
     }
@@ -55,51 +123,54 @@ fn resolve_ssh_launch(
             profile.name
         ));
     };
-    let Some(host) = assets.inventory_hosts.iter().find(|host| host.id == host_id) else {
+    let Some(host) = assets
+        .inventory_hosts
+        .iter()
+        .find(|host| host.id == host_id)
+    else {
         return Err(format!(
             "SSH profile '{}' references missing host '{}'.",
             profile.name, host_id
         ));
     };
 
-    let login = if host.user.trim().is_empty() {
-        host.host.clone()
-    } else {
-        format!("{}@{}", host.user.trim(), host.host.trim())
-    };
+    let login = ssh_login(host);
     let mut parts = vec!["ssh".to_string()];
     if host.port != 22 {
         parts.push("-p".into());
         parts.push(host.port.to_string());
     }
-    if let Some(key_path) = host.ssh_key_path.as_deref().filter(|path| !path.trim().is_empty()) {
+    if let Some(key_path) = host
+        .ssh_key_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    {
         parts.push("-i".into());
         parts.push(shell_quote(key_path));
     }
     parts.push(shell_quote(&login));
 
-    let remote_cwd = profile
-        .remote_working_directory
+    let remote_cwd = resolve_remote_working_directory(tile, profile);
+    let remote_shell = profile
+        .shell_program
         .clone()
-        .unwrap_or_else(|| match &tile.working_directory {
-            WorkingDirectory::WorkspaceRoot => ".".into(),
-            WorkingDirectory::Relative(path) => path.clone(),
-            WorkingDirectory::Absolute(path) => path.display().to_string(),
-            WorkingDirectory::Home => "~".into(),
-        });
-    let remote_shell = profile.shell_program.clone().unwrap_or_else(|| "bash".into());
+        .unwrap_or_else(|| "bash".into());
     let remote_command = tile
         .startup_command
         .clone()
         .or_else(|| profile.startup_prefix.clone());
-    let remote_script = match remote_command {
+    let remote_script = match remote_command.as_deref() {
         Some(command) if !command.trim().is_empty() => format!(
             "cd {} && {} ; exec {} -l",
             shell_quote(&remote_cwd),
             command,
             shell_quote(&remote_shell)
         ),
-        _ => format!("cd {} && exec {} -l", shell_quote(&remote_cwd), shell_quote(&remote_shell)),
+        _ => format!(
+            "cd {} && exec {} -l",
+            shell_quote(&remote_cwd),
+            shell_quote(&remote_shell)
+        ),
     };
     parts.push("-t".into());
     parts.push(shell_quote(&remote_script));
@@ -114,7 +185,43 @@ fn resolve_ssh_launch(
     Ok(ResolvedTileLaunch {
         connection_label,
         command: Some(parts.join(" ")),
+        startup_command: remote_command,
+        transport: ResolvedLaunchTransport::SshProfile {
+            profile_id: profile.id.clone(),
+            profile_name: profile.name.clone(),
+            host_id: host.id.clone(),
+            host_name: host.name.clone(),
+            host: host.host.clone(),
+            user: host.user.clone(),
+            port: host.port,
+            provider: host.provider.clone(),
+            ssh_key_path: host.ssh_key_path.clone(),
+            remote_working_directory: remote_cwd,
+            shell_program: remote_shell,
+            startup_prefix: profile.startup_prefix.clone(),
+        },
+        remote: true,
     })
+}
+
+fn resolve_remote_working_directory(tile: &TileSpec, profile: &ConnectionProfile) -> String {
+    profile
+        .remote_working_directory
+        .clone()
+        .unwrap_or_else(|| match &tile.working_directory {
+            WorkingDirectory::WorkspaceRoot => ".".into(),
+            WorkingDirectory::Relative(path) => path.clone(),
+            WorkingDirectory::Absolute(path) => path.display().to_string(),
+            WorkingDirectory::Home => "~".into(),
+        })
+}
+
+fn ssh_login(host: &InventoryHost) -> String {
+    if host.user.trim().is_empty() {
+        host.host.clone()
+    } else {
+        format!("{}@{}", host.user.trim(), host.host.trim())
+    }
 }
 
 fn build_wsl_command(
@@ -150,7 +257,7 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::resolve_tile_launch;
+    use super::{ResolvedLaunchTransport, resolve_tile_launch};
     use crate::model::assets::{
         ConnectionKind, ConnectionProfile, InventoryHost, TileConnectionTarget, WorkspaceAssets,
     };
@@ -178,6 +285,9 @@ mod tests {
             .expect("local launch should resolve");
         assert_eq!(resolved.connection_label, "local");
         assert_eq!(resolved.command.as_deref(), Some("echo hello"));
+        assert_eq!(resolved.startup_command.as_deref(), Some("echo hello"));
+        assert_eq!(resolved.transport, ResolvedLaunchTransport::DefaultLocal);
+        assert!(!resolved.remote);
     }
 
     #[test]
@@ -211,11 +321,21 @@ mod tests {
             }],
             inventory_groups: Vec::new(),
             role_templates: Vec::new(),
+            runbooks: Vec::new(),
         };
         let resolved = resolve_tile_launch(&tile, Path::new("/workspace"), &assets)
             .expect("ssh launch should resolve");
         assert!(resolved.connection_label.contains("Prod"));
         assert!(resolved.command.unwrap_or_default().contains("ssh"));
+        assert!(matches!(
+            resolved.transport,
+            ResolvedLaunchTransport::SshProfile {
+                ref profile_id,
+                ref host_id,
+                ..
+            } if profile_id == "prod" && host_id == "host-1"
+        ));
+        assert!(resolved.remote);
     }
 
     #[test]

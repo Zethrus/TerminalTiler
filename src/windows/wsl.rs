@@ -3,6 +3,10 @@ use std::process::Command;
 
 use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::platform::{home_dir, parse_wsl_unc_path, translate_path_for_wsl};
+use crate::services::launch_resolution::{
+    ResolvedLaunchTransport, ResolvedTileLaunch, resolve_tile_launch,
+};
+use crate::storage::asset_store::AssetStore;
 use crate::storage::session_store::SavedSession;
 
 const DEFAULT_WSL_SHELL: &str = "/bin/bash";
@@ -40,6 +44,7 @@ pub enum WindowsRuntime {
 pub enum WindowsLaunchRuntime {
     Wsl { distro: String },
     PowerShell { shell: String },
+    Ssh { host: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,13 +81,69 @@ pub fn probe_runtime(preferred_distribution: Option<&str>) -> Result<WindowsRunt
 pub fn build_launch_command(
     tile: &TileSpec,
     workspace_root: &Path,
+    resolved: &ResolvedTileLaunch,
     runtime: &WindowsRuntime,
 ) -> Result<WindowsLaunchCommand, String> {
-    match runtime {
-        WindowsRuntime::Wsl(runtime) => build_wsl_launch_command(tile, workspace_root, runtime),
-        WindowsRuntime::PowerShell(runtime) => {
-            build_powershell_launch_command(tile, workspace_root, runtime)
+    match &resolved.transport {
+        ResolvedLaunchTransport::DefaultLocal => match runtime {
+            WindowsRuntime::Wsl(runtime) => build_wsl_launch_command(
+                &tile.working_directory,
+                workspace_root,
+                resolved.startup_command.as_deref(),
+                &runtime.selected.name,
+            ),
+            WindowsRuntime::PowerShell(runtime) => build_powershell_launch_command(
+                &tile.working_directory,
+                workspace_root,
+                resolved.startup_command.as_deref(),
+                &runtime.program,
+            ),
+        },
+        ResolvedLaunchTransport::LocalProfile { startup_prefix, .. } => {
+            build_powershell_launch_command(
+                &tile.working_directory,
+                workspace_root,
+                resolved
+                    .startup_command
+                    .as_deref()
+                    .or(startup_prefix.as_deref()),
+                "",
+            )
         }
+        ResolvedLaunchTransport::SshProfile {
+            host,
+            user,
+            port,
+            ssh_key_path,
+            remote_working_directory,
+            shell_program,
+            startup_prefix,
+            ..
+        } => build_ssh_launch_command(
+            host,
+            user,
+            *port,
+            ssh_key_path.as_deref(),
+            remote_working_directory,
+            shell_program,
+            resolved
+                .startup_command
+                .as_deref()
+                .or(startup_prefix.as_deref()),
+        ),
+        ResolvedLaunchTransport::WslProfile {
+            profile_name,
+            startup_prefix,
+            ..
+        } => build_wsl_launch_command(
+            &tile.working_directory,
+            workspace_root,
+            resolved
+                .startup_command
+                .as_deref()
+                .or(startup_prefix.as_deref()),
+            profile_name,
+        ),
     }
 }
 
@@ -91,10 +152,18 @@ pub fn collect_session_launch_commands(
     runtime: &WindowsRuntime,
 ) -> Result<Vec<WindowsLaunchCommand>, String> {
     let mut commands = Vec::new();
+    let asset_store = AssetStore::new();
 
     for tab in &session.tabs {
+        let asset_outcome = asset_store.load_assets_for_workspace_root(&tab.workspace_root);
         for tile in tab.preset.layout.tile_specs() {
-            commands.push(build_launch_command(&tile, &tab.workspace_root, runtime)?);
+            let resolved = resolve_tile_launch(&tile, &tab.workspace_root, &asset_outcome.assets)?;
+            commands.push(build_launch_command(
+                &tile,
+                &tab.workspace_root,
+                &resolved,
+                runtime,
+            )?);
         }
     }
 
@@ -289,6 +358,14 @@ fn detect_powershell_shell() -> Option<String> {
         .map(str::to_string)
 }
 
+fn probe_ssh_client() -> Result<String, String> {
+    if shell_invocation_works_for_exit("ssh.exe", ["-V"]) {
+        Ok("ssh.exe".into())
+    } else {
+        Err("Windows SSH profile launches require 'ssh.exe' on PATH.".into())
+    }
+}
+
 fn shell_invocation_works(program: &str) -> bool {
     Command::new(program)
         .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
@@ -297,62 +374,111 @@ fn shell_invocation_works(program: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn shell_invocation_works_for_exit<const N: usize>(program: &str, args: [&str; N]) -> bool {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|output| output.status.success() || !output.stderr.is_empty())
+        .unwrap_or(false)
+}
+
 fn build_wsl_launch_command(
-    tile: &TileSpec,
+    working_directory_spec: &WorkingDirectory,
     workspace_root: &Path,
-    runtime: &WslRuntime,
+    startup_command: Option<&str>,
+    distribution: &str,
 ) -> Result<WindowsLaunchCommand, String> {
-    let workspace_root = translate_path_for_wsl(
-        &workspace_root.display().to_string(),
-        &runtime.selected.name,
-    )?;
-    let working_directory = resolve_wsl_working_directory(
-        &tile.working_directory,
-        &workspace_root,
-        &runtime.selected.name,
-    )?;
-    let command_script =
-        build_wsl_shell_script(&working_directory, tile.startup_command.as_deref());
+    let workspace_root =
+        translate_path_for_wsl(&workspace_root.display().to_string(), distribution)?;
+    let working_directory =
+        resolve_wsl_working_directory(working_directory_spec, &workspace_root, distribution)?;
+    let command_script = build_wsl_shell_script(&working_directory, startup_command);
 
     Ok(WindowsLaunchCommand {
         program: "wsl.exe".into(),
         args: vec![
             "--distribution".into(),
-            runtime.selected.name.clone(),
+            distribution.to_string(),
             "--exec".into(),
             DEFAULT_WSL_SHELL.into(),
             "-lc".into(),
             command_script,
         ],
         runtime: WindowsLaunchRuntime::Wsl {
-            distro: runtime.selected.name.clone(),
+            distro: distribution.to_string(),
         },
         working_directory,
     })
 }
 
 fn build_powershell_launch_command(
-    tile: &TileSpec,
+    working_directory_spec: &WorkingDirectory,
     workspace_root: &Path,
-    runtime: &PowerShellRuntime,
+    startup_command: Option<&str>,
+    program: &str,
 ) -> Result<WindowsLaunchCommand, String> {
+    let shell = if program.trim().is_empty() {
+        detect_powershell_shell()
+            .ok_or_else(|| "neither 'pwsh.exe' nor 'powershell.exe' is available".to_string())?
+    } else {
+        program.to_string()
+    };
     let working_directory =
-        resolve_powershell_working_directory(&tile.working_directory, workspace_root)?;
-    let command_script =
-        build_powershell_script(&working_directory, tile.startup_command.as_deref());
+        resolve_powershell_working_directory(working_directory_spec, workspace_root)?;
+    let command_script = build_powershell_script(&working_directory, startup_command);
 
     Ok(WindowsLaunchCommand {
-        program: runtime.program.clone(),
+        program: shell.clone(),
         args: vec![
             "-NoLogo".into(),
             "-NoExit".into(),
             "-Command".into(),
             command_script,
         ],
-        runtime: WindowsLaunchRuntime::PowerShell {
-            shell: runtime.program.clone(),
-        },
+        runtime: WindowsLaunchRuntime::PowerShell { shell },
         working_directory,
+    })
+}
+
+fn build_ssh_launch_command(
+    host: &str,
+    user: &str,
+    port: u16,
+    ssh_key_path: Option<&str>,
+    remote_working_directory: &str,
+    shell_program: &str,
+    startup_command: Option<&str>,
+) -> Result<WindowsLaunchCommand, String> {
+    let program = probe_ssh_client()?;
+    let login = if user.trim().is_empty() {
+        host.trim().to_string()
+    } else {
+        format!("{}@{}", user.trim(), host.trim())
+    };
+    let mut args = Vec::new();
+    if port != 22 {
+        args.push("-p".into());
+        args.push(port.to_string());
+    }
+    if let Some(key_path) = ssh_key_path.filter(|value| !value.trim().is_empty()) {
+        args.push("-i".into());
+        args.push(key_path.to_string());
+    }
+    args.push(login);
+    args.push("-t".into());
+    args.push(build_remote_shell_script(
+        remote_working_directory,
+        shell_program,
+        startup_command,
+    ));
+
+    Ok(WindowsLaunchCommand {
+        program,
+        args,
+        runtime: WindowsLaunchRuntime::Ssh {
+            host: host.trim().to_string(),
+        },
+        working_directory: remote_working_directory.to_string(),
     })
 }
 
@@ -436,6 +562,27 @@ fn build_powershell_script(working_directory: &str, startup_command: Option<&str
     }
 }
 
+fn build_remote_shell_script(
+    remote_working_directory: &str,
+    shell_program: &str,
+    startup_command: Option<&str>,
+) -> String {
+    if let Some(startup_command) = startup_command.filter(|value| !value.trim().is_empty()) {
+        format!(
+            "cd {} && {} ; exec {} -l",
+            shell_quote(remote_working_directory),
+            startup_command,
+            shell_quote(shell_program)
+        )
+    } else {
+        format!(
+            "cd {} && exec {} -l",
+            shell_quote(remote_working_directory),
+            shell_quote(shell_program)
+        )
+    }
+}
+
 fn join_posix(base: &str, relative: &str) -> String {
     let trimmed_base = base.trim_end_matches('/');
     let trimmed_relative = relative.trim_start_matches('/');
@@ -500,8 +647,10 @@ mod tests {
         build_launch_command, build_powershell_script, build_wsl_shell_script,
         collect_session_launch_commands, parse_verbose_list, resolve_wsl_runtime,
     };
+    use crate::model::assets::{ConnectionKind, ConnectionProfile, InventoryHost, WorkspaceAssets};
     use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+    use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::{SavedSession, SavedTab};
     use std::path::PathBuf;
 
@@ -577,6 +726,38 @@ mod tests {
         WindowsRuntime::Wsl(resolve_wsl_runtime(sample_distributions(), None).unwrap())
     }
 
+    fn sample_ssh_assets() -> WorkspaceAssets {
+        WorkspaceAssets {
+            connection_profiles: vec![ConnectionProfile {
+                id: "prod".into(),
+                name: "Prod".into(),
+                kind: ConnectionKind::Ssh,
+                inventory_host_id: Some("host-1".into()),
+                tags: Vec::new(),
+                remote_working_directory: Some("/srv/app".into()),
+                shell_program: Some("bash".into()),
+                startup_prefix: None,
+            }],
+            inventory_hosts: vec![InventoryHost {
+                id: "host-1".into(),
+                name: "Prod Box".into(),
+                host: "prod.example.com".into(),
+                group_ids: Vec::new(),
+                tags: Vec::new(),
+                provider: "hetzner".into(),
+                main_ip: "192.0.2.10".into(),
+                user: "deploy".into(),
+                port: 2222,
+                price_per_month_usd_cents: 1500,
+                password_secret_ref: None,
+                ssh_key_path: Some("C:\\Users\\dev\\.ssh\\id_ed25519".into()),
+            }],
+            inventory_groups: Vec::new(),
+            role_templates: Vec::new(),
+            runbooks: Vec::new(),
+        }
+    }
+
     #[test]
     fn parses_verbose_wsl_list_output() {
         let parsed = parse_verbose_list(
@@ -647,12 +828,10 @@ mod tests {
 
     #[test]
     fn builds_wsl_launch_command_for_workspace_root() {
-        let command = build_launch_command(
-            &sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test")),
-            &PathBuf::from(r"C:\Users\dev\project"),
-            &sample_wsl_runtime(),
-        )
-        .unwrap();
+        let tile = sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test"));
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let resolved = resolve_tile_launch(&tile, &root, &WorkspaceAssets::default()).unwrap();
+        let command = build_launch_command(&tile, &root, &resolved, &sample_wsl_runtime()).unwrap();
 
         assert_eq!(command.program, "wsl.exe");
         assert_eq!(
@@ -677,12 +856,11 @@ mod tests {
 
     #[test]
     fn builds_powershell_launch_command_for_workspace_root() {
-        let command = build_launch_command(
-            &sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test")),
-            &PathBuf::from(r"C:\Users\dev\project"),
-            &sample_powershell_runtime(),
-        )
-        .unwrap();
+        let tile = sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test"));
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let resolved = resolve_tile_launch(&tile, &root, &WorkspaceAssets::default()).unwrap();
+        let command =
+            build_launch_command(&tile, &root, &resolved, &sample_powershell_runtime()).unwrap();
 
         assert_eq!(command.program, "pwsh.exe");
         assert_eq!(
@@ -705,12 +883,11 @@ mod tests {
 
     #[test]
     fn builds_powershell_launch_command_for_relative_directories() {
-        let command = build_launch_command(
-            &sample_tile(WorkingDirectory::Relative("src\\tools".into()), None),
-            &PathBuf::from(r"C:\Users\dev\project"),
-            &sample_powershell_runtime(),
-        )
-        .unwrap();
+        let tile = sample_tile(WorkingDirectory::Relative("src\\tools".into()), None);
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let resolved = resolve_tile_launch(&tile, &root, &WorkspaceAssets::default()).unwrap();
+        let command =
+            build_launch_command(&tile, &root, &resolved, &sample_powershell_runtime()).unwrap();
 
         assert_eq!(command.working_directory, r"C:\Users\dev\project\src\tools");
         assert!(
@@ -724,15 +901,14 @@ mod tests {
 
     #[test]
     fn rejects_wsl_only_paths_in_powershell_mode() {
-        let error = build_launch_command(
-            &sample_tile(
-                WorkingDirectory::Absolute(PathBuf::from(r"\\wsl$\Ubuntu\home\dev")),
-                None,
-            ),
-            &PathBuf::from(r"C:\Users\dev\project"),
-            &sample_powershell_runtime(),
-        )
-        .expect_err("WSL path should fail in PowerShell mode");
+        let tile = sample_tile(
+            WorkingDirectory::Absolute(PathBuf::from(r"\\wsl$\Ubuntu\home\dev")),
+            None,
+        );
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let resolved = resolve_tile_launch(&tile, &root, &WorkspaceAssets::default()).unwrap();
+        let error = build_launch_command(&tile, &root, &resolved, &sample_powershell_runtime())
+            .expect_err("WSL path should fail in PowerShell mode");
 
         assert!(error.contains("requires WSL"));
     }
@@ -749,5 +925,37 @@ mod tests {
         assert_eq!(powershell.len(), 1);
         assert_eq!(wsl[0].working_directory, "/mnt/c/Users/dev/project");
         assert_eq!(powershell[0].working_directory, r"C:\Users\dev\project");
+    }
+
+    #[test]
+    fn builds_ssh_launch_command_from_resolved_profile() {
+        let mut tile = sample_tile(
+            WorkingDirectory::WorkspaceRoot,
+            Some("systemctl status nginx"),
+        );
+        tile.connection_target = crate::model::assets::TileConnectionTarget::Profile("prod".into());
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let resolved = resolve_tile_launch(&tile, &root, &sample_ssh_assets()).unwrap();
+        let command = build_launch_command(&tile, &root, &resolved, &sample_powershell_runtime());
+
+        if super::probe_ssh_client().is_ok() {
+            let command = command.unwrap();
+            assert_eq!(command.program, "ssh.exe");
+            assert_eq!(
+                command.runtime,
+                WindowsLaunchRuntime::Ssh {
+                    host: "prod.example.com".into(),
+                }
+            );
+            assert!(command.args.iter().any(|arg| arg == "2222"));
+            assert!(
+                command
+                    .args
+                    .iter()
+                    .any(|arg| arg.contains("deploy@prod.example.com"))
+            );
+        } else {
+            assert!(command.is_err());
+        }
     }
 }
