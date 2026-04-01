@@ -80,7 +80,9 @@ mod imp {
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
     use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsRuntime};
-    use crate::windows::{assets_manager, command_palette, runbook_dialog};
+    use crate::windows::{
+        alert_center, assets_manager, command_palette, runbook_dialog, transcript_viewer,
+    };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
     const PANE_CLASS: &str = "TerminalTilerWindowsPane";
@@ -1811,54 +1813,72 @@ mod imp {
             }
             return;
         }
-        let mut actions = Vec::new();
-        actions.push(command_palette::PaletteAction {
-            title: "Mark All Read".into(),
-            subtitle: "Clear unread state for every alert.".into(),
-            on_activate: Rc::new(move || {
-                if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                    state.alert_store.mark_all_read();
-                    refresh_alert_button(state);
-                }
-            }),
-        });
-        for alert in alerts.into_iter().rev() {
-            let title = if alert.unread {
-                format!("[Unread] {}", alert.title)
-            } else {
-                alert.title.clone()
-            };
-            let detail = if alert.detail.trim().is_empty() {
-                "No detail available.".to_string()
-            } else {
-                alert.detail.clone()
-            };
-            let pane_id = alert.pane_id.clone();
-            let alert_id = alert.id;
-            let allows_reconnect = alert.allows_reconnect;
-            actions.push(command_palette::PaletteAction {
-                title,
-                subtitle: detail,
-                on_activate: Rc::new(move || {
-                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                        if let Some(pane_id) = pane_id.as_deref() {
-                            if allows_reconnect {
-                                let _ = reconnect_pane(
-                                    state,
-                                    pane_id.parse::<usize>().ok().unwrap_or(0),
-                                    None,
-                                );
-                            } else {
+        let entries = alerts
+            .into_iter()
+            .rev()
+            .map(|alert| {
+                let pane_id = alert.pane_id.clone();
+                let alert_id = alert.id;
+                let allows_reconnect = alert.allows_reconnect;
+                alert_center::AlertCenterEntry {
+                    title: alert.title,
+                    detail: if alert.detail.trim().is_empty() {
+                        "No detail available.".into()
+                    } else {
+                        alert.detail
+                    },
+                    unread: alert.unread,
+                    allows_reconnect,
+                    on_jump: Rc::new({
+                        let pane_id = pane_id.clone();
+                        move || {
+                            if let Some(state) = unsafe { window_state_mut(hwnd) }
+                                && let Some(pane_id) = pane_id.as_deref()
+                            {
                                 focus_pane(state, pane_id);
                             }
                         }
-                        state.alert_store.mark_read(alert_id);
-                        refresh_alert_button(state);
-                    }
-                }),
-            });
-        }
-        let _ = command_palette::present(hwnd, "Alert Center", actions);
+                    }),
+                    on_reconnect: if allows_reconnect {
+                        Some(Rc::new({
+                            let pane_id = pane_id.clone();
+                            move || {
+                                if let Some(state) = unsafe { window_state_mut(hwnd) }
+                                    && let Some(pane_id) = pane_id.as_deref()
+                                    && let Ok(pane_id) = pane_id.parse::<usize>()
+                                    && let Err(error) = reconnect_pane(state, pane_id, None)
+                                {
+                                    let mut alert = AlertEventInput::new(
+                                        AlertSourceKind::Reconnect,
+                                        AlertSeverity::Error,
+                                        "Reconnect failed",
+                                    );
+                                    alert.detail = error;
+                                    alert.pane_id = Some(pane_id.to_string());
+                                    alert.allows_reconnect = true;
+                                    push_alert(state, alert);
+                                }
+                            }
+                        }))
+                    } else {
+                        None
+                    },
+                    on_mark_read: Rc::new(move || {
+                        if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                            state.alert_store.mark_read(alert_id);
+                            refresh_alert_button(state);
+                        }
+                    }),
+                }
+            })
+            .collect::<Vec<_>>();
+        let on_mark_all_read = Rc::new(move || {
+            if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                state.alert_store.mark_all_read();
+                refresh_alert_button(state);
+            }
+        });
+        let _ = alert_center::present(hwnd, entries, on_mark_all_read);
     }
 
     fn open_workspace_command_palette(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -1963,6 +1983,9 @@ mod imp {
             Ok(session) => {
                 pane.session = Some(session);
                 pane.reconnect_attempts = 0;
+                let pane_title = pane.tile.title.clone();
+                let pane_id_string = pane.id.to_string();
+                let working_directory = command.working_directory.clone();
                 pane.terminal.process(&format!(
                     "\r\n[reconnected {} in {}]\r\n",
                     pane.tile.title, command.working_directory
@@ -1972,6 +1995,15 @@ mod imp {
                     InvalidateRect(pane.title_hwnd, ptr::null(), 1);
                     InvalidateRect(pane.output_hwnd, ptr::null(), 1);
                 }
+                let mut reconnect_alert = AlertEventInput::new(
+                    AlertSourceKind::Reconnect,
+                    AlertSeverity::Info,
+                    format!("{pane_title} reconnected"),
+                );
+                reconnect_alert.detail = format!("Pane restarted in {working_directory}.");
+                reconnect_alert.pane_id = Some(pane_id_string);
+                reconnect_alert.allows_reconnect = true;
+                push_alert(state, reconnect_alert);
                 Ok(())
             }
             Err(error) => Err(error),
@@ -2731,6 +2763,7 @@ mod imp {
 
     fn mark_pane_exited(state: &mut WorkspaceWindowState, pane_id: usize) {
         let mut reconnect_schedule = None;
+        let mut reconnect_alert_to_push = None;
         let Some(pane) = pane_mut_by_id(state, pane_id) else {
             return;
         };
@@ -2769,6 +2802,16 @@ mod imp {
                     .unwrap_or(10);
                 let window_hwnd = pane.parent_hwnd as isize;
                 let pane_id = pane.id;
+                let mut reconnect_alert = AlertEventInput::new(
+                    AlertSourceKind::Reconnect,
+                    AlertSeverity::Info,
+                    format!("{} reconnect scheduled", pane.tile.title),
+                );
+                reconnect_alert.detail =
+                    format!("Attempt {} will run in {} second(s).", attempt, delay);
+                reconnect_alert.pane_id = Some(pane.id.to_string());
+                reconnect_alert.allows_reconnect = true;
+                reconnect_alert_to_push = Some(reconnect_alert);
                 reconnect_schedule = Some((window_hwnd, pane_id, attempt, delay));
             }
         }
@@ -2778,6 +2821,9 @@ mod imp {
             InvalidateRect(pane.output_hwnd, ptr::null(), 1);
         }
         if let Some(alert) = alert_to_push {
+            push_alert(state, alert);
+        }
+        if let Some(alert) = reconnect_alert_to_push {
             push_alert(state, alert);
         }
         if let Some((window_hwnd, pane_id, attempt, delay)) = reconnect_schedule {
@@ -3757,19 +3803,7 @@ mod imp {
     }
 
     fn show_transcript_dialog(parent_hwnd: HWND, transcript: &str) {
-        let text = if transcript.trim().is_empty() {
-            "No transcript is available yet."
-        } else {
-            transcript
-        };
-        unsafe {
-            MessageBoxW(
-                parent_hwnd,
-                wide(text).as_ptr(),
-                wide("Recent Transcript").as_ptr(),
-                MB_OK,
-            );
-        }
+        let _ = transcript_viewer::present(parent_hwnd, "Recent Transcript", transcript);
     }
 
     fn open_url(url: &str) -> Result<(), String> {

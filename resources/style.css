@@ -1803,7 +1803,7 @@ window.settings-dialog-window.theme-light headerbar {
 }
 
 window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button {
-  color: rgba(25, 35, 50, 0.76);
+  color: rgba(25, 35, 50, 0.84);
   background: linear-gradient(180deg, rgba(25, 35, 50, 0.06), rgba(25, 35, 50, 0.03));
   border: 1px solid rgba(25, 35, 50, 0.10);
   box-shadow:
@@ -1864,7 +1864,7 @@ window.window-shell.theme-light .app-tab-shell.is-inactive .app-tab-title {
 }
 
 window.window-shell.theme-light .app-tab-shell.is-inactive .app-tab-icon {
-  color: rgba(25, 35, 50, 0.58);
+  color: rgba(25, 35, 50, 0.72);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:selected image,
@@ -1876,12 +1876,12 @@ window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:checked label {
 
 window.window-shell.theme-light .app-tab-badge {
   background: rgba(25, 35, 50, 0.10);
-  color: rgba(25, 35, 50, 0.76);
+  color: rgba(25, 35, 50, 0.84);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab button.close,
 window.window-shell.theme-light button.app-tab-close {
-  color: rgba(25, 35, 50, 0.60);
+  color: rgba(25, 35, 50, 0.72);
   background: rgba(25, 35, 50, 0.03);
   border-color: transparent;
 }
@@ -1912,7 +1912,7 @@ window.window-shell.theme-light .terminal-card,
 window.theme-light .settings-dialog-content .config-panel,
 window.theme-light .settings-dialog-content .settings-shortcut-card,
 window.theme-light .settings-dialog-content .settings-toggle-row {
-  border-color: rgba(25, 35, 50, 0.10);
+  border-color: rgba(25, 35, 50, 0.14);
   background:
     linear-gradient(180deg, rgba(250, 247, 241, 0.98), rgba(238, 243, 249, 0.98)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
@@ -1943,7 +1943,7 @@ window.theme-light .settings-dialog-content .settings-summary-copy,
 window.theme-light .settings-dialog-content .settings-shortcut-note,
 window.theme-light .settings-dialog-content .settings-footer-note,
 window.theme-light .settings-help-copy {
-  color: rgba(25, 35, 50, 0.79);
+  color: rgba(25, 35, 50, 0.86);
 }
 
 window.window-shell.theme-light .hero-title,
@@ -1965,7 +1965,7 @@ window.window-shell.theme-light .breadcrumb-hint,
 window.theme-light .settings-dialog-content .settings-help-button,
 window.theme-light .settings-dialog-content .settings-meta-chip,
 window.theme-light .settings-dialog-content .launch-meta-chip {
-  color: rgba(25, 35, 50, 0.70);
+  color: rgba(25, 35, 50, 0.82);
 }
 
 window.window-shell.theme-light .breadcrumb-hint:hover,
@@ -1995,8 +1995,8 @@ window.window-shell.theme-light .launch-setting-row,
 window.window-shell.theme-light .tile-editor-row,
 window.theme-light .settings-dialog-content .settings-shortcut-card,
 window.theme-light .settings-dialog-content .settings-toggle-row {
-  background: rgba(25, 35, 50, 0.048);
-  border-color: rgba(25, 35, 50, 0.12);
+  background: rgba(25, 35, 50, 0.065);
+  border-color: rgba(25, 35, 50, 0.13);
 }
 
 window.window-shell.theme-light .launch-setting-row,
@@ -2066,7 +2066,7 @@ window.window-shell.theme-light entry text.placeholder,
 window.window-shell.theme-light spinbutton text.placeholder,
 window.theme-light .settings-dialog-content entry text.placeholder,
 window.theme-light .settings-dialog-content spinbutton text.placeholder {
-  color: rgba(25, 35, 50, 0.46);
+  color: rgba(25, 35, 50, 0.56);
 }
 
 window.window-shell.theme-light .path-validation {
@@ -2097,7 +2097,7 @@ window.theme-light button.secondary-button:active {
 }
 
 window.theme-light button.ghost-link-button {
-  color: rgba(25, 35, 50, 0.76);
+  color: rgba(25, 35, 50, 0.84);
 }
 
 window.theme-light button.ghost-link-button:hover {
@@ -2189,7 +2189,7 @@ window.window-shell.theme-light .terminal-header {
   background:
     linear-gradient(180deg, rgba(255, 250, 242, 0.92), rgba(238, 232, 222, 0.96)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.08), transparent 40%);
-  border-bottom-color: rgba(25, 35, 50, 0.10);
+  border-bottom-color: rgba(25, 35, 50, 0.15);
 }
 
 window.window-shell.theme-light .terminal-surface {
@@ -2219,7 +2219,7 @@ window.window-shell.theme-light .terminal-context-label {
 }
 
 window.window-shell.theme-light .terminal-context-shortcut {
-  color: rgba(25, 35, 50, 0.60);
+  color: rgba(25, 35, 50, 0.72);
 }
 
 window.theme-light .settings-help-example {
@@ -2243,7 +2243,7 @@ window.theme-light.profile-standard headerbar {
 
 /* ── Light mode: preset-card-compact default state ── */
 window.window-shell.theme-light .preset-card-compact {
-  border-color: rgba(25, 35, 50, 0.10);
+  border-color: rgba(25, 35, 50, 0.14);
   background:
     linear-gradient(180deg, rgba(250, 247, 241, 0.98), rgba(238, 243, 249, 0.98)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
@@ -2254,7 +2254,7 @@ window.window-shell.theme-light .preset-card-compact {
 
 /* ── Light mode: button.preset-card explicit override (template cards) ── */
 window.window-shell.theme-light button.preset-card {
-  border-color: rgba(25, 35, 50, 0.10);
+  border-color: rgba(25, 35, 50, 0.14);
   background:
     linear-gradient(180deg, rgba(250, 247, 241, 0.98), rgba(238, 243, 249, 0.98)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
@@ -2266,7 +2266,7 @@ window.window-shell.theme-light button.preset-card {
 /* ── Light mode: launch overview subtitle text ── */
 window.window-shell.theme-light .launch-overview-copy,
 window.window-shell.theme-light .settings-summary-copy {
-  color: rgba(25, 35, 50, 0.70);
+  color: rgba(25, 35, 50, 0.80);
 }
 
 /* ── Light mode: launch overview icon ── */
@@ -2289,5 +2289,5 @@ window.window-shell.theme-light .launch-meta-chip {
 
 /* ── Light mode: split-pane separator ── */
 window.window-shell.theme-light .split-pane separator {
-  background: linear-gradient(180deg, rgba(25, 35, 50, 0.10), rgba(25, 35, 50, 0.05));
+  background: linear-gradient(180deg, rgba(25, 35, 50, 0.16), rgba(25, 35, 50, 0.08));
 }
