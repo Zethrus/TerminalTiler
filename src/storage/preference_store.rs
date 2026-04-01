@@ -6,6 +6,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::logging;
+use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
 
@@ -23,6 +24,7 @@ pub struct AppPreferences {
     pub default_density: ApplicationDensity,
     pub default_theme: ThemeMode,
     pub close_to_background: bool,
+    pub default_restore_mode: RestoreLaunchMode,
     pub windows_wsl_distribution: Option<String>,
     pub workspace_fullscreen_shortcut: String,
     pub workspace_density_shortcut: String,
@@ -46,6 +48,8 @@ struct PreferenceDocument {
     default_theme: ThemeMode,
     #[serde(default = "default_close_to_background")]
     close_to_background: bool,
+    #[serde(default)]
+    default_restore_mode: RestoreLaunchMode,
     #[serde(default)]
     windows_wsl_distribution: Option<String>,
     #[serde(default = "default_fullscreen_shortcut")]
@@ -191,6 +195,7 @@ impl PreferenceStore {
                 default_density: document.default_density,
                 default_theme: document.default_theme,
                 close_to_background: document.close_to_background,
+                default_restore_mode: document.default_restore_mode,
                 windows_wsl_distribution: normalize_windows_wsl_distribution(
                     document.windows_wsl_distribution.as_deref(),
                 ),
@@ -239,6 +244,12 @@ impl PreferenceStore {
     pub fn save_close_to_background(&self, close_to_background: bool) {
         let mut preferences = self.load();
         preferences.close_to_background = close_to_background;
+        self.save(&preferences);
+    }
+
+    pub fn save_default_restore_mode(&self, restore_mode: RestoreLaunchMode) {
+        let mut preferences = self.load();
+        preferences.default_restore_mode = restore_mode;
         self.save(&preferences);
     }
 
@@ -294,6 +305,7 @@ impl PreferenceStore {
             default_density: preferences.default_density,
             default_theme: preferences.default_theme,
             close_to_background: preferences.close_to_background,
+            default_restore_mode: preferences.default_restore_mode,
             windows_wsl_distribution: normalize_windows_wsl_distribution(
                 preferences.windows_wsl_distribution.as_deref(),
             ),
@@ -345,6 +357,7 @@ impl Default for AppPreferences {
             default_density: default_density(),
             default_theme: default_theme(),
             close_to_background: default_close_to_background(),
+            default_restore_mode: RestoreLaunchMode::Prompt,
             windows_wsl_distribution: None,
             workspace_fullscreen_shortcut: default_fullscreen_shortcut(),
             workspace_density_shortcut: default_density_shortcut(),
@@ -366,6 +379,7 @@ impl PreferenceStore {
 #[cfg(test)]
 mod tests {
     use super::{AppPreferences, PreferenceStore};
+    use crate::model::assets::RestoreLaunchMode;
     use crate::model::preset::{ApplicationDensity, ThemeMode};
     use std::fs;
     use std::path::PathBuf;
@@ -403,6 +417,7 @@ mod tests {
             default_density: ApplicationDensity::Comfortable,
             default_theme: ThemeMode::Dark,
             close_to_background: true,
+            default_restore_mode: RestoreLaunchMode::ShellOnly,
             windows_wsl_distribution: Some("Ubuntu".into()),
             workspace_fullscreen_shortcut: "<Shift>F11".into(),
             workspace_density_shortcut: "<Shift>F8".into(),
@@ -418,6 +433,7 @@ mod tests {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::Dark,
                 close_to_background: true,
+                default_restore_mode: RestoreLaunchMode::ShellOnly,
                 windows_wsl_distribution: Some("Ubuntu".into()),
                 workspace_fullscreen_shortcut: "<Shift>F11".into(),
                 workspace_density_shortcut: "<Shift>F8".into(),
@@ -443,6 +459,7 @@ mod tests {
                 default_density: ApplicationDensity::Comfortable,
                 default_theme: ThemeMode::System,
                 close_to_background: false,
+                default_restore_mode: RestoreLaunchMode::Prompt,
                 windows_wsl_distribution: None,
                 workspace_fullscreen_shortcut: "F11".into(),
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),

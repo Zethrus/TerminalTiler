@@ -6,8 +6,11 @@ use gtk::prelude::*;
 
 use vte4::prelude::*;
 
+use crate::model::assets::{OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
+use crate::services::launch_resolution::resolve_tile_launch;
+use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::terminal::session::TerminalSession;
 
 pub struct TileView {
@@ -19,13 +22,20 @@ pub struct TileView {
 pub fn build(
     tile: &TileSpec,
     workspace_root: &Path,
+    assets: &WorkspaceAssets,
     use_dark_palette: bool,
     density: ApplicationDensity,
     zoom_steps: i32,
     on_swap: Rc<dyn Fn(String, String)>,
 ) -> TileView {
-    let session =
-        TerminalSession::spawn(tile, workspace_root, use_dark_palette, density, zoom_steps);
+    let session = TerminalSession::spawn(
+        tile,
+        workspace_root,
+        assets,
+        use_dark_palette,
+        density,
+        zoom_steps,
+    );
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -60,9 +70,23 @@ pub fn build(
 
     left.append(&badge);
     left.append(&title);
+    if !tile.pane_groups.is_empty() {
+        left.append(
+            &gtk::Label::builder()
+                .label(tile.pane_groups.join(", "))
+                .halign(gtk::Align::Start)
+                .tooltip_text(format!("Pane groups: {}", tile.pane_groups.join(", ")))
+                .css_classes(["status-chip", "muted-chip"])
+                .build(),
+        );
+    }
 
     let status = gtk::Label::builder()
-        .label(tile.working_directory.short_label())
+        .label(
+            initial_status_snapshot(tile, workspace_root, assets)
+                .to_line()
+                .trim(),
+        )
         .css_classes(["status-chip"])
         .build();
 
@@ -92,6 +116,43 @@ pub fn build(
             {
                 title_label.set_text(&new_title);
             }
+        });
+    }
+    {
+        let terminal_for_update = terminal.clone();
+        let session_for_update = session.clone();
+        let status = status.clone();
+        let tile = tile.clone();
+        let workspace_root = workspace_root.to_path_buf();
+        let assets = assets.clone();
+        let update = move || {
+            let snapshot = status_snapshot_for_terminal(
+                &tile,
+                &workspace_root,
+                &assets,
+                &terminal_for_update,
+                &session_for_update,
+            );
+            status.set_text(&snapshot.to_line());
+            sync_status_severity(&status, snapshot.helper_severity);
+        };
+        update();
+        let update = Rc::new(update);
+
+        {
+            let update = update.clone();
+            terminal.connect_window_title_changed(move |_| update());
+        }
+        {
+            let update = update.clone();
+            terminal.connect_current_directory_uri_changed(move |_| update());
+        }
+        {
+            let update = update.clone();
+            terminal.connect_contents_changed(move |_| update());
+        }
+        terminal.connect_child_exited(move |_, _| {
+            update();
         });
     }
 
@@ -188,6 +249,82 @@ pub fn build(
         widget: shell.upcast(),
         session,
         tile: tile.clone(),
+    }
+}
+
+fn initial_status_snapshot(
+    tile: &TileSpec,
+    workspace_root: &Path,
+    assets: &WorkspaceAssets,
+) -> PaneStatusSnapshot {
+    let connection_label = resolve_tile_launch(tile, workspace_root, assets)
+        .map(|resolved| resolved.connection_label)
+        .unwrap_or_else(|_| "launch-error".into());
+    PaneStatusSnapshot {
+        connection_label,
+        location_label: tile.working_directory.short_label(),
+        shell_label: tile.agent_label.clone(),
+        helper_label: String::new(),
+        helper_severity: None,
+    }
+}
+
+fn status_snapshot_for_terminal(
+    tile: &TileSpec,
+    workspace_root: &Path,
+    assets: &WorkspaceAssets,
+    terminal: &vte4::Terminal,
+    session: &TerminalSession,
+) -> PaneStatusSnapshot {
+    let mut snapshot = initial_status_snapshot(tile, workspace_root, assets);
+    if let Some(uri) = terminal.current_directory_uri() {
+        snapshot.location_label = short_location_from_uri(uri.as_str());
+    } else if let Some(title) = terminal.window_title() {
+        snapshot.location_label = title.to_string();
+    }
+    let (matches, shell_label) = if let Some(title) = terminal.window_title() {
+        (scan_output(&tile.output_helpers, title.as_str()), title.to_string())
+    } else {
+        let recent = session.recent_output(32);
+        let matches = scan_output(&tile.output_helpers, &recent);
+        let shell_label = if recent.trim().is_empty() {
+            tile.agent_label.clone()
+        } else {
+            recent
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+                .unwrap_or(&tile.agent_label)
+                .to_string()
+        };
+        (matches, shell_label)
+    };
+    snapshot.shell_label = shell_label;
+    let (helper_label, helper_severity) = helper_summary_text(&matches);
+    snapshot.helper_label = helper_label;
+    snapshot.helper_severity = helper_severity;
+    snapshot
+}
+
+fn short_location_from_uri(uri: &str) -> String {
+    let trimmed = uri.trim_start_matches("file://");
+    PathBuf::from(trimmed)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn sync_status_severity(status: &gtk::Label, severity: Option<OutputSeverity>) {
+    status.remove_css_class("helper-info");
+    status.remove_css_class("helper-warning");
+    status.remove_css_class("helper-error");
+    match severity {
+        Some(OutputSeverity::Info) => status.add_css_class("helper-info"),
+        Some(OutputSeverity::Warning) => status.add_css_class("helper-warning"),
+        Some(OutputSeverity::Error) => status.add_css_class("helper-error"),
+        None => {}
     }
 }
 

@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::logging;
+use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::SessionStore;
@@ -118,12 +119,15 @@ fn ensure_main_window(
     let preference_store = PreferenceStore::new();
     let preset_store = PresetStore::new();
     preset_store.ensure_seeded();
+    let asset_store = AssetStore::new();
+    asset_store.ensure_seeded();
     let session_store = SessionStore::new();
     let session_outcome = session_store.load_with_status();
     window::present(
         app,
         preference_store,
         preset_store,
+        asset_store,
         session_store,
         session_outcome.session,
         session_outcome.warning,

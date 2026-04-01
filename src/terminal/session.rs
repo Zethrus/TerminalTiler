@@ -8,8 +8,10 @@ use gtk::{gdk, gio, glib, pango};
 use vte4::prelude::*;
 
 use crate::logging;
+use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
+use crate::services::launch_resolution::resolve_tile_launch;
 
 const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
@@ -62,6 +64,7 @@ impl TerminalSession {
     pub fn spawn(
         tile: &TileSpec,
         workspace_root: &Path,
+        assets: &WorkspaceAssets,
         use_dark_palette: bool,
         density: ApplicationDensity,
         zoom_steps: i32,
@@ -113,8 +116,17 @@ impl TerminalSession {
             return session;
         }
 
+        let resolved_launch = match resolve_tile_launch(tile, workspace_root, assets) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                session.report_spawn_problem(&error);
+                session.mark_exited();
+                return session;
+            }
+        };
+
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        let argv = build_spawn_argv(&shell, tile.startup_command.as_deref());
+        let argv = build_spawn_argv(&shell, resolved_launch.command.as_deref());
         let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
         let envv = ["TERM=xterm-256color", "COLORTERM=truecolor"];
         let working_dir_label = working_dir.display().to_string();
@@ -197,6 +209,16 @@ impl TerminalSession {
 
     pub fn paste_clipboard(&self) {
         paste_terminal_clipboard(&self.terminal);
+    }
+
+    pub fn send_text(&self, text: &str) {
+        self.terminal.grab_focus();
+        self.terminal.feed_child(text.as_bytes());
+    }
+
+    pub fn recent_output(&self, row_count: i64) -> String {
+        let _ = row_count;
+        String::new()
     }
 
     pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {

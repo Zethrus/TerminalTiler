@@ -7,11 +7,14 @@ use gtk::gio;
 use uuid::Uuid;
 
 use crate::logging;
+use crate::model::assets::{AgentRoleTemplate, RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
-    LayoutNode, LayoutTemplate, TileSpec, builtin_templates, generate_layout,
+    LayoutNode, LayoutTemplate, SplitAxis, TileSpec, builtin_templates, generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
+use crate::services::layout_editor::{close_tile, split_tile};
+use crate::services::project_suggestions::detect_project_suggestions;
 use crate::storage::preset_store::PresetStore;
 
 #[derive(Clone, Copy, Debug)]
@@ -32,8 +35,10 @@ struct TileEditorPanel {
 pub struct LaunchScreenInput {
     pub load_warning: Option<String>,
     pub presets: Vec<WorkspacePreset>,
+    pub assets: WorkspaceAssets,
     pub default_theme: ThemeMode,
     pub default_density: ApplicationDensity,
+    pub default_restore_mode: RestoreLaunchMode,
     pub preset_store: PresetStore,
 }
 
@@ -50,8 +55,10 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     let LaunchScreenInput {
         load_warning,
         presets,
+        assets,
         default_theme,
         default_density,
+        default_restore_mode,
         preset_store,
     } = input;
     let LaunchScreenActions {
@@ -67,6 +74,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .unwrap_or_else(|| PathBuf::from("."));
     let templates = builtin_templates();
     let presets = Rc::new(presets);
+    let assets = Rc::new(assets);
     let launch_callback = on_launch;
     let theme_preview_callback = on_theme_preview;
     let density_preview_callback = on_density_preview;
@@ -81,6 +89,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             .unwrap_or(1),
     )));
     let edit_preset_button_handle: Rc<RefCell<Option<gtk::Button>>> = Rc::new(RefCell::new(None));
+    let suggestion_cards: Rc<RefCell<Vec<gtk::Widget>>> = Rc::new(RefCell::new(Vec::new()));
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -103,7 +112,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .build();
     root.append(&stage);
 
-    let header = build_header();
+    let header = build_header(default_restore_mode);
     stage.append(&header);
 
     if let Some(load_warning) = load_warning {
@@ -388,27 +397,109 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .build();
     layout_panel.append(&template_grid);
 
+    let suggestions_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "launch-suggestions-panel"])
+        .build();
+    suggestions_section.append(&build_section_header(
+        "Suggestions",
+        "Project-aware workspaces",
+        "Use detected project files to prefill a workspace tuned for the current folder.",
+    ));
+    let suggestions_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    suggestions_section.append(&suggestions_row);
+    layout_panel.append(&suggestions_section);
+
     let tile_editor = build_tile_editor_panel();
     tile_editor
         .tile_count
         .set_value(active_layout.borrow().tile_count() as f64);
-    refresh_tile_editor(&tile_editor, &active_layout);
+    refresh_tile_editor(&tile_editor, &active_layout, &assets);
 
     let template_buttons: Rc<std::cell::RefCell<Vec<gtk::Widget>>> =
         Rc::new(std::cell::RefCell::new(Vec::new()));
     let preset_buttons: Rc<std::cell::RefCell<Vec<gtk::Widget>>> =
         Rc::new(std::cell::RefCell::new(Vec::new()));
 
+    let assets_for_suggestions = assets.clone();
+    rebuild_suggestion_panel(
+        &suggestions_section,
+        &suggestions_row,
+        &suggestion_cards,
+        &PathBuf::from(path_entry.text().as_str()),
+        &assets_for_suggestions,
+        {
+            let summary = summary.clone();
+            let active_layout = active_layout.clone();
+            let tile_editor = tile_editor.clone();
+            let session_name_entry = session_name_entry.clone();
+            let assets = assets_for_suggestions.clone();
+            move |suggestion| {
+                apply_project_suggestion(
+                    &suggestion,
+                    &summary,
+                    &active_layout,
+                    &tile_editor,
+                    &assets,
+                    &session_name_entry,
+                );
+            }
+        },
+    );
+
+    {
+        let suggestions_section = suggestions_section.clone();
+        let suggestions_row = suggestions_row.clone();
+        let suggestion_cards = suggestion_cards.clone();
+        let assets = assets.clone();
+        let summary = summary.clone();
+        let active_layout = active_layout.clone();
+        let tile_editor = tile_editor.clone();
+        let session_name_entry = session_name_entry.clone();
+        path_entry.connect_changed(move |entry| {
+            let assets_for_rebuild = assets.clone();
+            rebuild_suggestion_panel(
+                &suggestions_section,
+                &suggestions_row,
+                &suggestion_cards,
+                &PathBuf::from(entry.text().as_str()),
+                &assets_for_rebuild,
+                {
+                    let summary = summary.clone();
+                    let active_layout = active_layout.clone();
+                    let tile_editor = tile_editor.clone();
+                    let session_name_entry = session_name_entry.clone();
+                    let assets = assets_for_rebuild.clone();
+                    move |suggestion| {
+                        apply_project_suggestion(
+                            &suggestion,
+                            &summary,
+                            &active_layout,
+                            &tile_editor,
+                            &assets,
+                            &session_name_entry,
+                        );
+                    }
+                },
+            );
+        });
+    }
+
     {
         let tile_editor = tile_editor.clone();
         let active_layout = active_layout.clone();
         let summary = summary.clone();
         let tile_count = tile_editor.tile_count.clone();
+        let assets = assets.clone();
         tile_count.connect_value_changed(move |spinner| {
             let requested = spinner.value_as_int().max(1) as usize;
             let next_layout = resize_layout(&active_layout.borrow(), requested);
             *active_layout.borrow_mut() = next_layout;
-            refresh_tile_editor(&tile_editor, &active_layout);
+            refresh_tile_editor(&tile_editor, &active_layout, &assets);
             summary
                 .subtitle_label
                 .set_text(&format!("{} tiles configured", requested));
@@ -431,6 +522,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             let density_strip = density_strip.clone();
             let edit_preset_button_handle = edit_preset_button_handle.clone();
             let density_preview_callback = density_preview_callback.clone();
+            let assets = assets.clone();
             let label = template.label;
             let subtitle = template.subtitle;
             let tile_count = template.tile_count;
@@ -448,7 +540,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 sync_density_strip_active(&density_strip, density);
                 *active_layout.borrow_mut() = generate_layout(tile_count);
                 tile_editor.tile_count.set_value(tile_count as f64);
-                refresh_tile_editor(&tile_editor, &active_layout);
+                refresh_tile_editor(&tile_editor, &active_layout, &assets);
 
                 if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
                     button.set_visible(false);
@@ -520,6 +612,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     let density_strip = density_strip.clone();
                     let edit_preset_button_handle = edit_preset_button_handle.clone();
                     let density_preview_callback = density_preview_callback.clone();
+                    let assets = assets.clone();
 
                     move |idx| {
                         selected.set(Selection::Preset(idx));
@@ -539,7 +632,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                         sync_density_strip_active(&density_strip, p.density);
                         *active_layout.borrow_mut() = p.layout.clone();
                         tile_editor.tile_count.set_value(p.tile_count() as f64);
-                        refresh_tile_editor(&tile_editor, &active_layout);
+                        refresh_tile_editor(&tile_editor, &active_layout, &assets);
 
                         if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
                             button.set_visible(true);
@@ -802,7 +895,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     scroller.upcast()
 }
 
-fn build_header() -> gtk::Widget {
+fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(16)
@@ -853,6 +946,7 @@ fn build_header() -> gtk::Widget {
         .build();
     meta.append(&build_launch_meta_chip("4-step flow"));
     meta.append(&build_launch_meta_chip("Live preview"));
+    meta.append(&build_launch_meta_chip(default_restore_mode.label()));
     card.append(&meta);
 
     card.upcast()
@@ -1279,7 +1373,11 @@ fn build_launch_meta_chip(label: &str) -> gtk::Widget {
         .upcast()
 }
 
-fn refresh_tile_editor(panel: &TileEditorPanel, layout_state: &Rc<RefCell<LayoutNode>>) {
+fn refresh_tile_editor(
+    panel: &TileEditorPanel,
+    layout_state: &Rc<RefCell<LayoutNode>>,
+    assets: &Rc<WorkspaceAssets>,
+) {
     while let Some(child) = panel.rows.first_child() {
         panel.rows.remove(&child);
     }
@@ -1308,8 +1406,103 @@ fn refresh_tile_editor(panel: &TileEditorPanel, layout_state: &Rc<RefCell<Layout
     for (index, tile) in tile_specs.iter().enumerate() {
         panel
             .rows
-            .append(&build_tile_editor_row(index, tile, layout_state));
+            .append(&build_tile_editor_row(index, tile, panel, layout_state, assets));
     }
+}
+
+fn rebuild_suggestion_panel<F>(
+    section: &gtk::Box,
+    row: &gtk::Box,
+    cards: &Rc<RefCell<Vec<gtk::Widget>>>,
+    workspace_root: &PathBuf,
+    assets: &Rc<WorkspaceAssets>,
+    on_select: F,
+) where
+    F: Fn(crate::model::assets::ProjectSuggestion) + Clone + 'static,
+{
+    for card in cards.borrow_mut().drain(..) {
+        row.remove(&card);
+    }
+
+    let suggestions = detect_project_suggestions(workspace_root);
+    section.set_visible(!suggestions.is_empty());
+
+    for suggestion in suggestions {
+        let button = gtk::Button::builder()
+            .css_classes(["preset-card", "template-button", "launch-template-card"])
+            .hexpand(true)
+            .build();
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .halign(gtk::Align::Start)
+            .build();
+        content.append(
+            &gtk::Label::builder()
+                .label(&suggestion.title)
+                .halign(gtk::Align::Start)
+                .css_classes(["card-title"])
+                .build(),
+        );
+        content.append(
+            &gtk::Label::builder()
+                .label(&suggestion.description)
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["card-meta"])
+                .build(),
+        );
+        let role_names = suggestion
+            .role_ids
+            .iter()
+            .filter_map(|role_id| assets.role_templates.iter().find(|role| role.id == *role_id))
+            .map(|role| role.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.append(
+            &gtk::Label::builder()
+                .label(format!("{} tiles  •  {}", suggestion.tile_count, role_names))
+                .halign(gtk::Align::Start)
+                .css_classes(["card-meta"])
+                .build(),
+        );
+        button.set_child(Some(&content));
+        let on_select = on_select.clone();
+        button.connect_clicked(move |_| {
+            on_select(suggestion.clone());
+        });
+        cards.borrow_mut().push(button.clone().upcast());
+        row.append(&button);
+    }
+}
+
+fn apply_project_suggestion(
+    suggestion: &crate::model::assets::ProjectSuggestion,
+    summary: &SelectionSummary,
+    layout_state: &Rc<RefCell<LayoutNode>>,
+    tile_editor: &TileEditorPanel,
+    assets: &Rc<WorkspaceAssets>,
+    session_name_entry: &gtk::Entry,
+) {
+    let mut layout = resize_layout(&layout_state.borrow(), suggestion.tile_count);
+    let mut specs = layout.tile_specs();
+    for (index, tile) in specs.iter_mut().enumerate() {
+        if let Some(role_id) = suggestion.role_ids.get(index)
+            && let Some(role) = resolve_role(assets, Some(role_id.as_str()))
+        {
+            apply_role_to_tile(tile, role);
+        }
+        if let Some(command) = suggestion.startup_commands.get(index).cloned().flatten() {
+            tile.startup_command = Some(command);
+        }
+    }
+    layout = layout.with_tile_specs(&specs);
+    *layout_state.borrow_mut() = layout;
+    tile_editor.tile_count.set_value(suggestion.tile_count as f64);
+    refresh_tile_editor(tile_editor, layout_state, assets);
+    summary.name_label.set_text(&suggestion.title);
+    summary.subtitle_label.set_text(&suggestion.description);
+    session_name_entry.set_text(&suggestion.title);
 }
 
 fn build_launch_preset(
@@ -1385,7 +1578,9 @@ fn sync_density_strip_active(strip: &gtk::Box, active_density: ApplicationDensit
 fn build_tile_editor_row(
     index: usize,
     tile: &TileSpec,
+    panel: &TileEditorPanel,
     layout_state: &Rc<RefCell<LayoutNode>>,
+    assets: &Rc<WorkspaceAssets>,
 ) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1411,6 +1606,33 @@ fn build_tile_editor_row(
         .halign(gtk::Align::End)
         .css_classes(["status-chip", "muted-chip"])
         .build();
+
+    let split_horizontal = gtk::Button::builder()
+        .icon_name("view-split-left-right-symbolic")
+        .tooltip_text("Split tile horizontally")
+        .css_classes(["flat"])
+        .build();
+    let split_vertical = gtk::Button::builder()
+        .icon_name("view-split-top-bottom-symbolic")
+        .tooltip_text("Split tile vertically")
+        .css_classes(["flat"])
+        .build();
+    let clone_tile = gtk::Button::builder()
+        .icon_name("edit-copy-symbolic")
+        .tooltip_text("Clone tile")
+        .css_classes(["flat"])
+        .build();
+    let close_tile_button = gtk::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Close tile")
+        .css_classes(["flat"])
+        .sensitive(layout_state.borrow().tile_count() > 1)
+        .build();
+
+    header.append(&split_horizontal);
+    header.append(&split_vertical);
+    header.append(&clone_tile);
+    header.append(&close_tile_button);
     header.append(&directory);
     row.append(&header);
 
@@ -1444,16 +1666,116 @@ fn build_tile_editor_row(
     command_entry.add_css_class("tile-editor-input");
     row.append(&command_entry);
 
+    let routing = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+
+    let role_combo = gtk::ComboBoxText::new();
+    role_combo.append(Some(""), "No role");
+    for role in &assets.role_templates {
+        role_combo.append(Some(&role.id), &role.name);
+    }
+    role_combo.set_active_id(tile.applied_role_id.as_deref());
+    routing.append(&role_combo);
+
+    let connection_combo = gtk::ComboBoxText::new();
+    connection_combo.append(Some("__local__"), "Local");
+    for profile in &assets.connection_profiles {
+        connection_combo.append(Some(&profile.id), &profile.name);
+    }
+    connection_combo.set_active_id(Some(match &tile.connection_target {
+        crate::model::assets::TileConnectionTarget::Local => "__local__",
+        crate::model::assets::TileConnectionTarget::Profile(profile_id) => profile_id.as_str(),
+    }));
+    routing.append(&connection_combo);
+
+    let groups_entry = gtk::Entry::builder()
+        .hexpand(true)
+        .text(tile.pane_groups.join(", "))
+        .placeholder_text("Pane groups, for example: delivery, ops")
+        .build();
+    groups_entry.add_css_class("tile-editor-input");
+    routing.append(&groups_entry);
+    row.append(&routing);
+
     let directory_hint = gtk::Label::builder()
-        .label(format!(
-            "Working directory: {}",
-            tile.working_directory.short_label()
-        ))
+        .label(tile_editor_hint(tile, assets))
         .halign(gtk::Align::Start)
         .wrap(true)
         .css_classes(["field-hint"])
         .build();
     row.append(&directory_hint);
+
+    {
+        let panel = panel.clone();
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        let tile_id = tile.id.clone();
+        split_horizontal.connect_clicked(move |_| {
+            if let Some(next_layout) =
+                split_tile(&layout_state.borrow(), &tile_id, SplitAxis::Horizontal, false)
+            {
+                *layout_state.borrow_mut() = next_layout;
+                panel
+                    .tile_count
+                    .set_value(layout_state.borrow().tile_count() as f64);
+                refresh_tile_editor(&panel, &layout_state, &assets);
+            }
+        });
+    }
+
+    {
+        let panel = panel.clone();
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        let tile_id = tile.id.clone();
+        split_vertical.connect_clicked(move |_| {
+            if let Some(next_layout) =
+                split_tile(&layout_state.borrow(), &tile_id, SplitAxis::Vertical, false)
+            {
+                *layout_state.borrow_mut() = next_layout;
+                panel
+                    .tile_count
+                    .set_value(layout_state.borrow().tile_count() as f64);
+                refresh_tile_editor(&panel, &layout_state, &assets);
+            }
+        });
+    }
+
+    {
+        let panel = panel.clone();
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        let tile_id = tile.id.clone();
+        clone_tile.connect_clicked(move |_| {
+            if let Some(next_layout) =
+                split_tile(&layout_state.borrow(), &tile_id, SplitAxis::Horizontal, true)
+            {
+                *layout_state.borrow_mut() = next_layout;
+                panel
+                    .tile_count
+                    .set_value(layout_state.borrow().tile_count() as f64);
+                refresh_tile_editor(&panel, &layout_state, &assets);
+            }
+        });
+    }
+
+    {
+        let panel = panel.clone();
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        let tile_id = tile.id.clone();
+        close_tile_button.connect_clicked(move |_| {
+            if let Some(next_layout) = close_tile(&layout_state.borrow(), &tile_id) {
+                *layout_state.borrow_mut() = next_layout;
+                panel
+                    .tile_count
+                    .set_value(layout_state.borrow().tile_count() as f64);
+                refresh_tile_editor(&panel, &layout_state, &assets);
+            }
+        });
+    }
 
     {
         let layout_state = layout_state.clone();
@@ -1466,10 +1788,15 @@ fn build_tile_editor_row(
 
     {
         let layout_state = layout_state.clone();
+        let assets = assets.clone();
         agent_entry.connect_changed(move |entry| {
             update_tile_spec(&layout_state, index, |tile| {
                 tile.agent_label = entry.text().to_string();
-                tile.accent_class = accent_class_for_agent(&tile.agent_label);
+                if tile.applied_role_id.is_none() {
+                    tile.accent_class = accent_class_for_agent(&tile.agent_label);
+                } else if let Some(role) = resolve_role(&assets, tile.applied_role_id.as_deref()) {
+                    tile.accent_class = role.accent_class.clone();
+                }
             });
         });
     }
@@ -1480,6 +1807,52 @@ fn build_tile_editor_row(
             update_tile_spec(&layout_state, index, |tile| {
                 let value = entry.text().trim().to_string();
                 tile.startup_command = if value.is_empty() { None } else { Some(value) };
+            });
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        role_combo.connect_changed(move |combo| {
+            update_tile_spec(&layout_state, index, |tile| {
+                let active = combo.active_id().map(|value| value.to_string());
+                if active.as_deref().is_none_or(|value| value.is_empty()) {
+                    tile.applied_role_id = None;
+                    return;
+                }
+                if let Some(role) = resolve_role(&assets, active.as_deref()) {
+                    apply_role_to_tile(tile, role);
+                }
+            });
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        connection_combo.connect_changed(move |combo| {
+            update_tile_spec(&layout_state, index, |tile| {
+                tile.connection_target = match combo.active_id().as_deref() {
+                    Some("__local__") | None => crate::model::assets::TileConnectionTarget::Local,
+                    Some(profile_id) => {
+                        crate::model::assets::TileConnectionTarget::Profile(profile_id.to_string())
+                    }
+                };
+            });
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        groups_entry.connect_changed(move |entry| {
+            update_tile_spec(&layout_state, index, |tile| {
+                tile.pane_groups = entry
+                    .text()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect();
             });
         });
     }
@@ -1513,10 +1886,68 @@ fn resize_layout(current_layout: &LayoutNode, tile_count: usize) -> LayoutNode {
             tile.accent_class = existing.accent_class.clone();
             tile.working_directory = existing.working_directory.clone();
             tile.startup_command = existing.startup_command.clone();
+            tile.connection_target = existing.connection_target.clone();
+            tile.pane_groups = existing.pane_groups.clone();
+            tile.applied_role_id = existing.applied_role_id.clone();
+            tile.output_helpers = existing.output_helpers.clone();
         }
     }
 
     next_layout.with_tile_specs(&next_tiles)
+}
+
+fn apply_role_to_tile(tile: &mut TileSpec, role: &AgentRoleTemplate) {
+    tile.applied_role_id = Some(role.id.clone());
+    tile.accent_class = role.accent_class.clone();
+    if let Some(title) = role.default_title.as_deref() {
+        tile.title = title.to_string();
+    }
+    if let Some(agent_label) = role.default_agent_label.as_deref() {
+        tile.agent_label = agent_label.to_string();
+    }
+    if let Some(command) = role.default_startup_command.as_deref() {
+        tile.startup_command = Some(command.to_string());
+    }
+    tile.output_helpers = role.default_output_helpers.clone();
+    if let Some(profile_id) = role.default_connection_profile_id.as_deref() {
+        tile.connection_target =
+            crate::model::assets::TileConnectionTarget::Profile(profile_id.to_string());
+    }
+    if !role.default_pane_groups.is_empty() {
+        tile.pane_groups = role.default_pane_groups.clone();
+    }
+}
+
+fn resolve_role<'a>(
+    assets: &'a WorkspaceAssets,
+    role_id: Option<&str>,
+) -> Option<&'a AgentRoleTemplate> {
+    let role_id = role_id?;
+    assets.role_templates.iter().find(|role| role.id == role_id)
+}
+
+fn tile_editor_hint(tile: &TileSpec, assets: &WorkspaceAssets) -> String {
+    let role_label = tile
+        .applied_role_id
+        .as_deref()
+        .and_then(|role_id| assets.role_templates.iter().find(|role| role.id == role_id))
+        .map(|role| role.name.clone())
+        .unwrap_or_else(|| "No role".into());
+    let connection_label = match &tile.connection_target {
+        crate::model::assets::TileConnectionTarget::Local => "Local".into(),
+        crate::model::assets::TileConnectionTarget::Profile(profile_id) => assets
+            .connection_profiles
+            .iter()
+            .find(|profile| profile.id == *profile_id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| format!("Missing profile: {profile_id}")),
+    };
+    format!(
+        "Working directory: {}  •  Role: {}  •  Connection: {}",
+        tile.working_directory.short_label(),
+        role_label,
+        connection_label
+    )
 }
 
 fn accent_class_for_agent(agent_label: &str) -> String {

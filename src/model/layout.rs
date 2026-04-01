@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::assets::{OutputHelperRule, TileConnectionTarget};
 use crate::platform::home_dir;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -49,6 +50,14 @@ pub struct TileSpec {
     pub accent_class: String,
     pub working_directory: WorkingDirectory,
     pub startup_command: Option<String>,
+    #[serde(default)]
+    pub connection_target: TileConnectionTarget,
+    #[serde(default)]
+    pub pane_groups: Vec<String>,
+    #[serde(default)]
+    pub applied_role_id: Option<String>,
+    #[serde(default)]
+    pub output_helpers: Vec<OutputHelperRule>,
 }
 
 impl TileSpec {
@@ -189,6 +198,10 @@ pub fn tile(
         accent_class: accent_class.into(),
         working_directory,
         startup_command: startup_command.map(str::to_owned),
+        connection_target: TileConnectionTarget::Local,
+        pane_groups: Vec::new(),
+        applied_role_id: None,
+        output_helpers: Vec::new(),
     })
 }
 
@@ -200,6 +213,10 @@ pub fn default_tile_spec(index: usize) -> TileSpec {
         accent_class: "accent-cyan".into(),
         working_directory: WorkingDirectory::WorkspaceRoot,
         startup_command: None,
+        connection_target: TileConnectionTarget::Local,
+        pane_groups: Vec::new(),
+        applied_role_id: None,
+        output_helpers: Vec::new(),
     }
 }
 

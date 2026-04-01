@@ -9,7 +9,9 @@ use gtk::{gdk, gio, glib, pango};
 
 use crate::app::tray::TrayController;
 use crate::logging;
+use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
@@ -84,6 +86,17 @@ fn shortcut_display_label(
     }
 }
 
+fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(first), Some(second)) if !second.trim().is_empty() => {
+            Some(format!("{first}\n{second}"))
+        }
+        (Some(first), _) => Some(first),
+        (_, Some(second)) => Some(second),
+        (None, None) => None,
+    }
+}
+
 #[derive(Clone)]
 struct WorkspaceTab {
     id: usize,
@@ -114,6 +127,7 @@ struct LaunchTabContext {
     window: adw::ApplicationWindow,
     preference_store: Rc<PreferenceStore>,
     preset_store: Rc<PresetStore>,
+    asset_store: Rc<AssetStore>,
     show_workspace_handle: ShowWorkspaceHandle,
     close_tab_handle: TabActionHandle,
     refresh_launch_tabs: VoidHandle,
@@ -127,6 +141,22 @@ struct RestoreSessionContext {
     active_tab_id: Rc<Cell<usize>>,
     forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
     suppress_empty_replacement: Rc<Cell<bool>>,
+    asset_store: Rc<AssetStore>,
+}
+
+impl Clone for RestoreSessionContext {
+    fn clone(&self) -> Self {
+        Self {
+            tabs: self.tabs.clone(),
+            next_tab_id: self.next_tab_id.clone(),
+            tab_view: self.tab_view.clone(),
+            select_tab: self.select_tab.clone(),
+            active_tab_id: self.active_tab_id.clone(),
+            forced_tab_closes: self.forced_tab_closes.clone(),
+            suppress_empty_replacement: self.suppress_empty_replacement.clone(),
+            asset_store: self.asset_store.clone(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -156,6 +186,7 @@ pub fn present(
     app: &adw::Application,
     preference_store: PreferenceStore,
     preset_store: PresetStore,
+    asset_store: AssetStore,
     session_store: SessionStore,
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
@@ -163,6 +194,7 @@ pub fn present(
 ) {
     let preference_store = Rc::new(preference_store);
     let preset_store = Rc::new(preset_store);
+    let asset_store = Rc::new(asset_store);
     let session_store = Rc::new(session_store);
 
     let header = adw::HeaderBar::builder()
@@ -545,13 +577,16 @@ pub fn present(
         let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
         let refresh_tab_strip_for_workspace = refresh_tab_strip.clone();
+        let asset_store = asset_store.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
                 let terminal_zoom_steps = 0;
+                let assets = asset_store.load_assets();
                 let built_workspace = workspace_view::build_with_layout_change_handler(
                     &preset,
                     &workspace_root,
+                    &assets,
                     resolved_theme_uses_dark_palette(preset.theme),
                     terminal_zoom_steps,
                     {
@@ -618,6 +653,7 @@ pub fn present(
         let window_for_refresh = window.clone();
         let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
+        let asset_store = asset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
         let close_tab_for_refresh = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
@@ -640,6 +676,7 @@ pub fn present(
                         window: window_for_refresh.clone(),
                         preference_store: preference_store.clone(),
                         preset_store: preset_store.clone(),
+                        asset_store: asset_store.clone(),
                         show_workspace_handle: show_workspace_handle.clone(),
                         close_tab_handle: close_tab_for_refresh.clone(),
                         refresh_launch_tabs: refresh_handle.clone(),
@@ -836,6 +873,7 @@ pub fn present(
         let window_for_add = window.clone();
         let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
+        let asset_store = asset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
         let close_tab_for_add = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
@@ -875,6 +913,7 @@ pub fn present(
                     window: window_for_add.clone(),
                     preference_store: preference_store.clone(),
                     preset_store: preset_store.clone(),
+                    asset_store: asset_store.clone(),
                     show_workspace_handle: show_workspace_handle.clone(),
                     close_tab_handle: close_tab_for_add.clone(),
                     refresh_launch_tabs: refresh_handle.clone(),
@@ -1300,6 +1339,7 @@ pub fn present(
     let window_for_back = window.clone();
     let preference_store_for_back = preference_store.clone();
     let preset_store_for_back = preset_store.clone();
+    let asset_store_for_back = asset_store.clone();
     let show_workspace_for_back = show_workspace_in_tab.clone();
     let close_tab_for_back = close_tab.clone();
     let refresh_for_back = refresh_launch_tabs.clone();
@@ -1324,6 +1364,7 @@ pub fn present(
             let window_for_back = window_for_back.clone();
             let preference_store_for_back = preference_store_for_back.clone();
             let preset_store_for_back = preset_store_for_back.clone();
+            let asset_store_for_back = asset_store_for_back.clone();
             let show_workspace_for_back = show_workspace_for_back.clone();
             let close_tab_for_back = close_tab_for_back.clone();
             let refresh_for_back = refresh_for_back.clone();
@@ -1357,6 +1398,7 @@ pub fn present(
                         window: window_for_back.clone(),
                         preference_store: preference_store_for_back.clone(),
                         preset_store: preset_store_for_back.clone(),
+                        asset_store: asset_store_for_back.clone(),
                         show_workspace_handle: show_workspace_for_back.clone(),
                         close_tab_handle: close_tab_for_back.clone(),
                         refresh_launch_tabs: refresh_for_back.clone(),
@@ -1432,30 +1474,53 @@ pub fn present(
         let session_store_for_restore = session_store.clone();
         let window_for_restore = window.clone();
         let warning = startup_warning.clone();
+        let restore_mode = preference_store.load().default_restore_mode;
 
         glib::idle_add_local_once(move || {
-            prompt_session_resume(
-                &window_for_restore,
-                &saved_session,
-                warning.as_deref(),
-                {
-                    let restore_context = RestoreSessionContext {
-                        tabs: tabs_for_restore.clone(),
-                        next_tab_id: next_tab_id_for_restore.clone(),
-                        tab_view: tab_view_for_restore.clone(),
-                        select_tab: select_for_restore.clone(),
-                        active_tab_id: active_for_restore.clone(),
-                        forced_tab_closes: forced_tab_closes.clone(),
-                        suppress_empty_replacement: suppress_empty_replacement.clone(),
-                    };
+            let restore_context = RestoreSessionContext {
+                tabs: tabs_for_restore.clone(),
+                next_tab_id: next_tab_id_for_restore.clone(),
+                tab_view: tab_view_for_restore.clone(),
+                select_tab: select_for_restore.clone(),
+                active_tab_id: active_for_restore.clone(),
+                forced_tab_closes: forced_tab_closes.clone(),
+                suppress_empty_replacement: suppress_empty_replacement.clone(),
+                asset_store: asset_store.clone(),
+            };
+            match restore_mode {
+                RestoreLaunchMode::Prompt => prompt_session_resume(
+                    &window_for_restore,
+                    &saved_session,
+                    warning.as_deref(),
+                    {
+                        let restore_context = restore_context.clone();
+                        let resume_session = resume_session.clone();
+                        move || {
+                            restore_saved_session(&restore_context, resume_session.clone(), true);
+                        }
+                    },
+                    {
+                        let restore_context = restore_context.clone();
+                        let shell_session = shell_only_session(&resume_session);
+                        move || {
+                            restore_saved_session(&restore_context, shell_session.clone(), true);
+                        }
+                    },
                     move || {
-                        restore_saved_session(&restore_context, resume_session.clone(), true);
-                    }
-                },
-                move || {
-                    session_store_for_restore.clear();
-                },
-            );
+                        session_store_for_restore.clear();
+                    },
+                ),
+                RestoreLaunchMode::RerunStartupCommands => {
+                    restore_saved_session(&restore_context, resume_session.clone(), true);
+                }
+                RestoreLaunchMode::ShellOnly => {
+                    restore_saved_session(
+                        &restore_context,
+                        shell_only_session(&resume_session),
+                        true,
+                    );
+                }
+            }
         });
     } else if let Some(startup_warning) = startup_warning {
         let window_for_notice = window.clone();
@@ -1996,6 +2061,7 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
         .expect("launch tab should exist");
 
     let load_outcome = context.preset_store.load_presets_with_status();
+    let asset_outcome = context.asset_store.load_assets_with_status();
     let presets = load_outcome.presets;
     let preferences = context.preference_store.load();
     let preset_store = context.preset_store.as_ref().clone();
@@ -2009,10 +2075,12 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
 
     let launch_surface = launch_screen::build(
         launch_screen::LaunchScreenInput {
-            load_warning: load_outcome.warning,
+            load_warning: combine_warnings(load_outcome.warning, asset_outcome.warning),
             presets,
+            assets: asset_outcome.assets,
             default_theme: preferences.default_theme,
             default_density: preferences.default_density,
+            default_restore_mode: preferences.default_restore_mode,
             preset_store,
         },
         launch_screen::LaunchScreenActions {
@@ -2098,10 +2166,12 @@ fn restore_saved_session(
         let preset = saved_tab.preset;
         let terminal_zoom_steps =
             clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
+        let assets = context.asset_store.load_assets();
 
         let built_workspace = workspace_view::build_with_layout_change_handler(
             &preset,
             &workspace_root,
+            &assets,
             resolved_theme_uses_dark_palette(preset.theme),
             terminal_zoom_steps,
             {
@@ -2732,25 +2802,27 @@ fn confirm_destructive_action<F>(
     dialog.present();
 }
 
-fn prompt_session_resume<F, G>(
+fn prompt_session_resume<F, G, H>(
     window: &adw::ApplicationWindow,
     saved_session: &SavedSession,
     warning: Option<&str>,
     on_resume: F,
-    on_start_fresh: G,
+    on_resume_shells: G,
+    on_start_fresh: H,
 ) where
     F: Fn() + 'static,
     G: Fn() + 'static,
+    H: Fn() + 'static,
 {
     let body = if let Some(warning) = warning {
         format!(
-            "TerminalTiler found {} saved workspace(s). Resuming will re-run their startup commands.\n\n{}",
+            "TerminalTiler found {} saved workspace(s). You can rerun commands, reopen the same layouts as plain shells, or start fresh.\n\n{}",
             saved_session.tabs.len(),
             warning
         )
     } else {
         format!(
-            "TerminalTiler found {} saved workspace(s). Resuming will re-run their startup commands.",
+            "TerminalTiler found {} saved workspace(s). You can rerun commands, reopen the same layouts as plain shells, or start fresh.",
             saved_session.tabs.len()
         )
     };
@@ -2763,20 +2835,34 @@ fn prompt_session_resume<F, G>(
         .build();
 
     dialog.add_response("fresh", "Start Fresh");
-    dialog.add_response("resume", "Resume");
+    dialog.add_response("shells", "Resume As Shells");
+    dialog.add_response("resume", "Resume And Rerun");
     dialog.set_response_appearance("resume", adw::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("fresh"));
+    dialog.set_default_response(Some("shells"));
     dialog.set_close_response("fresh");
 
     dialog.connect_response(None, move |dialog, response| {
         match response {
             "resume" => on_resume(),
+            "shells" => on_resume_shells(),
             _ => on_start_fresh(),
         }
         dialog.close();
     });
 
     dialog.present();
+}
+
+fn shell_only_session(saved_session: &SavedSession) -> SavedSession {
+    let mut next = saved_session.clone();
+    for tab in &mut next.tabs {
+        let mut tile_specs = tab.preset.layout.tile_specs();
+        for tile in &mut tile_specs {
+            tile.startup_command = None;
+        }
+        tab.preset.layout = tab.preset.layout.with_tile_specs(&tile_specs);
+    }
+    next
 }
 
 fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &str) {

@@ -11,7 +11,18 @@ pub struct LayoutShell {
     pub slots: Vec<gtk::Box>,
 }
 
-pub fn build(node: &LayoutNode) -> LayoutShell {
+pub fn build(
+    node: &LayoutNode,
+    on_ratio_changed: Option<Rc<dyn Fn(Vec<bool>, f32)>>,
+) -> LayoutShell {
+    build_with_path(node, &[], on_ratio_changed)
+}
+
+fn build_with_path(
+    node: &LayoutNode,
+    split_path: &[bool],
+    on_ratio_changed: Option<Rc<dyn Fn(Vec<bool>, f32)>>,
+) -> LayoutShell {
     match node {
         LayoutNode::Tile(_) => {
             let slot = gtk::Box::builder()
@@ -42,8 +53,12 @@ pub fn build(node: &LayoutNode) -> LayoutShell {
                 .shrink_end_child(true)
                 .build();
 
-            let first_child = build(first);
-            let second_child = build(second);
+            let mut first_path = split_path.to_vec();
+            first_path.push(false);
+            let first_child = build_with_path(first, &first_path, on_ratio_changed.clone());
+            let mut second_path = split_path.to_vec();
+            second_path.push(true);
+            let second_child = build_with_path(second, &second_path, on_ratio_changed.clone());
             paned.set_start_child(Some(&first_child.widget));
             paned.set_end_child(Some(&second_child.widget));
 
@@ -69,6 +84,19 @@ pub fn build(node: &LayoutNode) -> LayoutShell {
                     }
                 });
             });
+
+            if let Some(on_ratio_changed) = on_ratio_changed {
+                let path = split_path.to_vec();
+                paned.connect_position_notify(move |paned| {
+                    let total = match paned.orientation() {
+                        gtk::Orientation::Horizontal => paned.allocated_width(),
+                        _ => paned.allocated_height(),
+                    };
+                    if total > 1 {
+                        on_ratio_changed(path.clone(), paned.position() as f32 / total as f32);
+                    }
+                });
+            }
 
             paned.add_css_class("split-pane");
             let mut slots = first_child.slots;
