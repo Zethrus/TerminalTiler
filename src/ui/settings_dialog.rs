@@ -1409,7 +1409,9 @@ fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
         .valign(gtk::Align::Start)
         .css_classes(["settings-summary-icon"])
         .build();
-    icon.append(&gtk::Image::from_icon_name("preferences-system-symbolic"));
+    let settings_icon = gtk::Image::from_icon_name("preferences-system-symbolic");
+    settings_icon.set_valign(gtk::Align::Center);
+    icon.append(&settings_icon);
     shell.append(&icon);
 
     let body = gtk::Box::builder()

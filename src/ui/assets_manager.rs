@@ -148,9 +148,11 @@ pub fn present(
         .vexpand(true)
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
-    let sidebar = gtk::StackSidebar::new();
-    sidebar.set_stack(&stack);
-    sidebar.add_css_class("assets-sidebar");
+    let sidebar = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .css_classes(["assets-sidebar"])
+        .build();
 
     let overview_page = make_page_shell();
     let connections_page = make_page_shell();
@@ -203,6 +205,21 @@ pub fn present(
     raw_page.1.append(&raw_scroller);
     stack.add_titled(&raw_page.0, Some("raw"), AssetSection::RawToml.title());
 
+    let nav_buttons = [
+        make_nav_button(&sidebar, &stack, "overview", AssetSection::Overview.title()),
+        make_nav_button(
+            &sidebar,
+            &stack,
+            "connections",
+            AssetSection::Connections.title(),
+        ),
+        make_nav_button(&sidebar, &stack, "hosts", AssetSection::Hosts.title()),
+        make_nav_button(&sidebar, &stack, "groups", AssetSection::Groups.title()),
+        make_nav_button(&sidebar, &stack, "roles", AssetSection::Roles.title()),
+        make_nav_button(&sidebar, &stack, "runbooks", AssetSection::Runbooks.title()),
+        make_nav_button(&sidebar, &stack, "raw", AssetSection::RawToml.title()),
+    ];
+
     let shell = gtk::Paned::builder()
         .orientation(gtk::Orientation::Horizontal)
         .wide_handle(true)
@@ -242,6 +259,8 @@ pub fn present(
         let state = state.clone();
         let global_button = global_button.clone();
         let workspace_button = workspace_button.clone();
+        let nav_buttons = nav_buttons.clone();
+        let stack = stack.clone();
         let info_label = info_label.clone();
         let warning_label = warning_label.clone();
         let issue_banner = issue_banner.clone();
@@ -252,6 +271,7 @@ pub fn present(
         Rc::new(move || {
             let snapshot = state.borrow().clone();
             sync_scope_buttons(&global_button, &workspace_button, snapshot.scope);
+            sync_nav_buttons(&stack, &nav_buttons);
             info_label.set_text(&snapshot.info_text);
             if let Some(warning) = snapshot.warning_text.as_deref() {
                 warning_label.set_visible(true);
@@ -379,15 +399,17 @@ pub fn present(
             let start = buffer.start_iter();
             let end = buffer.end_iter();
             let raw = buffer.text(&start, &end, true).to_string();
-            let mut snapshot = state.borrow_mut();
-            snapshot.raw_toml = raw.clone();
-            match toml::from_str::<WorkspaceAssets>(&raw) {
-                Ok(assets) => {
-                    snapshot.current_assets = assets;
-                    snapshot.raw_error = None;
-                }
-                Err(error) => {
-                    snapshot.raw_error = Some(format!("TOML parse error: {error}"));
+            {
+                let mut snapshot = state.borrow_mut();
+                snapshot.raw_toml = raw.clone();
+                match toml::from_str::<WorkspaceAssets>(&raw) {
+                    Ok(assets) => {
+                        snapshot.current_assets = assets;
+                        snapshot.raw_error = None;
+                    }
+                    Err(error) => {
+                        snapshot.raw_error = Some(format!("TOML parse error: {error}"));
+                    }
                 }
             }
             refresh_status();
@@ -1126,16 +1148,18 @@ fn render_hosts_page(
                 let state = state.clone();
                 let refresh_status = refresh_status.clone();
                 toggle.connect_toggled(move |button| {
-                    let mut snapshot = state.borrow_mut();
-                    let groups = &mut snapshot.current_assets.inventory_hosts[index].group_ids;
-                    if button.is_active() {
-                        if groups.iter().all(|item| item != &group_id) {
-                            groups.push(group_id.clone());
+                    {
+                        let mut snapshot = state.borrow_mut();
+                        let groups = &mut snapshot.current_assets.inventory_hosts[index].group_ids;
+                        if button.is_active() {
+                            if groups.iter().all(|item| item != &group_id) {
+                                groups.push(group_id.clone());
+                            }
+                        } else {
+                            groups.retain(|item| item != &group_id);
                         }
-                    } else {
-                        groups.retain(|item| item != &group_id);
+                        snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
                     }
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
                     refresh_status();
                 });
                 groups_box.append(&toggle);
@@ -2092,10 +2116,12 @@ fn append_entry_field<F>(
     let state = state.clone();
     let refresh_status = refresh_status.clone();
     entry.connect_changed(move |entry| {
-        let mut snapshot = state.borrow_mut();
-        on_change(&mut snapshot, entry.text().to_string());
-        snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-        snapshot.raw_error = None;
+        {
+            let mut snapshot = state.borrow_mut();
+            on_change(&mut snapshot, entry.text().to_string());
+            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+            snapshot.raw_error = None;
+        }
         refresh_status();
     });
     row.append(&entry);
@@ -2150,10 +2176,12 @@ fn append_dynamic_combo_field<F>(
     let refresh_status = refresh_status.clone();
     combo.connect_changed(move |combo| {
         if let Some(id) = combo.active_id() {
-            let mut snapshot = state.borrow_mut();
-            on_change(&mut snapshot, id.to_string());
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = state.borrow_mut();
+                on_change(&mut snapshot, id.to_string());
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             refresh_status();
         }
     });
@@ -2269,12 +2297,14 @@ fn append_output_helpers_editor(
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
         toggle.connect_state_set(move |_, active| {
-            let mut snapshot = toggle_state.borrow_mut();
-            snapshot.current_assets.role_templates[role_index].default_output_helpers
-                [helper_index]
-                .toast_on_match = active;
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = toggle_state.borrow_mut();
+                snapshot.current_assets.role_templates[role_index].default_output_helpers
+                    [helper_index]
+                    .toast_on_match = active;
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             toggle_refresh_status();
             false.into()
         });
@@ -2290,12 +2320,14 @@ fn append_output_helpers_editor(
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
         remove_button.connect_clicked(move |_| {
-            let mut snapshot = remove_state.borrow_mut();
-            snapshot.current_assets.role_templates[role_index]
-                .default_output_helpers
-                .remove(helper_index);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = remove_state.borrow_mut();
+                snapshot.current_assets.role_templates[role_index]
+                    .default_output_helpers
+                    .remove(helper_index);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             remove_refresh_status();
             if let Some(refresh) = remove_refresh_pages.borrow().as_ref() {
                 refresh();
@@ -2506,11 +2538,13 @@ fn append_runbook_variables_editor(
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
         toggle.connect_state_set(move |_, active| {
-            let mut snapshot = toggle_state.borrow_mut();
-            snapshot.current_assets.runbooks[runbook_index].variables[variable_index].required =
-                active;
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = toggle_state.borrow_mut();
+                snapshot.current_assets.runbooks[runbook_index].variables[variable_index]
+                    .required = active;
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             toggle_refresh_status();
             false.into()
         });
@@ -2525,12 +2559,14 @@ fn append_runbook_variables_editor(
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
         remove.connect_clicked(move |_| {
-            let mut snapshot = remove_state.borrow_mut();
-            snapshot.current_assets.runbooks[runbook_index]
-                .variables
-                .remove(variable_index);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = remove_state.borrow_mut();
+                snapshot.current_assets.runbooks[runbook_index]
+                    .variables
+                    .remove(variable_index);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             remove_refresh_status();
             if let Some(refresh) = remove_refresh_pages.borrow().as_ref() {
                 refresh();
@@ -2623,11 +2659,13 @@ fn append_runbook_steps_editor(
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
         toggle.connect_state_set(move |_, active| {
-            let mut snapshot = toggle_state.borrow_mut();
-            snapshot.current_assets.runbooks[runbook_index].steps[step_index].append_newline =
-                active;
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = toggle_state.borrow_mut();
+                snapshot.current_assets.runbooks[runbook_index].steps[step_index].append_newline =
+                    active;
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             toggle_refresh_status();
             false.into()
         });
@@ -2642,12 +2680,14 @@ fn append_runbook_steps_editor(
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
         remove.connect_clicked(move |_| {
-            let mut snapshot = remove_state.borrow_mut();
-            snapshot.current_assets.runbooks[runbook_index]
-                .steps
-                .remove(step_index);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = remove_state.borrow_mut();
+                snapshot.current_assets.runbooks[runbook_index]
+                    .steps
+                    .remove(step_index);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             remove_refresh_status();
             if let Some(refresh) = remove_refresh_pages.borrow().as_ref() {
                 refresh();
@@ -2752,6 +2792,42 @@ fn sync_scope_buttons(
         ConfigScope::Global => global_button.add_css_class("suggested-action"),
         ConfigScope::Workspace => workspace_button.add_css_class("suggested-action"),
     }
+}
+
+fn make_nav_button(
+    sidebar: &gtk::Box,
+    stack: &gtk::Stack,
+    page_name: &'static str,
+    title: &'static str,
+) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .label(title)
+        .halign(gtk::Align::Fill)
+        .css_classes(["pill-button", "flat", "asset-nav-button"])
+        .build();
+    let stack = stack.clone();
+    button.connect_clicked(move |_| {
+        stack.set_visible_child_name(page_name);
+    });
+    sidebar.append(&button);
+    button
+}
+
+fn sync_nav_buttons(stack: &gtk::Stack, buttons: &[gtk::Button; 7]) {
+    let active = stack.visible_child_name();
+    for button in buttons {
+        button.remove_css_class("suggested-action");
+    }
+    let index = match active.as_deref().unwrap_or("overview") {
+        "connections" => 1,
+        "hosts" => 2,
+        "groups" => 3,
+        "roles" => 4,
+        "runbooks" => 5,
+        "raw" => 6,
+        _ => 0,
+    };
+    buttons[index].add_css_class("suggested-action");
 }
 
 fn sync_raw_buffer(text_view: &gtk::TextView, raw: &str) {

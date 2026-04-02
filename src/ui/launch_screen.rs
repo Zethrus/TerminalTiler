@@ -913,7 +913,9 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .valign(gtk::Align::Start)
         .css_classes(["launch-overview-icon"])
         .build();
-    icon.append(&gtk::Image::from_icon_name("utilities-terminal-symbolic"));
+    let launch_icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+    launch_icon.set_valign(gtk::Align::Center);
+    icon.append(&launch_icon);
     card.append(&icon);
 
     let body = gtk::Box::builder()

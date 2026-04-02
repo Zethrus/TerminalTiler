@@ -232,7 +232,7 @@ pub fn present(
         &gtk::Image::builder()
             .icon_name("dialog-warning-symbolic")
             .pixel_size(18)
-            .valign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
             .build(),
     );
     close_to_background_notice_row.append(
@@ -1890,6 +1890,7 @@ fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
         .margin_bottom(4)
         .build();
     let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+    icon.set_valign(gtk::Align::Center);
     icon.add_css_class("app-tab-icon");
     let label = gtk::Label::builder()
         .label(title)
@@ -2007,6 +2008,7 @@ impl TabStripController {
             .hexpand(true)
             .build();
         let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
+        icon.set_valign(gtk::Align::Center);
         icon.add_css_class("app-tab-icon");
         let title_label = gtk::Label::builder()
             .xalign(0.0)
