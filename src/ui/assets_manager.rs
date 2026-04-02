@@ -406,7 +406,11 @@ pub fn present(
             let asset_store = asset_store.clone();
             let refresh_pages = refresh_pages.clone();
             let workspace_root = state.borrow().workspace_root.clone();
-            maybe_discard_unsaved(&dialog, &state.borrow(), move || {
+            let should_prompt = {
+                let snapshot = state.borrow().clone();
+                is_dirty(&snapshot)
+            };
+            maybe_discard_unsaved(&dialog, should_prompt, move || {
                 *state_for_prompt.borrow_mut() =
                     load_scope_state(&asset_store, ConfigScope::Global, workspace_root.clone());
                 refresh_pages();
@@ -428,7 +432,11 @@ pub fn present(
             let asset_store = asset_store.clone();
             let refresh_pages = refresh_pages.clone();
             let workspace_root = state.borrow().workspace_root.clone();
-            maybe_discard_unsaved(&dialog, &state.borrow(), move || {
+            let should_prompt = {
+                let snapshot = state.borrow().clone();
+                is_dirty(&snapshot)
+            };
+            maybe_discard_unsaved(&dialog, should_prompt, move || {
                 *state_for_prompt.borrow_mut() =
                     load_scope_state(&asset_store, ConfigScope::Workspace, workspace_root.clone());
                 refresh_pages();
@@ -446,7 +454,11 @@ pub fn present(
             let refresh_pages = refresh_pages.clone();
             let scope = state.borrow().scope;
             let workspace_root = state.borrow().workspace_root.clone();
-            maybe_discard_unsaved(&dialog, &state.borrow(), move || {
+            let should_prompt = {
+                let snapshot = state.borrow().clone();
+                is_dirty(&snapshot)
+            };
+            maybe_discard_unsaved(&dialog, should_prompt, move || {
                 *state_for_prompt.borrow_mut() =
                     load_scope_state(&asset_store, scope, workspace_root.clone());
                 refresh_pages();
@@ -510,7 +522,11 @@ pub fn present(
             if response != gtk::ResponseType::Close {
                 return;
             }
-            maybe_discard_unsaved(&dialog_for_prompt, &state.borrow(), {
+            let should_prompt = {
+                let snapshot = state.borrow().clone();
+                is_dirty(&snapshot)
+            };
+            maybe_discard_unsaved(&dialog_for_prompt, should_prompt, {
                 let dialog = dialog.clone();
                 move || dialog.close()
             });
@@ -1855,7 +1871,8 @@ fn render_section_header<F>(
         let state_for_prompt = state.clone();
         let on_add = on_add.clone();
         let refresh_pages = refresh_pages.clone();
-        maybe_discard_invalid_raw(&dialog, &state.borrow(), move || {
+        let has_invalid_raw = state.borrow().raw_error.is_some();
+        maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
             let mut snapshot = state_for_prompt.borrow_mut();
             on_add(&mut snapshot);
             snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
@@ -1936,7 +1953,8 @@ where
             let state_for_prompt = state.clone();
             let on_duplicate = on_duplicate.clone();
             let refresh_pages = refresh_pages.clone();
-            maybe_discard_invalid_raw(&dialog, &state.borrow(), move || {
+            let has_invalid_raw = state.borrow().raw_error.is_some();
+            maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
                 on_duplicate();
                 let mut snapshot = state_for_prompt.borrow_mut();
                 snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
@@ -1964,7 +1982,8 @@ where
         let state_for_prompt = state.clone();
         let on_remove = on_remove.clone();
         let refresh_pages = refresh_pages.clone();
-        maybe_discard_invalid_raw(&dialog, &state.borrow(), move || {
+        let has_invalid_raw = state.borrow().raw_error.is_some();
+        maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
             let mut snapshot = state_for_prompt.borrow_mut();
             on_remove(&mut snapshot);
             snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
@@ -2036,7 +2055,8 @@ fn append_override_button<F>(
         let state_for_prompt = state.clone();
         let on_override = on_override.clone();
         let refresh_pages = refresh_pages.clone();
-        maybe_discard_invalid_raw(&dialog, &state.borrow(), move || {
+        let has_invalid_raw = state.borrow().raw_error.is_some();
+        maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
             let mut snapshot = state_for_prompt.borrow_mut();
             on_override(&mut snapshot);
             snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
@@ -2784,11 +2804,11 @@ fn format_issue_summary(issues: &[AssetValidationIssue]) -> String {
         .join("\n")
 }
 
-fn maybe_discard_invalid_raw<F>(dialog: &gtk::Dialog, state: &AssetsManagerState, on_confirm: F)
+fn maybe_discard_invalid_raw<F>(dialog: &gtk::Dialog, has_invalid_raw: bool, on_confirm: F)
 where
     F: Fn() + 'static,
 {
-    if state.raw_error.is_none() {
+    if !has_invalid_raw {
         on_confirm();
         return;
     }
@@ -2812,11 +2832,11 @@ where
     prompt.present();
 }
 
-fn maybe_discard_unsaved<F>(dialog: &gtk::Dialog, state: &AssetsManagerState, on_confirm: F)
+fn maybe_discard_unsaved<F>(dialog: &gtk::Dialog, has_unsaved_changes: bool, on_confirm: F)
 where
     F: Fn() + 'static,
 {
-    if !is_dirty(state) {
+    if !has_unsaved_changes {
         on_confirm();
         return;
     }
