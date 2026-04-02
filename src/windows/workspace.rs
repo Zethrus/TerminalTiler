@@ -74,6 +74,7 @@ mod imp {
     use crate::services::output_helpers::{helper_summary_text, scan_output};
     use crate::services::runbooks::resolve_runbook;
     use crate::storage::asset_store::AssetStore;
+    use crate::storage::preference_store::PreferenceStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::transcript::TranscriptBuffer;
     use crate::windows::vt::{
@@ -81,7 +82,8 @@ mod imp {
     };
     use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsRuntime};
     use crate::windows::{
-        alert_center, assets_manager, command_palette, runbook_dialog, transcript_viewer,
+        alert_center, assets_manager, command_palette, runbook_dialog, shortcut_capture,
+        transcript_viewer,
     };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsWorkspace";
@@ -146,6 +148,7 @@ mod imp {
     struct WorkspaceWindowState {
         window_id: usize,
         session_store: SessionStore,
+        preference_store: PreferenceStore,
         tabs: Vec<SavedTab>,
         active_tab_index: usize,
         runtime: WindowsRuntime,
@@ -541,6 +544,7 @@ mod imp {
         let state = Box::new(WorkspaceWindowState {
             window_id: NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed),
             session_store: SessionStore::new(),
+            preference_store: PreferenceStore::new(),
             tabs,
             active_tab_index,
             runtime: runtime.clone(),
@@ -678,6 +682,14 @@ mod imp {
                     layout_controls(hwnd, state);
                 }
                 0
+            }
+            WM_KEYDOWN => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) }
+                    && handle_workspace_shortcuts(hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
@@ -927,6 +939,16 @@ mod imp {
                 0
             }
             WM_KEYDOWN => {
+                let parent_hwnd = if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.parent_hwnd
+                } else {
+                    return 0;
+                };
+                if let Some(state) = unsafe { window_state_mut(parent_hwnd) }
+                    && handle_workspace_shortcuts(parent_hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_key_input(pane, wparam as u16);
                 }
@@ -1943,6 +1965,39 @@ mod imp {
                 SetFocus(pane.output_hwnd);
             }
         }
+    }
+
+    fn handle_workspace_shortcuts(
+        hwnd: HWND,
+        state: &mut WorkspaceWindowState,
+        virtual_key: u32,
+    ) -> bool {
+        let preferences = state.preference_store.load();
+        if shortcut_capture::matches_keydown(&preferences.command_palette_shortcut, virtual_key) {
+            open_workspace_command_palette(hwnd, state);
+            return true;
+        }
+        if shortcut_capture::matches_keydown(
+            &preferences.workspace_fullscreen_shortcut,
+            virtual_key,
+        ) {
+            toggle_workspace_fullscreen(hwnd, state);
+            return true;
+        }
+        if shortcut_capture::matches_keydown(&preferences.workspace_density_shortcut, virtual_key) {
+            cycle_workspace_density(hwnd, state);
+            return true;
+        }
+        if shortcut_capture::matches_keydown(&preferences.workspace_zoom_in_shortcut, virtual_key) {
+            adjust_terminal_zoom(hwnd, state, 1);
+            return true;
+        }
+        if shortcut_capture::matches_keydown(&preferences.workspace_zoom_out_shortcut, virtual_key)
+        {
+            adjust_terminal_zoom(hwnd, state, -1);
+            return true;
+        }
+        false
     }
 
     fn reconnect_pane(

@@ -11,6 +11,7 @@ use crate::app::tray::TrayController;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::services::session_restore::{session_for_restore_mode, shell_only_session};
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
@@ -1773,14 +1774,19 @@ pub fn present(
                     },
                 ),
                 RestoreLaunchMode::RerunStartupCommands => {
-                    restore_saved_session(&restore_context, resume_session.clone(), true);
+                    if let Some(session) = session_for_restore_mode(
+                        &resume_session,
+                        RestoreLaunchMode::RerunStartupCommands,
+                    ) {
+                        restore_saved_session(&restore_context, session, true);
+                    }
                 }
                 RestoreLaunchMode::ShellOnly => {
-                    restore_saved_session(
-                        &restore_context,
-                        shell_only_session(&resume_session),
-                        true,
-                    );
+                    if let Some(session) =
+                        session_for_restore_mode(&resume_session, RestoreLaunchMode::ShellOnly)
+                    {
+                        restore_saved_session(&restore_context, session, true);
+                    }
                 }
             }
         });
@@ -3148,18 +3154,6 @@ fn prompt_session_resume<F, G, H>(
     });
 
     dialog.present();
-}
-
-fn shell_only_session(saved_session: &SavedSession) -> SavedSession {
-    let mut next = saved_session.clone();
-    for tab in &mut next.tabs {
-        let mut tile_specs = tab.preset.layout.tile_specs();
-        for tile in &mut tile_specs {
-            tile.startup_command = None;
-        }
-        tab.preset.layout = tab.preset.layout.with_tile_specs(&tile_specs);
-    }
-    next
 }
 
 fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &str) {

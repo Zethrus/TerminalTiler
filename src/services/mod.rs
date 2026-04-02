@@ -5,4 +5,5 @@ pub mod layout_editor;
 pub mod output_helpers;
 pub mod project_suggestions;
 pub mod runbooks;
+pub mod session_restore;
 pub mod tile_draft;

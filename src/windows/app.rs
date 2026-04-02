@@ -14,34 +14,40 @@ mod imp {
         COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
         Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_PUSHBUTTON, CREATESTRUCTW,
-        CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-        DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-        ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgItem,
-        GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-        IDI_APPLICATION, IDOK, IDYES, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT,
-        LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW,
-        MB_ICONWARNING, MB_OKCANCEL, MB_YESNO, MF_STRING, MSG, MessageBoxW, PostQuitMessage,
-        RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND,
-        WM_CREATE, WM_DESTROY, WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT,
-        WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-        WS_VSCROLL,
+        AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
+        CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE, CBS_DROPDOWNLIST,
+        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
+        DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL,
+        ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect,
+        GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW,
+        GetWindowTextW, HMENU, IDC_ARROW, IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR,
+        LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
+        LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MF_STRING, MSG, MessageBoxW,
+        PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW,
+        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+        WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP, WM_NCCREATE,
+        WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::logging;
-    use crate::model::assets::ProjectSuggestion;
+    use crate::model::assets::{ProjectSuggestion, RestoreLaunchMode, WorkspaceAssets};
     use crate::model::layout::{LayoutNode, LayoutTemplate, builtin_templates, generate_layout};
-    use crate::model::preset::{WorkspacePreset, is_builtin_preset_id};
+    use crate::model::preset::{
+        ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
+    };
     use crate::platform::{home_dir, resolve_workspace_root};
     use crate::services::project_suggestions::detect_project_suggestions;
+    use crate::services::session_restore::{
+        RestoreStartupAction, session_for_restore_mode, session_for_startup_action,
+    };
     use crate::services::tile_draft::{apply_project_suggestion, resize_layout};
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -49,7 +55,9 @@ mod imp {
     use crate::storage::session_store::{SavedSession, SessionStore};
     use crate::windows::workspace;
     use crate::windows::wsl::{self, WindowsRuntime};
-    use crate::windows::{assets_manager, command_palette};
+    use crate::windows::{
+        assets_manager, command_palette, launcher_editor, restore_prompt, shortcut_capture,
+    };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const SETTINGS_WINDOW_CLASS: &str = "TerminalTilerWindowsSettings";
@@ -81,12 +89,16 @@ mod imp {
     const ID_APPLY_SUGGESTION: isize = 1024;
     const ID_ASSETS_MANAGER: isize = 1025;
     const ID_COMMAND_PALETTE: isize = 1026;
+    const ID_LABEL_THEME: isize = 1027;
+    const ID_THEME_COMBO: isize = 1028;
+    const ID_LABEL_LAUNCH_DENSITY: isize = 1029;
+    const ID_LAUNCH_DENSITY_COMBO: isize = 1030;
+    const ID_EDIT_TILES: isize = 1031;
     const ID_SETTINGS_THEME_LIST: isize = 2001;
     const ID_SETTINGS_DENSITY_LIST: isize = 2002;
     const ID_SETTINGS_CLOSE_BACKGROUND: isize = 2003;
     const ID_SETTINGS_WSL_DISTRO: isize = 2004;
     const ID_SETTINGS_RUNTIME_STATUS: isize = 2005;
-    const ID_SETTINGS_SAVE: isize = 2006;
     const ID_SETTINGS_RESET: isize = 2007;
     const ID_SETTINGS_CLOSE: isize = 2008;
     const ID_SETTINGS_PROBE: isize = 2009;
@@ -94,6 +106,38 @@ mod imp {
     const ID_SETTINGS_LABEL_DENSITY: isize = 2011;
     const ID_SETTINGS_LABEL_DISTRO: isize = 2012;
     const ID_SETTINGS_LABEL_RUNTIME: isize = 2013;
+    const ID_SETTINGS_LABEL_SHORTCUTS: isize = 2014;
+    const ID_SETTINGS_SHORTCUT_STATUS: isize = 2015;
+    const ID_SETTINGS_FULLSCREEN_SHORTCUT: isize = 2016;
+    const ID_SETTINGS_FULLSCREEN_RECORD: isize = 2017;
+    const ID_SETTINGS_DENSITY_SHORTCUT: isize = 2018;
+    const ID_SETTINGS_DENSITY_RECORD: isize = 2019;
+    const ID_SETTINGS_ZOOM_IN_SHORTCUT: isize = 2020;
+    const ID_SETTINGS_ZOOM_IN_RECORD: isize = 2021;
+    const ID_SETTINGS_ZOOM_OUT_SHORTCUT: isize = 2022;
+    const ID_SETTINGS_ZOOM_OUT_RECORD: isize = 2023;
+    const ID_SETTINGS_COMMAND_PALETTE_SHORTCUT: isize = 2024;
+    const ID_SETTINGS_COMMAND_PALETTE_RECORD: isize = 2025;
+    const ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT: isize = 2026;
+    const ID_SETTINGS_LABEL_DENSITY_SHORTCUT: isize = 2027;
+    const ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT: isize = 2028;
+    const ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT: isize = 2029;
+    const ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT: isize = 2030;
+    const ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT: isize = 2031;
+    const ID_SETTINGS_NOTE_DENSITY_SHORTCUT: isize = 2032;
+    const ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT: isize = 2033;
+    const ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT: isize = 2034;
+    const ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT: isize = 2035;
+    const ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT: isize = 2036;
+    const ID_SETTINGS_HELP_DENSITY_SHORTCUT: isize = 2037;
+    const ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT: isize = 2038;
+    const ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT: isize = 2039;
+    const ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT: isize = 2040;
+    const ID_SETTINGS_SUMMARY_TITLE: isize = 2041;
+    const ID_SETTINGS_SUMMARY_COPY: isize = 2042;
+    const ID_SETTINGS_META_AUTOSAVE: isize = 2043;
+    const ID_SETTINGS_META_LIVE: isize = 2044;
+    const ID_SETTINGS_RESET_BUILTIN_PRESETS: isize = 2045;
     const BUTTON_HEIGHT: i32 = 32;
     const BUTTON_WIDTH: i32 = 160;
     const MARGIN: i32 = 16;
@@ -159,17 +203,24 @@ mod imp {
         startup_resume_prompted: bool,
         selected_source: LaunchSelection,
         active_layout: LayoutNode,
+        active_theme: ThemeMode,
+        active_density: ApplicationDensity,
         save_preset_button_hwnd: HWND,
         update_preset_button_hwnd: HWND,
         delete_preset_button_hwnd: HWND,
         launch_preset_button_hwnd: HWND,
         launch_button_hwnd: HWND,
         apply_suggestion_button_hwnd: HWND,
+        theme_combo_hwnd: HWND,
+        density_combo_hwnd: HWND,
+        edit_tiles_button_hwnd: HWND,
         assets_button_hwnd: HWND,
         palette_button_hwnd: HWND,
+        launcher_editor_hwnd: HWND,
     }
 
     struct SettingsWindowState {
+        window_hwnd: HWND,
         parent_hwnd: HWND,
         preference_store: PreferenceStore,
         theme_list_hwnd: HWND,
@@ -177,6 +228,27 @@ mod imp {
         close_background_hwnd: HWND,
         distro_hwnd: HWND,
         runtime_status_hwnd: HWND,
+        fullscreen_shortcut_hwnd: HWND,
+        density_shortcut_hwnd: HWND,
+        zoom_in_shortcut_hwnd: HWND,
+        zoom_out_shortcut_hwnd: HWND,
+        command_palette_shortcut_hwnd: HWND,
+        shortcut_status_hwnd: HWND,
+        recording_shortcut: Option<ShortcutField>,
+        current_fullscreen_shortcut: String,
+        current_density_shortcut: String,
+        current_zoom_in_shortcut: String,
+        current_zoom_out_shortcut: String,
+        current_command_palette_shortcut: String,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ShortcutField {
+        Fullscreen,
+        Density,
+        ZoomIn,
+        ZoomOut,
+        CommandPalette,
     }
 
     unsafe fn run_gui() -> Result<ExitCode, String> {
@@ -216,14 +288,20 @@ mod imp {
             startup_resume_prompted: false,
             selected_source: LaunchSelection::Template(0),
             active_layout: generate_layout(1),
+            active_theme: ThemeMode::System,
+            active_density: ApplicationDensity::Compact,
             save_preset_button_hwnd: ptr::null_mut(),
             update_preset_button_hwnd: ptr::null_mut(),
             delete_preset_button_hwnd: ptr::null_mut(),
             launch_preset_button_hwnd: ptr::null_mut(),
             launch_button_hwnd: ptr::null_mut(),
             apply_suggestion_button_hwnd: ptr::null_mut(),
+            theme_combo_hwnd: ptr::null_mut(),
+            density_combo_hwnd: ptr::null_mut(),
+            edit_tiles_button_hwnd: ptr::null_mut(),
             assets_button_hwnd: ptr::null_mut(),
             palette_button_hwnd: ptr::null_mut(),
+            launcher_editor_hwnd: ptr::null_mut(),
         });
         let state_ptr = Box::into_raw(state);
 
@@ -235,8 +313,8 @@ mod imp {
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                760,
-                520,
+                920,
+                620,
                 ptr::null_mut(),
                 ptr::null_mut(),
                 instance,
@@ -347,6 +425,14 @@ mod imp {
                 }
                 0
             }
+            WM_KEYDOWN => {
+                if let Some(state) = unsafe { state_mut(hwnd) }
+                    && handle_shell_shortcuts(hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
             WM_TRAYICON => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     handle_tray_event(hwnd, state, lparam as u32);
@@ -387,10 +473,17 @@ mod imp {
                         ID_TILE_COUNT if notification == EN_CHANGE => {
                             sync_tile_count_from_input(state);
                         }
+                        ID_THEME_COMBO if notification == CBN_SELCHANGE => {
+                            sync_launch_appearance_from_controls(state);
+                        }
+                        ID_LAUNCH_DENSITY_COMBO if notification == CBN_SELCHANGE => {
+                            sync_launch_appearance_from_controls(state);
+                        }
                         ID_WORKSPACE_PATH if notification == EN_CHANGE => {
                             refresh_asset_warning(state);
                             refresh_suggestions(state);
                             sync_status_text(state);
+                            sync_launcher_editor(state);
                         }
                         ID_LAUNCH_NAME if notification == EN_CHANGE => {
                             sync_status_text(state);
@@ -400,6 +493,7 @@ mod imp {
                         }
                         ID_REFRESH => refresh_state(hwnd, state),
                         ID_APPLY_SUGGESTION => apply_selected_suggestion(state),
+                        ID_EDIT_TILES => open_launcher_editor(hwnd, state),
                         ID_ASSETS_MANAGER => open_assets_manager(hwnd, state),
                         ID_COMMAND_PALETTE => open_command_palette(hwnd, state),
                         ID_SETTINGS => open_settings_dialog(hwnd, state),
@@ -464,6 +558,7 @@ mod imp {
             }
             WM_CREATE => {
                 if let Some(state) = unsafe { settings_state_mut(hwnd) } {
+                    state.window_hwnd = hwnd;
                     create_settings_controls(hwnd, state);
                     refresh_settings_runtime_preview(state);
                 }
@@ -475,16 +570,89 @@ mod imp {
                 }
                 0
             }
+            WM_KEYDOWN => {
+                if let Some(state) = unsafe { settings_state_mut(hwnd) }
+                    && handle_settings_shortcut_capture(hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
+                let notification = ((wparam >> 16) & 0xffff) as u32;
                 if let Some(state) = unsafe { settings_state_mut(hwnd) } {
                     match command_id {
-                        ID_SETTINGS_SAVE => save_settings(hwnd, state),
+                        ID_SETTINGS_THEME_LIST if notification == LBN_SELCHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Default theme updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_DENSITY_LIST if notification == LBN_SELCHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Default application density updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_CLOSE_BACKGROUND if notification == BN_CLICKED => {
+                            apply_live_settings_change(
+                                state,
+                                "Background behavior updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_WSL_DISTRO if notification == EN_CHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Preferred WSL distro updated. Use Check Runtime to verify.",
+                                false,
+                                true,
+                            );
+                        }
                         ID_SETTINGS_RESET => reset_settings(hwnd, state),
+                        ID_SETTINGS_RESET_BUILTIN_PRESETS => {
+                            reset_builtin_presets_from_settings(hwnd, state)
+                        }
                         ID_SETTINGS_CLOSE => unsafe {
                             DestroyWindow(hwnd);
                         },
                         ID_SETTINGS_PROBE => refresh_settings_runtime_preview(state),
+                        ID_SETTINGS_FULLSCREEN_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::Fullscreen)
+                        }
+                        ID_SETTINGS_DENSITY_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::Density)
+                        }
+                        ID_SETTINGS_ZOOM_IN_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::ZoomIn)
+                        }
+                        ID_SETTINGS_ZOOM_OUT_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::ZoomOut)
+                        }
+                        ID_SETTINGS_COMMAND_PALETTE_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::CommandPalette)
+                        }
+                        ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT => {
+                            show_shortcut_help(hwnd, ShortcutField::Fullscreen)
+                        }
+                        ID_SETTINGS_HELP_DENSITY_SHORTCUT => {
+                            show_shortcut_help(hwnd, ShortcutField::Density)
+                        }
+                        ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT => {
+                            show_shortcut_help(hwnd, ShortcutField::ZoomIn)
+                        }
+                        ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT => {
+                            show_shortcut_help(hwnd, ShortcutField::ZoomOut)
+                        }
+                        ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT => {
+                            show_shortcut_help(hwnd, ShortcutField::CommandPalette)
+                        }
                         _ => {}
                     }
                 }
@@ -611,6 +779,24 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
+            "Theme",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_THEME,
+        );
+        state.theme_combo_hwnd = create_combo_box(hwnd, ID_THEME_COMBO);
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Density",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_LABEL_LAUNCH_DENSITY,
+        );
+        state.density_combo_hwnd = create_combo_box(hwnd, ID_LAUNCH_DENSITY_COMBO);
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
             "Selection summary",
             WS_CHILD | WS_VISIBLE,
             0,
@@ -647,6 +833,14 @@ mod imp {
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
             ID_APPLY_SUGGESTION,
+        );
+        state.edit_tiles_button_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Edit Tiles",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_EDIT_TILES,
         );
         state.status_hwnd = create_child_window(
             hwnd,
@@ -752,6 +946,10 @@ mod imp {
             state.session_name_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_TILE_COUNT as i32) },
             state.tile_count_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_THEME as i32) },
+            state.theme_combo_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_LAUNCH_DENSITY as i32) },
+            state.density_combo_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_SELECTION_SUMMARY as i32) },
             state.selection_summary_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_SUGGESTIONS as i32) },
@@ -761,6 +959,7 @@ mod imp {
             unsafe { GetDlgItem(hwnd, ID_LABEL_PRESETS as i32) },
             state.preset_list_hwnd,
             state.apply_suggestion_button_hwnd,
+            state.edit_tiles_button_hwnd,
             state.status_hwnd,
             state.save_preset_button_hwnd,
             state.update_preset_button_hwnd,
@@ -780,6 +979,11 @@ mod imp {
             }
         }
 
+        populate_combo_box_items(state.theme_combo_hwnd, &["System", "Light", "Dark"]);
+        populate_combo_box_items(
+            state.density_combo_hwnd,
+            &["Comfortable", "Standard", "Compact"],
+        );
         populate_template_list(state);
         populate_suggestion_list(state);
         layout_controls(hwnd, state);
@@ -800,9 +1004,13 @@ mod imp {
         let name_edit_y = name_label_y + LABEL_HEIGHT + 4;
         let tile_count_label_y = name_edit_y + FIELD_HEIGHT + 10;
         let tile_count_edit_y = tile_count_label_y + LABEL_HEIGHT + 4;
-        let summary_label_y = tile_count_label_y;
-        let summary_y = tile_count_edit_y;
-        let lists_label_y = tile_count_edit_y + FIELD_HEIGHT + 12;
+        let theme_label_y = tile_count_label_y;
+        let theme_combo_y = tile_count_edit_y;
+        let density_label_y = tile_count_label_y;
+        let density_combo_y = tile_count_edit_y;
+        let summary_label_y = tile_count_edit_y + FIELD_HEIGHT + 12;
+        let summary_y = summary_label_y + LABEL_HEIGHT + 4;
+        let lists_label_y = summary_y + FIELD_HEIGHT + 12;
         let list_y = lists_label_y + LABEL_HEIGHT + 4;
         let column_gap = 12;
         let column_width = ((content_width - column_gap) / 2).max(180);
@@ -814,6 +1022,11 @@ mod imp {
         let button_y = height - MARGIN - BUTTON_HEIGHT;
         let status_y = suggestions_button_y + BUTTON_HEIGHT + 12;
         let status_height = (button_y - status_y - 12).max(88);
+        let appearance_label_x = MARGIN + 96;
+        let appearance_field_x = appearance_label_x;
+        let combo_width = 148;
+        let density_label_x = appearance_field_x + combo_width + 20;
+        let density_field_x = density_label_x;
 
         unsafe {
             SetWindowPos(
@@ -871,20 +1084,56 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_THEME as i32),
+                ptr::null_mut(),
+                appearance_label_x,
+                theme_label_y,
+                combo_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.theme_combo_hwnd,
+                ptr::null_mut(),
+                appearance_field_x,
+                theme_combo_y,
+                combo_width,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_LABEL_LAUNCH_DENSITY as i32),
+                ptr::null_mut(),
+                density_label_x,
+                density_label_y,
+                combo_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.density_combo_hwnd,
+                ptr::null_mut(),
+                density_field_x,
+                density_combo_y,
+                combo_width,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
                 GetDlgItem(hwnd, ID_LABEL_SELECTION_SUMMARY as i32),
                 ptr::null_mut(),
-                MARGIN + 88,
+                MARGIN,
                 summary_label_y,
-                content_width - 88,
+                content_width,
                 LABEL_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
                 state.selection_summary_hwnd,
                 ptr::null_mut(),
-                MARGIN + 88,
+                MARGIN,
                 summary_y,
-                content_width - 88,
+                content_width,
                 FIELD_HEIGHT,
                 SWP_NOZORDER,
             );
@@ -984,6 +1233,15 @@ mod imp {
                 MARGIN,
                 suggestions_button_y,
                 BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.edit_tiles_button_hwnd,
+                ptr::null_mut(),
+                MARGIN + BUTTON_WIDTH + 12,
+                suggestions_button_y,
+                BUTTON_WIDTH - 8,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
@@ -1094,6 +1352,10 @@ mod imp {
                 state.apply_suggestion_button_hwnd,
                 (!state.suggestions.is_empty()) as i32,
             );
+            EnableWindow(
+                state.edit_tiles_button_hwnd,
+                has_launcher_selection(state) as i32,
+            );
         }
         sync_tray_tooltip(hwnd, state);
         maybe_prompt_startup_resume(hwnd, state);
@@ -1101,16 +1363,29 @@ mod imp {
         logging::info("refreshed Windows shell state");
     }
 
-    fn refresh_asset_warning(state: &mut AppWindowState) {
+    fn current_workspace_root(state: &AppWindowState) -> Option<PathBuf> {
         let workspace_root_input = read_window_text(state.workspace_path_hwnd);
-        state.asset_warning = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
-            .ok()
-            .and_then(|workspace_root| {
+        resolve_workspace_root(&PathBuf::from(workspace_root_input.trim())).ok()
+    }
+
+    fn current_launcher_assets(state: &AppWindowState) -> WorkspaceAssets {
+        current_workspace_root(state)
+            .map(|workspace_root| {
                 state
                     .asset_store
                     .load_assets_for_workspace_root(&workspace_root)
-                    .warning
-            });
+                    .assets
+            })
+            .unwrap_or_default()
+    }
+
+    fn refresh_asset_warning(state: &mut AppWindowState) {
+        state.asset_warning = current_workspace_root(state).and_then(|workspace_root| {
+            state
+                .asset_store
+                .load_assets_for_workspace_root(&workspace_root)
+                .warning
+        });
     }
 
     fn maybe_prompt_startup_resume(hwnd: HWND, state: &mut AppWindowState) {
@@ -1122,30 +1397,32 @@ mod imp {
         if state.runtime.is_none() || state.session.is_none() {
             return;
         }
+        let saved_session = state.session.clone().expect("checked above");
+        let restore_mode = state.preference_store.load().default_restore_mode;
 
-        let response = unsafe {
-            MessageBoxW(
-                hwnd,
-                wide("Resume the saved TerminalTiler workspace session now?\r\n\r\nYes = Resume\r\nNo = Start Fresh")
-                    .as_ptr(),
-                wide("Resume Previous Session").as_ptr(),
-                MB_YESNO | MB_ICONWARNING,
-            )
-        };
-
-        if response == IDYES {
-            launch_restored_session(hwnd, state);
-            return;
+        match restore_mode {
+            RestoreLaunchMode::Prompt => {
+                let action = restore_prompt::present(
+                    hwnd,
+                    saved_session.tabs.len(),
+                    state.session_warning.as_deref(),
+                )
+                .unwrap_or_else(|error| {
+                    logging::error(format!("could not show restore prompt: {error}"));
+                    RestoreStartupAction::StartFresh
+                });
+                if let Some(session) = session_for_startup_action(&saved_session, action) {
+                    launch_saved_session(state, &session, "restored");
+                    return;
+                }
+                clear_saved_startup_session(state);
+            }
+            RestoreLaunchMode::RerunStartupCommands | RestoreLaunchMode::ShellOnly => {
+                if let Some(session) = session_for_restore_mode(&saved_session, restore_mode) {
+                    launch_saved_session(state, &session, "restored");
+                }
+            }
         }
-
-        state.session_store.clear();
-        state.session = None;
-        state.session_warning = None;
-        unsafe {
-            sync_status_text(state);
-            EnableWindow(state.launch_button_hwnd, 0);
-        }
-        logging::info("cleared saved Windows session at startup");
     }
 
     fn launch_selected_preset(_hwnd: HWND, state: &mut AppWindowState) {
@@ -1227,11 +1504,8 @@ mod imp {
         }
     }
 
-    fn launch_restored_session(_hwnd: HWND, state: &mut AppWindowState) {
+    fn launch_saved_session(state: &mut AppWindowState, session: &SavedSession, label: &str) {
         let Some(runtime) = state.runtime.as_ref() else {
-            return;
-        };
-        let Some(session) = state.session.as_ref() else {
             return;
         };
 
@@ -1248,7 +1522,7 @@ mod imp {
                         SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
                     }
                     logging::info(format!(
-                        "opened {} Windows workspace host window(s) with {} pane(s) using {}",
+                        "opened {} {label} Windows workspace host window(s) with {} pane(s) using {}",
                         window_count,
                         pane_count,
                         runtime.label()
@@ -1272,6 +1546,24 @@ mod imp {
                 ));
             }
         }
+    }
+
+    fn launch_restored_session(_hwnd: HWND, state: &mut AppWindowState) {
+        let Some(session) = state.session.clone() else {
+            return;
+        };
+        launch_saved_session(state, &session, "restored");
+    }
+
+    fn clear_saved_startup_session(state: &mut AppWindowState) {
+        state.session_store.clear();
+        state.session = None;
+        state.session_warning = None;
+        unsafe {
+            sync_status_text(state);
+            EnableWindow(state.launch_button_hwnd, 0);
+        }
+        logging::info("cleared saved Windows session at startup");
     }
 
     fn build_status_text(state: &AppWindowState, preferred_distribution: Option<&str>) -> String {
@@ -1604,6 +1896,7 @@ mod imp {
 
         let preferences = state.preference_store.load();
         let settings_state = Box::new(SettingsWindowState {
+            window_hwnd: ptr::null_mut(),
             parent_hwnd,
             preference_store: state.preference_store.clone(),
             theme_list_hwnd: ptr::null_mut(),
@@ -1611,6 +1904,18 @@ mod imp {
             close_background_hwnd: ptr::null_mut(),
             distro_hwnd: ptr::null_mut(),
             runtime_status_hwnd: ptr::null_mut(),
+            fullscreen_shortcut_hwnd: ptr::null_mut(),
+            density_shortcut_hwnd: ptr::null_mut(),
+            zoom_in_shortcut_hwnd: ptr::null_mut(),
+            zoom_out_shortcut_hwnd: ptr::null_mut(),
+            command_palette_shortcut_hwnd: ptr::null_mut(),
+            shortcut_status_hwnd: ptr::null_mut(),
+            recording_shortcut: None,
+            current_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
+            current_density_shortcut: preferences.workspace_density_shortcut.clone(),
+            current_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
+            current_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
+            current_command_palette_shortcut: preferences.command_palette_shortcut.clone(),
         });
         let settings_state_ptr = Box::into_raw(settings_state);
 
@@ -1644,6 +1949,38 @@ mod imp {
 
     fn create_settings_controls(hwnd: HWND, state: &mut SettingsWindowState) {
         let preferences = state.preference_store.load();
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Application Settings",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_SUMMARY_TITLE,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Set launch defaults, tray behavior, and workspace shortcuts in one place. Changes apply immediately, while workspace zoom stays session-scoped.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_SUMMARY_COPY,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Saved automatically",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_META_AUTOSAVE,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Defaults live",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_META_LIVE,
+        );
         let _ = create_child_window(
             hwnd,
             "STATIC",
@@ -1706,6 +2043,222 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
+            "Workspace shortcuts",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_SHORTCUTS,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Fullscreen",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT,
+        );
+        state.fullscreen_shortcut_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.workspace_fullscreen_shortcut),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_FULLSCREEN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_FULLSCREEN_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "?",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Available only while a workspace tab is active.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Density",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_DENSITY_SHORTCUT,
+        );
+        state.density_shortcut_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.workspace_density_shortcut),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_DENSITY_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_DENSITY_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "?",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_HELP_DENSITY_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Rotates only the current workspace without changing the saved app default.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_DENSITY_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Zoom in",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT,
+        );
+        state.zoom_in_shortcut_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.workspace_zoom_in_shortcut),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_ZOOM_IN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_ZOOM_IN_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "?",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Applies only to the active workspace and is restored with saved workspace sessions.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Zoom out",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT,
+        );
+        state.zoom_out_shortcut_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.workspace_zoom_out_shortcut),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_ZOOM_OUT_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_ZOOM_OUT_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "?",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Applies only to the active workspace and is restored with saved workspace sessions.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Command palette",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT,
+        );
+        state.command_palette_shortcut_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.command_palette_shortcut),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_COMMAND_PALETTE_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_COMMAND_PALETTE_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "?",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Available in launch tabs and workspaces for fast navigation and actions.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT,
+        );
+        state.shortcut_status_hwnd = create_child_window(
+            hwnd,
+            "STATIC",
+            default_settings_status(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_SHORTCUT_STATUS,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
             "Runtime preview",
             WS_CHILD | WS_VISIBLE,
             0,
@@ -1737,18 +2290,18 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "BUTTON",
-            "Save",
+            "Reset Defaults",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
-            ID_SETTINGS_SAVE,
+            ID_SETTINGS_RESET,
         );
         let _ = create_child_window(
             hwnd,
             "BUTTON",
-            "Reset",
+            "Reset Default Saved Presets",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
             0,
-            ID_SETTINGS_RESET,
+            ID_SETTINGS_RESET_BUILTIN_PRESETS,
         );
         let _ = create_child_window(
             hwnd,
@@ -1761,6 +2314,10 @@ mod imp {
 
         let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         for control in [
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_TITLE as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_COPY as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_META_AUTOSAVE as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_META_LIVE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_THEME as i32) },
             state.theme_list_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_DENSITY as i32) },
@@ -1768,11 +2325,38 @@ mod imp {
             state.close_background_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_DISTRO as i32) },
             state.distro_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_SHORTCUTS as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT as i32) },
+            state.fullscreen_shortcut_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_FULLSCREEN_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_DENSITY_SHORTCUT as i32) },
+            state.density_shortcut_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_DENSITY_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_HELP_DENSITY_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_DENSITY_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT as i32) },
+            state.zoom_in_shortcut_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_ZOOM_IN_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT as i32) },
+            state.zoom_out_shortcut_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_ZOOM_OUT_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT as i32) },
+            state.command_palette_shortcut_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_COMMAND_PALETTE_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT as i32) },
+            state.shortcut_status_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_RUNTIME as i32) },
             state.runtime_status_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_PROBE as i32) },
-            unsafe { GetDlgItem(hwnd, ID_SETTINGS_SAVE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_RESET as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_RESET_BUILTIN_PRESETS as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_CLOSE as i32) },
         ] {
             if !control.is_null() {
@@ -1800,19 +2384,78 @@ mod imp {
         let height = rect.bottom - rect.top;
         let content_width = width - (MARGIN * 2);
 
-        let theme_label_y = MARGIN;
+        let summary_title_y = MARGIN;
+        let summary_copy_y = summary_title_y + 22;
+        let summary_meta_y = summary_copy_y + 40;
+        let theme_label_y = summary_meta_y + 24;
         let theme_list_y = theme_label_y + LABEL_HEIGHT + 4;
         let density_label_y = theme_list_y + SETTINGS_LIST_HEIGHT + 12;
         let density_list_y = density_label_y + LABEL_HEIGHT + 4;
         let checkbox_y = density_list_y + SETTINGS_LIST_HEIGHT + 12;
         let distro_label_y = checkbox_y + 28 + 12;
         let distro_edit_y = distro_label_y + LABEL_HEIGHT + 4;
-        let runtime_label_y = distro_edit_y + FIELD_HEIGHT + 12;
+        let shortcuts_label_y = distro_edit_y + FIELD_HEIGHT + 12;
+        let shortcut_row_height = FIELD_HEIGHT + LABEL_HEIGHT + 18;
+        let shortcut_row_1_y = shortcuts_label_y + LABEL_HEIGHT + 8;
+        let shortcut_row_2_y = shortcut_row_1_y + shortcut_row_height;
+        let shortcut_row_3_y = shortcut_row_2_y + shortcut_row_height;
+        let shortcut_row_4_y = shortcut_row_3_y + shortcut_row_height;
+        let shortcut_row_5_y = shortcut_row_4_y + shortcut_row_height;
+        let shortcut_status_y = shortcut_row_5_y + shortcut_row_height;
+        let runtime_label_y = shortcut_status_y + LABEL_HEIGHT + 12;
         let runtime_edit_y = runtime_label_y + LABEL_HEIGHT + 4;
         let button_y = height - MARGIN - BUTTON_HEIGHT;
         let runtime_height = (button_y - runtime_edit_y - 12).max(120);
+        let shortcut_label_width = 140;
+        let shortcut_button_width = 84;
+        let shortcut_help_width = 36;
+        let shortcut_edit_x = MARGIN + shortcut_label_width + 8;
+        let shortcut_edit_width = (content_width
+            - shortcut_label_width
+            - shortcut_button_width
+            - shortcut_help_width
+            - 24)
+            .max(120);
+        let shortcut_button_x = shortcut_edit_x + shortcut_edit_width + 8;
+        let shortcut_help_x = shortcut_button_x + shortcut_button_width + 8;
 
         unsafe {
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_TITLE as i32),
+                ptr::null_mut(),
+                MARGIN,
+                summary_title_y,
+                content_width,
+                22,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_COPY as i32),
+                ptr::null_mut(),
+                MARGIN,
+                summary_copy_y,
+                content_width,
+                36,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_META_AUTOSAVE as i32),
+                ptr::null_mut(),
+                MARGIN,
+                summary_meta_y,
+                120,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_META_LIVE as i32),
+                ptr::null_mut(),
+                MARGIN + 128,
+                summary_meta_y,
+                96,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
             SetWindowPos(
                 GetDlgItem(hwnd, ID_SETTINGS_LABEL_THEME as i32),
                 ptr::null_mut(),
@@ -1877,6 +2520,94 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_LABEL_SHORTCUTS as i32),
+                ptr::null_mut(),
+                MARGIN,
+                shortcuts_label_y,
+                content_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT,
+                state.fullscreen_shortcut_hwnd,
+                ID_SETTINGS_FULLSCREEN_RECORD,
+                shortcut_row_1_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT,
+                ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_DENSITY_SHORTCUT,
+                state.density_shortcut_hwnd,
+                ID_SETTINGS_DENSITY_RECORD,
+                shortcut_row_2_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_DENSITY_SHORTCUT,
+                ID_SETTINGS_HELP_DENSITY_SHORTCUT,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT,
+                state.zoom_in_shortcut_hwnd,
+                ID_SETTINGS_ZOOM_IN_RECORD,
+                shortcut_row_3_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT,
+                ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT,
+                state.zoom_out_shortcut_hwnd,
+                ID_SETTINGS_ZOOM_OUT_RECORD,
+                shortcut_row_4_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT,
+                ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT,
+                state.command_palette_shortcut_hwnd,
+                ID_SETTINGS_COMMAND_PALETTE_RECORD,
+                shortcut_row_5_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT,
+                ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT,
+            );
+            SetWindowPos(
+                state.shortcut_status_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                shortcut_status_y,
+                content_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
                 GetDlgItem(hwnd, ID_SETTINGS_LABEL_RUNTIME as i32),
                 ptr::null_mut(),
                 MARGIN,
@@ -1904,20 +2635,20 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                GetDlgItem(hwnd, ID_SETTINGS_SAVE as i32),
+                GetDlgItem(hwnd, ID_SETTINGS_RESET as i32),
                 ptr::null_mut(),
                 MARGIN + BUTTON_WIDTH + 12,
                 button_y,
-                96,
+                132,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                GetDlgItem(hwnd, ID_SETTINGS_RESET as i32),
+                GetDlgItem(hwnd, ID_SETTINGS_RESET_BUILTIN_PRESETS as i32),
                 ptr::null_mut(),
-                MARGIN + BUTTON_WIDTH + 120,
+                MARGIN + BUTTON_WIDTH + 156,
                 button_y,
-                96,
+                208,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
@@ -1928,6 +2659,69 @@ mod imp {
                 button_y,
                 96,
                 BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+        }
+    }
+
+    fn layout_shortcut_row(
+        hwnd: HWND,
+        label_id: isize,
+        edit_hwnd: HWND,
+        button_id: isize,
+        y: i32,
+        label_width: i32,
+        edit_x: i32,
+        edit_width: i32,
+        button_x: i32,
+        help_x: i32,
+        note_id: isize,
+        help_id: isize,
+    ) {
+        unsafe {
+            SetWindowPos(
+                GetDlgItem(hwnd, label_id as i32),
+                ptr::null_mut(),
+                MARGIN,
+                y + 4,
+                label_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                edit_hwnd,
+                ptr::null_mut(),
+                edit_x,
+                y,
+                edit_width,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, button_id as i32),
+                ptr::null_mut(),
+                button_x,
+                y - 2,
+                76,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, help_id as i32),
+                ptr::null_mut(),
+                help_x,
+                y - 2,
+                30,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, note_id as i32),
+                ptr::null_mut(),
+                edit_x,
+                y + FIELD_HEIGHT + 4,
+                help_x + 30 - edit_x,
+                LABEL_HEIGHT + 8,
                 SWP_NOZORDER,
             );
         }
@@ -1948,52 +2742,324 @@ mod imp {
         }
     }
 
-    fn save_settings(hwnd: HWND, state: &SettingsWindowState) {
-        let theme = theme_from_index(selected_listbox_index(state.theme_list_hwnd));
-        let density = density_from_index(selected_listbox_index(state.density_list_hwnd));
-        let close_to_background =
+    fn begin_shortcut_capture(hwnd: HWND, state: &mut SettingsWindowState, field: ShortcutField) {
+        if state.recording_shortcut == Some(field) {
+            state.recording_shortcut = None;
+            update_shortcut_record_button_labels(hwnd, state);
+            set_settings_status(state, default_settings_status());
+            return;
+        }
+        state.recording_shortcut = Some(field);
+        update_shortcut_record_button_labels(hwnd, state);
+        set_settings_status(
+            state,
+            &format!("Recording {}. Press Esc to cancel.", shortcut_title(field)),
+        );
+        unsafe { SetFocus(hwnd) };
+    }
+
+    fn handle_settings_shortcut_capture(
+        hwnd: HWND,
+        state: &mut SettingsWindowState,
+        virtual_key: u32,
+    ) -> bool {
+        let Some(field) = state.recording_shortcut else {
+            return false;
+        };
+        let Some(rendered) = shortcut_capture::capture_shortcut_from_keydown(virtual_key) else {
+            set_settings_status(
+                state,
+                "That key cannot be used alone. Try a function key or add modifiers.",
+            );
+            return true;
+        };
+        state.recording_shortcut = None;
+        update_shortcut_record_button_labels(hwnd, state);
+        if rendered.is_empty() {
+            set_settings_status(state, default_settings_status());
+            return true;
+        }
+        let target_hwnd = shortcut_hwnd_for_field(state, field);
+        *shortcut_value_mut(state, field) = rendered.clone();
+        unsafe {
+            SetWindowTextW(
+                target_hwnd,
+                wide(&shortcut_capture::display_label(&rendered)).as_ptr(),
+            );
+            SetFocus(hwnd);
+        }
+        apply_live_settings_change(
+            state,
+            &format!(
+                "{} updated to {}.",
+                shortcut_title(field),
+                shortcut_capture::display_label(&rendered)
+            ),
+            false,
+            true,
+        );
+        true
+    }
+
+    fn shortcut_hwnd_for_field(state: &SettingsWindowState, field: ShortcutField) -> HWND {
+        match field {
+            ShortcutField::Fullscreen => state.fullscreen_shortcut_hwnd,
+            ShortcutField::Density => state.density_shortcut_hwnd,
+            ShortcutField::ZoomIn => state.zoom_in_shortcut_hwnd,
+            ShortcutField::ZoomOut => state.zoom_out_shortcut_hwnd,
+            ShortcutField::CommandPalette => state.command_palette_shortcut_hwnd,
+        }
+    }
+
+    fn shortcut_value_mut(state: &mut SettingsWindowState, field: ShortcutField) -> &mut String {
+        match field {
+            ShortcutField::Fullscreen => &mut state.current_fullscreen_shortcut,
+            ShortcutField::Density => &mut state.current_density_shortcut,
+            ShortcutField::ZoomIn => &mut state.current_zoom_in_shortcut,
+            ShortcutField::ZoomOut => &mut state.current_zoom_out_shortcut,
+            ShortcutField::CommandPalette => &mut state.current_command_palette_shortcut,
+        }
+    }
+
+    fn shortcut_record_button_id(field: ShortcutField) -> isize {
+        match field {
+            ShortcutField::Fullscreen => ID_SETTINGS_FULLSCREEN_RECORD,
+            ShortcutField::Density => ID_SETTINGS_DENSITY_RECORD,
+            ShortcutField::ZoomIn => ID_SETTINGS_ZOOM_IN_RECORD,
+            ShortcutField::ZoomOut => ID_SETTINGS_ZOOM_OUT_RECORD,
+            ShortcutField::CommandPalette => ID_SETTINGS_COMMAND_PALETTE_RECORD,
+        }
+    }
+
+    fn shortcut_title(field: ShortcutField) -> &'static str {
+        match field {
+            ShortcutField::Fullscreen => "Toggle workspace fullscreen",
+            ShortcutField::Density => "Cycle active workspace density",
+            ShortcutField::ZoomIn => "Zoom in terminal text",
+            ShortcutField::ZoomOut => "Zoom out terminal text",
+            ShortcutField::CommandPalette => "Open command palette",
+        }
+    }
+
+    fn shortcut_note(field: ShortcutField) -> &'static str {
+        match field {
+            ShortcutField::Fullscreen => "Available only while a workspace tab is active.",
+            ShortcutField::Density => {
+                "Rotates only the current workspace without changing the saved app default."
+            }
+            ShortcutField::ZoomIn | ShortcutField::ZoomOut => {
+                "Applies only to the active workspace and is restored with saved workspace sessions."
+            }
+            ShortcutField::CommandPalette => {
+                "Available in launch tabs and workspaces for fast navigation and actions."
+            }
+        }
+    }
+
+    fn shortcut_examples(field: ShortcutField) -> &'static [&'static str] {
+        match field {
+            ShortcutField::Fullscreen => &["F11", "<Shift>F11", "<Ctrl>F11"],
+            ShortcutField::Density => &["<Ctrl><Shift>D", "<Shift>F8", "<Alt><Super>D"],
+            ShortcutField::ZoomIn => &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
+            ShortcutField::ZoomOut => &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
+            ShortcutField::CommandPalette => &["<Ctrl><Shift>P", "<Ctrl>P", "<Super>P"],
+        }
+    }
+
+    fn default_settings_status() -> &'static str {
+        "Changes are saved automatically. Click Record, then press the shortcut you want. Press Esc to cancel."
+    }
+
+    fn set_settings_status(state: &SettingsWindowState, message: &str) {
+        unsafe {
+            SetWindowTextW(state.shortcut_status_hwnd, wide(message).as_ptr());
+        }
+    }
+
+    fn show_shortcut_help(hwnd: HWND, field: ShortcutField) {
+        let examples = shortcut_examples(field).join("\r\n");
+        let body = format!(
+            "{}\r\n\r\n{}\r\n\r\nClick Record, then press the shortcut you want to use. Press Esc while recording to cancel.\r\n\r\nExamples\r\n{}",
+            shortcut_title(field),
+            shortcut_note(field),
+            examples
+        );
+        unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(&body).as_ptr(),
+                wide(shortcut_title(field)).as_ptr(),
+                MB_OK,
+            );
+        }
+    }
+
+    fn update_shortcut_record_button_labels(hwnd: HWND, state: &SettingsWindowState) {
+        for field in [
+            ShortcutField::Fullscreen,
+            ShortcutField::Density,
+            ShortcutField::ZoomIn,
+            ShortcutField::ZoomOut,
+            ShortcutField::CommandPalette,
+        ] {
+            let label = if state.recording_shortcut == Some(field) {
+                "Press keys..."
+            } else {
+                "Record"
+            };
+            unsafe {
+                SetWindowTextW(
+                    GetDlgItem(hwnd, shortcut_record_button_id(field) as i32),
+                    wide(label).as_ptr(),
+                );
+            }
+        }
+    }
+
+    fn settings_snapshot_from_controls(state: &SettingsWindowState) -> AppPreferences {
+        let mut preferences = state.preference_store.load();
+        preferences.default_theme = theme_from_index(selected_listbox_index(state.theme_list_hwnd));
+        preferences.default_density =
+            density_from_index(selected_listbox_index(state.density_list_hwnd));
+        preferences.close_to_background =
             unsafe { SendMessageW(state.close_background_hwnd, BM_GETCHECK, 0, 0) }
                 == CHECKBOX_CHECKED as isize;
         let preferred_distribution = read_window_text(state.distro_hwnd);
-
-        state.preference_store.save_default_theme(theme);
-        state.preference_store.save_default_density(density);
-        state
-            .preference_store
-            .save_close_to_background(close_to_background);
-        state
-            .preference_store
-            .save_windows_wsl_distribution(Some(preferred_distribution.as_str()));
-        refresh_settings_runtime_preview(state);
-
-        if let Some(parent_state) = unsafe { state_mut(state.parent_hwnd) } {
-            refresh_state(state.parent_hwnd, parent_state);
-        }
-
-        let mut rect = unsafe { mem::zeroed() };
-        unsafe {
-            GetClientRect(hwnd, &mut rect);
-        }
-        state
-            .preference_store
-            .save_settings_dialog_size(rect.right - rect.left, rect.bottom - rect.top);
+        preferences.windows_wsl_distribution = if preferred_distribution.trim().is_empty() {
+            None
+        } else {
+            Some(preferred_distribution.trim().to_string())
+        };
+        preferences.workspace_fullscreen_shortcut = state.current_fullscreen_shortcut.clone();
+        preferences.workspace_density_shortcut = state.current_density_shortcut.clone();
+        preferences.workspace_zoom_in_shortcut = state.current_zoom_in_shortcut.clone();
+        preferences.workspace_zoom_out_shortcut = state.current_zoom_out_shortcut.clone();
+        preferences.command_palette_shortcut = state.current_command_palette_shortcut.clone();
+        preferences
     }
 
-    fn reset_settings(_hwnd: HWND, state: &SettingsWindowState) {
+    fn settings_match_defaults(preferences: &AppPreferences) -> bool {
         let defaults = AppPreferences::default();
-        apply_preferences_to_settings_controls(state, &defaults);
-        state.preference_store.save(&defaults);
+        preferences.default_theme == defaults.default_theme
+            && preferences.default_density == defaults.default_density
+            && preferences.close_to_background == defaults.close_to_background
+            && preferences.windows_wsl_distribution == defaults.windows_wsl_distribution
+            && preferences.workspace_fullscreen_shortcut == defaults.workspace_fullscreen_shortcut
+            && preferences.workspace_density_shortcut == defaults.workspace_density_shortcut
+            && preferences.workspace_zoom_in_shortcut == defaults.workspace_zoom_in_shortcut
+            && preferences.workspace_zoom_out_shortcut == defaults.workspace_zoom_out_shortcut
+            && preferences.command_palette_shortcut == defaults.command_palette_shortcut
+    }
+
+    fn sync_settings_reset_button_state(state: &SettingsWindowState) {
+        let current = settings_snapshot_from_controls(state);
+        unsafe {
+            EnableWindow(
+                GetDlgItem(state.window_hwnd, ID_SETTINGS_RESET as i32),
+                if settings_match_defaults(&current) {
+                    0
+                } else {
+                    1
+                },
+            );
+        }
+    }
+
+    fn apply_live_settings_change(
+        state: &mut SettingsWindowState,
+        status: &str,
+        refresh_runtime_preview: bool,
+        refresh_parent: bool,
+    ) {
+        let next = settings_snapshot_from_controls(state);
+        let changed = next != state.preference_store.load();
+        if changed {
+            state.preference_store.save(&next);
+        }
+        if refresh_runtime_preview {
+            refresh_settings_runtime_preview(state);
+        }
+        set_settings_status(state, status);
+        sync_settings_reset_button_state(state);
+
+        if refresh_parent && let Some(parent_state) = unsafe { state_mut(state.parent_hwnd) } {
+            refresh_state(state.parent_hwnd, parent_state);
+        }
+    }
+
+    fn reset_settings(_hwnd: HWND, state: &mut SettingsWindowState) {
+        let mut preferences = state.preference_store.load();
+        let defaults = AppPreferences::default();
+        preferences.default_theme = defaults.default_theme;
+        preferences.default_density = defaults.default_density;
+        preferences.close_to_background = defaults.close_to_background;
+        preferences.windows_wsl_distribution = defaults.windows_wsl_distribution;
+        preferences.workspace_fullscreen_shortcut = defaults.workspace_fullscreen_shortcut;
+        preferences.workspace_density_shortcut = defaults.workspace_density_shortcut;
+        preferences.workspace_zoom_in_shortcut = defaults.workspace_zoom_in_shortcut;
+        preferences.workspace_zoom_out_shortcut = defaults.workspace_zoom_out_shortcut;
+        preferences.command_palette_shortcut = defaults.command_palette_shortcut;
+        state.preference_store.save(&preferences);
+        apply_preferences_to_settings_controls(state, &preferences);
         refresh_settings_runtime_preview(state);
+        set_settings_status(state, "Defaults restored. Changes are live.");
 
         if let Some(parent_state) = unsafe { state_mut(state.parent_hwnd) } {
             refresh_state(state.parent_hwnd, parent_state);
+        }
+    }
+
+    fn reset_builtin_presets_from_settings(hwnd: HWND, state: &mut SettingsWindowState) {
+        let response = unsafe {
+            MessageBoxW(
+                hwnd,
+                wide(
+                    "Restore the factory versions of TerminalTiler's default saved presets?\r\n\r\nYour custom presets will be kept.",
+                )
+                .as_ptr(),
+                wide("Reset Default Saved Presets").as_ptr(),
+                MB_OKCANCEL | MB_ICONWARNING,
+            )
+        };
+        if response != IDOK {
+            return;
+        }
+
+        if let Some(parent_state) = unsafe { state_mut(state.parent_hwnd) } {
+            match parent_state.preset_store.reset_builtin_presets() {
+                Ok(()) => {
+                    refresh_state(state.parent_hwnd, parent_state);
+                    set_settings_status(state, "Default saved presets restored. Changes are live.");
+                    logging::info("reset builtin saved presets to factory defaults on Windows");
+                }
+                Err(error) => {
+                    let message = format!("Could not restore default saved presets:\r\n{error}");
+                    unsafe {
+                        MessageBoxW(
+                            hwnd,
+                            wide(&message).as_ptr(),
+                            wide("Reset Default Saved Presets").as_ptr(),
+                            MB_OK | MB_ICONWARNING,
+                        );
+                    }
+                    logging::error(format!(
+                        "failed to reset builtin saved presets on Windows: {error}"
+                    ));
+                }
+            }
         }
     }
 
     fn apply_preferences_to_settings_controls(
-        state: &SettingsWindowState,
+        state: &mut SettingsWindowState,
         preferences: &AppPreferences,
     ) {
+        state.current_fullscreen_shortcut = preferences.workspace_fullscreen_shortcut.clone();
+        state.current_density_shortcut = preferences.workspace_density_shortcut.clone();
+        state.current_zoom_in_shortcut = preferences.workspace_zoom_in_shortcut.clone();
+        state.current_zoom_out_shortcut = preferences.workspace_zoom_out_shortcut.clone();
+        state.current_command_palette_shortcut = preferences.command_palette_shortcut.clone();
+        state.recording_shortcut = None;
         select_listbox_index(
             state.theme_list_hwnd,
             theme_index(preferences.default_theme),
@@ -2023,7 +3089,45 @@ mod imp {
                 )
                 .as_ptr(),
             );
+            SetWindowTextW(
+                state.fullscreen_shortcut_hwnd,
+                wide(&shortcut_capture::display_label(
+                    &preferences.workspace_fullscreen_shortcut,
+                ))
+                .as_ptr(),
+            );
+            SetWindowTextW(
+                state.density_shortcut_hwnd,
+                wide(&shortcut_capture::display_label(
+                    &preferences.workspace_density_shortcut,
+                ))
+                .as_ptr(),
+            );
+            SetWindowTextW(
+                state.zoom_in_shortcut_hwnd,
+                wide(&shortcut_capture::display_label(
+                    &preferences.workspace_zoom_in_shortcut,
+                ))
+                .as_ptr(),
+            );
+            SetWindowTextW(
+                state.zoom_out_shortcut_hwnd,
+                wide(&shortcut_capture::display_label(
+                    &preferences.workspace_zoom_out_shortcut,
+                ))
+                .as_ptr(),
+            );
+            SetWindowTextW(
+                state.command_palette_shortcut_hwnd,
+                wide(&shortcut_capture::display_label(
+                    &preferences.command_palette_shortcut,
+                ))
+                .as_ptr(),
+            );
         }
+        set_settings_status(state, default_settings_status());
+        update_shortcut_record_button_labels(state.window_hwnd, state);
+        sync_settings_reset_button_state(state);
     }
 
     fn create_child_window(
@@ -2040,6 +3144,25 @@ mod imp {
                 wide(class_name).as_ptr(),
                 wide(text).as_ptr(),
                 style,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                control_id as HMENU,
+                GetModuleHandleW(ptr::null()),
+                ptr::null(),
+            )
+        }
+    }
+
+    fn create_combo_box(hwnd: HWND, control_id: isize) -> HWND {
+        unsafe {
+            CreateWindowExW(
+                0,
+                wide("COMBOBOX").as_ptr(),
+                wide("").as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
                 0,
                 0,
                 0,
@@ -2093,6 +3216,15 @@ mod imp {
             SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
             for item in items {
                 SendMessageW(hwnd, LB_ADDSTRING, 0, wide(item).as_ptr() as LPARAM);
+            }
+        }
+    }
+
+    fn populate_combo_box_items(hwnd: HWND, items: &[&str]) {
+        unsafe {
+            SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+            for item in items {
+                SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as LPARAM);
             }
         }
     }
@@ -2164,9 +3296,7 @@ mod imp {
     }
 
     fn refresh_suggestions(state: &mut AppWindowState) {
-        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
-        state.suggestions = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
-            .ok()
+        state.suggestions = current_workspace_root(state)
             .map(|workspace_root| detect_project_suggestions(&workspace_root))
             .unwrap_or_default();
         populate_suggestion_list(state);
@@ -2181,16 +3311,7 @@ mod imp {
         let Some(suggestion) = state.suggestions.get(index).cloned() else {
             return;
         };
-        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
-        let assets = resolve_workspace_root(&PathBuf::from(workspace_root_input.trim()))
-            .ok()
-            .map(|workspace_root| {
-                state
-                    .asset_store
-                    .load_assets_for_workspace_root(&workspace_root)
-                    .assets
-            })
-            .unwrap_or_default();
+        let assets = current_launcher_assets(state);
         state.active_layout = apply_project_suggestion(&state.active_layout, &suggestion, &assets);
         unsafe {
             SetWindowTextW(state.session_name_hwnd, wide(&suggestion.title).as_ptr());
@@ -2199,20 +3320,66 @@ mod imp {
                 wide(&suggestion.tile_count.to_string()).as_ptr(),
             );
         }
+        sync_launcher_editor(state);
         sync_status_text(state);
     }
 
     fn open_assets_manager(hwnd: HWND, state: &mut AppWindowState) {
-        let workspace_root = resolve_workspace_root(&PathBuf::from(
-            read_window_text(state.workspace_path_hwnd).trim(),
-        ))
-        .ok();
+        let workspace_root = current_workspace_root(state);
         let on_saved = Rc::new(move || {
             if let Some(state) = unsafe { state_mut(hwnd) } {
                 refresh_state(hwnd, state);
             }
         });
         let _ = assets_manager::present(hwnd, state.asset_store.clone(), workspace_root, on_saved);
+    }
+
+    fn open_launcher_editor(hwnd: HWND, state: &mut AppWindowState) {
+        if !state.launcher_editor_hwnd.is_null() {
+            unsafe {
+                ShowWindow(state.launcher_editor_hwnd, SW_SHOW);
+                SetForegroundWindow(state.launcher_editor_hwnd);
+            }
+            sync_launcher_editor(state);
+            return;
+        }
+
+        let on_layout_changed = Rc::new(move |layout: LayoutNode| {
+            if let Some(state) = unsafe { state_mut(hwnd) } {
+                state.active_layout = layout;
+                unsafe {
+                    SetWindowTextW(
+                        state.tile_count_hwnd,
+                        wide(&state.active_layout.tile_count().to_string()).as_ptr(),
+                    );
+                }
+                sync_status_text(state);
+            }
+        });
+        let on_closed = Rc::new(move || {
+            if let Some(state) = unsafe { state_mut(hwnd) } {
+                state.launcher_editor_hwnd = ptr::null_mut();
+            }
+        });
+
+        match launcher_editor::present(
+            hwnd,
+            state.active_layout.clone(),
+            current_launcher_assets(state),
+            on_layout_changed,
+            on_closed,
+        ) {
+            Ok(editor_hwnd) => {
+                state.launcher_editor_hwnd = editor_hwnd;
+            }
+            Err(error) => {
+                let status = format!("Could not open tile editor:\r\n{error}");
+                unsafe {
+                    SetWindowTextW(state.status_hwnd, wide(&status).as_ptr());
+                }
+                logging::error(format!("could not open tile editor: {error}"));
+            }
+        }
     }
 
     fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
@@ -2241,6 +3408,15 @@ mod imp {
             on_activate: Rc::new(move || {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     open_assets_manager(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
+            title: "Edit Tiles".into(),
+            subtitle: "Adjust tile titles, roles, connections, and startup commands.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    open_launcher_editor(hwnd, state);
                 }
             }),
         });
@@ -2280,6 +3456,15 @@ mod imp {
         let _ = command_palette::present(hwnd, "Command Palette", actions);
     }
 
+    fn handle_shell_shortcuts(hwnd: HWND, state: &mut AppWindowState, virtual_key: u32) -> bool {
+        let preferences = state.preference_store.load();
+        if shortcut_capture::matches_keydown(&preferences.command_palette_shortcut, virtual_key) {
+            open_command_palette(hwnd, state);
+            return true;
+        }
+        false
+    }
+
     fn apply_launcher_selection(state: &mut AppWindowState) {
         match state.selected_source {
             LaunchSelection::Template(index) => {
@@ -2287,6 +3472,8 @@ mod imp {
                 state.selected_source = LaunchSelection::Template(resolved);
                 if let Some(template) = state.templates.get(resolved) {
                     state.active_layout = generate_layout(template.tile_count);
+                    state.active_theme = state.preference_store.load().default_theme;
+                    state.active_density = state.preference_store.load().default_density;
                     unsafe {
                         SendMessageW(state.template_list_hwnd, LB_SETCURSEL, resolved, 0);
                         SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, usize::MAX, 0);
@@ -2308,6 +3495,8 @@ mod imp {
                 state.selected_source = LaunchSelection::Preset(resolved);
                 if let Some(preset) = state.presets.get(resolved) {
                     state.active_layout = preset.layout.clone();
+                    state.active_theme = preset.theme;
+                    state.active_density = preset.density;
                     unsafe {
                         SendMessageW(state.preset_list_hwnd, LB_SETCURSEL, resolved, 0);
                         SendMessageW(state.template_list_hwnd, LB_SETCURSEL, usize::MAX, 0);
@@ -2320,6 +3509,8 @@ mod imp {
                 }
             }
         }
+        sync_launch_appearance_controls(state);
+        sync_launcher_editor(state);
         update_preset_action_buttons(state);
         sync_status_text(state);
     }
@@ -2346,7 +3537,36 @@ mod imp {
                 wide(&tile_count.to_string()).as_ptr(),
             );
         }
+        sync_launcher_editor(state);
         sync_status_text(state);
+    }
+
+    fn sync_launch_appearance_from_controls(state: &mut AppWindowState) {
+        state.active_theme = theme_from_index(selected_combo_index(state.theme_combo_hwnd));
+        state.active_density = density_from_index(selected_combo_index(state.density_combo_hwnd));
+        sync_status_text(state);
+    }
+
+    fn sync_launch_appearance_controls(state: &AppWindowState) {
+        if state.theme_combo_hwnd.is_null() || state.density_combo_hwnd.is_null() {
+            return;
+        }
+        select_combo_index(state.theme_combo_hwnd, theme_index(state.active_theme));
+        select_combo_index(
+            state.density_combo_hwnd,
+            density_index(state.active_density),
+        );
+    }
+
+    fn sync_launcher_editor(state: &AppWindowState) {
+        if state.launcher_editor_hwnd.is_null() {
+            return;
+        }
+        launcher_editor::sync_draft_state(
+            state.launcher_editor_hwnd,
+            state.active_layout.clone(),
+            current_launcher_assets(state),
+        );
     }
 
     fn has_launcher_selection(state: &AppWindowState) -> bool {
@@ -2396,15 +3616,20 @@ mod imp {
                 };
                 if launch_name.is_empty() || launch_name == template.label {
                     format!(
-                        "{} template, {}, {} density",
+                        "{} template, {}, {} theme / {} density",
                         template.label,
                         tile_summary,
-                        state.preference_store.load().default_density.label()
+                        state.active_theme.label(),
+                        state.active_density.label()
                     )
                 } else {
                     format!(
-                        "{} template, {}, launches as '{}'",
-                        template.label, tile_summary, launch_name
+                        "{} template, {}, launches as '{}', {} theme / {} density",
+                        template.label,
+                        tile_summary,
+                        launch_name,
+                        state.active_theme.label(),
+                        state.active_density.label()
                     )
                 }
             }
@@ -2427,13 +3652,17 @@ mod imp {
                         "{} preset, {}, {} theme / {} density",
                         preset.name,
                         tile_summary,
-                        preset.theme.label(),
-                        preset.density.label()
+                        state.active_theme.label(),
+                        state.active_density.label()
                     )
                 } else {
                     format!(
-                        "{} preset, {}, launches as '{}'",
-                        preset.name, tile_summary, launch_name
+                        "{} preset, {}, launches as '{}', {} theme / {} density",
+                        preset.name,
+                        tile_summary,
+                        launch_name,
+                        state.active_theme.label(),
+                        state.active_density.label()
                     )
                 }
             }
@@ -2450,6 +3679,7 @@ mod imp {
         unsafe {
             EnableWindow(state.save_preset_button_hwnd, has_selection as i32);
             EnableWindow(state.update_preset_button_hwnd, allow_update as i32);
+            EnableWindow(state.edit_tiles_button_hwnd, has_selection as i32);
             EnableWindow(
                 state.delete_preset_button_hwnd,
                 (has_selection && !selected_is_builtin) as i32,
@@ -2633,19 +3863,20 @@ mod imp {
             }
             LaunchSelection::Template(index) => {
                 let template = state.templates.get(index)?;
-                let preferences = state.preference_store.load();
                 WorkspacePreset {
                     id: format!("template-{}", template.tile_count),
                     name: template.label.to_string(),
                     description: template.subtitle.to_string(),
                     tags: vec!["template".into(), "windows".into()],
                     root_label: "Workspace root".into(),
-                    theme: preferences.default_theme,
-                    density: preferences.default_density,
+                    theme: state.active_theme,
+                    density: state.active_density,
                     layout: state.active_layout.clone(),
                 }
             }
         };
+        preset.theme = state.active_theme;
+        preset.density = state.active_density;
         let desired_name = read_window_text(state.session_name_hwnd);
         let desired_name = desired_name.trim();
         if !desired_name.is_empty() {
@@ -2726,9 +3957,20 @@ mod imp {
         }
     }
 
+    fn selected_combo_index(hwnd: HWND) -> usize {
+        let index = unsafe { SendMessageW(hwnd, CB_GETCURSEL, 0, 0) };
+        if index < 0 { 0 } else { index as usize }
+    }
+
     fn select_listbox_index(hwnd: HWND, index: usize) {
         unsafe {
             SendMessageW(hwnd, LB_SETCURSEL, index, 0);
+        }
+    }
+
+    fn select_combo_index(hwnd: HWND, index: usize) {
+        unsafe {
+            SendMessageW(hwnd, CB_SETCURSEL, index, 0);
         }
     }
 
