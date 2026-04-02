@@ -90,13 +90,13 @@ window.profile-comfortable .app-tab-strip {
 window.profile-comfortable .app-tab-shell {
   min-width: 160px;
   min-height: 34px;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
 }
 
 window.profile-comfortable button.app-tab-select {
   min-height: 34px;
   padding: 3px 8px 3px 12px;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
 }
 
 window.profile-comfortable .app-tab-title {
@@ -246,13 +246,13 @@ window.profile-compact .app-tab-strip {
 window.profile-compact .app-tab-shell {
   min-width: 124px;
   min-height: 24px;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px 8px 0 0 / 6px 6px 0 0;
 }
 
 window.profile-compact button.app-tab-select {
   min-height: 24px;
   padding: 1px 5px 1px 8px;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px 8px 0 0 / 6px 6px 0 0;
 }
 
 window.profile-compact .app-tab-icon {
@@ -463,7 +463,7 @@ window.profile-standard .app-tab-strip {
 window.profile-standard .app-tab-shell {
   min-width: 148px;
   min-height: 32px;
-  border-radius: 11px 11px 0 0;
+  border-radius: 11px 11px 0 0 / 7px 7px 0 0;
 }
 
 .app-tab-strip {
@@ -482,7 +482,7 @@ tabbar.app-tab-strip tabbox tab {
   min-height: 32px;
   margin: 0 6px 0 0;
   padding: 0 6px 0 8px;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
@@ -566,7 +566,7 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
 .app-tab-shell {
   min-width: 142px;
   min-height: 30px;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -636,7 +636,7 @@ button.app-tab-select {
   background: transparent;
   border: none;
   box-shadow: none;
-  border-radius: 12px 12px 0 0;
+  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
 }
 
 .app-tab-icon {
