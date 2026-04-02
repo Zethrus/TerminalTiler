@@ -120,6 +120,7 @@ impl AlertStore {
         }
     }
 
+    #[allow(dead_code)]
     pub fn subscribe(&self, listener: Rc<dyn Fn()>) {
         self.inner.listeners.borrow_mut().push(listener);
     }

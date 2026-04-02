@@ -15,6 +15,7 @@ const WORKSPACE_CONFIG_FILE: &str = "workspace.toml";
 #[derive(Clone, Debug, Default)]
 pub struct WorkspaceConfigStore;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct WorkspaceConfigLoadOutcome {
     pub config: WorkspaceConfig,

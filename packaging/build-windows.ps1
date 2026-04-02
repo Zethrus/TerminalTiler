@@ -75,21 +75,28 @@ Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
-$Makensis = Get-Command makensis -ErrorAction Stop
-Write-Host "==> building NSIS installer"
-Remove-Item -Force $InstallerPath, $InstallerLatestPath -ErrorAction SilentlyContinue
-& $Makensis.Source `
-    "/DAPP_VERSION=$ResolvedVersion" `
-    "/DSTAGE_DIR=$PortableRoot" `
-    "/DOUT_FILE=$InstallerPath" `
-    $NsisScript
+$Makensis = Get-Command makensis -ErrorAction SilentlyContinue
+if ($Makensis) {
+    Write-Host "==> building NSIS installer"
+    Remove-Item -Force $InstallerPath, $InstallerLatestPath -ErrorAction SilentlyContinue
+    & $Makensis.Source `
+        "/DAPP_VERSION=$ResolvedVersion" `
+        "/DSTAGE_DIR=$PortableRoot" `
+        "/DOUT_FILE=$InstallerPath" `
+        $NsisScript
 
-if (-not (Test-Path $InstallerPath)) {
-    throw "Expected installer was not created at $InstallerPath"
+    if (-not (Test-Path $InstallerPath)) {
+        throw "Expected installer was not created at $InstallerPath"
+    }
+
+    Copy-Item -Path $InstallerPath -Destination $InstallerLatestPath -Force
+} else {
+    Write-Host "==> NSIS not found - skipping installer build"
+    Write-Host "    To build the installer, install NSIS from https://nsis.sourceforge.io/"
 }
-
-Copy-Item -Path $InstallerPath -Destination $InstallerLatestPath -Force
 
 Write-Host "Windows packaging complete"
 Write-Host "  zip: $ZipPath"
-Write-Host "  installer: $InstallerPath"
+if ($Makensis) {
+    Write-Host "  installer: $InstallerPath"
+}

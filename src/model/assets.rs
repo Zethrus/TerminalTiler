@@ -210,6 +210,7 @@ pub enum RestoreLaunchMode {
 }
 
 impl RestoreLaunchMode {
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Prompt => "Prompt",
@@ -250,6 +251,7 @@ pub struct ProjectSuggestion {
     pub tags: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaneStatusSnapshot {
     pub connection_label: String,
@@ -260,6 +262,7 @@ pub struct PaneStatusSnapshot {
 }
 
 impl PaneStatusSnapshot {
+    #[allow(dead_code)]
     pub fn to_line(&self) -> String {
         [
             self.connection_label.trim(),

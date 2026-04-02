@@ -51,6 +51,7 @@ impl AssetStore {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ensure_seeded(&self) {
         let Some(path) = &self.path else {
             return;

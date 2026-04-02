@@ -2,11 +2,14 @@ use keyring::Entry;
 
 use crate::logging;
 
+#[allow(dead_code)]
 const SECRET_SERVICE: &str = "dev.zethrus.TerminalTiler";
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct SecretStore;
 
+#[allow(dead_code)]
 impl SecretStore {
     pub fn new() -> Self {
         Self

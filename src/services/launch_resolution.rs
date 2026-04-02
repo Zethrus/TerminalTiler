@@ -37,13 +37,15 @@ pub enum ResolvedLaunchTransport {
 
 #[derive(Clone, Debug)]
 pub struct ResolvedTileLaunch {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub connection_label: String,
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub command: Option<String>,
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub startup_command: Option<String>,
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub transport: ResolvedLaunchTransport,
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[allow(dead_code)]
     pub remote: bool,
 }
 

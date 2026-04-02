@@ -41,6 +41,7 @@ pub fn close_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNod
     remove_tile(layout, target_tile_id)
 }
 
+#[allow(dead_code)]
 pub fn update_split_ratio(
     layout: &LayoutNode,
     split_path: &[bool],
@@ -112,6 +113,7 @@ fn remove_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNode> 
     }
 }
 
+#[allow(dead_code)]
 fn update_ratio_inner(layout: &LayoutNode, split_path: &[bool], ratio: f32) -> Option<LayoutNode> {
     match layout {
         LayoutNode::Tile(_) => None,

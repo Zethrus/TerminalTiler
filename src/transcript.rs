@@ -10,6 +10,7 @@ pub struct TranscriptBuffer {
 }
 
 impl TranscriptBuffer {
+    #[allow(dead_code)]
     pub fn replace_output(&mut self, snapshot: &str) {
         self.output_lines = snapshot
             .replace('\r', "")
