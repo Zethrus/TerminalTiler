@@ -5,6 +5,49 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$VersionStateDir = Join-Path $PSScriptRoot ".build\versioning"
+$LastSuccessfulVersionFile = Join-Path $VersionStateDir "last-successful-version"
+
+function Get-BaseVersion {
+    param([string]$RootDir)
+    $cargoToml = Get-Content -Path (Join-Path $RootDir "Cargo.toml") -Raw
+    $match = [regex]::Match($cargoToml, '(?ms)^\[package\].*?^version = "([^"]+)"')
+    if (-not $match.Success) {
+        throw "Could not resolve package version from Cargo.toml"
+    }
+    return $match.Groups[1].Value
+}
+
+function Test-CleanSemver {
+    param([string]$Version)
+    return $Version -match '^\d+\.\d+\.\d+$'
+}
+
+function Compare-Semver {
+    param([string]$Left, [string]$Right)
+    $l = $Left.Split('.') | ForEach-Object { [int]$_ }
+    $r = $Right.Split('.') | ForEach-Object { [int]$_ }
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($l[$i] -gt $r[$i]) { return 1 }
+        if ($l[$i] -lt $r[$i]) { return -1 }
+    }
+    return 0
+}
+
+function Test-SameMajorMinor {
+    param([string]$Left, [string]$Right)
+    $l = $Left.Split('.')
+    $r = $Right.Split('.')
+    return ($l[0] -eq $r[0]) -and ($l[1] -eq $r[1])
+}
+
+function Step-PatchVersion {
+    param([string]$Version)
+    $parts = $Version.Split('.')
+    $parts[2] = [string]([int]$parts[2] + 1)
+    return $parts -join '.'
+}
+
 function Get-PackageVersion {
     param([string]$RootDir)
 
@@ -12,13 +55,27 @@ function Get-PackageVersion {
         return $PackageVersion
     }
 
-    $cargoToml = Get-Content -Path (Join-Path $RootDir "Cargo.toml") -Raw
-    $match = [regex]::Match($cargoToml, '(?ms)^\[package\].*?^version = "([^"]+)"')
-    if (-not $match.Success) {
-        throw "Could not resolve package version from Cargo.toml"
+    $base = Get-BaseVersion -RootDir $RootDir
+    if (-not (Test-CleanSemver $base)) {
+        throw "Package version in Cargo.toml must be a clean semver like 0.2.0"
     }
 
-    return $match.Groups[1].Value
+    $last = $null
+    if (Test-Path $LastSuccessfulVersionFile) {
+        $last = (Get-Content -Path $LastSuccessfulVersionFile -Raw).Trim()
+    }
+
+    if ($last -and (Test-CleanSemver $last) -and (Test-SameMajorMinor $last $base) -and ((Compare-Semver $last $base) -ge 0)) {
+        return Step-PatchVersion $last
+    }
+
+    return $base
+}
+
+function Save-SuccessfulBuildVersion {
+    param([string]$Version)
+    New-Item -ItemType Directory -Force -Path $VersionStateDir | Out-Null
+    Set-Content -Path $LastSuccessfulVersionFile -Value $Version -NoNewline
 }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -95,6 +152,7 @@ if ($Makensis) {
     Write-Host "    To build the installer, install NSIS from https://nsis.sourceforge.io/"
 }
 
+Save-SuccessfulBuildVersion -Version $ResolvedVersion
 Write-Host "Windows packaging complete"
 Write-Host "  zip: $ZipPath"
 if ($Makensis) {
