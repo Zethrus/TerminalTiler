@@ -72,7 +72,7 @@ impl AssetStore {
         let global = self.load_assets_with_status();
         let workspace = self.workspace_config_store.load_for_root(workspace_root);
         AssetLoadOutcome {
-            assets: merge_builtins(merge_workspace_assets(
+            assets: merge_assets_with_builtins(merge_workspace_assets_for_view(
                 &global.assets,
                 &workspace.config.assets,
             )),
@@ -113,7 +113,7 @@ impl AssetStore {
 
         match toml::from_str::<AssetDocument>(&raw) {
             Ok(document) if document.version == STORE_VERSION => AssetLoadOutcome {
-                assets: merge_builtins(WorkspaceAssets {
+                assets: merge_assets_with_builtins(WorkspaceAssets {
                     connection_profiles: document.connection_profiles,
                     inventory_hosts: document.inventory_hosts,
                     inventory_groups: document.inventory_groups,
@@ -183,7 +183,7 @@ impl AssetStore {
             connection_profiles: assets.connection_profiles.clone(),
             inventory_hosts: assets.inventory_hosts.clone(),
             inventory_groups: assets.inventory_groups.clone(),
-            role_templates: merge_builtins(WorkspaceAssets {
+            role_templates: merge_assets_with_builtins(WorkspaceAssets {
                 connection_profiles: Vec::new(),
                 inventory_hosts: Vec::new(),
                 inventory_groups: Vec::new(),
@@ -226,7 +226,7 @@ fn default_assets() -> WorkspaceAssets {
     }
 }
 
-fn merge_builtins(mut assets: WorkspaceAssets) -> WorkspaceAssets {
+pub fn merge_assets_with_builtins(mut assets: WorkspaceAssets) -> WorkspaceAssets {
     for builtin in builtin_role_templates() {
         if assets
             .role_templates
@@ -250,7 +250,7 @@ fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<Str
     }
 }
 
-fn merge_workspace_assets(
+pub fn merge_workspace_assets_for_view(
     global: &WorkspaceAssets,
     workspace: &WorkspaceAssets,
 ) -> WorkspaceAssets {

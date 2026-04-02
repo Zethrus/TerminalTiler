@@ -1,4 +1,5 @@
 pub mod alerts;
+pub mod assets_editor;
 pub mod broadcast;
 pub mod launch_resolution;
 pub mod layout_editor;

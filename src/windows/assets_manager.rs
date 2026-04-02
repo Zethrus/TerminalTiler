@@ -173,14 +173,14 @@ mod imp {
         state.global_button_hwnd = create_child_window(
             hwnd,
             "BUTTON",
-            ConfigScope::Global.label(),
+            "Global defaults",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             ID_GLOBAL_SCOPE,
         );
         state.workspace_button_hwnd = create_child_window(
             hwnd,
             "BUTTON",
-            ConfigScope::Workspace.label(),
+            "Workspace overrides",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             ID_WORKSPACE_SCOPE,
         );
@@ -317,7 +317,7 @@ mod imp {
         let (assets, info_text) = match state.scope {
             ConfigScope::Global => (
                 state.asset_store.load_assets(),
-                "Editing global assets from ~/.config/TerminalTiler/workspace-assets.toml."
+                "Editing global defaults from ~/.config/TerminalTiler/workspace-assets.toml. These assets are shared by every workspace."
                     .to_string(),
             ),
             ConfigScope::Workspace => {
@@ -328,14 +328,14 @@ mod imp {
                             .load_workspace_config(workspace_root)
                             .assets,
                         format!(
-                            "Editing workspace-local overrides from {}/.terminaltiler/workspace.toml. IDs override global items when they match.",
+                            "Editing workspace overrides from {}/.terminaltiler/workspace.toml. Matching IDs shadow the global definitions in this workspace only.",
                             workspace_root.display()
                         ),
                     )
                 } else {
                     (
                         crate::model::assets::WorkspaceAssets::default(),
-                        "Workspace scope is unavailable without an active workspace root."
+                        "Workspace overrides are unavailable until a workspace root is selected."
                             .to_string(),
                     )
                 }
@@ -349,18 +349,18 @@ mod imp {
             SetWindowTextW(
                 state.global_button_hwnd,
                 wide(if state.scope == ConfigScope::Global {
-                    "[Global]"
+                    "Global defaults *"
                 } else {
-                    "Global"
+                    "Global defaults"
                 })
                 .as_ptr(),
             );
             SetWindowTextW(
                 state.workspace_button_hwnd,
                 wide(if state.scope == ConfigScope::Workspace {
-                    "[Workspace]"
+                    "Workspace overrides *"
                 } else {
-                    "Workspace"
+                    "Workspace overrides"
                 })
                 .as_ptr(),
             );

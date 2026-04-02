@@ -8,15 +8,6 @@ pub enum ConfigScope {
     Workspace,
 }
 
-impl ConfigScope {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Global => "Global",
-            Self::Workspace => "Workspace",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     #[serde(default)]
