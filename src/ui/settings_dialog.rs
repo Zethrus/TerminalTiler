@@ -242,6 +242,14 @@ pub fn present(
     sync_dialog_chrome_classes(window, &dialog);
     dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.set_default_response(gtk::ResponseType::Close);
+    if let Some(close_button) = dialog
+        .widget_for_response(gtk::ResponseType::Close)
+        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
+    {
+        close_button.add_css_class("pill-button");
+        close_button.add_css_class("ghost-link-button");
+        close_button.add_css_class("settings-close-button");
+    }
 
     let content_area = dialog.content_area();
     content_area.set_vexpand(true);
