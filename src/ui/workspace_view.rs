@@ -272,6 +272,7 @@ pub fn build_with_layout_change_handler(
         .css_classes(["status-chip", "muted-chip"])
         .build();
     let broadcast_selector = gtk::ComboBoxText::new();
+    broadcast_selector.add_css_class("surface-select-control");
     broadcast_selector.append(Some("off"), "Broadcast Off");
     broadcast_selector.append(Some("all"), "Broadcast All");
     for group in runtime.saved_groups() {
@@ -287,7 +288,7 @@ pub fn build_with_layout_change_handler(
         .build();
     let broadcast_button = gtk::Button::builder()
         .label("Send")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button"])
         .build();
 
     {
@@ -337,6 +338,7 @@ pub fn build_with_layout_change_handler(
     }
 
     let runbook_selector = gtk::ComboBoxText::new();
+    runbook_selector.add_css_class("surface-select-control");
     runbook_selector.append(Some(""), "Runbook");
     for runbook in &assets.runbooks {
         runbook_selector.append(Some(&runbook.id), &runbook.name);
@@ -344,7 +346,7 @@ pub fn build_with_layout_change_handler(
     runbook_selector.set_active_id(Some(""));
     let runbook_button = gtk::Button::builder()
         .label("Run")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button"])
         .sensitive(!assets.runbooks.is_empty())
         .build();
     {
@@ -369,11 +371,11 @@ pub fn build_with_layout_change_handler(
 
     let alert_button = gtk::Button::builder()
         .label("Alerts (0)")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button"])
         .build();
     let mark_all_read_button = gtk::Button::builder()
         .label("Mark All Read")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button"])
         .build();
     let alert_list = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -498,7 +500,7 @@ fn bind_alert_ui(
             if let Some(pane_id) = alert.pane_id.clone() {
                 let jump_button = gtk::Button::builder()
                     .label("Jump")
-                    .css_classes(["flat"])
+                    .css_classes(["flat", "surface-button"])
                     .build();
                 let runtime_for_jump = runtime.clone();
                 let alert_store = alert_store_for_refresh.clone();
@@ -513,7 +515,7 @@ fn bind_alert_ui(
                 if alert.allows_reconnect {
                     let reconnect_button = gtk::Button::builder()
                         .label("Reconnect")
-                        .css_classes(["flat"])
+                        .css_classes(["flat", "surface-button"])
                         .build();
                     let runtime_for_reconnect = runtime.clone();
                     let alert_store = alert_store_for_refresh.clone();
@@ -528,7 +530,7 @@ fn bind_alert_ui(
             }
             let mark_read_button = gtk::Button::builder()
                 .label(if alert.unread { "Mark Read" } else { "Read" })
-                .css_classes(["flat"])
+                .css_classes(["flat", "surface-button"])
                 .sensitive(alert.unread)
                 .build();
             let alert_store = alert_store_for_refresh.clone();

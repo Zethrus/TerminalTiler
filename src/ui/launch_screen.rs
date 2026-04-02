@@ -1616,22 +1616,22 @@ fn build_tile_editor_row(
     let split_horizontal = gtk::Button::builder()
         .icon_name("view-split-left-right-symbolic")
         .tooltip_text("Split tile horizontally")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
     let split_vertical = gtk::Button::builder()
         .icon_name("view-split-top-bottom-symbolic")
         .tooltip_text("Split tile vertically")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
     let clone_tile = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Clone tile")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
     let close_tile_button = gtk::Button::builder()
         .icon_name("user-trash-symbolic")
         .tooltip_text("Close tile")
-        .css_classes(["flat"])
+        .css_classes(["flat", "surface-button", "surface-button-icon"])
         .sensitive(layout_state.borrow().tile_count() > 1)
         .build();
 
@@ -1678,6 +1678,7 @@ fn build_tile_editor_row(
         .build();
 
     let role_combo = gtk::ComboBoxText::new();
+    role_combo.add_css_class("surface-select-control");
     role_combo.append(Some(""), "No role");
     for role in &assets.role_templates {
         role_combo.append(Some(&role.id), &role.name);
@@ -1686,6 +1687,7 @@ fn build_tile_editor_row(
     routing.append(&role_combo);
 
     let connection_combo = gtk::ComboBoxText::new();
+    connection_combo.add_css_class("surface-select-control");
     connection_combo.append(Some("__local__"), "Local");
     for profile in &assets.connection_profiles {
         connection_combo.append(Some(&profile.id), &profile.name);
