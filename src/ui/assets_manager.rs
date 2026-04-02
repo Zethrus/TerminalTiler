@@ -357,7 +357,8 @@ pub fn present(
                     &dialog,
                 );
             }
-            sync_raw_buffer(&pages.raw_text_view, &state.borrow().raw_toml);
+            let raw_toml = state.borrow().raw_toml.clone();
+            sync_raw_buffer(&pages.raw_text_view, &raw_toml);
         })
     };
     *refresh_pages_handle.borrow_mut() = Some(refresh_pages.clone());
