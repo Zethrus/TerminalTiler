@@ -283,6 +283,9 @@ pub fn present(
     header.pack_end(&fullscreen_button);
 
     let settings_button = gtk::Button::from_icon_name("preferences-system-symbolic");
+    if let Some(img) = settings_button.first_child() {
+        let _ = img.pango_context();
+    }
     settings_button.add_css_class("flat");
     settings_button.add_css_class("titlebar-action-button");
     settings_button.add_css_class("titlebar-icon-button");
@@ -290,6 +293,9 @@ pub fn present(
     header.pack_end(&settings_button);
 
     let assets_button = gtk::Button::from_icon_name("folder-saved-search-symbolic");
+    if let Some(img) = assets_button.first_child() {
+        let _ = img.pango_context();
+    }
     assets_button.add_css_class("flat");
     assets_button.add_css_class("titlebar-action-button");
     assets_button.add_css_class("titlebar-icon-button");
@@ -2048,6 +2054,9 @@ impl TabStripController {
         shell.append(&select_button);
 
         let close_button = gtk::Button::from_icon_name("window-close-symbolic");
+        if let Some(img) = close_button.first_child() {
+            let _ = img.pango_context();
+        }
         close_button.add_css_class("app-tab-close");
         close_button.set_focus_on_click(false);
         let close_handle = self.close_tab.clone();

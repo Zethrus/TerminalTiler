@@ -1208,6 +1208,9 @@ where
     top_row.append(&button);
 
     let delete_button = gtk::Button::from_icon_name("window-close-symbolic");
+    if let Some(img) = delete_button.first_child() {
+        let _ = img.pango_context();
+    }
     delete_button.add_css_class("flat");
     delete_button.add_css_class("preset-delete-button");
     delete_button.add_css_class("destructive-button");
@@ -1620,22 +1623,46 @@ fn build_tile_editor_row(
         .tooltip_text("Split tile horizontally")
         .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
+    // Prime the internal GtkImage's Pango context before attachment to the
+    // realized tree.  gtk_image_get_baseline_align() computes ascent/(ascent+
+    // descent) and returns NaN when both metrics are 0 — this happens because
+    // gtk_widget_real_css_changed only updates the Pango context when
+    // peek_pango_context() is non-NULL ("has_text" gate).  A freshly-created
+    // GtkImage never calls get_pango_context() until its first measure, so the
+    // gate is false during the initial CSS-change on parent attachment and the
+    // context ends up with stale/zero metrics.  Calling pango_context() now
+    // creates the context early; the subsequent CSS change then sees has_text=
+    // true, updates the context with valid inherited font metrics, and no NaN
+    // is produced.  Affects all icon buttons appended to an already-realized
+    // GtkBox.
+    if let Some(img) = split_horizontal.first_child() {
+        let _ = img.pango_context();
+    }
     let split_vertical = gtk::Button::builder()
         .icon_name("view-split-top-bottom-symbolic")
         .tooltip_text("Split tile vertically")
         .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
+    if let Some(img) = split_vertical.first_child() {
+        let _ = img.pango_context();
+    }
     let clone_tile = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
         .tooltip_text("Clone tile")
         .css_classes(["flat", "surface-button", "surface-button-icon"])
         .build();
+    if let Some(img) = clone_tile.first_child() {
+        let _ = img.pango_context();
+    }
     let close_tile_button = gtk::Button::builder()
         .icon_name("user-trash-symbolic")
         .tooltip_text("Close tile")
         .css_classes(["flat", "surface-button", "surface-button-icon"])
         .sensitive(layout_state.borrow().tile_count() > 1)
         .build();
+    if let Some(img) = close_tile_button.first_child() {
+        let _ = img.pango_context();
+    }
 
     header.append(&split_horizontal);
     header.append(&split_vertical);
