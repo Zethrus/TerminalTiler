@@ -13,8 +13,8 @@ use crate::model::layout::ReconnectPolicy;
 use crate::model::workspace_config::ConfigScope;
 use crate::services::assets_editor::{
     AssetItemSource, AssetSection, AssetValidationIssue, connection_source,
-    effective_assets_for_scope, group_source, host_source, role_source, runbook_source,
-    validate_assets,
+    effective_assets_for_scope, group_source, host_source, prune_blank_drafts, role_source,
+    runbook_source, validate_assets,
 };
 use crate::storage::asset_store::AssetStore;
 
@@ -204,6 +204,7 @@ pub fn present(
     raw_scroller.set_child(Some(&raw_text_view));
     raw_page.1.append(&raw_scroller);
     stack.add_titled(&raw_page.0, Some("raw"), AssetSection::RawToml.title());
+    stack.set_visible_child_name("overview");
 
     let nav_buttons = [
         make_nav_button(&sidebar, &stack, "overview", AssetSection::Overview.title()),
@@ -315,67 +316,82 @@ pub fn present(
         let refresh_token = refresh_token.clone();
         let dialog = dialog.clone();
         let refresh_pages_handle = refresh_pages_handle.clone();
+        let stack = stack.clone();
         Rc::new(move || {
             refresh_token.set(refresh_token.get().wrapping_add(1));
             let token = refresh_token.get();
 
             refresh_status();
 
-            clear_box(&pages.overview);
-            clear_box(&pages.connections);
-            clear_box(&pages.hosts);
-            clear_box(&pages.groups);
-            clear_box(&pages.roles);
-            clear_box(&pages.runbooks);
-
             {
                 let snapshot = state.borrow().clone();
-                render_overview_page(&pages.overview, &snapshot);
-                render_connections_page(
-                    &pages.connections,
-                    &state,
-                    token,
-                    &refresh_token,
-                    &refresh_status,
-                    &refresh_pages_handle,
-                    &dialog,
-                );
-                render_hosts_page(
-                    &pages.hosts,
-                    &state,
-                    token,
-                    &refresh_token,
-                    &refresh_status,
-                    &refresh_pages_handle,
-                    &dialog,
-                );
-                render_groups_page(
-                    &pages.groups,
-                    &state,
-                    token,
-                    &refresh_token,
-                    &refresh_status,
-                    &refresh_pages_handle,
-                    &dialog,
-                );
-                render_roles_page(
-                    &pages.roles,
-                    &state,
-                    token,
-                    &refresh_token,
-                    &refresh_status,
-                    &refresh_pages_handle,
-                    &dialog,
-                );
-                render_runbooks_page(
-                    &pages.runbooks,
-                    &state,
-                    token,
-                    &refresh_token,
-                    &refresh_status,
-                    &refresh_pages_handle,
-                    &dialog,
-                );
+                match stack.visible_child_name().as_deref().unwrap_or("overview") {
+                    "connections" => {
+                        clear_box(&pages.connections);
+                        render_connections_page(
+                            &pages.connections,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "hosts" => {
+                        clear_box(&pages.hosts);
+                        render_hosts_page(
+                            &pages.hosts,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "groups" => {
+                        clear_box(&pages.groups);
+                        render_groups_page(
+                            &pages.groups,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "roles" => {
+                        clear_box(&pages.roles);
+                        render_roles_page(
+                            &pages.roles,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "runbooks" => {
+                        clear_box(&pages.runbooks);
+                        render_runbooks_page(
+                            &pages.runbooks,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "raw" => {}
+                    _ => {
+                        clear_box(&pages.overview);
+                        render_overview_page(&pages.overview, &snapshot);
+                    }
+                }
             }
             let raw_toml = state.borrow().raw_toml.clone();
             sync_raw_buffer(&pages.raw_text_view, &raw_toml);
@@ -498,19 +514,21 @@ pub fn present(
             if snapshot.raw_error.is_some() {
                 return;
             }
-            let issues = validate_assets(snapshot.scope, &snapshot.current_assets, &snapshot.global_assets);
+            let sanitized_assets = prune_blank_drafts(snapshot.current_assets.clone());
+            let issues = validate_assets(snapshot.scope, &sanitized_assets, &snapshot.global_assets);
             if !issues.is_empty() {
                 return;
             }
             match asset_store.save_assets_for_scope(
-                &snapshot.current_assets,
+                &sanitized_assets,
                 snapshot.scope,
                 snapshot.workspace_root.as_deref(),
             ) {
                 Ok(()) => {
                     snapshot.global_assets = asset_store.load_assets();
-                    snapshot.loaded_assets = snapshot.current_assets.clone();
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                    snapshot.current_assets = sanitized_assets.clone();
+                    snapshot.loaded_assets = sanitized_assets.clone();
+                    snapshot.raw_toml = serialize_assets(&sanitized_assets);
                     snapshot.warning_text = None;
                     snapshot.info_text = match snapshot.scope {
                         ConfigScope::Global => String::from(
@@ -1898,10 +1916,12 @@ fn render_section_header<F>(
         let refresh_pages = refresh_pages.clone();
         let has_invalid_raw = state.borrow().raw_error.is_some();
         maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
-            let mut snapshot = state_for_prompt.borrow_mut();
-            on_add(&mut snapshot);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = state_for_prompt.borrow_mut();
+                on_add(&mut snapshot);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             if let Some(refresh) = refresh_pages.borrow().as_ref() {
                 refresh();
             }
@@ -1981,9 +2001,11 @@ where
             let has_invalid_raw = state.borrow().raw_error.is_some();
             maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
                 on_duplicate();
-                let mut snapshot = state_for_prompt.borrow_mut();
-                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                snapshot.raw_error = None;
+                {
+                    let mut snapshot = state_for_prompt.borrow_mut();
+                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                    snapshot.raw_error = None;
+                }
                 if let Some(refresh) = refresh_pages.borrow().as_ref() {
                     refresh();
                 }
@@ -2009,10 +2031,12 @@ where
         let refresh_pages = refresh_pages.clone();
         let has_invalid_raw = state.borrow().raw_error.is_some();
         maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
-            let mut snapshot = state_for_prompt.borrow_mut();
-            on_remove(&mut snapshot);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = state_for_prompt.borrow_mut();
+                on_remove(&mut snapshot);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             if let Some(refresh) = refresh_pages.borrow().as_ref() {
                 refresh();
             }
@@ -2082,10 +2106,12 @@ fn append_override_button<F>(
         let refresh_pages = refresh_pages.clone();
         let has_invalid_raw = state.borrow().raw_error.is_some();
         maybe_discard_invalid_raw(&dialog, has_invalid_raw, move || {
-            let mut snapshot = state_for_prompt.borrow_mut();
-            on_override(&mut snapshot);
-            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-            snapshot.raw_error = None;
+            {
+                let mut snapshot = state_for_prompt.borrow_mut();
+                on_override(&mut snapshot);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
             if let Some(refresh) = refresh_pages.borrow().as_ref() {
                 refresh();
             }
@@ -2207,18 +2233,20 @@ fn append_output_helpers_editor(
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
     add.connect_clicked(move |_| {
-        let mut snapshot = state_add.borrow_mut();
-        snapshot.current_assets.role_templates[role_index]
-            .default_output_helpers
-            .push(OutputHelperRule {
-                id: String::new(),
-                label: String::new(),
-                regex: String::new(),
-                severity: OutputSeverity::Warning,
-                toast_on_match: true,
-            });
-        snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-        snapshot.raw_error = None;
+        {
+            let mut snapshot = state_add.borrow_mut();
+            snapshot.current_assets.role_templates[role_index]
+                .default_output_helpers
+                .push(OutputHelperRule {
+                    id: String::new(),
+                    label: String::new(),
+                    regex: String::new(),
+                    severity: OutputSeverity::Warning,
+                    toast_on_match: true,
+                });
+            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+            snapshot.raw_error = None;
+        }
         refresh_status_add();
         if let Some(refresh) = refresh_pages_add.borrow().as_ref() {
             refresh();
@@ -2460,18 +2488,20 @@ fn append_runbook_variables_editor(
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
     add.connect_clicked(move |_| {
-        let mut snapshot = state_add.borrow_mut();
-        snapshot.current_assets.runbooks[runbook_index]
-            .variables
-            .push(RunbookVariable {
-                id: String::new(),
-                label: String::new(),
-                description: String::new(),
-                default_value: None,
-                required: true,
-            });
-        snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-        snapshot.raw_error = None;
+        {
+            let mut snapshot = state_add.borrow_mut();
+            snapshot.current_assets.runbooks[runbook_index]
+                .variables
+                .push(RunbookVariable {
+                    id: String::new(),
+                    label: String::new(),
+                    description: String::new(),
+                    default_value: None,
+                    required: true,
+                });
+            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+            snapshot.raw_error = None;
+        }
         refresh_status_add();
         if let Some(refresh) = refresh_pages_add.borrow().as_ref() {
             refresh();
@@ -2597,17 +2627,19 @@ fn append_runbook_steps_editor(
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
     add.connect_clicked(move |_| {
-        let mut snapshot = state_add.borrow_mut();
-        snapshot.current_assets.runbooks[runbook_index]
-            .steps
-            .push(RunbookStep {
-                id: String::new(),
-                label: String::new(),
-                command: String::new(),
-                append_newline: true,
-            });
-        snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-        snapshot.raw_error = None;
+        {
+            let mut snapshot = state_add.borrow_mut();
+            snapshot.current_assets.runbooks[runbook_index]
+                .steps
+                .push(RunbookStep {
+                    id: String::new(),
+                    label: String::new(),
+                    command: String::new(),
+                    append_newline: true,
+                });
+            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+            snapshot.raw_error = None;
+        }
         refresh_status_add();
         if let Some(refresh) = refresh_pages_add.borrow().as_ref() {
             refresh();

@@ -768,7 +768,8 @@ mod imp {
         if let Some(tile) = tiles.get_mut(state.selected_tile_index) {
             update(tile);
             state.layout = state.layout.with_tile_specs(&tiles);
-            (state.on_layout_changed)(state.layout.clone());
+            let next_layout = state.layout.clone();
+            (state.on_layout_changed)(next_layout);
         }
     }
 
@@ -787,8 +788,9 @@ mod imp {
         };
         if let Some(next_layout) = split_tile(&state.layout, &tile_id, axis, clone_existing) {
             state.layout = next_layout;
-            (state.on_layout_changed)(state.layout.clone());
             refresh_editor(state);
+            let next_layout = state.layout.clone();
+            (state.on_layout_changed)(next_layout);
         }
     }
 
@@ -806,8 +808,9 @@ mod imp {
             state.selected_tile_index = state
                 .selected_tile_index
                 .min(state.layout.tile_count().saturating_sub(1));
-            (state.on_layout_changed)(state.layout.clone());
             refresh_editor(state);
+            let next_layout = state.layout.clone();
+            (state.on_layout_changed)(next_layout);
         }
     }
 

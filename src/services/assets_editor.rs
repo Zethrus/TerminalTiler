@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use regex::Regex;
 
 use crate::model::assets::{
-    AgentRoleTemplate, ConnectionProfile, InventoryGroup, InventoryHost, Runbook, RunbookTarget,
-    WorkspaceAssets, builtin_role_templates,
+    AgentRoleTemplate, ConnectionProfile, InventoryGroup, InventoryHost, OutputHelperRule, Runbook,
+    RunbookStep, RunbookTarget, RunbookVariable, WorkspaceAssets, builtin_role_templates,
 };
 use crate::model::workspace_config::ConfigScope;
 use crate::storage::asset_store::{merge_assets_with_builtins, merge_workspace_assets_for_view};
@@ -91,28 +91,50 @@ pub fn validate_assets(
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> Vec<AssetValidationIssue> {
-    let effective_assets = effective_assets_for_scope(scope, current_assets, global_assets);
+    let sanitized_assets = prune_blank_drafts(current_assets.clone());
+    let effective_assets = effective_assets_for_scope(scope, &sanitized_assets, global_assets);
     let mut issues = Vec::new();
 
     validate_connection_profiles(
         &mut issues,
-        &current_assets.connection_profiles,
+        &sanitized_assets.connection_profiles,
         &effective_assets,
     );
     validate_inventory_hosts(
         &mut issues,
-        &current_assets.inventory_hosts,
+        &sanitized_assets.inventory_hosts,
         &effective_assets,
     );
-    validate_inventory_groups(&mut issues, &current_assets.inventory_groups);
+    validate_inventory_groups(&mut issues, &sanitized_assets.inventory_groups);
     validate_roles(
         &mut issues,
-        &current_assets.role_templates,
+        &sanitized_assets.role_templates,
         &effective_assets,
     );
-    validate_runbooks(&mut issues, &current_assets.runbooks, &effective_assets);
+    validate_runbooks(&mut issues, &sanitized_assets.runbooks, &effective_assets);
 
     issues
+}
+
+pub fn prune_blank_drafts(mut assets: WorkspaceAssets) -> WorkspaceAssets {
+    assets
+        .connection_profiles
+        .retain(|item| !is_blank_connection_profile(item));
+    assets.inventory_hosts.retain(|item| !is_blank_host(item));
+    assets.inventory_groups.retain(|item| !is_blank_group(item));
+    assets.role_templates.retain(|item| !is_blank_role(item));
+    for role in &mut assets.role_templates {
+        role.default_output_helpers
+            .retain(|item| !is_blank_output_helper(item));
+    }
+    assets.runbooks.retain(|item| !is_blank_runbook(item));
+    for runbook in &mut assets.runbooks {
+        runbook
+            .variables
+            .retain(|item| !is_blank_runbook_variable(item));
+        runbook.steps.retain(|item| !is_blank_runbook_step(item));
+    }
+    assets
 }
 
 pub fn connection_source(
@@ -283,6 +305,9 @@ fn validate_connection_profiles(
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     for profile in profiles {
+        if is_blank_connection_profile(profile) {
+            continue;
+        }
         require_field(
             issues,
             AssetSection::Connections,
@@ -327,6 +352,9 @@ fn validate_inventory_hosts(
         .map(|item| item.id.as_str())
         .collect::<HashSet<_>>();
     for host in hosts {
+        if is_blank_host(host) {
+            continue;
+        }
         require_field(
             issues,
             AssetSection::Hosts,
@@ -368,6 +396,9 @@ fn validate_inventory_groups(issues: &mut Vec<AssetValidationIssue>, groups: &[I
     );
 
     for group in groups {
+        if is_blank_group(group) {
+            continue;
+        }
         require_field(
             issues,
             AssetSection::Groups,
@@ -403,6 +434,9 @@ fn validate_roles(
         .collect::<HashSet<_>>();
 
     for role in roles {
+        if is_blank_role(role) {
+            continue;
+        }
         require_field(
             issues,
             AssetSection::Roles,
@@ -428,6 +462,9 @@ fn validate_roles(
             });
         }
         for helper in &role.default_output_helpers {
+            if is_blank_output_helper(helper) {
+                continue;
+            }
             require_field(
                 issues,
                 AssetSection::Roles,
@@ -483,6 +520,9 @@ fn validate_runbooks(
         .collect::<HashSet<_>>();
 
     for runbook in runbooks {
+        if is_blank_runbook(runbook) {
+            continue;
+        }
         require_field(
             issues,
             AssetSection::Runbooks,
@@ -522,6 +562,9 @@ fn validate_runbooks(
 
         let mut variable_ids = HashMap::<&str, usize>::new();
         for variable in &runbook.variables {
+            if is_blank_runbook_variable(variable) {
+                continue;
+            }
             *variable_ids.entry(variable.id.as_str()).or_insert(0) += 1;
             require_field(
                 issues,
@@ -550,6 +593,9 @@ fn validate_runbooks(
 
         let mut step_ids = HashMap::<&str, usize>::new();
         for step in &runbook.steps {
+            if is_blank_runbook_step(step) {
+                continue;
+            }
             *step_ids.entry(step.id.as_str()).or_insert(0) += 1;
             require_field(
                 issues,
@@ -583,6 +629,136 @@ fn validate_runbooks(
             }
         }
     }
+}
+
+fn is_blank_connection_profile(item: &ConnectionProfile) -> bool {
+    item.id.trim().is_empty()
+        && item.name.trim().is_empty()
+        && item
+            .inventory_host_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .remote_working_directory
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .shell_program
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .startup_prefix
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item.tags.is_empty()
+}
+
+fn is_blank_host(item: &InventoryHost) -> bool {
+    item.id.trim().is_empty()
+        && item.name.trim().is_empty()
+        && item.host.trim().is_empty()
+        && item.group_ids.is_empty()
+        && item.tags.is_empty()
+        && item.provider.trim().is_empty()
+        && item.main_ip.trim().is_empty()
+        && item.user.trim().is_empty()
+        && item.port == 22
+        && item.price_per_month_usd_cents == 0
+        && item
+            .password_secret_ref
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item.ssh_key_path.as_deref().unwrap_or("").trim().is_empty()
+}
+
+fn is_blank_group(item: &InventoryGroup) -> bool {
+    item.id.trim().is_empty() && item.name.trim().is_empty() && item.tags.is_empty()
+}
+
+fn is_blank_role(item: &AgentRoleTemplate) -> bool {
+    item.id.trim().is_empty()
+        && item.name.trim().is_empty()
+        && item.description.trim().is_empty()
+        && item.accent_class.trim() == "accent-cyan"
+        && item
+            .default_title
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .default_agent_label
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .default_startup_command
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item
+            .default_connection_profile_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item.default_pane_groups.is_empty()
+        && item.default_reconnect_policy == crate::model::layout::ReconnectPolicy::Manual
+        && item
+            .default_output_helpers
+            .iter()
+            .all(is_blank_output_helper)
+}
+
+fn is_blank_output_helper(item: &OutputHelperRule) -> bool {
+    item.id.trim().is_empty()
+        && item.label.trim().is_empty()
+        && item.regex.trim().is_empty()
+        && item.severity == crate::model::assets::OutputSeverity::Warning
+        && item.toast_on_match
+}
+
+fn is_blank_runbook(item: &Runbook) -> bool {
+    item.id.trim().is_empty()
+        && item.name.trim().is_empty()
+        && item.description.trim().is_empty()
+        && item.tags.is_empty()
+        && matches!(item.target, RunbookTarget::AllPanes)
+        && item.variables.iter().all(is_blank_runbook_variable)
+        && item.steps.iter().all(is_blank_runbook_step)
+        && item.confirm_policy == crate::model::assets::RunbookConfirmPolicy::MultiPaneOrRemote
+}
+
+fn is_blank_runbook_variable(item: &RunbookVariable) -> bool {
+    item.id.trim().is_empty()
+        && item.label.trim().is_empty()
+        && item.description.trim().is_empty()
+        && item
+            .default_value
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        && item.required
+}
+
+fn is_blank_runbook_step(item: &RunbookStep) -> bool {
+    item.id.trim().is_empty()
+        && item.label.trim().is_empty()
+        && item.command.trim().is_empty()
+        && item.append_newline
 }
 
 fn validate_duplicate_ids<'a, I>(
@@ -630,7 +806,8 @@ fn require_field(
 #[cfg(test)]
 mod tests {
     use super::{
-        AssetItemSource, AssetSection, effective_assets_for_scope, role_source, validate_assets,
+        AssetItemSource, AssetSection, effective_assets_for_scope, prune_blank_drafts, role_source,
+        validate_assets,
     };
     use crate::model::assets::{
         AgentRoleTemplate, ConnectionKind, ConnectionProfile, InventoryGroup, InventoryHost,
@@ -799,10 +976,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_group_fields_are_reported() {
+    fn partially_filled_group_still_reports_missing_fields() {
         let current = WorkspaceAssets {
             inventory_groups: vec![InventoryGroup {
-                id: String::new(),
+                id: "ops".into(),
                 name: String::new(),
                 tags: Vec::new(),
             }],
@@ -815,5 +992,32 @@ mod tests {
                 .iter()
                 .any(|issue| issue.section == AssetSection::Groups)
         );
+    }
+
+    #[test]
+    fn blank_draft_host_is_ignored_until_user_fills_it() {
+        let current = WorkspaceAssets {
+            inventory_hosts: vec![InventoryHost {
+                id: String::new(),
+                name: String::new(),
+                host: String::new(),
+                group_ids: Vec::new(),
+                tags: Vec::new(),
+                provider: String::new(),
+                main_ip: String::new(),
+                user: String::new(),
+                port: 22,
+                price_per_month_usd_cents: 0,
+                password_secret_ref: None,
+                ssh_key_path: None,
+            }],
+            ..WorkspaceAssets::default()
+        };
+
+        let issues = validate_assets(ConfigScope::Global, &current, &WorkspaceAssets::default());
+        assert!(issues.is_empty());
+
+        let pruned = prune_blank_drafts(current);
+        assert!(pruned.inventory_hosts.is_empty());
     }
 }

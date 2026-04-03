@@ -137,18 +137,20 @@ mod imp {
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 let notification = ((wparam >> 16) & 0xffff) as u32;
-                if let Some(state) = unsafe { state_mut(hwnd) } {
-                    match command_id {
-                        ID_LIST if notification == LBN_SELCHANGE => update_selection_detail(state),
-                        ID_JUMP => activate_jump(state),
-                        ID_RECONNECT => activate_reconnect(state),
-                        ID_MARK_READ => activate_mark_read(state),
-                        ID_MARK_ALL => activate_mark_all(state),
-                        ID_CLOSE => unsafe {
-                            DestroyWindow(hwnd);
-                        },
-                        _ => {}
+                match command_id {
+                    ID_LIST if notification == LBN_SELCHANGE => {
+                        if let Some(state) = unsafe { state_mut(hwnd) } {
+                            update_selection_detail(state);
+                        }
                     }
+                    ID_JUMP => activate_jump(hwnd),
+                    ID_RECONNECT => activate_reconnect(hwnd),
+                    ID_MARK_READ => activate_mark_read(hwnd),
+                    ID_MARK_ALL => activate_mark_all(hwnd),
+                    ID_CLOSE => unsafe {
+                        DestroyWindow(hwnd);
+                    },
+                    _ => {}
                 }
                 0
             }
@@ -380,58 +382,90 @@ mod imp {
         }
     }
 
-    fn activate_jump(state: &mut AlertCenterWindowState) {
-        let Some(index) = selected_index(state) else {
+    fn activate_jump(hwnd: HWND) {
+        let Some((index, on_jump, on_mark_read)) =
+            unsafe { state_mut(hwnd) }.and_then(|state| selected_jump_callbacks(&*state))
+        else {
             return;
         };
-        let Some(entry) = state.entries.get(index).cloned() else {
-            return;
-        };
-        (entry.on_jump)();
-        (entry.on_mark_read)();
-        if let Some(current) = state.entries.get_mut(index) {
-            current.unread = false;
-        }
-        refresh_list(state, Some(index));
-    }
-
-    fn activate_reconnect(state: &mut AlertCenterWindowState) {
-        let Some(index) = selected_index(state) else {
-            return;
-        };
-        let Some(entry) = state.entries.get(index).cloned() else {
-            return;
-        };
-        if let Some(callback) = entry.on_reconnect {
-            callback();
-            (entry.on_mark_read)();
-            if let Some(current) = state.entries.get_mut(index) {
-                current.unread = false;
-            }
+        on_jump();
+        on_mark_read();
+        if let Some(state) = unsafe { state_mut(hwnd) } {
+            mark_entry_read(state, index);
             refresh_list(state, Some(index));
         }
     }
 
-    fn activate_mark_read(state: &mut AlertCenterWindowState) {
-        let Some(index) = selected_index(state) else {
+    fn activate_reconnect(hwnd: HWND) {
+        let Some((index, on_reconnect, on_mark_read)) =
+            unsafe { state_mut(hwnd) }.and_then(|state| selected_reconnect_callbacks(&*state))
+        else {
             return;
         };
-        let Some(entry) = state.entries.get(index).cloned() else {
+        on_reconnect();
+        on_mark_read();
+        if let Some(state) = unsafe { state_mut(hwnd) } {
+            mark_entry_read(state, index);
+            refresh_list(state, Some(index));
+        }
+    }
+
+    fn activate_mark_read(hwnd: HWND) {
+        let Some((index, on_mark_read)) =
+            unsafe { state_mut(hwnd) }.and_then(|state| selected_mark_read_callback(&*state))
+        else {
             return;
         };
-        (entry.on_mark_read)();
+        on_mark_read();
+        if let Some(state) = unsafe { state_mut(hwnd) } {
+            mark_entry_read(state, index);
+            refresh_list(state, Some(index));
+        }
+    }
+
+    fn activate_mark_all(hwnd: HWND) {
+        let Some(on_mark_all_read) =
+            unsafe { state_mut(hwnd) }.map(|state| state.on_mark_all_read.clone())
+        else {
+            return;
+        };
+        on_mark_all_read();
+        if let Some(state) = unsafe { state_mut(hwnd) } {
+            for entry in &mut state.entries {
+                entry.unread = false;
+            }
+            refresh_list(state, selected_index(state));
+        }
+    }
+
+    fn selected_jump_callbacks(
+        state: &AlertCenterWindowState,
+    ) -> Option<(usize, Rc<dyn Fn()>, Rc<dyn Fn()>)> {
+        let index = selected_index(state)?;
+        let entry = state.entries.get(index)?.clone();
+        Some((index, entry.on_jump, entry.on_mark_read))
+    }
+
+    fn selected_reconnect_callbacks(
+        state: &AlertCenterWindowState,
+    ) -> Option<(usize, Rc<dyn Fn()>, Rc<dyn Fn()>)> {
+        let index = selected_index(state)?;
+        let entry = state.entries.get(index)?.clone();
+        Some((index, entry.on_reconnect?, entry.on_mark_read))
+    }
+
+    fn selected_mark_read_callback(
+        state: &AlertCenterWindowState,
+    ) -> Option<(usize, Rc<dyn Fn()>)> {
+        let index = selected_index(state)?;
+        let entry = state.entries.get(index)?.clone();
+        Some((index, entry.on_mark_read))
+    }
+
+    fn mark_entry_read(state: &mut AlertCenterWindowState, index: usize) {
         if let Some(current) = state.entries.get_mut(index) {
             current.unread = false;
         }
-        refresh_list(state, Some(index));
-    }
-
-    fn activate_mark_all(state: &mut AlertCenterWindowState) {
-        (state.on_mark_all_read)();
-        for entry in &mut state.entries {
-            entry.unread = false;
-        }
-        refresh_list(state, selected_index(state));
     }
 
     fn selected_index(state: &AlertCenterWindowState) -> Option<usize> {

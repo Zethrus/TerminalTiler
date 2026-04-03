@@ -130,20 +130,32 @@ mod imp {
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 let notification = ((wparam >> 16) & 0xffff) as u32;
-                if let Some(state) = unsafe { state_mut(hwnd) } {
-                    match command_id {
-                        ID_SEARCH if notification == EN_CHANGE => {
+                match command_id {
+                    ID_SEARCH if notification == EN_CHANGE => {
+                        if let Some(state) = unsafe { state_mut(hwnd) } {
                             refresh_palette(state);
                         }
-                        ID_LIST if notification == LBN_DBLCLK => {
-                            activate_selected(hwnd, state);
-                        }
-                        ID_RUN => activate_selected(hwnd, state),
-                        ID_CLOSE => unsafe {
-                            DestroyWindow(hwnd);
-                        },
-                        _ => {}
                     }
+                    ID_LIST if notification == LBN_DBLCLK => {
+                        if let Some(action) =
+                            unsafe { state_mut(hwnd) }.and_then(|state| selected_action(state))
+                        {
+                            action();
+                            unsafe { DestroyWindow(hwnd) };
+                        }
+                    }
+                    ID_RUN => {
+                        if let Some(action) =
+                            unsafe { state_mut(hwnd) }.and_then(|state| selected_action(state))
+                        {
+                            action();
+                            unsafe { DestroyWindow(hwnd) };
+                        }
+                    }
+                    ID_CLOSE => unsafe {
+                        DestroyWindow(hwnd);
+                    },
+                    _ => {}
                 }
                 0
             }
@@ -306,17 +318,13 @@ mod imp {
         }
     }
 
-    fn activate_selected(hwnd: HWND, state: &mut PaletteWindowState) {
+    fn selected_action(state: &PaletteWindowState) -> Option<Rc<dyn Fn()>> {
         let selected = unsafe { SendMessageW(state.list_hwnd, LB_GETCURSEL, 0, 0) };
         if selected < 0 {
-            return;
+            return None;
         }
-        let Some(action_index) = state.filtered_indexes.get(selected as usize).copied() else {
-            return;
-        };
-        let action = state.actions[action_index].clone();
-        (action.on_activate)();
-        unsafe { DestroyWindow(hwnd) };
+        let action_index = state.filtered_indexes.get(selected as usize).copied()?;
+        Some(state.actions[action_index].on_activate.clone())
     }
 
     fn set_selected_status(state: &PaletteWindowState) {

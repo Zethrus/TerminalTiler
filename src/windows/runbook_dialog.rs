@@ -142,17 +142,24 @@ mod imp {
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 let notification = ((wparam >> 16) & 0xffff) as u32;
-                if let Some(state) = unsafe { state_mut(hwnd) } {
-                    match command_id {
-                        ID_RUN => submit(hwnd, state),
-                        ID_CANCEL => unsafe {
-                            DestroyWindow(hwnd);
-                        },
-                        id if id >= ID_FIELD_BASE && notification == EN_CHANGE => {
+                match command_id {
+                    ID_RUN => {
+                        if let Some((on_submit, values)) =
+                            unsafe { state_mut(hwnd) }.and_then(|state| prepare_submit(state))
+                        {
+                            on_submit(values);
+                            unsafe { DestroyWindow(hwnd) };
+                        }
+                    }
+                    ID_CANCEL => unsafe {
+                        DestroyWindow(hwnd);
+                    },
+                    id if id >= ID_FIELD_BASE && notification == EN_CHANGE => {
+                        if let Some(state) = unsafe { state_mut(hwnd) } {
                             refresh_preview(state);
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
                 0
             }
@@ -367,7 +374,9 @@ mod imp {
         }
     }
 
-    fn submit(hwnd: HWND, state: &RunbookDialogState) {
+    fn prepare_submit(
+        state: &RunbookDialogState,
+    ) -> Option<(Rc<dyn Fn(HashMap<String, String>)>, HashMap<String, String>)> {
         let values = current_values(state);
         for field in &state.fields {
             if field.required
@@ -383,14 +392,11 @@ mod imp {
                     );
                     SetFocus(field.edit_hwnd);
                 }
-                return;
+                return None;
             }
         }
 
-        (state.on_submit)(values);
-        unsafe {
-            DestroyWindow(hwnd);
-        }
+        Some((state.on_submit.clone(), values))
     }
 
     fn refresh_preview(state: &RunbookDialogState) {
