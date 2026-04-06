@@ -17,7 +17,9 @@ use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::{layout_tree, tile_view};
 
-const AUTO_RECONNECT_DELAYS_SECONDS: [u32; 3] = [1, 3, 10];
+fn reconnect_delay_seconds(attempt: u32) -> u32 {
+    2u32.pow(attempt.saturating_sub(1).min(5)).min(60)
+}
 
 struct WorkspaceTile {
     tile: crate::model::layout::TileSpec,
@@ -174,6 +176,7 @@ pub fn build_with_layout_change_handler(
     assets: &WorkspaceAssets,
     use_dark_palette: bool,
     zoom_steps: i32,
+    max_reconnect_attempts: u32,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
     let layout_state = Rc::new(RefCell::new(preset.layout.clone()));
@@ -255,7 +258,7 @@ pub fn build_with_layout_change_handler(
                 zoom_steps,
                 on_swap.clone(),
             );
-            install_tile_alert_hooks(&tile_view.session, &tile, &alert_store);
+            install_tile_alert_hooks(&tile_view.session, &tile, &alert_store, max_reconnect_attempts);
             WorkspaceTile {
                 tile: tile_view.tile,
                 widget: tile_view.widget,
@@ -551,6 +554,7 @@ fn install_tile_alert_hooks(
     session: &TerminalSession,
     tile: &crate::model::layout::TileSpec,
     alert_store: &AlertStore,
+    max_reconnect_attempts: u32,
 ) {
     let terminal = session.widget();
     let last_helper_signature = Rc::new(RefCell::new(String::new()));
@@ -600,15 +604,10 @@ fn install_tile_alert_hooks(
             );
             alert.detail = detail;
             alert.pane_id = Some(tile.id.clone());
-            alert.allows_reconnect = true;
             alert_store.push(alert);
-
-            if should_auto_reconnect(&tile, &session, status) {
+            if should_auto_reconnect(&tile, &session, status, max_reconnect_attempts) {
                 let attempt = session.register_auto_reconnect_attempt();
-                let delay = AUTO_RECONNECT_DELAYS_SECONDS
-                    .get((attempt.saturating_sub(1)) as usize)
-                    .copied()
-                    .unwrap_or(10);
+                let delay = reconnect_delay_seconds(attempt.into());
                 let session = session.clone();
                 let alert_store = alert_store.clone();
                 let tile = tile.clone();
@@ -648,8 +647,9 @@ fn should_auto_reconnect(
     tile: &crate::model::layout::TileSpec,
     session: &TerminalSession,
     status: i32,
+    max_attempts: u32,
 ) -> bool {
-    if session.termination_requested() || session.auto_reconnect_attempts() >= 3 {
+    if session.termination_requested() || u32::from(session.auto_reconnect_attempts()) >= max_attempts {
         return false;
     }
     match tile.reconnect_policy {

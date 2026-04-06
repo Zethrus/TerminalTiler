@@ -19,6 +19,7 @@ const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const DEFAULT_SETTINGS_DIALOG_WIDTH: i32 = 528;
 const DEFAULT_SETTINGS_DIALOG_HEIGHT: i32 = 760;
 const DEFAULT_CLOSE_TO_BACKGROUND: bool = false;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPreferences {
@@ -34,6 +35,7 @@ pub struct AppPreferences {
     pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
+    pub max_reconnect_attempts: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +70,8 @@ struct PreferenceDocument {
     settings_dialog_width: i32,
     #[serde(default = "default_settings_dialog_height")]
     settings_dialog_height: i32,
+    #[serde(default = "default_max_reconnect_attempts")]
+    max_reconnect_attempts: u32,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -108,6 +112,10 @@ fn default_settings_dialog_width() -> i32 {
 
 fn default_settings_dialog_height() -> i32 {
     DEFAULT_SETTINGS_DIALOG_HEIGHT
+}
+
+fn default_max_reconnect_attempts() -> u32 {
+    DEFAULT_MAX_RECONNECT_ATTEMPTS
 }
 
 fn normalize_settings_dialog_width(width: i32) -> i32 {
@@ -236,6 +244,7 @@ impl PreferenceStore {
                 settings_dialog_height: normalize_settings_dialog_height(
                     document.settings_dialog_height,
                 ),
+                max_reconnect_attempts: document.max_reconnect_attempts,
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -318,6 +327,13 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    #[allow(dead_code)]
+    pub fn save_max_reconnect_attempts(&self, attempts: u32) {
+        let mut preferences = self.load();
+        preferences.max_reconnect_attempts = attempts;
+        self.save(&preferences);
+    }
+
     pub fn save_settings_dialog_size(&self, width: i32, height: i32) {
         let mut preferences = self.load();
         preferences.settings_dialog_width = normalize_settings_dialog_width(width);
@@ -346,6 +362,7 @@ impl PreferenceStore {
             command_palette_shortcut: preferences.command_palette_shortcut.clone(),
             settings_dialog_width: preferences.settings_dialog_width,
             settings_dialog_height: preferences.settings_dialog_height,
+            max_reconnect_attempts: preferences.max_reconnect_attempts,
         };
 
         let serialized = match toml::to_string_pretty(&document) {
@@ -397,6 +414,7 @@ impl Default for AppPreferences {
             command_palette_shortcut: default_command_palette_shortcut(),
             settings_dialog_width: default_settings_dialog_width(),
             settings_dialog_height: default_settings_dialog_height(),
+            max_reconnect_attempts: default_max_reconnect_attempts(),
         }
     }
 }

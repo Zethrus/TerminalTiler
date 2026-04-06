@@ -145,6 +145,7 @@ struct RestoreSessionContext {
     forced_tab_closes: Rc<RefCell<HashSet<usize>>>,
     suppress_empty_replacement: Rc<Cell<bool>>,
     asset_store: Rc<AssetStore>,
+    preference_store: Rc<PreferenceStore>,
 }
 
 impl Clone for RestoreSessionContext {
@@ -158,6 +159,7 @@ impl Clone for RestoreSessionContext {
             forced_tab_closes: self.forced_tab_closes.clone(),
             suppress_empty_replacement: self.suppress_empty_replacement.clone(),
             asset_store: self.asset_store.clone(),
+            preference_store: self.preference_store.clone(),
         }
     }
 }
@@ -598,6 +600,7 @@ pub fn present(
         let select_for_workspace = select_tab.clone();
         let refresh_tab_strip_for_workspace = refresh_tab_strip.clone();
         let asset_store = asset_store.clone();
+        let preference_store_for_workspace = preference_store.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -611,6 +614,7 @@ pub fn present(
                     &assets,
                     resolved_theme_uses_dark_palette(preset.theme),
                     terminal_zoom_steps,
+                    preference_store_for_workspace.load().max_reconnect_attempts,
                     {
                         let tabs_for_workspace = tabs_for_workspace.clone();
                         Rc::new(move |next_layout| {
@@ -999,6 +1003,7 @@ pub fn present(
                     command_palette_shortcut: preferences.command_palette_shortcut,
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
+                    max_reconnect_attempts: preferences.max_reconnect_attempts,
                 },
                 settings_dialog::SettingsDialogActions {
                     on_theme_changed: Rc::new({
@@ -1256,6 +1261,16 @@ pub fn present(
                                     )
                                 ),
                             );
+                        }
+                    }),
+                    on_max_reconnect_attempts_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        move |attempts| {
+                            preference_store.save_max_reconnect_attempts(attempts);
+                            logging::info(format!(
+                                "updated application settings max_reconnect_attempts={}",
+                                attempts
+                            ));
                         }
                     }),
                     on_reset_defaults: Rc::new({
@@ -1755,6 +1770,7 @@ pub fn present(
                 forced_tab_closes: forced_tab_closes.clone(),
                 suppress_empty_replacement: suppress_empty_replacement.clone(),
                 asset_store: asset_store.clone(),
+                preference_store: preference_store.clone(),
             };
             match restore_mode {
                 RestoreLaunchMode::Prompt => prompt_session_resume(
@@ -2459,6 +2475,7 @@ fn restore_saved_session(
             &assets,
             resolved_theme_uses_dark_palette(preset.theme),
             terminal_zoom_steps,
+            context.preference_store.load().max_reconnect_attempts,
             {
                 let tabs = context.tabs.clone();
                 Rc::new(move |next_layout| {

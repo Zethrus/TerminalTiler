@@ -17,6 +17,7 @@ struct SettingsState {
     zoom_in_shortcut: String,
     zoom_out_shortcut: String,
     command_palette_shortcut: String,
+    max_reconnect_attempts: u32,
 }
 
 impl SettingsState {
@@ -31,6 +32,7 @@ impl SettingsState {
             zoom_in_shortcut: defaults.workspace_zoom_in_shortcut,
             zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
             command_palette_shortcut: defaults.command_palette_shortcut,
+            max_reconnect_attempts: defaults.max_reconnect_attempts,
         }
     }
 }
@@ -46,6 +48,7 @@ pub struct SettingsDialogInput {
     pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
+    pub max_reconnect_attempts: u32,
 }
 
 #[derive(Clone)]
@@ -58,6 +61,7 @@ pub struct SettingsDialogActions {
     pub on_zoom_in_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_command_palette_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_max_reconnect_attempts_changed: Rc<dyn Fn(u32)>,
     pub on_reset_defaults: Rc<dyn Fn()>,
     pub on_reset_builtin_presets: Rc<dyn Fn()>,
     pub on_size_changed: Rc<dyn Fn(i32, i32)>,
@@ -215,6 +219,7 @@ pub fn present(
         command_palette_shortcut,
         settings_dialog_width,
         settings_dialog_height,
+        max_reconnect_attempts,
     } = input;
     let SettingsDialogActions {
         on_theme_changed,
@@ -225,6 +230,7 @@ pub fn present(
         on_zoom_in_shortcut_changed,
         on_zoom_out_shortcut_changed,
         on_command_palette_shortcut_changed,
+        on_max_reconnect_attempts_changed,
         on_reset_defaults,
         on_reset_builtin_presets,
         on_size_changed,
@@ -282,6 +288,7 @@ pub fn present(
     let current_zoom_in_shortcut = Rc::new(RefCell::new(workspace_zoom_in_shortcut));
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
     let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
+    let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
     let reset_button = gtk::Button::with_label("Reset Defaults");
     reset_button.add_css_class("pill-button");
     reset_button.add_css_class("secondary-button");
@@ -295,6 +302,7 @@ pub fn present(
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
+        let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
         let reset_button = reset_button.clone();
         Rc::new(move || {
             sync_reset_button_state(
@@ -308,6 +316,7 @@ pub fn present(
                     zoom_in_shortcut: current_zoom_in_shortcut.borrow().clone(),
                     zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
                     command_palette_shortcut: current_command_palette_shortcut.borrow().clone(),
+                    max_reconnect_attempts: current_max_reconnect_attempts.get(),
                 },
             );
         })
@@ -517,6 +526,69 @@ pub fn present(
             move || callback()
         },
     ));
+
+    let connection_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["config-panel", "settings-section"])
+        .build();
+    content.append(&connection_section);
+
+    connection_section.append(&build_section_header(
+        "Connection",
+        "Auto-reconnect",
+        "Maximum number of times a pane automatically reconnects after an unexpected exit before requiring a manual restart.",
+    ));
+
+    let reconnect_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+    let reconnect_text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    reconnect_text.append(
+        &gtk::Label::builder()
+            .label("Maximum auto-reconnect attempts")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    reconnect_text.append(
+        &gtk::Label::builder()
+            .label("After this many automatic restarts, a pane stays closed until manually restarted.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    reconnect_row.append(&reconnect_text);
+
+    let reconnect_spin = gtk::SpinButton::with_range(1.0, 20.0, 1.0);
+    reconnect_spin.set_value(max_reconnect_attempts as f64);
+    reconnect_spin.set_valign(gtk::Align::Center);
+    reconnect_spin.add_css_class("settings-spin-button");
+    {
+        let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = on_max_reconnect_attempts_changed.clone();
+        reconnect_spin.connect_value_changed(move |spin| {
+            let value = spin.value() as u32;
+            if current_max_reconnect_attempts.get() != value {
+                current_max_reconnect_attempts.set(value);
+                callback(value);
+                sync_reset_button();
+            }
+        });
+    }
+    reconnect_row.append(&reconnect_spin);
+    connection_section.append(&reconnect_row);
 
     let shortcuts_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1056,6 +1128,7 @@ pub fn present(
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
+        let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
         let close_to_background_switch = close_to_background_switch.clone();
@@ -1080,6 +1153,7 @@ pub fn present(
         let zoom_in_recording = zoom_in_recording.clone();
         let zoom_out_recording = zoom_out_recording.clone();
         let command_palette_recording = command_palette_recording.clone();
+        let reconnect_spin = reconnect_spin.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
@@ -1097,7 +1171,8 @@ pub fn present(
                 || current_zoom_out_shortcut.borrow().as_str()
                     != defaults.workspace_zoom_out_shortcut
                 || current_command_palette_shortcut.borrow().as_str()
-                    != defaults.command_palette_shortcut;
+                    != defaults.command_palette_shortcut
+                || current_max_reconnect_attempts.get() != defaults.max_reconnect_attempts;
             if !changed {
                 return;
             }
@@ -1110,6 +1185,7 @@ pub fn present(
             current_zoom_in_shortcut.replace(defaults.workspace_zoom_in_shortcut.clone());
             current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
             current_command_palette_shortcut.replace(defaults.command_palette_shortcut.clone());
+            current_max_reconnect_attempts.set(defaults.max_reconnect_attempts);
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
             suppress_close_to_background_signal.set(true);
@@ -1135,6 +1211,7 @@ pub fn present(
                 &command_palette_capture_label,
                 &defaults.command_palette_shortcut,
             );
+            reconnect_spin.set_value(defaults.max_reconnect_attempts as f64);
             fullscreen_recording.set(false);
             density_recording.set(false);
             zoom_in_recording.set(false);
