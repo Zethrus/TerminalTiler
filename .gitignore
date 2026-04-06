@@ -22,6 +22,7 @@
 *~
 *.iml
 .DS_Store
+.terminaltiler/
 
 # Build and development files
 *.o
