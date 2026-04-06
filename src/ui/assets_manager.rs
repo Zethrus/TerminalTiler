@@ -781,6 +781,8 @@ fn render_connections_page(
             "ssh-prod",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].id = value;
             },
@@ -792,6 +794,8 @@ fn render_connections_page(
             "Production SSH",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].name = value;
             },
@@ -807,6 +811,8 @@ fn render_connections_page(
             },
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].kind = match value.as_str() {
                     "ssh" => ConnectionKind::Ssh,
@@ -830,6 +836,8 @@ fn render_connections_page(
                 .unwrap_or_else(|| "__none__".into()),
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].inventory_host_id =
                     if value == "__none__" {
@@ -846,6 +854,8 @@ fn render_connections_page(
             "/srv/app",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].remote_working_directory =
                     none_if_empty(value);
@@ -858,6 +868,8 @@ fn render_connections_page(
             "bash",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].shell_program =
                     none_if_empty(value);
@@ -870,6 +882,8 @@ fn render_connections_page(
             "source ~/.profile",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].startup_prefix =
                     none_if_empty(value);
@@ -882,6 +896,8 @@ fn render_connections_page(
             "prod, ssh",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.connection_profiles[index].tags = parse_csv(&value);
             },
@@ -1018,6 +1034,8 @@ fn render_hosts_page(
             "prod-1",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].id = value;
             },
@@ -1029,6 +1047,8 @@ fn render_hosts_page(
             "Production 1",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].name = value;
             },
@@ -1040,6 +1060,8 @@ fn render_hosts_page(
             "prod.internal",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].host = value;
             },
@@ -1051,6 +1073,8 @@ fn render_hosts_page(
             "deploy",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].user = value;
             },
@@ -1062,6 +1086,8 @@ fn render_hosts_page(
             "aws",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].provider = value;
             },
@@ -1073,6 +1099,8 @@ fn render_hosts_page(
             "10.0.0.12",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].main_ip = value;
             },
@@ -1084,6 +1112,8 @@ fn render_hosts_page(
             "22",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].port =
                     value.parse::<u16>().unwrap_or(22);
@@ -1096,6 +1126,8 @@ fn render_hosts_page(
             "0",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].price_per_month_usd_cents =
                     value.parse::<u64>().unwrap_or(0);
@@ -1108,6 +1140,8 @@ fn render_hosts_page(
             "secret/prod-password",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].password_secret_ref =
                     none_if_empty(value);
@@ -1120,6 +1154,8 @@ fn render_hosts_page(
             "~/.ssh/id_ed25519",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].ssh_key_path = none_if_empty(value);
             },
@@ -1131,6 +1167,8 @@ fn render_hosts_page(
             "prod, api",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_hosts[index].tags = parse_csv(&value);
             },
@@ -1165,7 +1203,9 @@ fn render_hosts_page(
                 let group_id = group.id.clone();
                 let state = state.clone();
                 let refresh_status = refresh_status.clone();
+                let group_rt = refresh_token.clone();
                 toggle.connect_toggled(move |button| {
+                    if group_rt.get() != token { return; }
                     {
                         let mut snapshot = state.borrow_mut();
                         let groups = &mut snapshot.current_assets.inventory_hosts[index].group_ids;
@@ -1312,6 +1352,8 @@ fn render_groups_page(
             "prod",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_groups[index].id = value;
             },
@@ -1323,6 +1365,8 @@ fn render_groups_page(
             "Production",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_groups[index].name = value;
             },
@@ -1334,6 +1378,8 @@ fn render_groups_page(
             "ops, critical",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.inventory_groups[index].tags = parse_csv(&value);
             },
@@ -1479,6 +1525,8 @@ fn render_roles_page(
             "planner",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].id = value;
             },
@@ -1490,6 +1538,8 @@ fn render_roles_page(
             "Planner",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].name = value;
             },
@@ -1501,6 +1551,8 @@ fn render_roles_page(
             "Plan-first role for design work.",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].description = value;
             },
@@ -1512,6 +1564,8 @@ fn render_roles_page(
             "accent-violet",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].accent_class = value;
             },
@@ -1523,6 +1577,8 @@ fn render_roles_page(
             "Planner",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_title = none_if_empty(value);
             },
@@ -1534,6 +1590,8 @@ fn render_roles_page(
             "Lead",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_agent_label =
                     none_if_empty(value);
@@ -1546,6 +1604,8 @@ fn render_roles_page(
             "codex",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_startup_command =
                     none_if_empty(value);
@@ -1560,6 +1620,8 @@ fn render_roles_page(
                 .unwrap_or_else(|| "__none__".into()),
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_connection_profile_id =
                     if value == "__none__" {
@@ -1584,6 +1646,8 @@ fn render_roles_page(
             },
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_reconnect_policy =
                     match value.as_str() {
@@ -1600,6 +1664,8 @@ fn render_roles_page(
             "planning, review",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[index].default_pane_groups =
                     parse_csv(&value);
@@ -1611,6 +1677,8 @@ fn render_roles_page(
             state,
             refresh_status,
             refresh_pages,
+            token,
+            refresh_token,
             index,
             &role.default_output_helpers,
         );
@@ -1747,6 +1815,8 @@ fn render_runbooks_page(
             "deploy",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[index].id = value;
             },
@@ -1758,6 +1828,8 @@ fn render_runbooks_page(
             "Deploy",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[index].name = value;
             },
@@ -1769,6 +1841,8 @@ fn render_runbooks_page(
             "Publish the latest build.",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[index].description = value;
             },
@@ -1780,6 +1854,8 @@ fn render_runbooks_page(
             "release, prod",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[index].tags = parse_csv(&value);
             },
@@ -1799,6 +1875,8 @@ fn render_runbooks_page(
             },
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[index].confirm_policy = match value.as_str() {
                     "always" => RunbookConfirmPolicy::Always,
@@ -1812,6 +1890,8 @@ fn render_runbooks_page(
             &card,
             state,
             refresh_status,
+            token,
+            refresh_token,
             index,
             &runbook.target,
             &role_options,
@@ -1822,6 +1902,8 @@ fn render_runbooks_page(
             state,
             refresh_status,
             refresh_pages,
+            token,
+            refresh_token,
             index,
             &runbook.variables,
         );
@@ -1830,6 +1912,8 @@ fn render_runbooks_page(
             state,
             refresh_status,
             refresh_pages,
+            token,
+            refresh_token,
             index,
             &runbook.steps,
         );
@@ -1994,7 +2078,10 @@ where
         let state = state.clone();
         let dialog = dialog.clone();
         let refresh_pages = refresh_pages.clone();
+        let dup_token = token;
+        let dup_rt = refresh_token.clone();
         button.connect_clicked(move |_| {
+            if dup_rt.get() != dup_token { return; }
             let state_for_prompt = state.clone();
             let on_duplicate = on_duplicate.clone();
             let refresh_pages = refresh_pages.clone();
@@ -2129,6 +2216,8 @@ fn append_entry_field<F>(
     placeholder: &str,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
+    token: u64,
+    refresh_token: Rc<Cell<u64>>,
     on_change: F,
 ) where
     F: Fn(&mut AssetsManagerState, String) + 'static,
@@ -2141,7 +2230,9 @@ fn append_entry_field<F>(
         .build();
     let state = state.clone();
     let refresh_status = refresh_status.clone();
+    let rt = refresh_token;
     entry.connect_changed(move |entry| {
+        if rt.get() != token { return; }
         {
             let mut snapshot = state.borrow_mut();
             on_change(&mut snapshot, entry.text().to_string());
@@ -2161,6 +2252,8 @@ fn append_combo_field<F>(
     active: &str,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
+    token: u64,
+    refresh_token: Rc<Cell<u64>>,
     on_change: F,
 ) where
     F: Fn(&mut AssetsManagerState, String) + 'static,
@@ -2176,6 +2269,8 @@ fn append_combo_field<F>(
         active.to_string(),
         state,
         refresh_status,
+        token,
+        refresh_token,
         on_change,
     );
 }
@@ -2187,6 +2282,8 @@ fn append_dynamic_combo_field<F>(
     active: String,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
+    token: u64,
+    refresh_token: Rc<Cell<u64>>,
     on_change: F,
 ) where
     F: Fn(&mut AssetsManagerState, String) + 'static,
@@ -2200,7 +2297,9 @@ fn append_dynamic_combo_field<F>(
     combo.set_active_id(Some(&active));
     let state = state.clone();
     let refresh_status = refresh_status.clone();
+    let rt = refresh_token;
     combo.connect_changed(move |combo| {
+        if rt.get() != token { return; }
         if let Some(id) = combo.active_id() {
             {
                 let mut snapshot = state.borrow_mut();
@@ -2220,6 +2319,8 @@ fn append_output_helpers_editor(
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
     role_index: usize,
     helpers: &[OutputHelperRule],
 ) {
@@ -2232,7 +2333,9 @@ fn append_output_helpers_editor(
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
+    let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
+        if add_rt.get() != token { return; }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.role_templates[role_index]
@@ -2267,6 +2370,8 @@ fn append_output_helpers_editor(
             "compile-error",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
                     [helper_index]
@@ -2280,6 +2385,8 @@ fn append_output_helpers_editor(
             "Compile error",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
                     [helper_index]
@@ -2293,6 +2400,8 @@ fn append_output_helpers_editor(
             "(?i)error",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
                     [helper_index]
@@ -2310,6 +2419,8 @@ fn append_output_helpers_editor(
             },
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
                     [helper_index]
@@ -2324,7 +2435,9 @@ fn append_output_helpers_editor(
         let toggle = gtk::Switch::builder().active(helper.toast_on_match).build();
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
+        let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
+            if toggle_rt.get() != token { return false.into(); }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
@@ -2347,7 +2460,9 @@ fn append_output_helpers_editor(
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
+        let remove_rt = refresh_token.clone();
         remove_button.connect_clicked(move |_| {
+            if remove_rt.get() != token { return; }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.role_templates[role_index]
@@ -2372,6 +2487,8 @@ fn append_runbook_target_editor(
     card: &gtk::Box,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
     runbook_index: usize,
     target: &RunbookTarget,
     role_options: &[(String, String)],
@@ -2395,6 +2512,8 @@ fn append_runbook_target_editor(
         },
         state,
         refresh_status,
+        token,
+        refresh_token.clone(),
         move |snapshot, value| {
             snapshot.current_assets.runbooks[runbook_index].target = match value.as_str() {
                 "group" => RunbookTarget::PaneGroup(String::new()),
@@ -2412,6 +2531,8 @@ fn append_runbook_target_editor(
             "delivery",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, next| {
                 snapshot.current_assets.runbooks[runbook_index].target =
                     RunbookTarget::PaneGroup(next);
@@ -2431,6 +2552,8 @@ fn append_runbook_target_editor(
                 },
                 state,
                 refresh_status,
+                token,
+                refresh_token.clone(),
                 move |snapshot, next| {
                     snapshot.current_assets.runbooks[runbook_index].target =
                         RunbookTarget::Role(if next == "__none__" {
@@ -2455,6 +2578,8 @@ fn append_runbook_target_editor(
                 },
                 state,
                 refresh_status,
+                token,
+                refresh_token.clone(),
                 move |snapshot, next| {
                     snapshot.current_assets.runbooks[runbook_index].target =
                         RunbookTarget::ConnectionProfile(if next == "__none__" {
@@ -2475,6 +2600,8 @@ fn append_runbook_variables_editor(
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
     runbook_index: usize,
     variables: &[RunbookVariable],
 ) {
@@ -2487,7 +2614,9 @@ fn append_runbook_variables_editor(
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
+    let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
+        if add_rt.get() != token { return; }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.runbooks[runbook_index]
@@ -2522,6 +2651,8 @@ fn append_runbook_variables_editor(
             "service",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index].id =
                     value;
@@ -2534,6 +2665,8 @@ fn append_runbook_variables_editor(
             "Service name",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index].label =
                     value;
@@ -2546,6 +2679,8 @@ fn append_runbook_variables_editor(
             "Used to target one service.",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index]
                     .description = value;
@@ -2558,6 +2693,8 @@ fn append_runbook_variables_editor(
             "api",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index]
                     .default_value = none_if_empty(value);
@@ -2567,7 +2704,9 @@ fn append_runbook_variables_editor(
         let toggle = gtk::Switch::builder().active(variable.required).build();
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
+        let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
+            if toggle_rt.get() != token { return false.into(); }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index]
@@ -2588,7 +2727,9 @@ fn append_runbook_variables_editor(
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
+        let remove_rt = refresh_token.clone();
         remove.connect_clicked(move |_| {
+            if remove_rt.get() != token { return; }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index]
@@ -2614,6 +2755,8 @@ fn append_runbook_steps_editor(
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
     runbook_index: usize,
     steps: &[RunbookStep],
 ) {
@@ -2626,7 +2769,9 @@ fn append_runbook_steps_editor(
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
+    let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
+        if add_rt.get() != token { return; }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.runbooks[runbook_index]
@@ -2660,6 +2805,8 @@ fn append_runbook_steps_editor(
             "restart",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].steps[step_index].id = value;
             },
@@ -2671,6 +2818,8 @@ fn append_runbook_steps_editor(
             "Restart service",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].steps[step_index].label = value;
             },
@@ -2682,6 +2831,8 @@ fn append_runbook_steps_editor(
             "systemctl restart app",
             state,
             refresh_status,
+            token,
+            refresh_token.clone(),
             move |snapshot, value| {
                 snapshot.current_assets.runbooks[runbook_index].steps[step_index].command = value;
             },
@@ -2690,7 +2841,9 @@ fn append_runbook_steps_editor(
         let toggle = gtk::Switch::builder().active(step.append_newline).build();
         let toggle_state = state.clone();
         let toggle_refresh_status = refresh_status.clone();
+        let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
+            if toggle_rt.get() != token { return false.into(); }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index].steps[step_index].append_newline =
@@ -2711,7 +2864,9 @@ fn append_runbook_steps_editor(
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
+        let remove_rt = refresh_token.clone();
         remove.connect_clicked(move |_| {
+            if remove_rt.get() != token { return; }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index]
