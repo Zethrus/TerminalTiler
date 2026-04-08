@@ -213,6 +213,11 @@ impl TerminalSession {
         self.state.borrow().termination_requested
     }
 
+    pub fn has_active_process(&self) -> bool {
+        let state = self.state.borrow();
+        !state.exited && !state.termination_requested
+    }
+
     pub fn auto_reconnect_attempts(&self) -> u8 {
         self.state.borrow().auto_reconnect_attempts
     }

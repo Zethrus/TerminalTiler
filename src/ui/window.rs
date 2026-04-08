@@ -335,6 +335,7 @@ pub fn present(
         current_shortcuts.command_palette_shortcut.clone(),
     ));
     let quit_requested = Rc::new(Cell::new(false));
+    let force_quit_requested = Rc::new(Cell::new(false));
     let tab_strip_controller = create_tab_strip_controller(
         &title.tabs_box,
         select_tab.clone(),
@@ -1597,11 +1598,39 @@ pub fn present(
 
     {
         let window_for_quit_action = window.clone();
+        let tabs_for_quit_action = tabs.clone();
+        let active_for_quit_action = active_tab_id.clone();
+        let session_store_for_quit_action = session_store.clone();
         let tray_controller = tray_controller.clone();
         let quit_requested = quit_requested.clone();
+        let force_quit_requested = force_quit_requested.clone();
         let action = gio::SimpleAction::new("quit-app", None);
         action.connect_activate(move |_, _| {
             tray_controller.set_window_hidden(false);
+            if has_active_workspace_processes(&tabs_for_quit_action) {
+                let window = window_for_quit_action.clone();
+                let tabs = tabs_for_quit_action.clone();
+                let session_store = session_store_for_quit_action.clone();
+                let active_tab_id = active_for_quit_action.clone();
+                let force_quit_requested = force_quit_requested.clone();
+                confirm_destructive_action(
+                    &window_for_quit_action,
+                    "Quit Application?",
+                    "One or more terminal sessions are still running. Quitting TerminalTiler now will close the application immediately even if those processes are still active.",
+                    "Quit Application",
+                    move || {
+                        force_quit_requested.set(true);
+                        force_quit_application(
+                            &window,
+                            &tabs,
+                            active_tab_id.get(),
+                            &session_store,
+                        );
+                    },
+                );
+                return;
+            }
+
             quit_requested.set(true);
             window_for_quit_action.close();
         });
@@ -1714,8 +1743,13 @@ pub fn present(
         let session_store = session_store.clone();
         let current_close_to_background = current_close_to_background.clone();
         let quit_requested = quit_requested.clone();
+        let force_quit_requested = force_quit_requested.clone();
         let tray_controller = tray_controller.clone();
         window.connect_close_request(move |window| {
+            if force_quit_requested.replace(false) {
+                return glib::Propagation::Proceed;
+            }
+
             if !quit_requested.replace(false)
                 && current_close_to_background.get()
                 && tray_controller.is_available()
@@ -1726,18 +1760,34 @@ pub fn present(
                 return glib::Propagation::Stop;
             }
 
+            if has_active_workspace_processes(&tabs_for_save) {
+                let window = window.clone();
+                let confirm_window = window.clone();
+                let tabs = tabs_for_save.clone();
+                let session_store = session_store.clone();
+                let active_tab_id = active_for_save.clone();
+                let force_quit_requested = force_quit_requested.clone();
+                confirm_destructive_action(
+                    &confirm_window,
+                    "Quit Application?",
+                    "One or more terminal sessions are still running. Quitting TerminalTiler now will close the application immediately even if those processes are still active.",
+                    "Quit Application",
+                    move || {
+                        force_quit_requested.set(true);
+                        force_quit_application(
+                            &window,
+                            &tabs,
+                            active_tab_id.get(),
+                            &session_store,
+                        );
+                    },
+                );
+                return glib::Propagation::Stop;
+            }
+
             tray_controller.set_window_hidden(false);
             let runtimes = workspace_runtimes(&tabs_for_save);
-            if let Some(session) = collect_session(&tabs_for_save, active_for_save.get()) {
-                logging::info(format!(
-                    "saving session with {} workspace tab(s)",
-                    session.tabs.len()
-                ));
-                session_store.save(&session);
-            } else {
-                logging::info("no workspace tabs to save, clearing session");
-                session_store.clear();
-            }
+            persist_application_session(&tabs_for_save, active_for_save.get(), &session_store);
 
             for runtime in runtimes {
                 runtime.terminate_all("closing application window");
@@ -3099,6 +3149,52 @@ fn workspace_runtimes(
             TabContent::LaunchDeck => None,
         })
         .collect()
+}
+
+fn has_active_workspace_processes(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> bool {
+    tabs.borrow().iter().any(|tab| match &tab.content {
+        TabContent::Workspace(workspace) => workspace.runtime.has_active_processes(),
+        TabContent::LaunchDeck => false,
+    })
+}
+
+fn persist_application_session(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+    session_store: &SessionStore,
+) {
+    if let Some(session) = collect_session(tabs, active_tab_id) {
+        logging::info(format!(
+            "saving session with {} workspace tab(s)",
+            session.tabs.len()
+        ));
+        session_store.save(&session);
+    } else {
+        logging::info("no workspace tabs to save, clearing session");
+        session_store.clear();
+    }
+}
+
+fn force_quit_application(
+    window: &adw::ApplicationWindow,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+    session_store: &SessionStore,
+) {
+    logging::info("force quitting application window");
+    persist_application_session(tabs, active_tab_id, session_store);
+    for runtime in workspace_runtimes(tabs) {
+        runtime.terminate_all("force quitting application window");
+    }
+
+    window.set_visible(false);
+    if let Some(app) = window.application()
+        && let Ok(app) = app.downcast::<adw::Application>()
+    {
+        app.quit();
+    } else {
+        window.close();
+    }
 }
 
 fn confirm_destructive_action<F>(

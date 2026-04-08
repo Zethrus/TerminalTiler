@@ -65,6 +65,15 @@ impl WorkspaceRuntime {
         }
     }
 
+    pub fn has_active_processes(&self) -> bool {
+        self.inner
+            .tiles
+            .borrow()
+            .iter()
+            .filter_map(|tile| tile.session.as_ref())
+            .any(TerminalSession::has_active_process)
+    }
+
     pub fn saved_groups(&self) -> Vec<String> {
         let tiles = self
             .inner
