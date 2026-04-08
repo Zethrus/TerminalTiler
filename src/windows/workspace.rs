@@ -67,17 +67,17 @@ mod imp {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         CreateCoreWebView2EnvironmentWithOptions, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
         ICoreWebView2, ICoreWebView2Controller, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
-        ICoreWebView2Environment,
+        ICoreWebView2Environment, ICoreWebView2NewWindowRequestedEventArgs, ICoreWebView2_11,
     };
     use webview2_com::{
         CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-        DocumentTitleChangedEventHandler, NavigationCompletedEventHandler, take_pwstr,
-        wait_with_pump,
+        ContextMenuRequestedEventHandler, DocumentTitleChangedEventHandler,
+        NavigationCompletedEventHandler, NewWindowRequestedEventHandler, take_pwstr, wait_with_pump,
     };
     use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::System::WinRT::EventRegistrationToken;
-    use windows::core::{Error as WindowsError, HSTRING, PCWSTR, PWSTR};
+    use windows::core::{Error as WindowsError, HSTRING, Interface, PCWSTR, PWSTR};
 
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
@@ -127,6 +127,9 @@ mod imp {
     const MENU_COPY_LINK: usize = 4;
     const MENU_RECONNECT: usize = 5;
     const MENU_SHOW_TRANSCRIPT: usize = 6;
+    const MENU_WEB_RELOAD: usize = 21;
+    const MENU_WEB_OPEN_EXTERNAL: usize = 22;
+    const MENU_WEB_COPY_URL: usize = 23;
     const ID_WORKSPACE_TITLE: isize = 1001;
     const ID_WORKSPACE_ZOOM_OUT: isize = 1002;
     const ID_WORKSPACE_ZOOM_IN: isize = 1003;
@@ -2558,6 +2561,127 @@ mod imp {
         pane.auto_refresh_stop = Some(stop);
     }
 
+    fn current_web_pane_url(pane: &PaneState) -> String {
+        pane.webview_uri
+            .clone()
+            .or_else(|| pane.tile.url.clone())
+            .unwrap_or_default()
+    }
+
+    fn show_web_pane_context_menu(pane: &PaneState, screen_point: POINT) {
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
+        }
+
+        let current_url = current_web_pane_url(pane);
+        let has_url = !current_url.trim().is_empty();
+        unsafe {
+            AppendMenuW(menu, MF_STRING, MENU_WEB_RELOAD, wide("Reload").as_ptr());
+            AppendMenuW(
+                menu,
+                MF_STRING | if has_url { 0 } else { MF_GRAYED },
+                MENU_WEB_OPEN_EXTERNAL,
+                wide("Open in Browser").as_ptr(),
+            );
+            AppendMenuW(
+                menu,
+                MF_STRING | if has_url { 0 } else { MF_GRAYED },
+                MENU_WEB_COPY_URL,
+                wide("Copy URL").as_ptr(),
+            );
+        }
+
+        let command = unsafe {
+            TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                screen_point.x,
+                screen_point.y,
+                0,
+                pane.parent_hwnd,
+                ptr::null(),
+            )
+        };
+
+        match command as usize {
+            MENU_WEB_RELOAD => {
+                if let Some(webview) = pane.webview.as_ref()
+                    && let Err(error) = unsafe { webview.Reload() }
+                {
+                    logging::error(format!("WebView2 reload from context menu failed: {error}"));
+                }
+            }
+            MENU_WEB_OPEN_EXTERNAL => {
+                if has_url && let Err(error) = open_url(&current_url) {
+                    logging::error(format!("Opening web tile URL externally failed: {error}"));
+                }
+            }
+            MENU_WEB_COPY_URL => {
+                if has_url && let Err(error) = write_clipboard_text(&current_url) {
+                    logging::error(format!("Copying web tile URL failed: {error}"));
+                }
+            }
+            _ => {}
+        }
+
+        unsafe {
+            DestroyMenu(menu);
+        }
+    }
+
+    fn show_web_pane_context_menu_for_point(
+        parent_hwnd: HWND,
+        pane_id: usize,
+        mut point: POINT,
+    ) {
+        let Some(state) = (unsafe { window_state_mut(parent_hwnd) }) else {
+            return;
+        };
+        let Some(pane) = pane_by_id(state, pane_id) else {
+            return;
+        };
+
+        unsafe {
+            ClientToScreen(pane.output_hwnd, &mut point);
+        }
+        show_web_pane_context_menu(pane, point);
+    }
+
+    fn handle_webview_new_window_request(
+        parent_hwnd: HWND,
+        pane_id: usize,
+        args: &ICoreWebView2NewWindowRequestedEventArgs,
+    ) -> windows::core::Result<()> {
+        let mut requested_uri = PWSTR::null();
+        unsafe {
+            args.Uri(&mut requested_uri)?;
+        }
+        let requested_uri = take_pwstr(requested_uri);
+
+        let mut is_user_initiated = windows::Win32::Foundation::BOOL::default();
+        unsafe {
+            args.IsUserInitiated(&mut is_user_initiated)?;
+            args.SetHandled(true)?;
+        }
+
+        if !is_user_initiated.as_bool() || requested_uri.trim().is_empty() {
+            return Ok(());
+        }
+
+        if let Some(state) = unsafe { window_state_mut(parent_hwnd) }
+            && let Some(pane) = pane_mut_by_id(state, pane_id)
+        {
+            pane.webview_uri = Some(requested_uri.clone());
+        }
+
+        if let Err(error) = open_url(&requested_uri) {
+            logging::error(format!("Opening popup request externally failed: {error}"));
+        }
+
+        Ok(())
+    }
+
     fn initialize_web_pane(
         state: &mut WorkspaceWindowState,
         pane_index: usize,
@@ -2617,6 +2741,17 @@ mod imp {
                 )
                 .map_err(|error| format!("Registering WebView2 title handler failed: {error}"))?;
             webview
+                .add_NewWindowRequested(
+                    &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else {
+                            return Ok(());
+                        };
+                        handle_webview_new_window_request(parent_hwnd, pane_id, &args)
+                    })),
+                    &mut token,
+                )
+                .map_err(|error| format!("Registering WebView2 popup handler failed: {error}"))?;
+            webview
                 .add_NavigationCompleted(
                     &NavigationCompletedEventHandler::create(Box::new(move |webview, _| {
                         let Some(webview) = webview else {
@@ -2635,6 +2770,31 @@ mod imp {
                     &mut token,
                 )
                 .map_err(|error| format!("Registering WebView2 navigation handler failed: {error}"))?;
+            if let Ok(webview11) = webview.cast::<ICoreWebView2_11>() {
+                let mut context_menu_token = EventRegistrationToken::default();
+                webview11
+                    .add_ContextMenuRequested(
+                        &ContextMenuRequestedEventHandler::create(Box::new(move |_, args| {
+                            let Some(args) = args else {
+                                return Ok(());
+                            };
+                            let mut point = windows::Win32::Foundation::POINT::default();
+                            args.Location(&mut point)?;
+                            args.SetHandled(true)?;
+                            show_web_pane_context_menu_for_point(
+                                parent_hwnd,
+                                pane_id,
+                                POINT {
+                                    x: point.x,
+                                    y: point.y,
+                                },
+                            );
+                            Ok(())
+                        })),
+                        &mut context_menu_token,
+                    )
+                    .map_err(|error| format!("Registering WebView2 context menu handler failed: {error}"))?;
+            }
             let _ = controller.SetBounds(WinRect {
                 left: 0,
                 top: 0,
