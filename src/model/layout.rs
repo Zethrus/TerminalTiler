@@ -7,6 +7,23 @@ use crate::platform::home_dir;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum TileKind {
+    #[default]
+    Terminal,
+    WebView,
+}
+
+impl TileKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Terminal => "Terminal",
+            Self::WebView => "Web View",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ReconnectPolicy {
     #[default]
     Manual,
@@ -79,6 +96,12 @@ pub struct TileSpec {
     pub applied_role_id: Option<String>,
     #[serde(default)]
     pub output_helpers: Vec<OutputHelperRule>,
+    #[serde(default)]
+    pub tile_kind: TileKind,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub auto_refresh_seconds: Option<u32>,
 }
 
 impl TileSpec {
@@ -225,6 +248,9 @@ pub fn tile(
         reconnect_policy: ReconnectPolicy::Manual,
         applied_role_id: None,
         output_helpers: Vec::new(),
+        tile_kind: TileKind::Terminal,
+        url: None,
+        auto_refresh_seconds: None,
     })
 }
 
@@ -241,6 +267,9 @@ pub fn default_tile_spec(index: usize) -> TileSpec {
         reconnect_policy: ReconnectPolicy::Manual,
         applied_role_id: None,
         output_helpers: Vec::new(),
+        tile_kind: TileKind::Terminal,
+        url: None,
+        auto_refresh_seconds: None,
     }
 }
 

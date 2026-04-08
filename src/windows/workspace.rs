@@ -3,10 +3,11 @@ mod imp {
     use std::collections::BTreeMap;
     use std::ffi::c_void;
     use std::mem;
+    use std::sync::mpsc;
     use std::ptr;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::Duration;
 
@@ -63,10 +64,24 @@ mod imp {
         WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD,
         WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        CreateCoreWebView2EnvironmentWithOptions, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+        ICoreWebView2, ICoreWebView2Controller, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
+        ICoreWebView2Environment,
+    };
+    use webview2_com::{
+        CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+        DocumentTitleChangedEventHandler, NavigationCompletedEventHandler, take_pwstr,
+        wait_with_pump,
+    };
+    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+    use windows::Win32::System::WinRT::EventRegistrationToken;
+    use windows::core::{Error as WindowsError, HSTRING, PCWSTR, PWSTR};
 
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
-    use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
+    use crate::model::layout::{LayoutNode, SplitAxis, TileKind, TileSpec};
     use crate::model::preset::ApplicationDensity;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
@@ -93,6 +108,9 @@ mod imp {
     const WM_PANE_OUTPUT: u32 = WM_APP + 1;
     const WM_PANE_EXIT: u32 = WM_APP + 2;
     const WM_RECONNECT_PANE: u32 = WM_APP + 3;
+    const WM_WEBVIEW_URI_CHANGED: u32 = WM_APP + 4;
+    const WM_WEBVIEW_TITLE_CHANGED: u32 = WM_APP + 5;
+    const WM_WEBVIEW_AUTO_REFRESH: u32 = WM_APP + 6;
     const HEADER_HEIGHT: i32 = 152;
     const OUTER_MARGIN: i32 = 12;
     const PANE_GAP: i32 = 8;
@@ -124,6 +142,8 @@ mod imp {
     const ID_WORKSPACE_RUNBOOK: isize = 1013;
     const ID_WORKSPACE_ALERTS: isize = 1014;
     const ID_WORKSPACE_COMMAND_PALETTE: isize = 1015;
+    const ID_WORKSPACE_URL: isize = 1016;
+    const ID_WORKSPACE_URL_RELOAD: isize = 1017;
     const ID_TAB_BUTTON_BASE: isize = 3000;
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
@@ -160,6 +180,8 @@ mod imp {
         suppress_title_events: bool,
         title_hwnd: HWND,
         path_hwnd: HWND,
+        url_hwnd: HWND,
+        url_reload_hwnd: HWND,
         zoom_out_hwnd: HWND,
         zoom_in_hwnd: HWND,
         density_hwnd: HWND,
@@ -180,6 +202,8 @@ mod imp {
         is_fullscreen: bool,
         saved_window_rect: RECT,
         saved_window_style: isize,
+        focused_web_pane_id: Option<usize>,
+        webview_environment: Option<ICoreWebView2Environment>,
         panes: Vec<Box<PaneState>>,
     }
 
@@ -203,6 +227,11 @@ mod imp {
         title_hwnd: HWND,
         output_hwnd: HWND,
         terminal: VtBuffer,
+        webview_controller: Option<ICoreWebView2Controller>,
+        webview: Option<ICoreWebView2>,
+        webview_uri: Option<String>,
+        webview_title: Option<String>,
+        auto_refresh_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
         focused: bool,
         font: HFONT,
         cell_width: i32,
@@ -223,6 +252,9 @@ mod imp {
 
     impl Drop for PaneState {
         fn drop(&mut self) {
+            if let Some(stop) = self.auto_refresh_stop.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
             if !self.font.is_null() {
                 unsafe {
                     DeleteObject(self.font as HGDIOBJ);
@@ -241,6 +273,11 @@ mod imp {
     struct PaneOutputEvent {
         pane_id: usize,
         text: String,
+    }
+
+    struct WebViewStringEvent {
+        pane_id: usize,
+        value: String,
     }
 
     #[derive(Clone, Copy)]
@@ -556,6 +593,8 @@ mod imp {
             suppress_title_events: false,
             title_hwnd: ptr::null_mut(),
             path_hwnd: ptr::null_mut(),
+            url_hwnd: ptr::null_mut(),
+            url_reload_hwnd: ptr::null_mut(),
             zoom_out_hwnd: ptr::null_mut(),
             zoom_in_hwnd: ptr::null_mut(),
             density_hwnd: ptr::null_mut(),
@@ -576,6 +615,8 @@ mod imp {
             is_fullscreen: false,
             saved_window_rect: unsafe { mem::zeroed() },
             saved_window_style: 0,
+            focused_web_pane_id: None,
+            webview_environment: None,
             panes: Vec::new(),
         });
         let state_ptr = Box::into_raw(state);
@@ -610,6 +651,82 @@ mod imp {
         }
 
         Ok(())
+    }
+
+    fn ensure_webview_com_initialized() -> Result<(), String> {
+        static WEBVIEW_COM_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+        WEBVIEW_COM_INIT
+            .get_or_init(|| {
+                unsafe {
+                    CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                        .ok()
+                        .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
+                }
+            })
+            .clone()
+    }
+
+    fn create_webview_environment() -> Result<ICoreWebView2Environment, String> {
+        ensure_webview_com_initialized()?;
+
+        let (tx, rx) = mpsc::channel();
+        unsafe {
+            CreateCoreWebView2EnvironmentWithOptions(
+                PCWSTR::null(),
+                PCWSTR::null(),
+                None::<&webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions>,
+                &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+                    move |error_code, environment| {
+                        error_code?;
+                        tx.send(environment.ok_or_else(|| WindowsError::from(E_POINTER)))
+                            .map_err(|_| WindowsError::from(E_UNEXPECTED))
+                    },
+                )),
+            )
+            .map_err(|error| format!("CreateCoreWebView2EnvironmentWithOptions failed: {error}"))?;
+        }
+
+        wait_with_pump(rx)
+            .map_err(|error| format!("Waiting for WebView2 environment failed: {error}"))?
+            .map_err(|error| format!("Creating WebView2 environment failed: {error}"))
+    }
+
+    fn ensure_webview_environment(
+        state: &mut WorkspaceWindowState,
+    ) -> Result<ICoreWebView2Environment, String> {
+        if let Some(environment) = state.webview_environment.as_ref() {
+            return Ok(environment.clone());
+        }
+
+        let environment = create_webview_environment()?;
+        state.webview_environment = Some(environment.clone());
+        Ok(environment)
+    }
+
+    fn create_webview_controller(
+        parent_hwnd: HWND,
+        environment: &ICoreWebView2Environment,
+    ) -> Result<ICoreWebView2Controller, String> {
+        let (tx, rx) = mpsc::channel();
+        let handler: ICoreWebView2CreateCoreWebView2ControllerCompletedHandler =
+            CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+                move |error_code, controller| {
+                    error_code?;
+                    tx.send(controller.ok_or_else(|| WindowsError::from(E_POINTER)))
+                        .map_err(|_| WindowsError::from(E_UNEXPECTED))
+                },
+            ));
+
+        unsafe {
+            environment
+                .CreateCoreWebView2Controller(Win32Hwnd(parent_hwnd as _), &handler)
+                .map_err(|error| format!("CreateCoreWebView2Controller failed: {error}"))?;
+        }
+
+        wait_with_pump(rx)
+            .map_err(|error| format!("Waiting for WebView2 controller failed: {error}"))?
+            .map_err(|error| format!("Creating WebView2 controller failed: {error}"))
     }
 
     fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
@@ -698,6 +815,7 @@ mod imp {
                         ID_WORKSPACE_TITLE if ((wparam >> 16) & 0xffff) as u32 == EN_CHANGE => {
                             sync_workspace_title(hwnd, state);
                         }
+                        ID_WORKSPACE_URL_RELOAD => activate_web_navigation_control(state),
                         ID_WORKSPACE_ZOOM_OUT => adjust_terminal_zoom(hwnd, state, -1),
                         ID_WORKSPACE_ZOOM_IN => adjust_terminal_zoom(hwnd, state, 1),
                         ID_WORKSPACE_DENSITY => cycle_workspace_density(hwnd, state),
@@ -724,6 +842,32 @@ mod imp {
                         }
                         _ => {}
                     }
+                }
+                0
+            }
+            WM_WEBVIEW_URI_CHANGED => {
+                let event_ptr = lparam as *mut WebViewStringEvent;
+                if !event_ptr.is_null() {
+                    let event = unsafe { Box::from_raw(event_ptr) };
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                        apply_webview_uri_update(state, event.pane_id, &event.value);
+                    }
+                }
+                0
+            }
+            WM_WEBVIEW_TITLE_CHANGED => {
+                let event_ptr = lparam as *mut WebViewStringEvent;
+                if !event_ptr.is_null() {
+                    let event = unsafe { Box::from_raw(event_ptr) };
+                    if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                        apply_webview_title_update(state, event.pane_id, &event.value);
+                    }
+                }
+                0
+            }
+            WM_WEBVIEW_AUTO_REFRESH => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    let _ = reload_web_pane_by_id(state, wparam as usize);
                 }
                 0
             }
@@ -775,6 +919,11 @@ mod imp {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        let is_web_pane = unsafe {
+            pane_state_mut(hwnd)
+                .map(|pane| pane.tile.tile_kind == TileKind::WebView)
+                .unwrap_or(false)
+        };
         match message {
             WM_NCCREATE => {
                 let create = lparam as *const CREATESTRUCTW;
@@ -789,6 +938,14 @@ mod imp {
                 1
             }
             WM_PAINT => {
+                if is_web_pane {
+                    let mut paint = PAINTSTRUCT::default();
+                    unsafe {
+                        BeginPaint(hwnd, &mut paint);
+                        EndPaint(hwnd, &paint);
+                    }
+                    return 0;
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     render_pane(hwnd, pane);
                     return 0;
@@ -797,6 +954,22 @@ mod imp {
             }
             WM_SETFOCUS => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if let Some(state) = unsafe { window_state_mut(pane.parent_hwnd) } {
+                        set_focused_web_pane(
+                            state,
+                            (pane.tile.tile_kind == TileKind::WebView).then_some(pane.id),
+                        );
+                    }
+                    if pane.tile.tile_kind == TileKind::WebView {
+                        if let Some(controller) = pane.webview_controller.as_ref() {
+                            let _ = unsafe {
+                                controller.MoveFocus(
+                                    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+                                )
+                            };
+                        }
+                        return 0;
+                    }
                     pane.focused = true;
                     if pane.terminal.focus_reporting()
                         && let Some(session) = pane.session.as_ref()
@@ -812,6 +985,9 @@ mod imp {
             }
             WM_KILLFOCUS => {
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    if pane.tile.tile_kind == TileKind::WebView {
+                        return 0;
+                    }
                     pane.focused = false;
                     if pane.terminal.focus_reporting()
                         && let Some(session) = pane.session.as_ref()
@@ -826,6 +1002,10 @@ mod imp {
                 0
             }
             WM_LBUTTONDOWN => {
+                if is_web_pane {
+                    unsafe { SetFocus(hwnd) };
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     unsafe { SetFocus(hwnd) };
                     if forward_mouse_event(pane, lparam, MouseEvent::ButtonPress(0)) {
@@ -848,6 +1028,9 @@ mod imp {
                 0
             }
             WM_LBUTTONDBLCLK => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     unsafe { SetFocus(hwnd) };
                     let position = pane_position_from_lparam(pane, lparam);
@@ -860,6 +1043,9 @@ mod imp {
                 0
             }
             WM_MOUSEMOVE => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     if pane.pressed_mouse_button.is_some()
                         && (pane.terminal.mouse_tracking() == MouseTrackingMode::Drag
@@ -877,6 +1063,9 @@ mod imp {
                 0
             }
             WM_SETCURSOR => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) }
                     && pane.terminal.mouse_tracking() == MouseTrackingMode::Disabled
                     && is_modifier_pressed(VK_CONTROL)
@@ -890,6 +1079,9 @@ mod imp {
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
             }
             WM_MOUSEWHEEL => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     if pane.terminal.mouse_tracking() != MouseTrackingMode::Disabled {
                         let delta = (((wparam >> 16) & 0xffff) as i16) as i32;
@@ -911,6 +1103,9 @@ mod imp {
                 0
             }
             WM_LBUTTONUP => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     if pane.pressed_mouse_button.take().is_some()
                         && forward_mouse_event(pane, lparam, MouseEvent::ButtonRelease)
@@ -926,6 +1121,9 @@ mod imp {
                 0
             }
             WM_RBUTTONUP => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     unsafe { SetFocus(hwnd) };
                     show_pane_context_menu(hwnd, pane, lparam);
@@ -933,6 +1131,9 @@ mod imp {
                 0
             }
             WM_CHAR => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_char_input(pane, wparam as u32);
                 }
@@ -949,12 +1150,18 @@ mod imp {
                 {
                     return 0;
                 }
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_key_input(pane, wparam as u16);
                 }
                 0
             }
             WM_VSCROLL => {
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+                }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_scrollbar_input(hwnd, pane, wparam);
                 }
@@ -1151,6 +1358,24 @@ mod imp {
             0,
             ptr::null_mut(),
         );
+        state.url_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            "",
+            WS_CHILD | WS_BORDER | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_URL,
+            ptr::null_mut(),
+        );
+        state.url_reload_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Reload",
+            WS_CHILD | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_URL_RELOAD,
+            ptr::null_mut(),
+        );
         state.zoom_out_hwnd = create_child_window(
             hwnd,
             "BUTTON",
@@ -1282,6 +1507,8 @@ mod imp {
         for control in [
             state.title_hwnd,
             state.path_hwnd,
+            state.url_hwnd,
+            state.url_reload_hwnd,
             state.zoom_out_hwnd,
             state.zoom_in_hwnd,
             state.density_hwnd,
@@ -1318,6 +1545,7 @@ mod imp {
         let buttons_width = (HEADER_BUTTON_WIDTH * 4) + (button_gap * 3);
         let title_width = (bounds.width() - (OUTER_MARGIN * 2) - buttons_width - 12).max(240);
         let tab_action_width = HEADER_BUTTON_WIDTH * 4 + (button_gap * 3);
+        let show_web_controls = active_tab_has_web_tiles(state);
         unsafe {
             SetWindowPos(
                 state.title_hwnd,
@@ -1328,16 +1556,37 @@ mod imp {
                 26,
                 SWP_NOZORDER,
             );
-            SetWindowPos(
-                state.path_hwnd,
-                ptr::null_mut(),
-                OUTER_MARGIN,
-                OUTER_MARGIN + 32,
-                title_width,
-                18,
-                SWP_NOZORDER,
-            );
             let button_left = OUTER_MARGIN + title_width + 12;
+            if show_web_controls {
+                SetWindowPos(
+                    state.url_hwnd,
+                    ptr::null_mut(),
+                    OUTER_MARGIN,
+                    OUTER_MARGIN + 32,
+                    (title_width - 84).max(120),
+                    24,
+                    SWP_NOZORDER,
+                );
+                SetWindowPos(
+                    state.url_reload_hwnd,
+                    ptr::null_mut(),
+                    OUTER_MARGIN + (title_width - 76).max(128),
+                    OUTER_MARGIN + 30,
+                    76,
+                    HEADER_BUTTON_HEIGHT,
+                    SWP_NOZORDER,
+                );
+            } else {
+                SetWindowPos(
+                    state.path_hwnd,
+                    ptr::null_mut(),
+                    OUTER_MARGIN,
+                    OUTER_MARGIN + 32,
+                    title_width,
+                    18,
+                    SWP_NOZORDER,
+                );
+            }
             SetWindowPos(
                 state.zoom_out_hwnd,
                 ptr::null_mut(),
@@ -1486,6 +1735,9 @@ mod imp {
                 HEADER_BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
+            ShowWindow(state.path_hwnd, if show_web_controls { 0 } else { SW_SHOW });
+            ShowWindow(state.url_hwnd, if show_web_controls { SW_SHOW } else { 0 });
+            ShowWindow(state.url_reload_hwnd, if show_web_controls { SW_SHOW } else { 0 });
         }
 
         let layout_bounds = Bounds {
@@ -1524,16 +1776,31 @@ mod imp {
                 );
             }
 
-            let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
-            pane.terminal.resize(columns as usize, rows as usize);
-            update_pane_scrollbar(pane);
-            if let Some(session) = pane.session.as_ref() {
-                session.resize(columns, rows);
-            }
-            unsafe {
-                InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+            if pane.tile.tile_kind == TileKind::WebView {
+                if let Some(controller) = pane.webview_controller.as_ref() {
+                    let _ = unsafe {
+                        controller.SetBounds(WinRect {
+                            left: 0,
+                            top: 0,
+                            right: bounds.width().max(120),
+                            bottom: output_height,
+                        })
+                    };
+                }
+            } else {
+                let (columns, rows) = pane_console_size(bounds.width(), output_height, pane);
+                pane.terminal.resize(columns as usize, rows as usize);
+                update_pane_scrollbar(pane);
+                if let Some(session) = pane.session.as_ref() {
+                    session.resize(columns, rows);
+                }
+                unsafe {
+                    InvalidateRect(pane.output_hwnd, ptr::null(), 1);
+                }
             }
         }
+
+        sync_web_navigation_controls(state);
     }
 
     fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -1548,6 +1815,9 @@ mod imp {
             ));
         }
         for pane in state.panes.iter_mut() {
+            if pane.tile.tile_kind == TileKind::WebView {
+                continue;
+            }
             let resolved_launch =
                 match resolve_tile_launch(&pane.tile, &workspace_root, &asset_outcome.assets) {
                     Ok(resolved_launch) => resolved_launch,
@@ -2089,6 +2359,303 @@ mod imp {
             .map(Box::as_ref)
     }
 
+    fn active_tab_has_web_tiles(state: &WorkspaceWindowState) -> bool {
+        if !state.panes.is_empty() {
+            return state
+                .panes
+                .iter()
+                .any(|pane| pane.tile.tile_kind == TileKind::WebView);
+        }
+
+        active_tab(state)
+            .preset
+            .layout
+            .tile_specs()
+            .iter()
+            .any(|tile| tile.tile_kind == TileKind::WebView)
+    }
+
+    fn first_web_pane_id(state: &WorkspaceWindowState) -> Option<usize> {
+        state
+            .panes
+            .iter()
+            .find(|pane| pane.tile.tile_kind == TileKind::WebView)
+            .map(|pane| pane.id)
+    }
+
+    fn set_focused_web_pane(state: &mut WorkspaceWindowState, pane_id: Option<usize>) {
+        state.focused_web_pane_id = pane_id.filter(|pane_id| {
+            pane_by_id(state, *pane_id)
+                .map(|pane| pane.tile.tile_kind == TileKind::WebView)
+                .unwrap_or(false)
+        });
+        sync_web_navigation_controls(state);
+    }
+
+    fn current_web_entry_text(state: &WorkspaceWindowState) -> String {
+        read_window_text(state.url_hwnd).trim().to_string()
+    }
+
+    fn normalize_web_url(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            String::new()
+        } else if trimmed.contains("://") {
+            trimmed.to_string()
+        } else {
+            format!("https://{trimmed}")
+        }
+    }
+
+    fn sync_web_navigation_controls(state: &WorkspaceWindowState) {
+        let has_web_tiles = active_tab_has_web_tiles(state);
+        let focused_pane = state
+            .focused_web_pane_id
+            .and_then(|pane_id| pane_by_id(state, pane_id));
+        let url_text = focused_pane
+            .and_then(|pane| pane.webview_uri.clone().or_else(|| pane.tile.url.clone()))
+            .unwrap_or_default();
+
+        unsafe {
+            ShowWindow(state.path_hwnd, if has_web_tiles { 0 } else { SW_SHOW });
+            ShowWindow(state.url_hwnd, if has_web_tiles { SW_SHOW } else { 0 });
+            ShowWindow(state.url_reload_hwnd, if has_web_tiles { SW_SHOW } else { 0 });
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.url_hwnd,
+                focused_pane.is_some() as i32,
+            );
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
+                state.url_reload_hwnd,
+                focused_pane.is_some() as i32,
+            );
+            if has_web_tiles {
+                SetWindowTextW(state.url_hwnd, wide(&url_text).as_ptr());
+            } else {
+                SetWindowTextW(
+                    state.path_hwnd,
+                    wide(&active_tab(state).workspace_root.display().to_string()).as_ptr(),
+                );
+            }
+        }
+    }
+
+    fn post_webview_string_message(window_hwnd: HWND, message: u32, pane_id: usize, value: String) {
+        let event_ptr = Box::into_raw(Box::new(WebViewStringEvent { pane_id, value }));
+        let posted = unsafe { PostMessageW(window_hwnd, message, 0, event_ptr as LPARAM) };
+        if posted == 0 {
+            unsafe {
+                drop(Box::from_raw(event_ptr));
+            }
+        }
+    }
+
+    fn apply_webview_uri_update(
+        state: &mut WorkspaceWindowState,
+        pane_id: usize,
+        value: &str,
+    ) {
+        if let Some(pane) = pane_mut_by_id(state, pane_id) {
+            pane.webview_uri = Some(value.to_string());
+        }
+        if state.focused_web_pane_id == Some(pane_id) {
+            sync_web_navigation_controls(state);
+        }
+    }
+
+    fn apply_webview_title_update(
+        state: &mut WorkspaceWindowState,
+        pane_id: usize,
+        value: &str,
+    ) {
+        if let Some(pane) = pane_mut_by_id(state, pane_id) {
+            pane.webview_title = (!value.trim().is_empty()).then(|| value.to_string());
+            unsafe {
+                InvalidateRect(pane.title_hwnd, ptr::null(), 1);
+            }
+        }
+    }
+
+    fn navigate_web_pane_by_id(
+        state: &mut WorkspaceWindowState,
+        pane_id: usize,
+        url: &str,
+    ) -> Result<(), String> {
+        let webview = pane_by_id(state, pane_id)
+            .and_then(|pane| pane.webview.clone())
+            .ok_or_else(|| format!("Web pane {pane_id} is unavailable."))?;
+        let url = normalize_web_url(url);
+        if url.is_empty() {
+            return Ok(());
+        }
+
+        unsafe {
+            webview
+                .Navigate(&HSTRING::from(url.as_str()))
+                .map_err(|error| format!("WebView2 navigation failed: {error}"))?;
+        }
+
+        if let Some(pane) = pane_mut_by_id(state, pane_id) {
+            pane.webview_uri = Some(url.clone());
+        }
+        if state.focused_web_pane_id == Some(pane_id) {
+            sync_web_navigation_controls(state);
+        }
+        Ok(())
+    }
+
+    fn reload_web_pane_by_id(state: &mut WorkspaceWindowState, pane_id: usize) -> Result<(), String> {
+        let webview = pane_by_id(state, pane_id)
+            .and_then(|pane| pane.webview.clone())
+            .ok_or_else(|| format!("Web pane {pane_id} is unavailable."))?;
+        unsafe {
+            webview
+                .Reload()
+                .map_err(|error| format!("WebView2 reload failed: {error}"))?;
+        }
+        Ok(())
+    }
+
+    fn activate_web_navigation_control(state: &mut WorkspaceWindowState) {
+        let Some(pane_id) = state.focused_web_pane_id else {
+            return;
+        };
+
+        let entered_url = normalize_web_url(&current_web_entry_text(state));
+        let current_url = pane_by_id(state, pane_id)
+            .and_then(|pane| pane.webview_uri.clone())
+            .unwrap_or_default();
+
+        let result = if !entered_url.is_empty() && entered_url != current_url {
+            navigate_web_pane_by_id(state, pane_id, &entered_url)
+        } else {
+            reload_web_pane_by_id(state, pane_id)
+        };
+
+        if let Err(error) = result {
+            logging::error(error);
+        }
+    }
+
+    fn start_webview_auto_refresh(pane: &mut PaneState, interval_seconds: u32) {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_signal = stop.clone();
+        let window_hwnd = pane.parent_hwnd as isize;
+        let pane_id = pane.id;
+        thread::spawn(move || {
+            while !stop_signal.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_secs(interval_seconds as u64));
+                if stop_signal.load(Ordering::Relaxed) {
+                    break;
+                }
+                let posted = unsafe {
+                    PostMessageW(window_hwnd as HWND, WM_WEBVIEW_AUTO_REFRESH, pane_id, 0)
+                };
+                if posted == 0 {
+                    break;
+                }
+            }
+        });
+        pane.auto_refresh_stop = Some(stop);
+    }
+
+    fn initialize_web_pane(
+        state: &mut WorkspaceWindowState,
+        pane_index: usize,
+    ) -> Result<(), String> {
+        let environment = ensure_webview_environment(state)?;
+        let (pane_id, parent_hwnd, output_hwnd, initial_url, auto_refresh_seconds) = {
+            let pane = &state.panes[pane_index];
+            (
+                pane.id,
+                pane.parent_hwnd,
+                pane.output_hwnd,
+                pane.tile
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| "about:blank".to_string()),
+                pane.tile.auto_refresh_seconds,
+            )
+        };
+        let controller = create_webview_controller(output_hwnd, &environment)?;
+        let webview = unsafe {
+            controller
+                .CoreWebView2()
+                .map_err(|error| format!("CoreWebView2 controller access failed: {error}"))?
+        };
+
+        unsafe {
+            let settings = webview
+                .Settings()
+                .map_err(|error| format!("WebView2 settings access failed: {error}"))?;
+            settings
+                .SetIsStatusBarEnabled(false)
+                .map_err(|error| format!("Disabling WebView2 status bar failed: {error}"))?;
+            settings
+                .SetIsZoomControlEnabled(false)
+                .map_err(|error| format!("Disabling WebView2 zoom controls failed: {error}"))?;
+        }
+
+        let mut token = EventRegistrationToken::default();
+        unsafe {
+            webview
+                .add_DocumentTitleChanged(
+                    &DocumentTitleChangedEventHandler::create(Box::new(move |webview, _| {
+                        let Some(webview) = webview else {
+                            return Ok(());
+                        };
+                        let mut title = PWSTR::null();
+                        webview.DocumentTitle(&mut title)?;
+                        post_webview_string_message(
+                            parent_hwnd,
+                            WM_WEBVIEW_TITLE_CHANGED,
+                            pane_id,
+                            take_pwstr(title),
+                        );
+                        Ok(())
+                    })),
+                    &mut token,
+                )
+                .map_err(|error| format!("Registering WebView2 title handler failed: {error}"))?;
+            webview
+                .add_NavigationCompleted(
+                    &NavigationCompletedEventHandler::create(Box::new(move |webview, _| {
+                        let Some(webview) = webview else {
+                            return Ok(());
+                        };
+                        let mut source = PWSTR::null();
+                        webview.Source(&mut source)?;
+                        post_webview_string_message(
+                            parent_hwnd,
+                            WM_WEBVIEW_URI_CHANGED,
+                            pane_id,
+                            take_pwstr(source),
+                        );
+                        Ok(())
+                    })),
+                    &mut token,
+                )
+                .map_err(|error| format!("Registering WebView2 navigation handler failed: {error}"))?;
+            let _ = controller.SetBounds(WinRect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            });
+            webview
+                .Navigate(&HSTRING::from(initial_url.as_str()))
+                .map_err(|error| format!("Initial WebView2 navigation failed: {error}"))?;
+        }
+
+        let pane = &mut state.panes[pane_index];
+        pane.webview_controller = Some(controller);
+        pane.webview = Some(webview);
+        pane.webview_uri = Some(initial_url);
+        if let Some(interval_seconds) = auto_refresh_seconds {
+            start_webview_auto_refresh(pane, interval_seconds);
+        }
+        Ok(())
+    }
+
     fn session_registry() -> &'static Mutex<WorkspaceSessionRegistry> {
         SESSION_REGISTRY.get_or_init(|| Mutex::new(WorkspaceSessionRegistry::default()))
     }
@@ -2246,6 +2813,8 @@ mod imp {
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         state.panes = Vec::with_capacity(tile_specs.len());
         for tile in tile_specs {
+            let initial_web_uri = tile.url.clone();
+            let is_web_tile = tile.tile_kind == TileKind::WebView;
             let mut pane = Box::new(PaneState {
                 id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
                 parent_hwnd: hwnd,
@@ -2253,6 +2822,11 @@ mod imp {
                 title_hwnd: ptr::null_mut(),
                 output_hwnd: ptr::null_mut(),
                 terminal: VtBuffer::new(80, 24),
+                webview_controller: None,
+                webview: None,
+                webview_uri: initial_web_uri,
+                webview_title: None,
+                auto_refresh_stop: None,
                 focused: false,
                 font: create_terminal_font(font_points),
                 cell_width: 9,
@@ -2284,7 +2858,11 @@ mod imp {
                 hwnd,
                 PANE_CLASS,
                 "",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL,
+                if is_web_tile {
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
+                } else {
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL
+                },
                 0,
                 0,
                 pane_ptr.cast(),
@@ -2295,9 +2873,30 @@ mod imp {
                 }
             }
             update_terminal_metrics(&mut pane);
-            update_pane_scrollbar(&pane);
+            if !is_web_tile {
+                update_pane_scrollbar(&pane);
+            }
             state.panes.push(pane);
         }
+
+        for pane_index in 0..state.panes.len() {
+            if state.panes[pane_index].tile.tile_kind != TileKind::WebView {
+                continue;
+            }
+            let result = initialize_web_pane(state, pane_index);
+            if let Err(error) = result {
+                let pane = &mut state.panes[pane_index];
+                logging::error(format!(
+                    "failed to initialize web tile '{}': {error}",
+                    pane.tile.title
+                ));
+                pane.terminal.process(&format!(
+                    "Could not initialize embedded browser.\r\n\r\n{error}\r\n"
+                ));
+            }
+        }
+
+        state.focused_web_pane_id = first_web_pane_id(state);
 
         rebuild_tab_buttons(hwnd, state);
         update_tab_action_buttons(state);
@@ -2897,6 +3496,15 @@ mod imp {
     }
 
     fn pane_header_text(pane: &PaneState) -> String {
+        if pane.tile.tile_kind == TileKind::WebView {
+            if let Some(title) = pane.webview_title.as_deref() {
+                return format!("{}  •  {}", pane.tile.title, title);
+            }
+            if let Some(uri) = pane.webview_uri.as_deref() {
+                return format!("{}  •  {}", pane.tile.title, uri);
+            }
+            return format!("{}  •  web", pane.tile.title);
+        }
         if let Some(title) = pane.terminal.window_title() {
             format!("{}  •  {}", pane.tile.title, title)
         } else if let Some(cwd) = pane.terminal.current_working_directory() {
