@@ -23,9 +23,12 @@ printf '[%s] launcher start app_root=%s argc=%s\n' \
   "$APP_ROOT" \
   "$#" >&2
 
-export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export GSETTINGS_SCHEMA_DIR="$SHARE_DIR/glib-2.0/schemas"
 export XDG_DATA_DIRS="$SHARE_DIR${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+
+printf '[%s] launcher runtime lib_dir=%s runpath=embedded\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$LIB_DIR" >&2
 
 for candidate in "$LIB_DIR"/gdk-pixbuf-2.0/*; do
   if [[ -d "$candidate/loaders" ]]; then

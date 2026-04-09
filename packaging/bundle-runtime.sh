@@ -11,6 +11,11 @@ BUNDLE_ROOT="$2"
 LIB_DIR="$BUNDLE_ROOT/lib"
 SCHEMA_DIR="$BUNDLE_ROOT/share/glib-2.0/schemas"
 
+if ! command -v patchelf >/dev/null 2>&1; then
+  echo "patchelf is required to set bundled runtime rpaths" >&2
+  exit 1
+fi
+
 mkdir -p "$LIB_DIR" "$SCHEMA_DIR"
 
 should_bundle_dependency() {
@@ -37,6 +42,9 @@ copy_library() {
   if [[ ! -f "$LIB_DIR/$real_name" ]]; then
     cp -L "$real" "$LIB_DIR/$real_name"
     chmod 0644 "$LIB_DIR/$real_name"
+    if file "$LIB_DIR/$real_name" | grep -q 'ELF .*shared object'; then
+      patchelf --set-rpath '$ORIGIN' "$LIB_DIR/$real_name" || true
+    fi
   fi
 
   if [[ "$link_name" != "$real_name" && ! -e "$LIB_DIR/$link_name" ]]; then
@@ -64,6 +72,8 @@ enqueue_dependencies() {
 }
 
 enqueue_dependencies "$TARGET_BIN"
+
+patchelf --set-rpath '$ORIGIN/../lib' "$BUNDLE_ROOT/bin/terminaltiler-bin"
 
 while [[ ${#queue[@]} -gt 0 ]]; do
   current="${queue[0]}"
