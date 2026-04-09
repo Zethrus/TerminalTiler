@@ -18,6 +18,7 @@ pub const APP_ID: &str = "dev.zethrus.terminaltiler";
 pub fn run() -> adw::glib::ExitCode {
     logging::init();
     logging::info("application startup");
+    crate::platform::configure_webkit_process_environment();
 
     let (tray_tx, tray_rx) = mpsc::channel();
     let tray_rx = Rc::new(RefCell::new(Some(tray_rx)));

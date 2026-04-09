@@ -30,6 +30,26 @@ printf '[%s] launcher runtime lib_dir=%s runpath=embedded\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   "$LIB_DIR" >&2
 
+if [[ -z "${WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS:-}" ]]; then
+  webkit_sandbox_reasons=()
+  if [[ -r /proc/sys/kernel/unprivileged_userns_clone ]] && [[ "$(tr -d '[:space:]' </proc/sys/kernel/unprivileged_userns_clone)" == "0" ]]; then
+    webkit_sandbox_reasons+=("kernel.unprivileged_userns_clone=0")
+  fi
+  if [[ -r /proc/sys/user/max_user_namespaces ]] && [[ "$(tr -d '[:space:]' </proc/sys/user/max_user_namespaces)" == "0" ]]; then
+    webkit_sandbox_reasons+=("user.max_user_namespaces=0")
+  fi
+  if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ "$(tr -d '[:space:]' </proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]]; then
+    webkit_sandbox_reasons+=("kernel.apparmor_restrict_unprivileged_userns=1")
+  fi
+
+  if (( ${#webkit_sandbox_reasons[@]} > 0 )); then
+    export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+    printf '[%s] launcher disabled WebKit sandbox because %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "$(IFS=', '; echo "${webkit_sandbox_reasons[*]}")" >&2
+  fi
+fi
+
 for candidate in "$LIB_DIR"/gdk-pixbuf-2.0/*; do
   if [[ -d "$candidate/loaders" ]]; then
     export GDK_PIXBUF_MODULEDIR="$candidate/loaders"

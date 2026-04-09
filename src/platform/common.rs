@@ -33,6 +33,55 @@ pub fn resolve_workspace_root(path: &Path) -> io::Result<PathBuf> {
     canonicalize_existing_dir(path)
 }
 
+#[cfg(target_os = "linux")]
+pub fn configure_webkit_process_environment() {
+    const WEBKIT_DISABLE_SANDBOX_ENV: &str = "WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS";
+
+    if std::env::var_os(WEBKIT_DISABLE_SANDBOX_ENV).is_some() {
+        crate::logging::info(format!(
+            "leaving WebKit sandbox environment unchanged because {} is already set",
+            WEBKIT_DISABLE_SANDBOX_ENV
+        ));
+        return;
+    }
+
+    let mut reasons = Vec::new();
+
+    if proc_flag_eq("/proc/sys/kernel/unprivileged_userns_clone", 0) {
+        reasons.push("kernel.unprivileged_userns_clone=0");
+    }
+    if proc_flag_eq("/proc/sys/user/max_user_namespaces", 0) {
+        reasons.push("user.max_user_namespaces=0");
+    }
+    if proc_flag_eq("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", 1) {
+        reasons.push("kernel.apparmor_restrict_unprivileged_userns=1");
+    }
+
+    if reasons.is_empty() {
+        return;
+    }
+
+    unsafe {
+        std::env::set_var(WEBKIT_DISABLE_SANDBOX_ENV, "1");
+    }
+
+    crate::logging::info(format!(
+        "disabled WebKit sandbox for this session because {}",
+        reasons.join(", ")
+    ));
+}
+
+#[cfg(target_os = "linux")]
+fn proc_flag_eq(path: &str, expected: u64) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        == Some(expected)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn configure_webkit_process_environment() {}
+
 fn windows_home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
