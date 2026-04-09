@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use vte4::prelude::TerminalExt;
 use webkit6::prelude::WebViewExt;
 
+use crate::logging;
 use crate::model::assets::{Runbook, WorkspaceAssets};
 use crate::model::layout::TileKind;
 use crate::model::layout::{LayoutNode, SplitAxis};
@@ -276,29 +277,33 @@ impl WorkspaceRuntime {
     pub fn navigate_web_tile(&self, tile_id: &str, url: &str) -> bool {
         let normalized_url = normalize_web_tile_url(url);
 
-        let mut navigated = false;
-        {
+        let web_view = {
             let mut tiles = self.inner.tiles.borrow_mut();
-            if let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id)
-                && let Some(web_view) = &tile.web_view
-            {
-                web_view.load_uri(&normalized_url);
-                tile.tile.url = Some(normalized_url.clone());
-                navigated = true;
-            }
+            let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id) else {
+                return false;
+            };
+            let Some(web_view) = tile.web_view.clone() else {
+                return false;
+            };
+            tile.tile.url = Some(normalized_url.clone());
+            web_view
+        };
+
+        logging::info(format!(
+            "web tile {} navigating to {}",
+            tile_id, normalized_url
+        ));
+        web_view.load_uri(&normalized_url);
+
+        let persisted_url = normalized_url.clone();
+        let _ = self.update_layout_tile(tile_id, move |tile| {
+            tile.url = Some(persisted_url.clone());
+        });
+        if self.current_focused_web_tile().as_deref() == Some(tile_id) {
+            self.inner.url_entry.set_text(&normalized_url);
         }
 
-        if navigated {
-            let persisted_url = normalized_url.clone();
-            let _ = self.update_layout_tile(tile_id, move |tile| {
-                tile.url = Some(persisted_url.clone());
-            });
-            if self.current_focused_web_tile().as_deref() == Some(tile_id) {
-                self.inner.url_entry.set_text(&normalized_url);
-            }
-        }
-
-        navigated
+        true
     }
 
     pub fn update_web_tile_settings(
@@ -308,32 +313,54 @@ impl WorkspaceRuntime {
         auto_refresh_seconds: Option<u32>,
     ) -> bool {
         let normalized_url = normalize_web_tile_url(url);
-        let mut updated = false;
-        {
+
+        let (web_view, refresh_source_id, url_changed, refresh_changed) = {
             let mut tiles = self.inner.tiles.borrow_mut();
-            if let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id)
-                && let Some(web_view) = &tile.web_view
-            {
-                if tile.tile.url.as_deref() != Some(normalized_url.as_str()) {
-                    web_view.load_uri(&normalized_url);
-                    tile.tile.url = Some(normalized_url.clone());
-                    updated = true;
-                }
-                if tile.tile.auto_refresh_seconds != auto_refresh_seconds {
-                    tile.tile.auto_refresh_seconds = auto_refresh_seconds;
-                    if let Some(refresh_source_id) = tile.refresh_source_id.as_ref() {
-                        configure_web_refresh_timer(
-                            refresh_source_id,
-                            web_view,
-                            auto_refresh_seconds,
-                        );
-                    }
-                    updated = true;
-                }
+            let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id) else {
+                return false;
+            };
+            let Some(web_view) = tile.web_view.clone() else {
+                return false;
+            };
+
+            let url_changed = tile.tile.url.as_deref() != Some(normalized_url.as_str());
+            let refresh_changed = tile.tile.auto_refresh_seconds != auto_refresh_seconds;
+
+            if url_changed {
+                tile.tile.url = Some(normalized_url.clone());
             }
+            if refresh_changed {
+                tile.tile.auto_refresh_seconds = auto_refresh_seconds;
+            }
+
+            (
+                web_view,
+                tile.refresh_source_id.clone(),
+                url_changed,
+                refresh_changed,
+            )
+        };
+
+        if refresh_changed && let Some(refresh_source_id) = refresh_source_id.as_ref() {
+            configure_web_refresh_timer(refresh_source_id, &web_view, auto_refresh_seconds);
+            logging::info(format!(
+                "web tile {} auto-refresh set to {}",
+                tile_id,
+                auto_refresh_seconds
+                    .map(|seconds| format!("{}s", seconds))
+                    .unwrap_or_else(|| "disabled".into())
+            ));
         }
 
-        if updated {
+        if url_changed {
+            logging::info(format!(
+                "web tile {} settings updated, navigating to {}",
+                tile_id, normalized_url
+            ));
+            web_view.load_uri(&normalized_url);
+        }
+
+        if url_changed || refresh_changed {
             let persisted_url = normalized_url.clone();
             let _ = self.update_layout_tile(tile_id, move |tile| {
                 tile.url = Some(persisted_url.clone());
@@ -344,18 +371,25 @@ impl WorkspaceRuntime {
             }
         }
 
-        updated
+        url_changed || refresh_changed
     }
 
     pub fn reload_web_tile(&self, tile_id: &str) -> bool {
-        let tiles = self.inner.tiles.borrow();
-        if let Some(tile) = tiles.iter().find(|t| t.tile.id == tile_id) {
-            if let Some(web_view) = &tile.web_view {
-                web_view.reload();
-                return true;
-            }
+        let web_view = {
+            let tiles = self.inner.tiles.borrow();
+            tiles
+                .iter()
+                .find(|t| t.tile.id == tile_id)
+                .and_then(|tile| tile.web_view.clone())
+        };
+
+        if let Some(web_view) = web_view {
+            logging::info(format!("web tile {} reload requested", tile_id));
+            web_view.reload();
+            true
+        } else {
+            false
         }
-        false
     }
 
     pub fn web_tile_uri(&self, tile_id: &str) -> Option<String> {
@@ -643,6 +677,7 @@ impl WorkspaceRuntime {
         };
 
         if changed {
+            logging::info(format!("web tile {} uri updated to {}", tile_id, next_uri));
             let persisted_uri = next_uri.clone();
             let _ = self.update_layout_tile(tile_id, move |tile| {
                 tile.url = Some(persisted_uri.clone());

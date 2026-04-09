@@ -7,6 +7,7 @@ use gtk::prelude::*;
 
 use webkit6::prelude::*;
 
+use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
@@ -259,6 +260,53 @@ pub fn build(
             if let Some(uri) = wv.uri() {
                 status.set_text(&domain_from_url(uri.as_str()));
             }
+        });
+    }
+
+    {
+        let tile_id = tile.id.clone();
+        web_view.connect_load_changed(move |wv, event| {
+            logging::info(format!(
+                "web tile {} load event {:?} uri='{}'",
+                tile_id,
+                event,
+                wv.uri()
+                    .map(|uri| uri.to_string())
+                    .unwrap_or_else(|| "about:blank".into())
+            ));
+        });
+    }
+    {
+        let tile_id = tile.id.clone();
+        web_view.connect_load_failed(move |_, event, failing_uri, error| {
+            logging::error(format!(
+                "web tile {} load failed event={:?} uri='{}' error='{}'",
+                tile_id, event, failing_uri, error
+            ));
+            false
+        });
+    }
+    {
+        let tile_id = tile.id.clone();
+        web_view.connect_load_failed_with_tls_errors(move |_, failing_uri, _, errors| {
+            logging::error(format!(
+                "web tile {} TLS load failure uri='{}' errors={:?}",
+                tile_id, failing_uri, errors
+            ));
+            false
+        });
+    }
+    {
+        let tile_id = tile.id.clone();
+        web_view.connect_web_process_terminated(move |wv, reason| {
+            logging::error(format!(
+                "web tile {} web process terminated reason={:?} uri='{}'",
+                tile_id,
+                reason,
+                wv.uri()
+                    .map(|uri| uri.to_string())
+                    .unwrap_or_else(|| "about:blank".into())
+            ));
         });
     }
 

@@ -13,6 +13,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
+#[cfg(target_os = "linux")]
+use gtk::glib;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -22,6 +24,7 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 
 struct Logger {
     file: Mutex<File>,
+    session_file: Mutex<File>,
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
@@ -33,12 +36,14 @@ static HOOKS_INSTALLED: OnceLock<()> = OnceLock::new();
 
 pub fn init() {
     let log_path = standard_log_path();
+    let session_log_path = session_log_path();
 
-    if let Some(path) = &log_path {
-        match open_logger(path) {
-            Ok(file) => {
+    if let (Some(path), Some(session_path)) = (&log_path, &session_log_path) {
+        match open_logger(path, session_path) {
+            Ok((file, session_file)) => {
                 let logger = Logger {
                     file: Mutex::new(file),
+                    session_file: Mutex::new(session_file),
                 };
 
                 let _ = LOGGER.set(logger);
@@ -51,8 +56,12 @@ pub fn init() {
 
     install_hooks();
 
-    if let Some(path) = log_path {
+    if let (Some(path), Some(session_path)) = (log_path, session_log_path) {
         info(format!("logging initialized at {}", path.display()));
+        info(format!(
+            "session log initialized at {}",
+            session_path.display()
+        ));
     } else {
         error("could not resolve an application state directory for logs");
     }
@@ -72,7 +81,13 @@ fn standard_log_path() -> Option<PathBuf> {
         .map(|dir| dir.join("terminaltiler.log"))
 }
 
-fn open_logger(path: &Path) -> io::Result<File> {
+fn session_log_path() -> Option<PathBuf> {
+    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
+        .and_then(|dirs| dirs.state_dir().map(|state_dir| state_dir.join("logs")))
+        .map(|dir| dir.join("terminaltiler-session.log"))
+}
+
+fn open_logger(path: &Path, session_path: &Path) -> io::Result<(File, File)> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -83,8 +98,15 @@ fn open_logger(path: &Path) -> io::Result<File> {
     options.mode(PRIVATE_FILE_MODE);
 
     let file = options.open(path)?;
-    initialize_crash_logging(&file)?;
-    Ok(file)
+
+    let mut session_options = OpenOptions::new();
+    session_options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    session_options.mode(PRIVATE_FILE_MODE);
+    let session_file = session_options.open(session_path)?;
+
+    initialize_crash_logging(&session_file)?;
+    Ok((file, session_file))
 }
 
 #[cfg(unix)]
@@ -106,15 +128,18 @@ fn initialize_crash_logging(_file: &File) -> io::Result<()> {
 fn write_log_line(level: &str, message: &str) {
     let line = format!("[{}] {} {}\n", unix_timestamp(), level, message);
 
-    if let Some(logger) = LOGGER.get()
-        && let Ok(mut file) = logger.file.lock()
-    {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-        return;
+    if let Some(logger) = LOGGER.get() {
+        if let Ok(mut file) = logger.file.lock() {
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
+        if let Ok(mut session_file) = logger.session_file.lock() {
+            let _ = session_file.write_all(line.as_bytes());
+            let _ = session_file.flush();
+        }
+    } else {
+        eprint!("{line}");
     }
-
-    eprint!("{line}");
 }
 
 fn unix_timestamp() -> String {
@@ -130,6 +155,7 @@ fn install_hooks() {
     }
 
     install_panic_hook();
+    install_platform_logging_hooks();
     install_signal_handlers();
 }
 
@@ -206,6 +232,30 @@ fn install_signal_handlers() {
 #[cfg(not(unix))]
 fn install_signal_handlers() {}
 
+#[cfg(target_os = "linux")]
+fn install_platform_logging_hooks() {
+    glib::log_set_writer_func(|log_level, fields| {
+        let mut domain = None;
+        let mut message = None;
+
+        for field in fields {
+            match field.key() {
+                "GLIB_DOMAIN" => domain = field.value_str(),
+                "MESSAGE" => message = field.value_str(),
+                _ => {}
+            }
+        }
+
+        let domain = domain.unwrap_or("glib");
+        let message = message.unwrap_or("(missing message)");
+        write_log_line("GLIB", &format!("[{domain} {log_level:?}] {message}"));
+        glib::log_writer_default(log_level, fields)
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_platform_logging_hooks() {}
+
 #[cfg(unix)]
 unsafe extern "C" fn crash_signal_handler(
     signal: libc::c_int,
@@ -223,10 +273,12 @@ unsafe extern "C" fn crash_signal_handler(
             _ => b"fatal signal: UNKNOWN\n".as_slice(),
         };
         let prefix = b"TerminalTiler crash handler captured ";
+        let newline = b"See terminaltiler-session.log for the current-session breadcrumb trail.\n";
 
         unsafe {
             libc::write(fd, prefix.as_ptr().cast(), prefix.len());
             libc::write(fd, message.as_ptr().cast(), message.len());
+            libc::write(fd, newline.as_ptr().cast(), newline.len());
             libc::fsync(fd);
         }
     }
