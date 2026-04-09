@@ -751,64 +751,46 @@ pub fn present(
             if is_workspace && !force_close {
                 let view = view.clone();
                 let page = page.clone();
-                let forced_tab_closes = forced_tab_closes_for_signal.clone();
-                confirm_destructive_action(
+                let tabs = tabs_for_close.clone();
+                let active_tab_id = active_for_close.clone();
+                let select_tab = select_for_close.clone();
+                let add_workspace_tab = add_for_close.clone();
+                let suppress_empty_replacement = suppress_empty_replacement_for_signal.clone();
+                confirm_tab_close(
                     &window_for_close,
                     "Close Workspace?",
                     "Running terminal sessions in this workspace will be terminated.",
                     "Close",
-                    move || {
-                        forced_tab_closes.borrow_mut().insert(tab_id);
-                        view.close_page(&page);
+                    move |confirmed| {
+                        if confirmed {
+                            finish_tab_close(
+                                &view,
+                                &page,
+                                tab_id,
+                                &tabs,
+                                &active_tab_id,
+                                &select_tab,
+                                &add_workspace_tab,
+                                &suppress_empty_replacement,
+                            );
+                        } else {
+                            view.close_page_finish(&page, false);
+                        }
                     },
                 );
                 return glib::Propagation::Stop;
             }
 
-            let (runtime, next_active_id, should_create_replacement) = {
-                let mut tabs = tabs_for_close.borrow_mut();
-                let Some(index) = tabs.iter().position(|tab| tab.id == tab_id) else {
-                    view.close_page_finish(page, false);
-                    return glib::Propagation::Stop;
-                };
-
-                let removed = tabs.remove(index);
-                let runtime = match removed.content {
-                    TabContent::Workspace(workspace) => Some(workspace.runtime),
-                    TabContent::LaunchDeck => None,
-                };
-                let next_active_id = if tabs.is_empty() {
-                    None
-                } else if active_for_close.get() == tab_id {
-                    tabs.get(index).or_else(|| tabs.last()).map(|tab| tab.id)
-                } else {
-                    Some(active_for_close.get())
-                };
-
-                (runtime, next_active_id, tabs.is_empty())
-            };
-
-            if let Some(runtime) = runtime {
-                runtime.terminate_all("closing workspace tab");
-            }
-            view.close_page_finish(page, true);
-            logging::info(format!("closed workspace tab {}", tab_id));
-
-            if should_create_replacement {
-                active_for_close.set(0);
-                if !suppress_empty_replacement_for_signal.get()
-                    && let Some(add_tab) = add_for_close.borrow().as_ref()
-                {
-                    add_tab();
-                }
-                return glib::Propagation::Stop;
-            }
-
-            if let Some(next_active_id) = next_active_id
-                && let Some(select) = select_for_close.borrow().as_ref()
-            {
-                select(next_active_id);
-            }
+            finish_tab_close(
+                view,
+                page,
+                tab_id,
+                &tabs_for_close,
+                &active_for_close,
+                &select_for_close,
+                &add_for_close,
+                &suppress_empty_replacement_for_signal,
+            );
             glib::Propagation::Stop
         });
     }
@@ -3151,6 +3133,62 @@ fn workspace_runtimes(
         .collect()
 }
 
+fn finish_tab_close(
+    view: &adw::TabView,
+    page: &adw::TabPage,
+    tab_id: usize,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    select_tab: &SelectTabHandle,
+    add_workspace_tab: &VoidHandle,
+    suppress_empty_replacement: &Cell<bool>,
+) {
+    let (runtime, next_active_id, should_create_replacement) = {
+        let mut tabs = tabs.borrow_mut();
+        let Some(index) = tabs.iter().position(|tab| tab.id == tab_id) else {
+            view.close_page_finish(page, false);
+            return;
+        };
+
+        let removed = tabs.remove(index);
+        let runtime = match removed.content {
+            TabContent::Workspace(workspace) => Some(workspace.runtime),
+            TabContent::LaunchDeck => None,
+        };
+        let next_active_id = if tabs.is_empty() {
+            None
+        } else if active_tab_id.get() == tab_id {
+            tabs.get(index).or_else(|| tabs.last()).map(|tab| tab.id)
+        } else {
+            Some(active_tab_id.get())
+        };
+
+        (runtime, next_active_id, tabs.is_empty())
+    };
+
+    if let Some(runtime) = runtime {
+        runtime.terminate_all("closing workspace tab");
+    }
+    view.close_page_finish(page, true);
+    logging::info(format!("closed workspace tab {}", tab_id));
+
+    if should_create_replacement {
+        active_tab_id.set(0);
+        if !suppress_empty_replacement.get()
+            && let Some(add_tab) = add_workspace_tab.borrow().as_ref()
+        {
+            add_tab();
+        }
+        return;
+    }
+
+    if let Some(next_active_id) = next_active_id
+        && let Some(select) = select_tab.borrow().as_ref()
+    {
+        select(next_active_id);
+    }
+}
+
 fn has_active_workspace_processes(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> bool {
     tabs.borrow().iter().any(|tab| match &tab.content {
         TabContent::Workspace(workspace) => workspace.runtime.has_active_processes(),
@@ -3223,6 +3261,36 @@ fn confirm_destructive_action<F>(
         if response == "confirm" {
             on_confirm();
         }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
+fn confirm_tab_close<F>(
+    window: &adw::ApplicationWindow,
+    heading: &str,
+    body: &str,
+    confirm_label: &str,
+    on_response: F,
+) where
+    F: Fn(bool) + 'static,
+{
+    let dialog = adw::MessageDialog::builder()
+        .modal(true)
+        .transient_for(window)
+        .heading(heading)
+        .body(body)
+        .build();
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("confirm", confirm_label);
+    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        on_response(response == "confirm");
         dialog.close();
     });
 
