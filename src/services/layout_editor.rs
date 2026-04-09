@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::model::layout::{LayoutNode, SplitAxis, TileSpec};
+use crate::model::layout::{LayoutNode, SplitAxis, TileKind, TileSpec};
 
 pub fn split_tile(
     layout: &LayoutNode,
@@ -8,23 +8,21 @@ pub fn split_tile(
     axis: SplitAxis,
     clone_existing: bool,
 ) -> Option<LayoutNode> {
+    split_tile_with_kind(layout, target_tile_id, axis, clone_existing, TileKind::Terminal)
+        .map(|(layout, _)| layout)
+}
+
+pub fn split_tile_with_kind(
+    layout: &LayoutNode,
+    target_tile_id: &str,
+    axis: SplitAxis,
+    clone_existing: bool,
+    tile_kind: TileKind,
+) -> Option<(LayoutNode, String)> {
+    let mut created_tile_id = None;
     mutate_layout(layout, target_tile_id, &mut |tile| {
-        let new_tile = if clone_existing {
-            let mut cloned = tile.clone();
-            cloned.id = format!("tile-{}", Uuid::new_v4().simple());
-            cloned.title = format!("{} Copy", cloned.title);
-            cloned
-        } else {
-            let mut created = tile.clone();
-            created.id = format!("tile-{}", Uuid::new_v4().simple());
-            created.title = "New Tile".into();
-            created.agent_label = "Shell".into();
-            created.startup_command = None;
-            created.applied_role_id = None;
-            created.pane_groups.clear();
-            created.output_helpers.clear();
-            created
-        };
+        let new_tile = draft_split_tile(tile, clone_existing, tile_kind);
+        created_tile_id = Some(new_tile.id.clone());
         LayoutNode::Split {
             axis,
             ratio: 0.5,
@@ -32,6 +30,7 @@ pub fn split_tile(
             second: Box::new(LayoutNode::Tile(new_tile)),
         }
     })
+    .zip(created_tile_id)
 }
 
 pub fn close_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNode> {
@@ -80,6 +79,43 @@ fn mutate_layout(
             })
         }
     }
+}
+
+fn draft_split_tile(tile: &TileSpec, clone_existing: bool, tile_kind: TileKind) -> TileSpec {
+    if clone_existing {
+        let mut cloned = tile.clone();
+        cloned.id = format!("tile-{}", Uuid::new_v4().simple());
+        cloned.title = format!("{} Copy", cloned.title);
+        return cloned;
+    }
+
+    let mut created = tile.clone();
+    created.id = format!("tile-{}", Uuid::new_v4().simple());
+    created.applied_role_id = None;
+    created.pane_groups.clear();
+    created.output_helpers.clear();
+
+    match tile_kind {
+        TileKind::Terminal => {
+            created.title = "New Tile".into();
+            created.agent_label = "Shell".into();
+            created.startup_command = None;
+            created.tile_kind = TileKind::Terminal;
+            created.url = None;
+            created.auto_refresh_seconds = None;
+        }
+        TileKind::WebView => {
+            created.title = "Web Tile".into();
+            created.agent_label = "Web".into();
+            created.startup_command = None;
+            created.connection_target = Default::default();
+            created.tile_kind = TileKind::WebView;
+            created.url = Some("about:blank".into());
+            created.auto_refresh_seconds = None;
+        }
+    }
+
+    created
 }
 
 fn remove_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNode> {
@@ -154,8 +190,8 @@ fn update_ratio_inner(layout: &LayoutNode, split_path: &[bool], ratio: f32) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::{close_tile, split_tile, update_split_ratio};
-    use crate::model::layout::{LayoutNode, SplitAxis, default_tile_spec};
+    use super::{close_tile, split_tile, split_tile_with_kind, update_split_ratio};
+    use crate::model::layout::{LayoutNode, SplitAxis, TileKind, default_tile_spec};
 
     fn single_tile_layout() -> LayoutNode {
         LayoutNode::Tile(default_tile_spec(1))
@@ -166,6 +202,25 @@ mod tests {
         let layout = single_tile_layout();
         let next = split_tile(&layout, "tile-1", SplitAxis::Horizontal, false).unwrap();
         assert_eq!(next.tile_count(), 2);
+    }
+
+    #[test]
+    fn split_tile_with_kind_creates_web_tile() {
+        let layout = single_tile_layout();
+        let (next, new_tile_id) = split_tile_with_kind(
+            &layout,
+            "tile-1",
+            SplitAxis::Horizontal,
+            false,
+            TileKind::WebView,
+        )
+        .unwrap();
+        let tiles = next.tile_specs();
+        let new_tile = tiles.iter().find(|tile| tile.id == new_tile_id).unwrap();
+
+        assert_eq!(new_tile.tile_kind, TileKind::WebView);
+        assert_eq!(new_tile.url.as_deref(), Some("about:blank"));
+        assert_eq!(new_tile.startup_command, None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -8,11 +8,11 @@ use vte4::prelude::TerminalExt;
 use webkit6::prelude::WebViewExt;
 
 use crate::model::assets::{Runbook, WorkspaceAssets};
-use crate::model::layout::LayoutNode;
+use crate::model::layout::{LayoutNode, SplitAxis};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
-use crate::services::layout_editor::update_split_ratio;
+use crate::services::layout_editor::{split_tile_with_kind, update_split_ratio};
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::model::layout::TileKind;
@@ -28,14 +28,27 @@ struct WorkspaceTile {
     widget: gtk::Widget,
     session: Option<TerminalSession>,
     web_view: Option<webkit6::WebView>,
+    handlers_bound: bool,
 }
 
 struct WorkspaceRuntimeInner {
     layout: Rc<RefCell<LayoutNode>>,
-    slots: Vec<gtk::Box>,
+    slots: RefCell<Vec<gtk::Box>>,
     tiles: RefCell<Vec<WorkspaceTile>>,
+    layout_host: gtk::Box,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
     alert_store: AlertStore,
+    workspace_root: PathBuf,
+    assets: WorkspaceAssets,
+    use_dark_palette: bool,
+    density: ApplicationDensity,
+    zoom_steps: i32,
+    max_reconnect_attempts: u32,
+    path_label: gtk::Label,
+    url_entry: gtk::Entry,
+    url_reload_button: gtk::Button,
+    focused_tile_id: RefCell<Option<String>>,
+    focused_web_tile_id: RefCell<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -127,7 +140,13 @@ impl WorkspaceRuntime {
             .iter()
             .find(|tile| tile.tile.id == tile_id)
         {
-            tile.widget.grab_focus();
+            if let Some(session) = &tile.session {
+                session.widget().grab_focus();
+            } else if let Some(web_view) = &tile.web_view {
+                web_view.grab_focus();
+            } else {
+                tile.widget.grab_focus();
+            }
             true
         } else {
             false
@@ -168,7 +187,7 @@ impl WorkspaceRuntime {
                 return false;
             };
             tiles.swap(dragged_index, target_index);
-            remount_tiles(&self.inner.slots, &tiles);
+            remount_tiles(&self.inner.slots.borrow(), &tiles);
         }
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
@@ -177,14 +196,35 @@ impl WorkspaceRuntime {
     }
 
     pub fn navigate_web_tile(&self, tile_id: &str, url: &str) -> bool {
-        let tiles = self.inner.tiles.borrow();
-        if let Some(tile) = tiles.iter().find(|t| t.tile.id == tile_id) {
-            if let Some(web_view) = &tile.web_view {
-                web_view.load_uri(url);
-                return true;
+        let normalized_url = if url.contains("://") {
+            url.to_string()
+        } else {
+            format!("https://{url}")
+        };
+
+        let mut navigated = false;
+        {
+            let mut tiles = self.inner.tiles.borrow_mut();
+            if let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id)
+                && let Some(web_view) = &tile.web_view
+            {
+                web_view.load_uri(&normalized_url);
+                tile.tile.url = Some(normalized_url.clone());
+                navigated = true;
             }
         }
-        false
+
+        if navigated {
+            let persisted_url = normalized_url.clone();
+            let _ = self.update_layout_tile(tile_id, move |tile| {
+                tile.url = Some(persisted_url.clone());
+            });
+            if self.current_focused_web_tile().as_deref() == Some(tile_id) {
+                self.inner.url_entry.set_text(&normalized_url);
+            }
+        }
+
+        navigated
     }
 
     pub fn reload_web_tile(&self, tile_id: &str) -> bool {
@@ -203,18 +243,275 @@ impl WorkspaceRuntime {
         tiles
             .iter()
             .find(|t| t.tile.id == tile_id)
-            .and_then(|t| t.web_view.as_ref())
-            .and_then(|wv| wv.uri())
-            .map(|s: gtk::glib::GString| s.to_string())
+            .and_then(|t| {
+                t.web_view
+                    .as_ref()
+                    .and_then(|wv| wv.uri())
+                    .map(|s: gtk::glib::GString| s.to_string())
+                    .or_else(|| t.tile.url.clone())
+            })
     }
 
     pub fn has_web_tiles(&self) -> bool {
         self.inner.tiles.borrow().iter().any(|t| t.web_view.is_some())
     }
 
-    fn set_tiles(&self, tiles: Vec<WorkspaceTile>) {
-        remount_tiles(&self.inner.slots, &tiles);
+    pub fn current_focused_web_tile(&self) -> Option<String> {
+        self.inner.focused_web_tile_id.borrow().clone()
+    }
+
+    pub fn add_web_tile(&self) -> Option<String> {
+        let target_tile_id = self
+            .inner
+            .focused_tile_id
+            .borrow()
+            .clone()
+            .or_else(|| {
+                self.inner
+                    .tiles
+                    .borrow()
+                    .first()
+                    .map(|tile| tile.tile.id.clone())
+            })?;
+
+        let current_layout = self.inner.layout.borrow().clone();
+        let (next_layout, new_tile_id) = split_tile_with_kind(
+            &current_layout,
+            &target_tile_id,
+            SplitAxis::Horizontal,
+            false,
+            TileKind::WebView,
+        )?;
+
+        let ordered_specs = next_layout.tile_specs();
+        let mut existing_tiles = self
+            .inner
+            .tiles
+            .borrow_mut()
+            .drain(..)
+            .map(|tile| (tile.tile.id.clone(), tile))
+            .collect::<HashMap<_, _>>();
+        let next_tiles = ordered_specs
+            .into_iter()
+            .map(|spec| {
+                if let Some(mut tile) = existing_tiles.remove(&spec.id) {
+                    tile.tile = spec;
+                    tile
+                } else {
+                    self.build_tile(&spec)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.replace_layout_shell(&next_layout);
+        self.set_tiles(next_tiles);
+        *self.inner.focused_tile_id.borrow_mut() = Some(new_tile_id.clone());
+        *self.inner.focused_web_tile_id.borrow_mut() = Some(new_tile_id.clone());
+        self.refresh_navigation_controls();
+        self.inner.url_entry.set_text("about:blank");
+        self.inner.url_entry.grab_focus();
+        (self.inner.on_layout_changed)(next_layout);
+
+        Some(new_tile_id)
+    }
+
+    fn set_tiles(&self, mut tiles: Vec<WorkspaceTile>) {
+        self.bind_tile_handlers(&mut tiles);
+        remount_tiles(&self.inner.slots.borrow(), &tiles);
         *self.inner.tiles.borrow_mut() = tiles;
+        self.refresh_navigation_controls();
+    }
+
+    fn build_tile(&self, tile: &crate::model::layout::TileSpec) -> WorkspaceTile {
+        let on_swap = {
+            let runtime = self.clone();
+            Rc::new(move |dragged_id: String, target_id: String| {
+                let _ = runtime.swap_tiles(&dragged_id, &target_id);
+            })
+        };
+
+        match tile.tile_kind {
+            TileKind::WebView => {
+                let web = web_tile::build(
+                    tile,
+                    &self.inner.assets,
+                    self.inner.use_dark_palette,
+                    self.inner.density,
+                    on_swap,
+                );
+                WorkspaceTile {
+                    tile: web.tile,
+                    widget: web.widget,
+                    session: None,
+                    web_view: Some(web.web_view),
+                    handlers_bound: false,
+                }
+            }
+            TileKind::Terminal => {
+                let tile_view = tile_view::build(
+                    tile,
+                    &self.inner.workspace_root,
+                    &self.inner.assets,
+                    self.inner.use_dark_palette,
+                    self.inner.density,
+                    self.inner.zoom_steps,
+                    on_swap,
+                );
+                install_tile_alert_hooks(
+                    &tile_view.session,
+                    tile,
+                    &self.inner.alert_store,
+                    self.inner.max_reconnect_attempts,
+                );
+                WorkspaceTile {
+                    tile: tile_view.tile,
+                    widget: tile_view.widget,
+                    session: Some(tile_view.session),
+                    web_view: None,
+                    handlers_bound: false,
+                }
+            }
+        }
+    }
+
+    fn bind_tile_handlers(&self, tiles: &mut [WorkspaceTile]) {
+        for tile in tiles.iter_mut() {
+            if tile.handlers_bound {
+                continue;
+            }
+
+            let focus_target: gtk::Widget = if let Some(session) = &tile.session {
+                session.widget().upcast()
+            } else if let Some(web_view) = &tile.web_view {
+                web_view.clone().upcast()
+            } else {
+                tile.widget.clone()
+            };
+
+            let runtime = self.clone();
+            let tile_id = tile.tile.id.clone();
+            let tile_kind = tile.tile.tile_kind;
+            let controller = gtk::EventControllerFocus::new();
+            controller.connect_enter(move |_| {
+                runtime.set_focused_tile(Some(tile_id.clone()), tile_kind == TileKind::WebView);
+            });
+            focus_target.add_controller(controller);
+
+            if let Some(web_view) = &tile.web_view {
+                let runtime = self.clone();
+                let tile_id = tile.tile.id.clone();
+                web_view.connect_uri_notify(move |wv| {
+                    if let Some(uri) = wv.uri() {
+                        runtime.record_web_tile_uri(&tile_id, uri.as_str());
+                    }
+                });
+            }
+
+            tile.handlers_bound = true;
+        }
+    }
+
+    fn refresh_navigation_controls(&self) {
+        let has_web_tiles = self.has_web_tiles();
+        self.inner.path_label.set_visible(!has_web_tiles);
+        self.inner.url_entry.set_visible(has_web_tiles);
+        self.inner.url_reload_button.set_visible(has_web_tiles);
+
+        let focused_web_tile = self.inner.focused_web_tile_id.borrow().clone();
+        let current_url = focused_web_tile
+            .as_deref()
+            .and_then(|tile_id| self.web_tile_uri(tile_id))
+            .unwrap_or_default();
+        let web_controls_enabled = focused_web_tile.is_some();
+        self.inner.url_entry.set_sensitive(web_controls_enabled);
+        self.inner.url_reload_button.set_sensitive(web_controls_enabled);
+        if has_web_tiles {
+            self.inner.url_entry.set_text(&current_url);
+        }
+    }
+
+    fn set_focused_tile(&self, tile_id: Option<String>, is_web: bool) {
+        *self.inner.focused_tile_id.borrow_mut() = tile_id.clone();
+        *self.inner.focused_web_tile_id.borrow_mut() = if is_web { tile_id } else { None };
+        self.refresh_navigation_controls();
+    }
+
+    fn record_web_tile_uri(&self, tile_id: &str, uri: &str) {
+        let next_uri = uri.to_string();
+        let changed = {
+            let mut tiles = self.inner.tiles.borrow_mut();
+            let Some(tile) = tiles.iter_mut().find(|tile| tile.tile.id == tile_id) else {
+                return;
+            };
+            if tile.tile.url.as_deref() == Some(uri) {
+                false
+            } else {
+                tile.tile.url = Some(next_uri.clone());
+                true
+            }
+        };
+
+        if changed {
+            let persisted_uri = next_uri.clone();
+            let _ = self.update_layout_tile(tile_id, move |tile| {
+                tile.url = Some(persisted_uri.clone());
+            });
+        }
+
+        if self.current_focused_web_tile().as_deref() == Some(tile_id) {
+            self.inner.url_entry.set_text(&next_uri);
+        }
+    }
+
+    fn update_layout_tile<F>(&self, tile_id: &str, update: F) -> bool
+    where
+        F: FnOnce(&mut crate::model::layout::TileSpec),
+    {
+        let current_layout = self.inner.layout.borrow().clone();
+        let mut tile_specs = current_layout.tile_specs();
+        let Some(tile) = tile_specs.iter_mut().find(|tile| tile.id == tile_id) else {
+            return false;
+        };
+
+        update(tile);
+        let next_layout = current_layout.with_tile_specs(&tile_specs);
+        *self.inner.layout.borrow_mut() = next_layout.clone();
+        (self.inner.on_layout_changed)(next_layout);
+        true
+    }
+
+    fn replace_layout_shell(&self, layout: &LayoutNode) {
+        let layout_state = self.inner.layout.clone();
+        let on_layout_changed = self.inner.on_layout_changed.clone();
+        let layout_shell = layout_tree::build(
+            layout,
+            Some(Rc::new(move |split_path, ratio| {
+                let current = layout_state.borrow().clone();
+                if let Some(next_layout) = update_split_ratio(&current, &split_path, ratio) {
+                    *layout_state.borrow_mut() = next_layout.clone();
+                    on_layout_changed(next_layout);
+                }
+            })),
+        );
+        layout_shell.widget.set_hexpand(true);
+        layout_shell.widget.set_vexpand(true);
+        while let Some(child) = self.inner.layout_host.first_child() {
+            self.inner.layout_host.remove(&child);
+        }
+        self.inner.layout_host.append(&layout_shell.widget);
+        *self.inner.slots.borrow_mut() = layout_shell.slots;
+    }
+
+    fn rebuild_from_layout(&self) {
+        let layout = self.inner.layout.borrow().clone();
+        self.replace_layout_shell(&layout);
+        let tiles = layout
+            .tile_specs()
+            .into_iter()
+            .map(|tile| self.build_tile(&tile))
+            .collect::<Vec<_>>();
+        self.set_tiles(tiles);
     }
 }
 
@@ -233,20 +530,6 @@ pub fn build_with_layout_change_handler(
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
     let layout_state = Rc::new(RefCell::new(preset.layout.clone()));
-    let on_layout_changed_for_ratio = on_layout_changed.clone();
-    let layout = layout_tree::build(
-        &preset.layout,
-        Some(Rc::new({
-            let layout_state = layout_state.clone();
-            move |split_path, ratio| {
-                let current = layout_state.borrow().clone();
-                if let Some(next_layout) = update_split_ratio(&current, &split_path, ratio) {
-                    *layout_state.borrow_mut() = next_layout.clone();
-                    on_layout_changed_for_ratio(next_layout);
-                }
-            }
-        })),
-    );
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -280,139 +563,57 @@ pub fn build_with_layout_change_handler(
         .css_classes(["workspace-summary-path"])
         .build();
 
-    let alert_store = AlertStore::default();
-    let runtime = WorkspaceRuntime {
-        inner: Rc::new(WorkspaceRuntimeInner {
-            layout: layout_state,
-            slots: layout.slots,
-            tiles: RefCell::new(Vec::new()),
-            on_layout_changed,
-            alert_store: alert_store.clone(),
-        }),
-    };
-    let on_swap = {
-        let runtime = runtime.clone();
-        Rc::new(move |dragged_id: String, target_id: String| {
-            let _ = runtime.swap_tiles(&dragged_id, &target_id);
-        })
-    };
-
-    let tiles = preset
-        .layout
-        .tile_specs()
-        .into_iter()
-        .map(|tile| match tile.tile_kind {
-            TileKind::WebView => {
-                let web = web_tile::build(
-                    &tile,
-                    assets,
-                    use_dark_palette,
-                    preset.density,
-                    on_swap.clone(),
-                );
-                WorkspaceTile {
-                    tile: web.tile,
-                    widget: web.widget,
-                    session: None,
-                    web_view: Some(web.web_view),
-                }
-            }
-            TileKind::Terminal => {
-                let tile_view = tile_view::build(
-                    &tile,
-                    workspace_root,
-                    assets,
-                    use_dark_palette,
-                    preset.density,
-                    zoom_steps,
-                    on_swap.clone(),
-                );
-                install_tile_alert_hooks(&tile_view.session, &tile, &alert_store, max_reconnect_attempts);
-                WorkspaceTile {
-                    tile: tile_view.tile,
-                    widget: tile_view.widget,
-                    session: Some(tile_view.session),
-                    web_view: None,
-                }
-            }
-        })
-        .collect::<Vec<_>>();
-    runtime.set_tiles(tiles);
-
-    // --- URL bar for web tiles ---
-    let focused_web_tile: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let has_web = runtime.has_web_tiles();
-
     let url_entry = gtk::Entry::builder()
         .placeholder_text("URL")
         .width_chars(30)
         .hexpand(false)
-        .visible(has_web)
         .css_classes(["workspace-url-entry"])
         .build();
     let url_reload_button = gtk::Button::builder()
         .label("Reload")
-        .visible(has_web)
         .css_classes(["flat", "surface-button"])
         .build();
+    let layout_host = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
 
-    // Connect web tile focus: when any web tile gains focus, populate the URL bar
-    {
-        let tiles_ref = runtime.inner.tiles.borrow();
-        let web_tiles: Vec<_> = tiles_ref
-            .iter()
-            .filter_map(|wt| {
-                wt.web_view
-                    .as_ref()
-                    .map(|wv| (wt.tile.id.clone(), wv.clone(), wt.widget.clone()))
-            })
-            .collect();
-        let terminal_tiles: Vec<_> = tiles_ref
-            .iter()
-            .filter(|wt| wt.session.is_some())
-            .map(|wt| wt.widget.clone())
-            .collect();
-        drop(tiles_ref);
-
-        for (tile_id, web_view, widget) in web_tiles {
-            let focused = focused_web_tile.clone();
-            let url_entry = url_entry.clone();
-            let controller = gtk::EventControllerFocus::new();
-            controller.connect_enter(move |_| {
-                *focused.borrow_mut() = Some(tile_id.clone());
-                if let Some(uri) = web_view.uri() {
-                    url_entry.set_text(&uri);
-                }
-            });
-            widget.add_controller(controller);
-        }
-        // When a terminal tile gains focus, clear the focused web tile
-        for widget in terminal_tiles {
-            let focused = focused_web_tile.clone();
-            let controller = gtk::EventControllerFocus::new();
-            controller.connect_enter(move |_| {
-                *focused.borrow_mut() = None;
-            });
-            widget.add_controller(controller);
-        }
-    }
+    let alert_store = AlertStore::default();
+    let runtime = WorkspaceRuntime {
+        inner: Rc::new(WorkspaceRuntimeInner {
+            layout: layout_state,
+            slots: RefCell::new(Vec::new()),
+            tiles: RefCell::new(Vec::new()),
+            layout_host: layout_host.clone(),
+            on_layout_changed,
+            alert_store: alert_store.clone(),
+            workspace_root: workspace_root.to_path_buf(),
+            assets: assets.clone(),
+            use_dark_palette,
+            density: preset.density,
+            zoom_steps,
+            max_reconnect_attempts,
+            path_label: path_label.clone(),
+            url_entry: url_entry.clone(),
+            url_reload_button: url_reload_button.clone(),
+            focused_tile_id: RefCell::new(None),
+            focused_web_tile_id: RefCell::new(None),
+        }),
+    };
+    runtime.rebuild_from_layout();
 
     // Navigate on Enter
     {
         let runtime = runtime.clone();
-        let focused = focused_web_tile.clone();
         url_entry.connect_activate(move |entry| {
             let url = entry.text().to_string();
             if url.is_empty() {
                 return;
             }
-            let url = if !url.contains("://") {
-                format!("https://{url}")
-            } else {
-                url
-            };
-            if let Some(tile_id) = focused.borrow().as_deref() {
-                runtime.navigate_web_tile(tile_id, &url);
+            if let Some(tile_id) = runtime.current_focused_web_tile() {
+                runtime.navigate_web_tile(&tile_id, &url);
             }
         });
     }
@@ -420,11 +621,21 @@ pub fn build_with_layout_change_handler(
     // Reload button
     {
         let runtime = runtime.clone();
-        let focused = focused_web_tile.clone();
         url_reload_button.connect_clicked(move |_| {
-            if let Some(tile_id) = focused.borrow().as_deref() {
-                runtime.reload_web_tile(tile_id);
+            if let Some(tile_id) = runtime.current_focused_web_tile() {
+                runtime.reload_web_tile(&tile_id);
             }
+        });
+    }
+
+    let add_web_tile_button = gtk::Button::builder()
+        .label("Add Web Tile")
+        .css_classes(["flat", "surface-button"])
+        .build();
+    {
+        let runtime = runtime.clone();
+        add_web_tile_button.connect_clicked(move |_| {
+            let _ = runtime.add_web_tile();
         });
     }
 
@@ -590,6 +801,7 @@ pub fn build_with_layout_change_handler(
     summary.append(&broadcast_selector);
     summary.append(&broadcast_entry);
     summary.append(&broadcast_button);
+    summary.append(&add_web_tile_button);
     summary.append(&url_entry);
     summary.append(&url_reload_button);
     summary.append(&runbook_selector);
@@ -603,9 +815,7 @@ pub fn build_with_layout_change_handler(
         .hexpand(true)
         .vexpand(true)
         .build();
-    layout.widget.set_hexpand(true);
-    layout.widget.set_vexpand(true);
-    content.append(&layout.widget);
+    content.append(&layout_host);
     content.append(&alert_revealer);
     shell.append(&content);
 

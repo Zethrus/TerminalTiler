@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
-    LayoutNode, LayoutTemplate, SplitAxis, TileSpec, builtin_templates, generate_layout,
+    LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates,
+    generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
@@ -1282,7 +1283,7 @@ fn build_tile_editor_panel() -> TileEditorPanel {
     root.append(&build_section_header(
         "Step 4",
         "Tile setup",
-        "Set how many terminals to open, then name each tile and add an optional startup command.",
+        "Set how many tiles to open, then choose whether each one starts a terminal or a web view.",
     ));
 
     let count_row = gtk::Box::builder()
@@ -1292,7 +1293,7 @@ fn build_tile_editor_panel() -> TileEditorPanel {
         .build();
 
     let count_label = gtk::Label::builder()
-        .label("Terminal tiles")
+        .label("Tiles")
         .halign(gtk::Align::Start)
         .hexpand(true)
         .css_classes(["section-title"])
@@ -1671,6 +1672,20 @@ fn build_tile_editor_row(
     header.append(&directory);
     row.append(&header);
 
+    let kind_combo = gtk::ComboBoxText::new();
+    kind_combo.add_css_class("surface-select-control");
+    kind_combo.append(Some("terminal"), TileKind::Terminal.label());
+    kind_combo.append(Some("web-view"), TileKind::WebView.label());
+    kind_combo.set_active_id(Some(match tile.tile_kind {
+        TileKind::Terminal => "terminal",
+        TileKind::WebView => "web-view",
+    }));
+    row.append(&build_launch_control_row(
+        "Tile kind",
+        "Terminal tiles run commands. Web View tiles open a browser pane.",
+        &kind_combo,
+    ));
+
     let details = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
@@ -1736,6 +1751,33 @@ fn build_tile_editor_row(
     routing.append(&groups_entry);
     row.append(&routing);
 
+    let web_settings = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+
+    let url_entry = gtk::Entry::builder()
+        .hexpand(true)
+        .text(tile.url.as_deref().unwrap_or(""))
+        .placeholder_text("https://example.com")
+        .build();
+    url_entry.add_css_class("tile-editor-input");
+    web_settings.append(&url_entry);
+
+    let auto_refresh = gtk::SpinButton::with_range(0.0, 3600.0, 5.0);
+    auto_refresh.set_numeric(true);
+    auto_refresh.set_width_chars(6);
+    auto_refresh.add_css_class("tile-count-input");
+    auto_refresh.set_tooltip_text(Some("Auto-refresh in seconds, 0 disables automatic reload."));
+    auto_refresh.set_value(tile.auto_refresh_seconds.unwrap_or_default() as f64);
+    web_settings.append(&auto_refresh);
+
+    row.append(&build_launch_control_row(
+        "Web settings",
+        "Set the initial URL and optional auto-refresh interval for this browser tile.",
+        &web_settings,
+    ));
+
     let directory_hint = gtk::Label::builder()
         .label(tile_editor_hint(tile, assets))
         .halign(gtk::Align::Start)
@@ -1743,6 +1785,30 @@ fn build_tile_editor_row(
         .css_classes(["field-hint"])
         .build();
     row.append(&directory_hint);
+
+    let sync_visibility = Rc::new({
+        let command_entry = command_entry.clone();
+        let routing = routing.clone();
+        let web_settings = web_settings.clone();
+        move |tile_kind: TileKind| {
+            let is_terminal = tile_kind == TileKind::Terminal;
+            command_entry.set_visible(is_terminal);
+            routing.set_visible(is_terminal);
+            web_settings.set_visible(!is_terminal);
+        }
+    });
+    sync_visibility(tile.tile_kind);
+
+    let refresh_hint = Rc::new({
+        let layout_state = layout_state.clone();
+        let assets = assets.clone();
+        let directory_hint = directory_hint.clone();
+        move || {
+            if let Some(tile) = layout_state.borrow().tile_specs().get(index) {
+                directory_hint.set_text(&tile_editor_hint(tile, &assets));
+            }
+        }
+    });
 
     {
         let panel = panel.clone();
@@ -1832,6 +1898,7 @@ fn build_tile_editor_row(
     {
         let layout_state = layout_state.clone();
         let assets = assets.clone();
+        let refresh_hint = refresh_hint.clone();
         agent_entry.connect_changed(move |entry| {
             update_tile_spec(&layout_state, index, |tile| {
                 tile.agent_label = entry.text().to_string();
@@ -1841,22 +1908,26 @@ fn build_tile_editor_row(
                     tile.accent_class = role.accent_class.clone();
                 }
             });
+            refresh_hint();
         });
     }
 
     {
         let layout_state = layout_state.clone();
+        let refresh_hint = refresh_hint.clone();
         command_entry.connect_changed(move |entry| {
             update_tile_spec(&layout_state, index, |tile| {
                 let value = entry.text().trim().to_string();
                 tile.startup_command = if value.is_empty() { None } else { Some(value) };
             });
+            refresh_hint();
         });
     }
 
     {
         let layout_state = layout_state.clone();
         let assets = assets.clone();
+        let refresh_hint = refresh_hint.clone();
         role_combo.connect_changed(move |combo| {
             update_tile_spec(&layout_state, index, |tile| {
                 let active = combo.active_id().map(|value| value.to_string());
@@ -1868,11 +1939,13 @@ fn build_tile_editor_row(
                     apply_role_to_tile(tile, role);
                 }
             });
+            refresh_hint();
         });
     }
 
     {
         let layout_state = layout_state.clone();
+        let refresh_hint = refresh_hint.clone();
         connection_combo.connect_changed(move |combo| {
             update_tile_spec(&layout_state, index, |tile| {
                 tile.connection_target = match combo.active_id().as_deref() {
@@ -1882,11 +1955,13 @@ fn build_tile_editor_row(
                     }
                 };
             });
+            refresh_hint();
         });
     }
 
     {
         let layout_state = layout_state.clone();
+        let refresh_hint = refresh_hint.clone();
         groups_entry.connect_changed(move |entry| {
             update_tile_spec(&layout_state, index, |tile| {
                 tile.pane_groups = entry
@@ -1897,6 +1972,57 @@ fn build_tile_editor_row(
                     .map(str::to_string)
                     .collect();
             });
+            refresh_hint();
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        let sync_visibility = sync_visibility.clone();
+        let refresh_hint = refresh_hint.clone();
+        kind_combo.connect_changed(move |combo| {
+            let next_kind = match combo.active_id().as_deref() {
+                Some("web-view") => TileKind::WebView,
+                _ => TileKind::Terminal,
+            };
+            update_tile_spec(&layout_state, index, |tile| {
+                tile.tile_kind = next_kind;
+                if tile.tile_kind == TileKind::WebView && tile.url.is_none() {
+                    tile.url = Some("about:blank".into());
+                }
+                if tile.tile_kind == TileKind::WebView {
+                    tile.startup_command = None;
+                    tile.applied_role_id = None;
+                    tile.connection_target = crate::model::assets::TileConnectionTarget::Local;
+                    tile.output_helpers.clear();
+                }
+            });
+            sync_visibility(next_kind);
+            refresh_hint();
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        let refresh_hint = refresh_hint.clone();
+        url_entry.connect_changed(move |entry| {
+            update_tile_spec(&layout_state, index, |tile| {
+                let value = entry.text().trim().to_string();
+                tile.url = if value.is_empty() { None } else { Some(value) };
+            });
+            refresh_hint();
+        });
+    }
+
+    {
+        let layout_state = layout_state.clone();
+        let refresh_hint = refresh_hint.clone();
+        auto_refresh.connect_value_changed(move |spinner| {
+            update_tile_spec(&layout_state, index, |tile| {
+                let seconds = spinner.value_as_int().max(0) as u32;
+                tile.auto_refresh_seconds = (seconds > 0).then_some(seconds);
+            });
+            refresh_hint();
         });
     }
 
@@ -1917,6 +2043,19 @@ where
 }
 
 fn tile_editor_hint(tile: &TileSpec, assets: &WorkspaceAssets) -> String {
+    if tile.tile_kind == TileKind::WebView {
+        let auto_refresh = tile
+            .auto_refresh_seconds
+            .map(|seconds| format!("every {}s", seconds))
+            .unwrap_or_else(|| "off".into());
+        return format!(
+            "Tile kind: {}  •  URL: {}  •  Auto refresh: {}",
+            tile.tile_kind.label(),
+            tile.url.as_deref().unwrap_or("about:blank"),
+            auto_refresh,
+        );
+    }
+
     let role_label = tile
         .applied_role_id
         .as_deref()

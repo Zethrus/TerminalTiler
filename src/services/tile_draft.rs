@@ -19,6 +19,9 @@ pub fn resize_layout(current_layout: &LayoutNode, tile_count: usize) -> LayoutNo
             tile.reconnect_policy = existing.reconnect_policy;
             tile.applied_role_id = existing.applied_role_id.clone();
             tile.output_helpers = existing.output_helpers.clone();
+            tile.tile_kind = existing.tile_kind;
+            tile.url = existing.url.clone();
+            tile.auto_refresh_seconds = existing.auto_refresh_seconds;
         }
     }
 
@@ -81,7 +84,9 @@ pub fn apply_project_suggestion(
 mod tests {
     use super::{apply_project_suggestion, apply_role_to_tile, resize_layout};
     use crate::model::assets::{AgentRoleTemplate, ProjectSuggestion, WorkspaceAssets};
-    use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory, default_tile_spec};
+    use crate::model::layout::{
+        ReconnectPolicy, TileKind, TileSpec, WorkingDirectory, default_tile_spec,
+    };
 
     fn role() -> AgentRoleTemplate {
         AgentRoleTemplate {
@@ -114,6 +119,21 @@ mod tests {
     }
 
     #[test]
+    fn resize_layout_preserves_web_tile_fields() {
+        let mut tile = default_tile_spec(1);
+        tile.tile_kind = TileKind::WebView;
+        tile.url = Some("https://example.com".into());
+        tile.auto_refresh_seconds = Some(30);
+        let layout = crate::model::layout::LayoutNode::Tile(tile);
+        let resized = resize_layout(&layout, 2);
+        let tiles = resized.tile_specs();
+
+        assert_eq!(tiles[0].tile_kind, TileKind::WebView);
+        assert_eq!(tiles[0].url.as_deref(), Some("https://example.com"));
+        assert_eq!(tiles[0].auto_refresh_seconds, Some(30));
+    }
+
+    #[test]
     fn apply_role_copies_reconnect_policy() {
         let mut tile = TileSpec {
             id: "tile-1".into(),
@@ -127,6 +147,9 @@ mod tests {
             reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: None,
             output_helpers: Vec::new(),
+            tile_kind: TileKind::Terminal,
+            url: None,
+            auto_refresh_seconds: None,
         };
 
         apply_role_to_tile(&mut tile, &role());

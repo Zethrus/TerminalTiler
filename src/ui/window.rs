@@ -1519,6 +1519,15 @@ pub fn present(
                         }),
                     });
 
+                    let runtime_for_add_web_tile = workspace.runtime.clone();
+                    actions.push(command_palette::PaletteAction {
+                        title: "Add Web Tile".into(),
+                        subtitle: "Insert a new browser tile beside the focused pane.".into(),
+                        on_activate: Rc::new(move || {
+                            let _ = runtime_for_add_web_tile.add_web_tile();
+                        }),
+                    });
+
                     for runbook in workspace
                         .assets
                         .runbooks
