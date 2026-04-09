@@ -9,7 +9,7 @@ use webkit6::prelude::*;
 
 use crate::logging;
 use crate::model::assets::WorkspaceAssets;
-use crate::model::layout::TileSpec;
+use crate::model::layout::{DEFAULT_WEB_URL, TileSpec};
 use crate::model::preset::ApplicationDensity;
 
 pub struct WebTileView {
@@ -40,7 +40,7 @@ pub fn build(
         }
     }
 
-    let url = tile.url.as_deref().unwrap_or("about:blank");
+    let url = tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL);
 
     web_view.load_uri(url);
 
@@ -147,7 +147,7 @@ pub fn build(
         let tile_id = tile.id.clone();
         move || {
             let (current_url, refresh_seconds) =
-                get_settings(tile_id.clone()).unwrap_or_else(|| ("about:blank".into(), None));
+                get_settings(tile_id.clone()).unwrap_or_else(|| (DEFAULT_WEB_URL.into(), None));
             url_entry.set_text(&current_url);
             auto_refresh.set_value(refresh_seconds.unwrap_or_default() as f64);
         }
@@ -272,7 +272,7 @@ pub fn build(
                 event,
                 wv.uri()
                     .map(|uri| uri.to_string())
-                    .unwrap_or_else(|| "about:blank".into())
+                    .unwrap_or_else(|| DEFAULT_WEB_URL.into())
             ));
         });
     }
@@ -305,7 +305,7 @@ pub fn build(
                 reason,
                 wv.uri()
                     .map(|uri| uri.to_string())
-                    .unwrap_or_else(|| "about:blank".into())
+                    .unwrap_or_else(|| DEFAULT_WEB_URL.into())
             ));
         });
     }

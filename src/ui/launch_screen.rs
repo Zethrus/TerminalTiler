@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
-    LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates, generate_layout,
+    DEFAULT_WEB_URL, LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec,
+    builtin_templates, generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
@@ -1989,7 +1990,7 @@ fn build_tile_editor_row(
             update_tile_spec(&layout_state, index, |tile| {
                 tile.tile_kind = next_kind;
                 if tile.tile_kind == TileKind::WebView && tile.url.is_none() {
-                    tile.url = Some("about:blank".into());
+                    tile.url = Some(DEFAULT_WEB_URL.into());
                 }
                 if tile.tile_kind == TileKind::WebView {
                     tile.startup_command = None;
@@ -2052,7 +2053,7 @@ fn tile_editor_hint(tile: &TileSpec, assets: &WorkspaceAssets) -> String {
         return format!(
             "Tile kind: {}  •  URL: {}  •  Auto refresh: {}",
             tile.tile_kind.label(),
-            tile.url.as_deref().unwrap_or("about:blank"),
+            tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL),
             auto_refresh,
         );
     }

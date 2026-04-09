@@ -83,7 +83,7 @@ mod imp {
 
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
-    use crate::model::layout::{LayoutNode, SplitAxis, TileKind, TileSpec};
+    use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
     use crate::model::preset::ApplicationDensity;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
@@ -2763,7 +2763,7 @@ mod imp {
                 pane.tile
                     .url
                     .clone()
-                    .unwrap_or_else(|| "about:blank".to_string()),
+                    .unwrap_or_else(|| DEFAULT_WEB_URL.to_string()),
                 pane.tile.auto_refresh_seconds,
             )
         };

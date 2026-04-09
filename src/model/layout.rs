@@ -5,6 +5,19 @@ use serde::{Deserialize, Serialize};
 use crate::model::assets::{OutputHelperRule, TileConnectionTarget};
 use crate::platform::home_dir;
 
+pub const DEFAULT_WEB_URL: &str = "https://google.com";
+
+pub fn normalize_web_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        DEFAULT_WEB_URL.into()
+    } else if trimmed.contains("://") || trimmed.starts_with("about:") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TileKind {

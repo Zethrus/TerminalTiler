@@ -10,8 +10,7 @@ use webkit6::prelude::WebViewExt;
 
 use crate::logging;
 use crate::model::assets::{Runbook, WorkspaceAssets};
-use crate::model::layout::TileKind;
-use crate::model::layout::{LayoutNode, SplitAxis};
+use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
@@ -275,7 +274,7 @@ impl WorkspaceRuntime {
     }
 
     pub fn navigate_web_tile(&self, tile_id: &str, url: &str) -> bool {
-        let normalized_url = normalize_web_tile_url(url);
+        let normalized_url = normalize_web_url(url);
 
         let web_view = {
             let mut tiles = self.inner.tiles.borrow_mut();
@@ -312,7 +311,7 @@ impl WorkspaceRuntime {
         url: &str,
         auto_refresh_seconds: Option<u32>,
     ) -> bool {
-        let normalized_url = normalize_web_tile_url(url);
+        let normalized_url = normalize_web_url(url);
 
         let (web_view, refresh_source_id, url_changed, refresh_changed) = {
             let mut tiles = self.inner.tiles.borrow_mut();
@@ -427,13 +426,14 @@ impl WorkspaceRuntime {
                         .and_then(|web_view| web_view.uri())
                         .map(|uri| uri.to_string())
                         .or_else(|| tile.tile.url.clone())
-                        .unwrap_or_else(|| "about:blank".into()),
+                        .unwrap_or_else(|| DEFAULT_WEB_URL.into()),
                     tile.tile.auto_refresh_seconds,
                 )
             })
     }
 
     pub fn add_web_tile(&self) -> Option<String> {
+        let initial_url = normalize_web_url(self.inner.url_entry.text().as_str());
         let target_tile_id = self.inner.focused_tile_id.borrow().clone().or_else(|| {
             self.inner
                 .tiles
@@ -451,7 +451,11 @@ impl WorkspaceRuntime {
             TileKind::WebView,
         )?;
 
-        let ordered_specs = next_layout.tile_specs();
+        let mut ordered_specs = next_layout.tile_specs();
+        if let Some(tile) = ordered_specs.iter_mut().find(|tile| tile.id == new_tile_id) {
+            tile.url = Some(initial_url.clone());
+        }
+        let next_layout = next_layout.with_tile_specs(&ordered_specs);
         let mut existing_tiles = self
             .inner
             .tiles
@@ -478,8 +482,6 @@ impl WorkspaceRuntime {
         *self.inner.focused_tile_id.borrow_mut() = Some(new_tile_id.clone());
         *self.inner.focused_web_tile_id.borrow_mut() = Some(new_tile_id.clone());
         self.refresh_navigation_controls();
-        self.inner.url_entry.set_text("about:blank");
-        self.inner.url_entry.grab_focus();
         (self.inner.on_layout_changed)(next_layout);
 
         Some(new_tile_id)
@@ -737,17 +739,6 @@ impl WorkspaceRuntime {
             .map(|tile| self.build_tile(&tile))
             .collect::<Vec<_>>();
         self.set_tiles(tiles);
-    }
-}
-
-fn normalize_web_tile_url(url: &str) -> String {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        "about:blank".into()
-    } else if trimmed.contains("://") || trimmed.starts_with("about:") {
-        trimmed.to_string()
-    } else {
-        format!("https://{trimmed}")
     }
 }
 

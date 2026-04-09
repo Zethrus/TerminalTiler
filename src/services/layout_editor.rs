@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::model::layout::{LayoutNode, SplitAxis, TileKind, TileSpec};
+use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
 
 pub fn split_tile(
     layout: &LayoutNode,
@@ -116,7 +116,7 @@ fn draft_split_tile(tile: &TileSpec, clone_existing: bool, tile_kind: TileKind) 
             created.startup_command = None;
             created.connection_target = Default::default();
             created.tile_kind = TileKind::WebView;
-            created.url = Some("about:blank".into());
+            created.url = Some(DEFAULT_WEB_URL.into());
             created.auto_refresh_seconds = None;
         }
     }
@@ -197,7 +197,9 @@ fn update_ratio_inner(layout: &LayoutNode, split_path: &[bool], ratio: f32) -> O
 #[cfg(test)]
 mod tests {
     use super::{close_tile, split_tile, split_tile_with_kind, update_split_ratio};
-    use crate::model::layout::{LayoutNode, SplitAxis, TileKind, default_tile_spec};
+    use crate::model::layout::{
+        DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, default_tile_spec,
+    };
 
     fn single_tile_layout() -> LayoutNode {
         LayoutNode::Tile(default_tile_spec(1))
@@ -225,7 +227,7 @@ mod tests {
         let new_tile = tiles.iter().find(|tile| tile.id == new_tile_id).unwrap();
 
         assert_eq!(new_tile.tile_kind, TileKind::WebView);
-        assert_eq!(new_tile.url.as_deref(), Some("about:blank"));
+        assert_eq!(new_tile.url.as_deref(), Some(DEFAULT_WEB_URL));
         assert_eq!(new_tile.startup_command, None);
     }
 

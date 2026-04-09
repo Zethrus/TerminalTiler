@@ -21,7 +21,9 @@ mod imp {
     };
 
     use crate::model::assets::{TileConnectionTarget, WorkspaceAssets};
-    use crate::model::layout::{LayoutNode, ReconnectPolicy, SplitAxis, TileKind, TileSpec};
+    use crate::model::layout::{
+        DEFAULT_WEB_URL, LayoutNode, ReconnectPolicy, SplitAxis, TileKind, TileSpec,
+    };
     use crate::services::layout_editor::{close_tile, split_tile, split_tile_with_kind};
     use crate::services::tile_draft::apply_role_to_tile;
 
@@ -231,7 +233,7 @@ mod imp {
                                 match tile.tile_kind {
                                     TileKind::WebView => {
                                         if tile.url.is_none() {
-                                            tile.url = Some("about:blank".into());
+                                            tile.url = Some(DEFAULT_WEB_URL.into());
                                         }
                                         tile.auto_refresh_seconds = None;
                                         tile.startup_command = None;
@@ -856,7 +858,7 @@ mod imp {
             SetWindowTextW(state.title_hwnd, wide(&tile.title).as_ptr());
             SetWindowTextW(
                 state.url_hwnd,
-                wide(tile.url.as_deref().unwrap_or("about:blank")).as_ptr(),
+                wide(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL)).as_ptr(),
             );
             SetWindowTextW(
                 state.auto_refresh_hwnd,
@@ -1107,7 +1109,7 @@ mod imp {
         if tile.tile_kind == TileKind::WebView {
             return format!(
                 "Kind: Web View  •  URL: {}  •  Auto refresh: {}",
-                tile.url.as_deref().unwrap_or("about:blank"),
+                tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL),
                 tile.auto_refresh_seconds
                     .map(|value| format!("{value}s"))
                     .unwrap_or_else(|| "off".into())
