@@ -12,7 +12,7 @@ mod imp {
         BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
         CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
         DestroyWindow, EN_CHANGE, ES_AUTOHSCROLL, ES_LEFT, GWLP_USERDATA, GetClientRect,
-        GetDlgItem, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+        GetDlgItem, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
         LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE, LoadCursorW,
         RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
         SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE,
@@ -21,8 +21,8 @@ mod imp {
     };
 
     use crate::model::assets::{TileConnectionTarget, WorkspaceAssets};
-    use crate::model::layout::{LayoutNode, ReconnectPolicy, SplitAxis, TileSpec};
-    use crate::services::layout_editor::{close_tile, split_tile};
+    use crate::model::layout::{LayoutNode, ReconnectPolicy, SplitAxis, TileKind, TileSpec};
+    use crate::services::layout_editor::{close_tile, split_tile, split_tile_with_kind};
     use crate::services::tile_draft::apply_role_to_tile;
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsLauncherEditor";
@@ -47,6 +47,13 @@ mod imp {
     const ID_LABEL_CONNECTION: isize = 1019;
     const ID_LABEL_GROUPS: isize = 1020;
     const ID_LABEL_RECONNECT: isize = 1021;
+    const ID_KIND: isize = 1022;
+    const ID_URL: isize = 1023;
+    const ID_AUTO_REFRESH: isize = 1024;
+    const ID_LABEL_KIND: isize = 1025;
+    const ID_LABEL_URL: isize = 1026;
+    const ID_LABEL_AUTO_REFRESH: isize = 1027;
+    const ID_SPLIT_WEB: isize = 1028;
     const MARGIN: i32 = 16;
     const BUTTON_HEIGHT: i32 = 32;
     const FIELD_HEIGHT: i32 = 28;
@@ -60,8 +67,11 @@ mod imp {
         syncing_controls: bool,
         tile_list_hwnd: HWND,
         title_hwnd: HWND,
+        kind_hwnd: HWND,
         agent_hwnd: HWND,
         startup_hwnd: HWND,
+        url_hwnd: HWND,
+        auto_refresh_hwnd: HWND,
         role_hwnd: HWND,
         connection_hwnd: HWND,
         groups_hwnd: HWND,
@@ -69,6 +79,7 @@ mod imp {
         hint_hwnd: HWND,
         split_horizontal_hwnd: HWND,
         split_vertical_hwnd: HWND,
+        split_web_hwnd: HWND,
         clone_hwnd: HWND,
         close_tile_hwnd: HWND,
         close_window_hwnd: HWND,
@@ -96,8 +107,11 @@ mod imp {
             syncing_controls: false,
             tile_list_hwnd: ptr::null_mut(),
             title_hwnd: ptr::null_mut(),
+            kind_hwnd: ptr::null_mut(),
             agent_hwnd: ptr::null_mut(),
             startup_hwnd: ptr::null_mut(),
+            url_hwnd: ptr::null_mut(),
+            auto_refresh_hwnd: ptr::null_mut(),
             role_hwnd: ptr::null_mut(),
             connection_hwnd: ptr::null_mut(),
             groups_hwnd: ptr::null_mut(),
@@ -105,6 +119,7 @@ mod imp {
             hint_hwnd: ptr::null_mut(),
             split_horizontal_hwnd: ptr::null_mut(),
             split_vertical_hwnd: ptr::null_mut(),
+            split_web_hwnd: ptr::null_mut(),
             clone_hwnd: ptr::null_mut(),
             close_tile_hwnd: ptr::null_mut(),
             close_window_hwnd: ptr::null_mut(),
@@ -205,6 +220,36 @@ mod imp {
                             });
                             refresh_tile_list(state);
                         }
+                        ID_KIND if notification == CBN_SELCHANGE => {
+                            let selected = selected_combo_index(state.kind_hwnd);
+                            mutate_selected_tile(state, |tile| {
+                                tile.tile_kind = if selected == 1 {
+                                    TileKind::WebView
+                                } else {
+                                    TileKind::Terminal
+                                };
+                                match tile.tile_kind {
+                                    TileKind::WebView => {
+                                        if tile.url.is_none() {
+                                            tile.url = Some("about:blank".into());
+                                        }
+                                        tile.auto_refresh_seconds = None;
+                                        tile.startup_command = None;
+                                        tile.applied_role_id = None;
+                                        tile.connection_target = TileConnectionTarget::Local;
+                                        tile.output_helpers.clear();
+                                        if tile.agent_label.trim().is_empty() {
+                                            tile.agent_label = "Web".into();
+                                        }
+                                    }
+                                    TileKind::Terminal => {
+                                        tile.url = None;
+                                        tile.auto_refresh_seconds = None;
+                                    }
+                                }
+                            });
+                            refresh_editor(state);
+                        }
                         ID_AGENT if notification == EN_CHANGE => {
                             let value = read_window_text(state.agent_hwnd);
                             mutate_selected_tile(state, |tile| {
@@ -223,6 +268,24 @@ mod imp {
                                 tile.startup_command =
                                     if value.is_empty() { None } else { Some(value) };
                             });
+                        }
+                        ID_URL if notification == EN_CHANGE => {
+                            let value = read_window_text(state.url_hwnd).trim().to_string();
+                            mutate_selected_tile(state, |tile| {
+                                tile.url = if value.is_empty() {
+                                    None
+                                } else {
+                                    Some(value.clone())
+                                };
+                            });
+                            refresh_hint(state);
+                        }
+                        ID_AUTO_REFRESH if notification == EN_CHANGE => {
+                            let value = read_window_text(state.auto_refresh_hwnd);
+                            mutate_selected_tile(state, |tile| {
+                                tile.auto_refresh_seconds = value.trim().parse::<u32>().ok();
+                            });
+                            refresh_hint(state);
                         }
                         ID_GROUPS if notification == EN_CHANGE => {
                             let value = read_window_text(state.groups_hwnd);
@@ -282,6 +345,14 @@ mod imp {
                         ID_SPLIT_VERTICAL if notification == BN_CLICKED => {
                             mutate_layout_structure(state, SplitAxis::Vertical, false);
                         }
+                        ID_SPLIT_WEB if notification == BN_CLICKED => {
+                            mutate_layout_structure_with_kind(
+                                state,
+                                SplitAxis::Horizontal,
+                                false,
+                                TileKind::WebView,
+                            );
+                        }
                         ID_CLONE_TILE if notification == BN_CLICKED => {
                             mutate_layout_structure(state, SplitAxis::Horizontal, true);
                         }
@@ -338,6 +409,14 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
+            "Tile kind",
+            WS_CHILD | WS_VISIBLE,
+            ID_LABEL_KIND,
+        );
+        state.kind_hwnd = create_combo_box(hwnd, ID_KIND);
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
             "Agent label",
             WS_CHILD | WS_VISIBLE,
             ID_LABEL_AGENT,
@@ -362,6 +441,28 @@ mod imp {
             "",
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
             ID_STARTUP,
+        );
+        let _ = create_child_window(hwnd, "STATIC", "URL", WS_CHILD | WS_VISIBLE, ID_LABEL_URL);
+        state.url_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
+            ID_URL,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Auto refresh (s)",
+            WS_CHILD | WS_VISIBLE,
+            ID_LABEL_AUTO_REFRESH,
+        );
+        state.auto_refresh_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
+            ID_AUTO_REFRESH,
         );
         let _ = create_child_window(hwnd, "STATIC", "Role", WS_CHILD | WS_VISIBLE, ID_LABEL_ROLE);
         state.role_hwnd = create_combo_box(hwnd, ID_ROLE);
@@ -410,6 +511,13 @@ mod imp {
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             ID_SPLIT_VERTICAL,
         );
+        state.split_web_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Split Web Tile",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            ID_SPLIT_WEB,
+        );
         state.clone_hwnd = create_child_window(
             hwnd,
             "BUTTON",
@@ -437,10 +545,16 @@ mod imp {
             state.tile_list_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_TITLE as i32) },
             state.title_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_KIND as i32) },
+            state.kind_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_AGENT as i32) },
             state.agent_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_STARTUP as i32) },
             state.startup_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_URL as i32) },
+            state.url_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_LABEL_AUTO_REFRESH as i32) },
+            state.auto_refresh_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_ROLE as i32) },
             state.role_hwnd,
             unsafe { GetDlgItem(hwnd, ID_LABEL_CONNECTION as i32) },
@@ -452,6 +566,7 @@ mod imp {
             state.hint_hwnd,
             state.split_horizontal_hwnd,
             state.split_vertical_hwnd,
+            state.split_web_hwnd,
             state.clone_hwnd,
             state.close_tile_hwnd,
             state.close_window_hwnd,
@@ -460,6 +575,7 @@ mod imp {
                 SendMessageW(control, WM_SETFONT, font as usize, 1);
             }
         }
+        populate_tile_kind_choices(state.kind_hwnd);
         populate_reconnect_choices(state.reconnect_hwnd);
         layout_controls(hwnd, state);
     }
@@ -480,9 +596,12 @@ mod imp {
         let field_width = (detail_width - label_width - 8).max(180);
 
         let title_y = MARGIN;
-        let agent_y = title_y + FIELD_HEIGHT + 18;
+        let kind_y = title_y + FIELD_HEIGHT + 18;
+        let agent_y = kind_y + FIELD_HEIGHT + 18;
         let startup_y = agent_y + FIELD_HEIGHT + 18;
-        let role_y = startup_y + FIELD_HEIGHT + 18;
+        let url_y = startup_y + FIELD_HEIGHT + 18;
+        let auto_refresh_y = url_y + FIELD_HEIGHT + 18;
+        let role_y = auto_refresh_y + FIELD_HEIGHT + 18;
         let connection_y = role_y + FIELD_HEIGHT + 18;
         let groups_y = connection_y + FIELD_HEIGHT + 18;
         let reconnect_y = groups_y + FIELD_HEIGHT + 18;
@@ -510,6 +629,15 @@ mod imp {
             );
             position_label_and_field(
                 hwnd,
+                ID_LABEL_KIND,
+                state.kind_hwnd,
+                detail_x,
+                field_x,
+                field_width,
+                kind_y,
+            );
+            position_label_and_field(
+                hwnd,
                 ID_LABEL_AGENT,
                 state.agent_hwnd,
                 detail_x,
@@ -525,6 +653,24 @@ mod imp {
                 field_x,
                 field_width,
                 startup_y,
+            );
+            position_label_and_field(
+                hwnd,
+                ID_LABEL_URL,
+                state.url_hwnd,
+                detail_x,
+                field_x,
+                field_width,
+                url_y,
+            );
+            position_label_and_field(
+                hwnd,
+                ID_LABEL_AUTO_REFRESH,
+                state.auto_refresh_hwnd,
+                detail_x,
+                field_x,
+                field_width,
+                auto_refresh_y,
             );
             position_label_and_field(
                 hwnd,
@@ -599,9 +745,18 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                state.close_tile_hwnd,
+                state.split_web_hwnd,
                 ptr::null_mut(),
                 detail_x + 388,
+                button_y,
+                120,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.close_tile_hwnd,
+                ptr::null_mut(),
+                detail_x + 516,
                 button_y,
                 108,
                 BUTTON_HEIGHT,
@@ -667,8 +822,8 @@ mod imp {
             let label = format!(
                 "Tile {}  •  {}  •  {}",
                 index + 1,
+                tile_kind_label(tile.tile_kind),
                 tile.title,
-                tile.agent_label
             );
             unsafe {
                 SendMessageW(
@@ -699,6 +854,20 @@ mod imp {
 
         unsafe {
             SetWindowTextW(state.title_hwnd, wide(&tile.title).as_ptr());
+            SetWindowTextW(
+                state.url_hwnd,
+                wide(tile.url.as_deref().unwrap_or("about:blank")).as_ptr(),
+            );
+            SetWindowTextW(
+                state.auto_refresh_hwnd,
+                wide(
+                    &tile
+                        .auto_refresh_seconds
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                )
+                .as_ptr(),
+            );
             SetWindowTextW(state.agent_hwnd, wide(&tile.agent_label).as_ptr());
             SetWindowTextW(
                 state.startup_hwnd,
@@ -713,6 +882,8 @@ mod imp {
                 (state.layout.tile_count() > 1) as i32,
             );
         }
+
+        select_combo_index(state.kind_hwnd, usize::from(tile.tile_kind == TileKind::WebView));
 
         select_combo_index(
             state.role_hwnd,
@@ -745,6 +916,7 @@ mod imp {
             state.reconnect_hwnd,
             reconnect_policy_index(tile.reconnect_policy),
         );
+        sync_control_visibility(state, tile.tile_kind);
         refresh_hint(state);
     }
 
@@ -788,6 +960,36 @@ mod imp {
         };
         if let Some(next_layout) = split_tile(&state.layout, &tile_id, axis, clone_existing) {
             state.layout = next_layout;
+            refresh_editor(state);
+            let next_layout = state.layout.clone();
+            (state.on_layout_changed)(next_layout);
+        }
+    }
+
+    fn mutate_layout_structure_with_kind(
+        state: &mut EditorWindowState,
+        axis: SplitAxis,
+        clone_existing: bool,
+        tile_kind: TileKind,
+    ) {
+        let Some(tile_id) = state
+            .layout
+            .tile_specs()
+            .get(state.selected_tile_index)
+            .map(|tile| tile.id.clone())
+        else {
+            return;
+        };
+        if let Some((next_layout, new_tile_id)) =
+            split_tile_with_kind(&state.layout, &tile_id, axis, clone_existing, tile_kind)
+        {
+            state.layout = next_layout;
+            state.selected_tile_index = state
+                .layout
+                .tile_specs()
+                .iter()
+                .position(|tile| tile.id == new_tile_id)
+                .unwrap_or(state.selected_tile_index);
             refresh_editor(state);
             let next_layout = state.layout.clone();
             (state.on_layout_changed)(next_layout);
@@ -864,6 +1066,15 @@ mod imp {
         select_combo_index(hwnd, 0);
     }
 
+    fn populate_tile_kind_choices(hwnd: HWND) {
+        unsafe {
+            SendMessageW(hwnd, CB_RESETCONTENT, 0, 0);
+            SendMessageW(hwnd, CB_ADDSTRING, 0, wide("Terminal").as_ptr() as LPARAM);
+            SendMessageW(hwnd, CB_ADDSTRING, 0, wide("Web View").as_ptr() as LPARAM);
+        }
+        select_combo_index(hwnd, 0);
+    }
+
     fn reconnect_policy_index(policy: ReconnectPolicy) -> usize {
         match policy {
             ReconnectPolicy::Manual => 0,
@@ -890,6 +1101,16 @@ mod imp {
     }
 
     fn tile_editor_hint(tile: &TileSpec, assets: &WorkspaceAssets) -> String {
+        if tile.tile_kind == TileKind::WebView {
+            return format!(
+                "Kind: Web View  •  URL: {}  •  Auto refresh: {}",
+                tile.url.as_deref().unwrap_or("about:blank"),
+                tile.auto_refresh_seconds
+                    .map(|value| format!("{value}s"))
+                    .unwrap_or_else(|| "off".into())
+            );
+        }
+
         let role_label = tile
             .applied_role_id
             .as_deref()
@@ -912,6 +1133,46 @@ mod imp {
             connection_label,
             tile.reconnect_policy.label()
         )
+    }
+
+    fn tile_kind_label(tile_kind: TileKind) -> &'static str {
+        match tile_kind {
+            TileKind::Terminal => "Terminal",
+            TileKind::WebView => "Web View",
+        }
+    }
+
+    fn sync_control_visibility(state: &EditorWindowState, tile_kind: TileKind) {
+        let parent_hwnd = unsafe { GetParent(state.tile_list_hwnd) };
+        let show_web = tile_kind == TileKind::WebView;
+        for control in [
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_AGENT as i32) },
+            state.agent_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_STARTUP as i32) },
+            state.startup_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_ROLE as i32) },
+            state.role_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_CONNECTION as i32) },
+            state.connection_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_GROUPS as i32) },
+            state.groups_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_RECONNECT as i32) },
+            state.reconnect_hwnd,
+        ] {
+            unsafe {
+                ShowWindow(control, if show_web { 0 } else { SW_SHOW });
+            }
+        }
+        for control in [
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_URL as i32) },
+            state.url_hwnd,
+            unsafe { GetDlgItem(parent_hwnd, ID_LABEL_AUTO_REFRESH as i32) },
+            state.auto_refresh_hwnd,
+        ] {
+            unsafe {
+                ShowWindow(control, if show_web { SW_SHOW } else { 0 });
+            }
+        }
     }
 
     fn accent_class_for_agent(agent_label: &str) -> String {

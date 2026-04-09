@@ -85,6 +85,7 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
+    use crate::services::layout_editor::split_tile_with_kind;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::services::output_helpers::{helper_summary_text, scan_output};
     use crate::services::runbooks::resolve_runbook;
@@ -147,6 +148,7 @@ mod imp {
     const ID_WORKSPACE_COMMAND_PALETTE: isize = 1015;
     const ID_WORKSPACE_URL: isize = 1016;
     const ID_WORKSPACE_URL_RELOAD: isize = 1017;
+    const ID_WORKSPACE_ADD_WEB: isize = 1018;
     const ID_TAB_BUTTON_BASE: isize = 3000;
     const HEADER_BUTTON_WIDTH: i32 = 90;
     const HEADER_BUTTON_HEIGHT: i32 = 28;
@@ -196,6 +198,7 @@ mod imp {
         broadcast_target_hwnd: HWND,
         broadcast_entry_hwnd: HWND,
         broadcast_send_hwnd: HWND,
+        add_web_hwnd: HWND,
         runbook_hwnd: HWND,
         alerts_hwnd: HWND,
         command_palette_hwnd: HWND,
@@ -609,6 +612,7 @@ mod imp {
             broadcast_target_hwnd: ptr::null_mut(),
             broadcast_entry_hwnd: ptr::null_mut(),
             broadcast_send_hwnd: ptr::null_mut(),
+            add_web_hwnd: ptr::null_mut(),
             runbook_hwnd: ptr::null_mut(),
             alerts_hwnd: ptr::null_mut(),
             command_palette_hwnd: ptr::null_mut(),
@@ -831,6 +835,7 @@ mod imp {
                         }
                         ID_WORKSPACE_BROADCAST_TARGET => cycle_broadcast_target(state),
                         ID_WORKSPACE_BROADCAST_SEND => send_broadcast_command(state),
+                        ID_WORKSPACE_ADD_WEB => add_web_tile_to_active_workspace(hwnd, state),
                         ID_WORKSPACE_RUNBOOK => open_runbook_palette(hwnd, state),
                         ID_WORKSPACE_ALERTS => open_alert_center(hwnd, state),
                         ID_WORKSPACE_COMMAND_PALETTE => open_workspace_command_palette(hwnd, state),
@@ -1478,6 +1483,15 @@ mod imp {
             ID_WORKSPACE_BROADCAST_SEND,
             ptr::null_mut(),
         );
+        state.add_web_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Add Web",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            0,
+            ID_WORKSPACE_ADD_WEB,
+            ptr::null_mut(),
+        );
         state.runbook_hwnd = create_child_window(
             hwnd,
             "BUTTON",
@@ -1523,6 +1537,7 @@ mod imp {
             state.broadcast_target_hwnd,
             state.broadcast_entry_hwnd,
             state.broadcast_send_hwnd,
+            state.add_web_hwnd,
             state.runbook_hwnd,
             state.alerts_hwnd,
             state.command_palette_hwnd,
@@ -1697,11 +1712,11 @@ mod imp {
                 ptr::null_mut(),
                 OUTER_MARGIN + 148,
                 controls_y,
-                (bounds.width() - OUTER_MARGIN * 2 - 148 - 88 * 4 - 24).max(180),
+                (bounds.width() - OUTER_MARGIN * 2 - 148 - 88 * 5 - 32).max(180),
                 HEADER_BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
-            let right_controls_left = bounds.right - OUTER_MARGIN - (88 * 4) - (button_gap * 3);
+            let right_controls_left = bounds.right - OUTER_MARGIN - (88 * 5) - (button_gap * 4);
             SetWindowPos(
                 state.broadcast_send_hwnd,
                 ptr::null_mut(),
@@ -1712,7 +1727,7 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                state.runbook_hwnd,
+                state.add_web_hwnd,
                 ptr::null_mut(),
                 right_controls_left + 88 + button_gap,
                 controls_y,
@@ -1721,7 +1736,7 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                state.alerts_hwnd,
+                state.runbook_hwnd,
                 ptr::null_mut(),
                 right_controls_left + (88 + button_gap) * 2,
                 controls_y,
@@ -1730,9 +1745,18 @@ mod imp {
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                state.command_palette_hwnd,
+                state.alerts_hwnd,
                 ptr::null_mut(),
                 right_controls_left + (88 + button_gap) * 3,
+                controls_y,
+                88,
+                HEADER_BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.command_palette_hwnd,
+                ptr::null_mut(),
+                right_controls_left + (88 + button_gap) * 4,
                 controls_y,
                 88,
                 HEADER_BUTTON_HEIGHT,
@@ -2197,6 +2221,15 @@ mod imp {
             }),
         });
         actions.push(command_palette::PaletteAction {
+            title: "Add Web Tile".into(),
+            subtitle: "Insert a new browser pane beside the focused pane.".into(),
+            on_activate: Rc::new(move || {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    add_web_tile_to_active_workspace(hwnd, state);
+                }
+            }),
+        });
+        actions.push(command_palette::PaletteAction {
             title: "Open Assets Manager".into(),
             subtitle: "Edit connection profiles, inventory, roles, and runbooks.".into(),
             on_activate: Rc::new(move || {
@@ -2237,6 +2270,43 @@ mod imp {
             unsafe {
                 SetFocus(pane.output_hwnd);
             }
+        }
+    }
+
+    fn add_web_tile_to_active_workspace(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let target_tile_id = state
+            .panes
+            .iter()
+            .find(|pane| pane.focused)
+            .map(|pane| pane.tile.id.clone())
+            .or_else(|| {
+                state
+                    .focused_web_pane_id
+                    .and_then(|pane_id| pane_by_id(state, pane_id))
+                    .map(|pane| pane.tile.id.clone())
+            })
+            .or_else(|| state.panes.first().map(|pane| pane.tile.id.clone()));
+        let Some(target_tile_id) = target_tile_id else {
+            return;
+        };
+
+        let current_layout = active_tab(state).preset.layout.clone();
+        let Some((next_layout, new_tile_id)) = split_tile_with_kind(
+            &current_layout,
+            &target_tile_id,
+            SplitAxis::Horizontal,
+            false,
+            TileKind::WebView,
+        ) else {
+            return;
+        };
+
+        active_tab_mut(state).preset.layout = next_layout;
+        rebuild_active_tab_content(hwnd, state);
+        focus_pane(state, &new_tile_id);
+        unsafe {
+            SetFocus(state.url_hwnd);
+            SendMessageW(state.url_hwnd, EM_SETSEL_MESSAGE, 0, -1isize as LPARAM);
         }
     }
 
