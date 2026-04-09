@@ -291,6 +291,7 @@ impl WorkspaceRuntime {
             .drain(..)
             .map(|tile| (tile.tile.id.clone(), tile))
             .collect::<HashMap<_, _>>();
+        detach_tile_widgets(existing_tiles.values());
         let next_tiles = ordered_specs
             .into_iter()
             .map(|spec| {
@@ -1192,7 +1193,42 @@ fn remount_tiles(slots: &[gtk::Box], tiles: &[WorkspaceTile]) {
         }
     }
 
+    detach_tile_widgets(tiles.iter());
+
     for (slot, tile) in slots.iter().zip(tiles.iter()) {
         slot.append(&tile.widget);
+    }
+}
+
+fn detach_tile_widgets<'a, I>(tiles: I)
+where
+    I: IntoIterator<Item = &'a WorkspaceTile>,
+{
+    for tile in tiles {
+        let Some(parent) = tile.widget.parent() else {
+            continue;
+        };
+
+        if let Ok(parent_box) = parent.clone().downcast::<gtk::Box>() {
+            parent_box.remove(&tile.widget);
+            continue;
+        }
+
+        if let Ok(parent_paned) = parent.downcast::<gtk::Paned>() {
+            if parent_paned
+                .start_child()
+                .as_ref()
+                .is_some_and(|child| child == &tile.widget)
+            {
+                parent_paned.set_start_child(Option::<&gtk::Widget>::None);
+            }
+            if parent_paned
+                .end_child()
+                .as_ref()
+                .is_some_and(|child| child == &tile.widget)
+            {
+                parent_paned.set_end_child(Option::<&gtk::Widget>::None);
+            }
+        }
     }
 }
