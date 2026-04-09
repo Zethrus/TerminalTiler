@@ -3,14 +3,30 @@ mod imp {
     use std::collections::BTreeMap;
     use std::ffi::c_void;
     use std::mem;
-    use std::sync::mpsc;
     use std::ptr;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::Duration;
 
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, CreateCoreWebView2EnvironmentWithOptions,
+        ICoreWebView2, ICoreWebView2_11, ICoreWebView2Controller,
+        ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, ICoreWebView2Environment,
+        ICoreWebView2NewWindowRequestedEventArgs,
+    };
+    use webview2_com::{
+        ContextMenuRequestedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
+        CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
+        NavigationCompletedEventHandler, NewWindowRequestedEventHandler, take_pwstr,
+        wait_with_pump,
+    };
+    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+    use windows::Win32::System::WinRT::EventRegistrationToken;
+    use windows::core::{Error as WindowsError, HSTRING, Interface, PCWSTR, PWSTR};
     use windows_sys::Win32::Foundation::{
         COLORREF, CloseHandle, GlobalFree, HANDLE, HANDLE_FLAG_INHERIT, HINSTANCE, HWND, LPARAM,
         LRESULT, POINT, RECT, SIZE, SetHandleInformation, WPARAM,
@@ -64,20 +80,6 @@ mod imp {
         WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD,
         WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        CreateCoreWebView2EnvironmentWithOptions, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
-        ICoreWebView2, ICoreWebView2Controller, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
-        ICoreWebView2Environment, ICoreWebView2NewWindowRequestedEventArgs, ICoreWebView2_11,
-    };
-    use webview2_com::{
-        CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-        ContextMenuRequestedEventHandler, DocumentTitleChangedEventHandler,
-        NavigationCompletedEventHandler, NewWindowRequestedEventHandler, take_pwstr, wait_with_pump,
-    };
-    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
-    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-    use windows::Win32::System::WinRT::EventRegistrationToken;
-    use windows::core::{Error as WindowsError, HSTRING, Interface, PCWSTR, PWSTR};
 
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
@@ -85,8 +87,8 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
-    use crate::services::layout_editor::split_tile_with_kind;
     use crate::services::launch_resolution::resolve_tile_launch;
+    use crate::services::layout_editor::split_tile_with_kind;
     use crate::services::output_helpers::{helper_summary_text, scan_output};
     use crate::services::runbooks::resolve_runbook;
     use crate::storage::asset_store::AssetStore;
@@ -664,12 +666,10 @@ mod imp {
         static WEBVIEW_COM_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
         WEBVIEW_COM_INIT
-            .get_or_init(|| {
-                unsafe {
-                    CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                        .ok()
-                        .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
-                }
+            .get_or_init(|| unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                    .ok()
+                    .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
             })
             .clone()
     }
@@ -682,7 +682,9 @@ mod imp {
             CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
                 PCWSTR::null(),
-                None::<&webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions>,
+                None::<
+                    &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
+                >,
                 &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
                     move |error_code, environment| {
                         error_code?;
@@ -971,9 +973,7 @@ mod imp {
                     if pane.tile.tile_kind == TileKind::WebView {
                         if let Some(controller) = pane.webview_controller.as_ref() {
                             let _ = unsafe {
-                                controller.MoveFocus(
-                                    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
-                                )
+                                controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)
                             };
                         }
                         return 0;
@@ -1764,7 +1764,10 @@ mod imp {
             );
             ShowWindow(state.path_hwnd, if show_web_controls { 0 } else { SW_SHOW });
             ShowWindow(state.url_hwnd, if show_web_controls { SW_SHOW } else { 0 });
-            ShowWindow(state.url_reload_hwnd, if show_web_controls { SW_SHOW } else { 0 });
+            ShowWindow(
+                state.url_reload_hwnd,
+                if show_web_controls { SW_SHOW } else { 0 },
+            );
         }
 
         let layout_bounds = Bounds {
@@ -2492,7 +2495,10 @@ mod imp {
         unsafe {
             ShowWindow(state.path_hwnd, if has_web_tiles { 0 } else { SW_SHOW });
             ShowWindow(state.url_hwnd, if has_web_tiles { SW_SHOW } else { 0 });
-            ShowWindow(state.url_reload_hwnd, if has_web_tiles { SW_SHOW } else { 0 });
+            ShowWindow(
+                state.url_reload_hwnd,
+                if has_web_tiles { SW_SHOW } else { 0 },
+            );
             windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
                 state.url_hwnd,
                 focused_pane.is_some() as i32,
@@ -2522,11 +2528,7 @@ mod imp {
         }
     }
 
-    fn apply_webview_uri_update(
-        state: &mut WorkspaceWindowState,
-        pane_id: usize,
-        value: &str,
-    ) {
+    fn apply_webview_uri_update(state: &mut WorkspaceWindowState, pane_id: usize, value: &str) {
         if let Some(pane) = pane_mut_by_id(state, pane_id) {
             pane.webview_uri = Some(value.to_string());
         }
@@ -2535,11 +2537,7 @@ mod imp {
         }
     }
 
-    fn apply_webview_title_update(
-        state: &mut WorkspaceWindowState,
-        pane_id: usize,
-        value: &str,
-    ) {
+    fn apply_webview_title_update(state: &mut WorkspaceWindowState, pane_id: usize, value: &str) {
         if let Some(pane) = pane_mut_by_id(state, pane_id) {
             pane.webview_title = (!value.trim().is_empty()).then(|| value.to_string());
             unsafe {
@@ -2576,7 +2574,10 @@ mod imp {
         Ok(())
     }
 
-    fn reload_web_pane_by_id(state: &mut WorkspaceWindowState, pane_id: usize) -> Result<(), String> {
+    fn reload_web_pane_by_id(
+        state: &mut WorkspaceWindowState,
+        pane_id: usize,
+    ) -> Result<(), String> {
         let webview = pane_by_id(state, pane_id)
             .and_then(|pane| pane.webview.clone())
             .ok_or_else(|| format!("Web pane {pane_id} is unavailable."))?;
@@ -2700,11 +2701,7 @@ mod imp {
         }
     }
 
-    fn show_web_pane_context_menu_for_point(
-        parent_hwnd: HWND,
-        pane_id: usize,
-        mut point: POINT,
-    ) {
+    fn show_web_pane_context_menu_for_point(parent_hwnd: HWND, pane_id: usize, mut point: POINT) {
         let Some(state) = (unsafe { window_state_mut(parent_hwnd) }) else {
             return;
         };
@@ -2839,7 +2836,9 @@ mod imp {
                     })),
                     &mut token,
                 )
-                .map_err(|error| format!("Registering WebView2 navigation handler failed: {error}"))?;
+                .map_err(|error| {
+                    format!("Registering WebView2 navigation handler failed: {error}")
+                })?;
             if let Ok(webview11) = webview.cast::<ICoreWebView2_11>() {
                 let mut context_menu_token = EventRegistrationToken::default();
                 webview11
@@ -2863,7 +2862,9 @@ mod imp {
                         })),
                         &mut context_menu_token,
                     )
-                    .map_err(|error| format!("Registering WebView2 context menu handler failed: {error}"))?;
+                    .map_err(|error| {
+                        format!("Registering WebView2 context menu handler failed: {error}")
+                    })?;
             }
             let _ = controller.SetBounds(WinRect {
                 left: 0,

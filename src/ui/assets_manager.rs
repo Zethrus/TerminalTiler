@@ -1205,7 +1205,9 @@ fn render_hosts_page(
                 let refresh_status = refresh_status.clone();
                 let group_rt = refresh_token.clone();
                 toggle.connect_toggled(move |button| {
-                    if group_rt.get() != token { return; }
+                    if group_rt.get() != token {
+                        return;
+                    }
                     {
                         let mut snapshot = state.borrow_mut();
                         let groups = &mut snapshot.current_assets.inventory_hosts[index].group_ids;
@@ -2081,7 +2083,9 @@ where
         let dup_token = token;
         let dup_rt = refresh_token.clone();
         button.connect_clicked(move |_| {
-            if dup_rt.get() != dup_token { return; }
+            if dup_rt.get() != dup_token {
+                return;
+            }
             let state_for_prompt = state.clone();
             let on_duplicate = on_duplicate.clone();
             let refresh_pages = refresh_pages.clone();
@@ -2232,7 +2236,9 @@ fn append_entry_field<F>(
     let refresh_status = refresh_status.clone();
     let rt = refresh_token;
     entry.connect_changed(move |entry| {
-        if rt.get() != token { return; }
+        if rt.get() != token {
+            return;
+        }
         {
             let mut snapshot = state.borrow_mut();
             on_change(&mut snapshot, entry.text().to_string());
@@ -2299,7 +2305,9 @@ fn append_dynamic_combo_field<F>(
     let refresh_status = refresh_status.clone();
     let rt = refresh_token;
     combo.connect_changed(move |combo| {
-        if rt.get() != token { return; }
+        if rt.get() != token {
+            return;
+        }
         if let Some(id) = combo.active_id() {
             {
                 let mut snapshot = state.borrow_mut();
@@ -2335,7 +2343,9 @@ fn append_output_helpers_editor(
     let refresh_pages_add = refresh_pages.clone();
     let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
-        if add_rt.get() != token { return; }
+        if add_rt.get() != token {
+            return;
+        }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.role_templates[role_index]
@@ -2437,7 +2447,9 @@ fn append_output_helpers_editor(
         let toggle_refresh_status = refresh_status.clone();
         let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
-            if toggle_rt.get() != token { return false.into(); }
+            if toggle_rt.get() != token {
+                return false.into();
+            }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.role_templates[role_index].default_output_helpers
@@ -2462,7 +2474,9 @@ fn append_output_helpers_editor(
         let remove_refresh_pages = refresh_pages.clone();
         let remove_rt = refresh_token.clone();
         remove_button.connect_clicked(move |_| {
-            if remove_rt.get() != token { return; }
+            if remove_rt.get() != token {
+                return;
+            }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.role_templates[role_index]
@@ -2616,7 +2630,9 @@ fn append_runbook_variables_editor(
     let refresh_pages_add = refresh_pages.clone();
     let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
-        if add_rt.get() != token { return; }
+        if add_rt.get() != token {
+            return;
+        }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.runbooks[runbook_index]
@@ -2706,7 +2722,9 @@ fn append_runbook_variables_editor(
         let toggle_refresh_status = refresh_status.clone();
         let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
-            if toggle_rt.get() != token { return false.into(); }
+            if toggle_rt.get() != token {
+                return false.into();
+            }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index].variables[variable_index]
@@ -2729,7 +2747,9 @@ fn append_runbook_variables_editor(
         let remove_refresh_pages = refresh_pages.clone();
         let remove_rt = refresh_token.clone();
         remove.connect_clicked(move |_| {
-            if remove_rt.get() != token { return; }
+            if remove_rt.get() != token {
+                return;
+            }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index]
@@ -2771,7 +2791,9 @@ fn append_runbook_steps_editor(
     let refresh_pages_add = refresh_pages.clone();
     let add_rt = refresh_token.clone();
     add.connect_clicked(move |_| {
-        if add_rt.get() != token { return; }
+        if add_rt.get() != token {
+            return;
+        }
         {
             let mut snapshot = state_add.borrow_mut();
             snapshot.current_assets.runbooks[runbook_index]
@@ -2843,7 +2865,9 @@ fn append_runbook_steps_editor(
         let toggle_refresh_status = refresh_status.clone();
         let toggle_rt = refresh_token.clone();
         toggle.connect_state_set(move |_, active| {
-            if toggle_rt.get() != token { return false.into(); }
+            if toggle_rt.get() != token {
+                return false.into();
+            }
             {
                 let mut snapshot = toggle_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index].steps[step_index].append_newline =
@@ -2866,7 +2890,9 @@ fn append_runbook_steps_editor(
         let remove_refresh_pages = refresh_pages.clone();
         let remove_rt = refresh_token.clone();
         remove.connect_clicked(move |_| {
-            if remove_rt.get() != token { return; }
+            if remove_rt.get() != token {
+                return;
+            }
             {
                 let mut snapshot = remove_state.borrow_mut();
                 snapshot.current_assets.runbooks[runbook_index]

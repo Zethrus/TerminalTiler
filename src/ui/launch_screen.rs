@@ -9,8 +9,7 @@ use uuid::Uuid;
 use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
-    LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates,
-    generate_layout,
+    LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates, generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
@@ -1768,7 +1767,9 @@ fn build_tile_editor_row(
     auto_refresh.set_numeric(true);
     auto_refresh.set_width_chars(6);
     auto_refresh.add_css_class("tile-count-input");
-    auto_refresh.set_tooltip_text(Some("Auto-refresh in seconds, 0 disables automatic reload."));
+    auto_refresh.set_tooltip_text(Some(
+        "Auto-refresh in seconds, 0 disables automatic reload.",
+    ));
     auto_refresh.set_value(tile.auto_refresh_seconds.unwrap_or_default() as f64);
     web_settings.append(&auto_refresh);
 

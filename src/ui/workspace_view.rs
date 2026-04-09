@@ -3,19 +3,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use gtk::glib;
 use gtk::prelude::*;
 use vte4::prelude::TerminalExt;
 use webkit6::prelude::WebViewExt;
 
 use crate::model::assets::{Runbook, WorkspaceAssets};
+use crate::model::layout::TileKind;
 use crate::model::layout::{LayoutNode, SplitAxis};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
-use crate::services::layout_editor::{split_tile_with_kind, update_split_ratio};
+use crate::services::layout_editor::{
+    close_tile as close_layout_tile, split_tile_with_kind, update_split_ratio,
+};
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
-use crate::model::layout::TileKind;
 use crate::terminal::session::TerminalSession;
 use crate::ui::{layout_tree, tile_view, web_tile};
 
@@ -28,6 +31,8 @@ struct WorkspaceTile {
     widget: gtk::Widget,
     session: Option<TerminalSession>,
     web_view: Option<webkit6::WebView>,
+    refresh_source_id: Option<Rc<RefCell<Option<glib::SourceId>>>>,
+    close_button: gtk::Button,
     handlers_bound: bool,
 }
 
@@ -195,12 +200,81 @@ impl WorkspaceRuntime {
         true
     }
 
-    pub fn navigate_web_tile(&self, tile_id: &str, url: &str) -> bool {
-        let normalized_url = if url.contains("://") {
-            url.to_string()
-        } else {
-            format!("https://{url}")
+    pub fn close_tile(&self, tile_id: &str) -> bool {
+        let current_layout = self.inner.layout.borrow().clone();
+        let Some(next_layout) = close_layout_tile(&current_layout, tile_id) else {
+            return false;
         };
+
+        let ordered_specs = next_layout.tile_specs();
+        let next_tile_ids = ordered_specs
+            .iter()
+            .map(|tile| tile.id.clone())
+            .collect::<Vec<_>>();
+        let mut existing_tiles = self
+            .inner
+            .tiles
+            .borrow_mut()
+            .drain(..)
+            .map(|tile| (tile.tile.id.clone(), tile))
+            .collect::<HashMap<_, _>>();
+        detach_tile_widgets(existing_tiles.values());
+        let next_tiles = ordered_specs
+            .into_iter()
+            .map(|spec| {
+                if let Some(mut tile) = existing_tiles.remove(&spec.id) {
+                    tile.tile = spec;
+                    tile
+                } else {
+                    self.build_tile(&spec)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (_, removed_tile) in existing_tiles {
+            clear_web_refresh_timer(removed_tile.refresh_source_id.as_ref());
+            if let Some(session) = removed_tile.session {
+                session.terminate("tile closed");
+            }
+        }
+
+        let next_focused_tile = self
+            .inner
+            .focused_tile_id
+            .borrow()
+            .clone()
+            .filter(|focused_id| next_tile_ids.iter().any(|tile_id| tile_id == focused_id))
+            .or_else(|| next_tile_ids.first().cloned());
+        let next_focused_web_tile = self
+            .inner
+            .focused_web_tile_id
+            .borrow()
+            .clone()
+            .filter(|focused_id| {
+                next_tiles
+                    .iter()
+                    .any(|tile| tile.tile.id == *focused_id && tile.web_view.is_some())
+            })
+            .or_else(|| {
+                next_focused_tile.as_ref().and_then(|focused_id| {
+                    next_tiles
+                        .iter()
+                        .find(|tile| tile.tile.id == *focused_id && tile.web_view.is_some())
+                        .map(|tile| tile.tile.id.clone())
+                })
+            });
+
+        *self.inner.layout.borrow_mut() = next_layout.clone();
+        *self.inner.focused_tile_id.borrow_mut() = next_focused_tile;
+        *self.inner.focused_web_tile_id.borrow_mut() = next_focused_web_tile;
+        self.replace_layout_shell(&next_layout);
+        self.set_tiles(next_tiles);
+        (self.inner.on_layout_changed)(next_layout);
+        true
+    }
+
+    pub fn navigate_web_tile(&self, tile_id: &str, url: &str) -> bool {
+        let normalized_url = normalize_web_tile_url(url);
 
         let mut navigated = false;
         {
@@ -227,6 +301,52 @@ impl WorkspaceRuntime {
         navigated
     }
 
+    pub fn update_web_tile_settings(
+        &self,
+        tile_id: &str,
+        url: &str,
+        auto_refresh_seconds: Option<u32>,
+    ) -> bool {
+        let normalized_url = normalize_web_tile_url(url);
+        let mut updated = false;
+        {
+            let mut tiles = self.inner.tiles.borrow_mut();
+            if let Some(tile) = tiles.iter_mut().find(|t| t.tile.id == tile_id)
+                && let Some(web_view) = &tile.web_view
+            {
+                if tile.tile.url.as_deref() != Some(normalized_url.as_str()) {
+                    web_view.load_uri(&normalized_url);
+                    tile.tile.url = Some(normalized_url.clone());
+                    updated = true;
+                }
+                if tile.tile.auto_refresh_seconds != auto_refresh_seconds {
+                    tile.tile.auto_refresh_seconds = auto_refresh_seconds;
+                    if let Some(refresh_source_id) = tile.refresh_source_id.as_ref() {
+                        configure_web_refresh_timer(
+                            refresh_source_id,
+                            web_view,
+                            auto_refresh_seconds,
+                        );
+                    }
+                    updated = true;
+                }
+            }
+        }
+
+        if updated {
+            let persisted_url = normalized_url.clone();
+            let _ = self.update_layout_tile(tile_id, move |tile| {
+                tile.url = Some(persisted_url.clone());
+                tile.auto_refresh_seconds = auto_refresh_seconds;
+            });
+            if self.current_focused_web_tile().as_deref() == Some(tile_id) {
+                self.inner.url_entry.set_text(&normalized_url);
+            }
+        }
+
+        updated
+    }
+
     pub fn reload_web_tile(&self, tile_id: &str) -> bool {
         let tiles = self.inner.tiles.borrow();
         if let Some(tile) = tiles.iter().find(|t| t.tile.id == tile_id) {
@@ -240,39 +360,53 @@ impl WorkspaceRuntime {
 
     pub fn web_tile_uri(&self, tile_id: &str) -> Option<String> {
         let tiles = self.inner.tiles.borrow();
-        tiles
-            .iter()
-            .find(|t| t.tile.id == tile_id)
-            .and_then(|t| {
-                t.web_view
-                    .as_ref()
-                    .and_then(|wv| wv.uri())
-                    .map(|s: gtk::glib::GString| s.to_string())
-                    .or_else(|| t.tile.url.clone())
-            })
+        tiles.iter().find(|t| t.tile.id == tile_id).and_then(|t| {
+            t.web_view
+                .as_ref()
+                .and_then(|wv| wv.uri())
+                .map(|s: gtk::glib::GString| s.to_string())
+                .or_else(|| t.tile.url.clone())
+        })
     }
 
     pub fn has_web_tiles(&self) -> bool {
-        self.inner.tiles.borrow().iter().any(|t| t.web_view.is_some())
+        self.inner
+            .tiles
+            .borrow()
+            .iter()
+            .any(|t| t.web_view.is_some())
     }
 
     pub fn current_focused_web_tile(&self) -> Option<String> {
         self.inner.focused_web_tile_id.borrow().clone()
     }
 
+    fn web_tile_settings(&self, tile_id: &str) -> Option<(String, Option<u32>)> {
+        let tiles = self.inner.tiles.borrow();
+        tiles
+            .iter()
+            .find(|tile| tile.tile.id == tile_id)
+            .map(|tile| {
+                (
+                    tile.web_view
+                        .as_ref()
+                        .and_then(|web_view| web_view.uri())
+                        .map(|uri| uri.to_string())
+                        .or_else(|| tile.tile.url.clone())
+                        .unwrap_or_else(|| "about:blank".into()),
+                    tile.tile.auto_refresh_seconds,
+                )
+            })
+    }
+
     pub fn add_web_tile(&self) -> Option<String> {
-        let target_tile_id = self
-            .inner
-            .focused_tile_id
-            .borrow()
-            .clone()
-            .or_else(|| {
-                self.inner
-                    .tiles
-                    .borrow()
-                    .first()
-                    .map(|tile| tile.tile.id.clone())
-            })?;
+        let target_tile_id = self.inner.focused_tile_id.borrow().clone().or_else(|| {
+            self.inner
+                .tiles
+                .borrow()
+                .first()
+                .map(|tile| tile.tile.id.clone())
+        })?;
 
         let current_layout = self.inner.layout.borrow().clone();
         let (next_layout, new_tile_id) = split_tile_with_kind(
@@ -321,6 +455,7 @@ impl WorkspaceRuntime {
         self.bind_tile_handlers(&mut tiles);
         remount_tiles(&self.inner.slots.borrow(), &tiles);
         *self.inner.tiles.borrow_mut() = tiles;
+        self.sync_tile_close_buttons();
         self.refresh_navigation_controls();
     }
 
@@ -331,21 +466,57 @@ impl WorkspaceRuntime {
                 let _ = runtime.swap_tiles(&dragged_id, &target_id);
             })
         };
+        let on_close = {
+            let runtime = self.clone();
+            Rc::new(move |tile_id: String| {
+                let _ = runtime.close_tile(&tile_id);
+            })
+        };
+        let can_close = self.inner.layout.borrow().tile_count() > 1;
 
         match tile.tile_kind {
             TileKind::WebView => {
+                let on_update_settings = {
+                    let runtime = self.clone();
+                    Rc::new(
+                        move |tile_id: String, url: String, auto_refresh_seconds: Option<u32>| {
+                            let _ = runtime.update_web_tile_settings(
+                                &tile_id,
+                                &url,
+                                auto_refresh_seconds,
+                            );
+                        },
+                    )
+                };
+                let on_reload = {
+                    let runtime = self.clone();
+                    Rc::new(move |tile_id: String| {
+                        let _ = runtime.reload_web_tile(&tile_id);
+                    })
+                };
+                let get_settings = {
+                    let runtime = self.clone();
+                    Rc::new(move |tile_id: String| runtime.web_tile_settings(&tile_id))
+                };
                 let web = web_tile::build(
                     tile,
                     &self.inner.assets,
                     self.inner.use_dark_palette,
                     self.inner.density,
                     on_swap,
+                    on_close,
+                    on_update_settings,
+                    on_reload,
+                    get_settings,
+                    can_close,
                 );
                 WorkspaceTile {
                     tile: web.tile,
                     widget: web.widget,
                     session: None,
                     web_view: Some(web.web_view),
+                    refresh_source_id: Some(web.refresh_source_id),
+                    close_button: web.close_button,
                     handlers_bound: false,
                 }
             }
@@ -358,6 +529,8 @@ impl WorkspaceRuntime {
                     self.inner.density,
                     self.inner.zoom_steps,
                     on_swap,
+                    on_close,
+                    can_close,
                 );
                 install_tile_alert_hooks(
                     &tile_view.session,
@@ -370,9 +543,23 @@ impl WorkspaceRuntime {
                     widget: tile_view.widget,
                     session: Some(tile_view.session),
                     web_view: None,
+                    refresh_source_id: None,
+                    close_button: tile_view.close_button,
                     handlers_bound: false,
                 }
             }
+        }
+    }
+
+    fn sync_tile_close_buttons(&self) {
+        let can_close = self.inner.tiles.borrow().len() > 1;
+        for tile in self.inner.tiles.borrow().iter() {
+            tile.close_button.set_sensitive(can_close);
+            tile.close_button.set_tooltip_text(Some(if can_close {
+                "Close tile"
+            } else {
+                "Cannot close the last tile"
+            }));
         }
     }
 
@@ -426,7 +613,9 @@ impl WorkspaceRuntime {
             .unwrap_or_default();
         let web_controls_enabled = focused_web_tile.is_some();
         self.inner.url_entry.set_sensitive(web_controls_enabled);
-        self.inner.url_reload_button.set_sensitive(web_controls_enabled);
+        self.inner
+            .url_reload_button
+            .set_sensitive(web_controls_enabled);
         if has_web_tiles {
             self.inner.url_entry.set_text(&current_url);
         }
@@ -514,6 +703,44 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
         self.set_tiles(tiles);
     }
+}
+
+fn normalize_web_tile_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        "about:blank".into()
+    } else if trimmed.contains("://") || trimmed.starts_with("about:") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+fn clear_web_refresh_timer(refresh_source_id: Option<&Rc<RefCell<Option<glib::SourceId>>>>) {
+    let Some(refresh_source_id) = refresh_source_id else {
+        return;
+    };
+    if let Some(source_id) = refresh_source_id.borrow_mut().take() {
+        source_id.remove();
+    }
+}
+
+fn configure_web_refresh_timer(
+    refresh_source_id: &Rc<RefCell<Option<glib::SourceId>>>,
+    web_view: &webkit6::WebView,
+    auto_refresh_seconds: Option<u32>,
+) {
+    clear_web_refresh_timer(Some(refresh_source_id));
+    let Some(interval) = auto_refresh_seconds.filter(|interval| *interval > 0) else {
+        return;
+    };
+
+    let web_view = web_view.clone();
+    let source_id = glib::timeout_add_seconds_local(interval, move || {
+        web_view.reload();
+        glib::ControlFlow::Continue
+    });
+    *refresh_source_id.borrow_mut() = Some(source_id);
 }
 
 pub struct WorkspaceView {
@@ -1022,7 +1249,9 @@ fn should_auto_reconnect(
     status: i32,
     max_attempts: u32,
 ) -> bool {
-    if session.termination_requested() || u32::from(session.auto_reconnect_attempts()) >= max_attempts {
+    if session.termination_requested()
+        || u32::from(session.auto_reconnect_attempts()) >= max_attempts
+    {
         return false;
     }
     match tile.reconnect_policy {

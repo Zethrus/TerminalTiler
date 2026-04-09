@@ -8,8 +8,14 @@ pub fn split_tile(
     axis: SplitAxis,
     clone_existing: bool,
 ) -> Option<LayoutNode> {
-    split_tile_with_kind(layout, target_tile_id, axis, clone_existing, TileKind::Terminal)
-        .map(|(layout, _)| layout)
+    split_tile_with_kind(
+        layout,
+        target_tile_id,
+        axis,
+        clone_existing,
+        TileKind::Terminal,
+    )
+    .map(|(layout, _)| layout)
 }
 
 pub fn split_tile_with_kind(

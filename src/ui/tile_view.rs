@@ -17,6 +17,7 @@ pub struct TileView {
     pub widget: gtk::Widget,
     pub session: TerminalSession,
     pub tile: TileSpec,
+    pub close_button: gtk::Button,
 }
 
 pub fn build(
@@ -27,6 +28,8 @@ pub fn build(
     density: ApplicationDensity,
     zoom_steps: i32,
     on_swap: Rc<dyn Fn(String, String)>,
+    on_close: Rc<dyn Fn(String)>,
+    can_close: bool,
 ) -> TileView {
     let session = TerminalSession::spawn(
         tile,
@@ -48,7 +51,6 @@ pub fn build(
         .spacing(8)
         .css_classes(["terminal-header"])
         .build();
-    header.set_tooltip_text(Some("Drag this header to swap terminal positions"));
 
     let left = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -56,6 +58,7 @@ pub fn build(
         .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
+    left.set_tooltip_text(Some("Drag this header to swap terminal positions"));
 
     let badge = gtk::Label::builder()
         .label(&tile.agent_label)
@@ -90,8 +93,33 @@ pub fn build(
         .css_classes(["status-chip"])
         .build();
 
+    let close_button = build_header_icon_button(
+        "window-close-symbolic",
+        if can_close {
+            "Close tile"
+        } else {
+            "Cannot close the last tile"
+        },
+    );
+    close_button.set_sensitive(can_close);
+    {
+        let tile_id = tile.id.clone();
+        let on_close = on_close.clone();
+        close_button.connect_clicked(move |_| {
+            on_close(tile_id.clone());
+        });
+    }
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .build();
+    actions.append(&status);
+    actions.append(&close_button);
+
     header.append(&left);
-    header.append(&status);
+    header.append(&actions);
     shell.append(&header);
 
     let terminal_frame = gtk::Box::builder()
@@ -213,7 +241,7 @@ pub fn build(
             shell.remove_css_class("is-dragging");
         });
     }
-    header.add_controller(drag_source);
+    left.add_controller(drag_source);
 
     let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
     {
@@ -249,7 +277,21 @@ pub fn build(
         widget: shell.upcast(),
         session,
         tile: tile.clone(),
+        close_button,
     }
+}
+
+fn build_header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .icon_name(icon_name)
+        .focus_on_click(false)
+        .css_classes(["flat", "tile-header-action", "tile-header-close"])
+        .build();
+    button.set_tooltip_text(Some(tooltip));
+    if let Some(img) = button.first_child() {
+        let _ = img.pango_context();
+    }
+    button
 }
 
 fn initial_status_snapshot(

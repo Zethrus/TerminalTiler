@@ -561,7 +561,9 @@ pub fn present(
     );
     reconnect_text.append(
         &gtk::Label::builder()
-            .label("After this many automatic restarts, a pane stays closed until manually restarted.")
+            .label(
+                "After this many automatic restarts, a pane stays closed until manually restarted.",
+            )
             .halign(gtk::Align::Start)
             .hexpand(true)
             .wrap(true)
