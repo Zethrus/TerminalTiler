@@ -45,7 +45,7 @@ struct WorkspaceRuntimeInner {
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
     alert_store: AlertStore,
     workspace_root: PathBuf,
-    assets: WorkspaceAssets,
+    assets: RefCell<WorkspaceAssets>,
     use_dark_palette: bool,
     density: ApplicationDensity,
     zoom_steps: i32,
@@ -53,6 +53,8 @@ struct WorkspaceRuntimeInner {
     path_label: gtk::Label,
     url_entry: gtk::Entry,
     url_reload_button: gtk::Button,
+    runbook_selector: gtk::ComboBoxText,
+    runbook_button: gtk::Button,
     focused_tile_id: RefCell<Option<String>>,
     focused_web_tile_id: RefCell<Option<String>>,
 }
@@ -63,6 +65,15 @@ pub struct WorkspaceRuntime {
 }
 
 impl WorkspaceRuntime {
+    pub fn current_assets(&self) -> WorkspaceAssets {
+        self.inner.assets.borrow().clone()
+    }
+
+    pub fn update_assets(&self, assets: WorkspaceAssets) {
+        *self.inner.assets.borrow_mut() = assets;
+        self.sync_runbook_controls();
+    }
+
     pub fn apply_appearance(
         &self,
         use_dark_palette: bool,
@@ -441,6 +452,31 @@ impl WorkspaceRuntime {
         self.inner.focused_web_tile_id.borrow().clone()
     }
 
+    fn sync_runbook_controls(&self) {
+        let assets = self.current_assets();
+        let selected_id = self
+            .inner
+            .runbook_selector
+            .active_id()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+
+        self.inner.runbook_selector.remove_all();
+        self.inner.runbook_selector.append(Some(""), "Runbook");
+        for runbook in &assets.runbooks {
+            self.inner
+                .runbook_selector
+                .append(Some(&runbook.id), &runbook.name);
+        }
+
+        let keep_selection = !selected_id.is_empty()
+            && assets.runbooks.iter().any(|runbook| runbook.id == selected_id);
+        self.inner
+            .runbook_selector
+            .set_active_id(Some(if keep_selection { &selected_id } else { "" }));
+        self.inner.runbook_button.set_sensitive(!assets.runbooks.is_empty());
+    }
+
     fn web_tile_settings(&self, tile_id: &str) -> Option<(String, Option<u32>)> {
         let tiles = self.inner.tiles.borrow();
         tiles
@@ -536,6 +572,7 @@ impl WorkspaceRuntime {
             })
         };
         let can_close = self.inner.layout.borrow().tile_count() > 1;
+        let assets = self.current_assets();
 
         match tile.tile_kind {
             TileKind::WebView => {
@@ -563,7 +600,7 @@ impl WorkspaceRuntime {
                 };
                 let web = web_tile::build(
                     tile,
-                    &self.inner.assets,
+                    &assets,
                     self.inner.use_dark_palette,
                     self.inner.density,
                     on_swap,
@@ -585,13 +622,18 @@ impl WorkspaceRuntime {
                 }
             }
             TileKind::Terminal => {
+                let snippet_provider = {
+                    let runtime = self.clone();
+                    Rc::new(move || runtime.current_assets().snippets)
+                };
                 let tile_view = tile_view::build(
                     tile,
                     &self.inner.workspace_root,
-                    &self.inner.assets,
+                    &assets,
                     self.inner.use_dark_palette,
                     self.inner.density,
                     self.inner.zoom_steps,
+                    snippet_provider,
                     on_swap,
                     on_close,
                     can_close,
@@ -890,6 +932,13 @@ pub fn build_with_layout_change_handler(
         .label("Reload")
         .css_classes(["flat", "surface-button"])
         .build();
+    let runbook_selector = gtk::ComboBoxText::new();
+    runbook_selector.add_css_class("surface-select-control");
+    let runbook_button = gtk::Button::builder()
+        .label("Run")
+        .css_classes(["flat", "surface-button"])
+        .sensitive(false)
+        .build();
     let layout_host = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -907,7 +956,7 @@ pub fn build_with_layout_change_handler(
             on_layout_changed,
             alert_store: alert_store.clone(),
             workspace_root: workspace_root.to_path_buf(),
-            assets: assets.clone(),
+            assets: RefCell::new(assets.clone()),
             use_dark_palette,
             density: preset.density,
             zoom_steps,
@@ -915,11 +964,14 @@ pub fn build_with_layout_change_handler(
             path_label: path_label.clone(),
             url_entry: url_entry.clone(),
             url_reload_button: url_reload_button.clone(),
+            runbook_selector: runbook_selector.clone(),
+            runbook_button: runbook_button.clone(),
             focused_tile_id: RefCell::new(None),
             focused_web_tile_id: RefCell::new(None),
         }),
     };
     runtime.rebuild_from_layout();
+    runtime.sync_runbook_controls();
 
     // Navigate on Enter
     {
@@ -1028,22 +1080,9 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let runbook_selector = gtk::ComboBoxText::new();
-    runbook_selector.add_css_class("surface-select-control");
-    runbook_selector.append(Some(""), "Runbook");
-    for runbook in &assets.runbooks {
-        runbook_selector.append(Some(&runbook.id), &runbook.name);
-    }
-    runbook_selector.set_active_id(Some(""));
-    let runbook_button = gtk::Button::builder()
-        .label("Run")
-        .css_classes(["flat", "surface-button"])
-        .sensitive(!assets.runbooks.is_empty())
-        .build();
     {
         let runtime = runtime.clone();
         let alert_store = alert_store.clone();
-        let runbooks = assets.runbooks.clone();
         let runbook_selector = runbook_selector.clone();
         let broadcast_state = broadcast_state.clone();
         runbook_button.connect_clicked(move |button| {
@@ -1053,7 +1092,9 @@ pub fn build_with_layout_change_handler(
             if runbook_id.is_empty() {
                 return;
             }
-            let Some(runbook) = runbooks.iter().find(|runbook| runbook.id == runbook_id) else {
+            let assets = runtime.current_assets();
+            let Some(runbook) = assets.runbooks.iter().find(|runbook| runbook.id == runbook_id)
+            else {
                 return;
             };
             present_runbook_dialog(button, runbook, &runtime, &alert_store, &broadcast_state);

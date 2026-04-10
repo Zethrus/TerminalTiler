@@ -29,6 +29,7 @@ pub fn build(
     use_dark_palette: bool,
     density: ApplicationDensity,
     zoom_steps: i32,
+    snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
     can_close: bool,
@@ -170,13 +171,13 @@ pub fn build(
 
     let snippet_popover = build_snippet_popover(
         &snippet_button,
-        &assets.snippets,
+        snippets_provider.clone(),
         &session,
         show_recovery_prompt.clone(),
     );
     {
         let snippet_popover = snippet_popover.clone();
-        let snippets = Rc::new(assets.snippets.clone());
+        let snippets_provider = snippets_provider.clone();
         let session = session.clone();
         let show_recovery_prompt = show_recovery_prompt.clone();
         snippet_button.connect_clicked(move |_| {
@@ -187,7 +188,7 @@ pub fn build(
             }
             refresh_snippet_list(
                 &snippet_popover,
-                snippets.clone(),
+                Rc::new(snippets_provider()),
                 session.clone(),
                 show_recovery_prompt.clone(),
             );
@@ -385,7 +386,7 @@ fn build_header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
 
 fn build_snippet_popover(
     button: &gtk::Button,
-    snippets: &[CliSnippet],
+    snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
     session: &TerminalSession,
     show_recovery_prompt: Rc<dyn Fn()>,
 ) -> gtk::Popover {
@@ -408,7 +409,7 @@ fn build_snippet_popover(
 
     refresh_snippet_list(
         &popover,
-        Rc::new(snippets.to_vec()),
+        Rc::new(snippets_provider()),
         session.clone(),
         show_recovery_prompt,
     );

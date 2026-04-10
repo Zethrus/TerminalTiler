@@ -1405,12 +1405,30 @@ pub fn present(
                 .find(|tab| tab.id == active_tab_id.get())
                 .and_then(|tab| tab.workspace_root.clone())
                 .or_else(|| std::env::current_dir().ok());
+            let tabs_for_saved = tabs.clone();
+            let asset_store_for_saved = asset_store.clone();
             let refresh_launch_tabs = refresh_launch_tabs.clone();
             assets_manager::present(
                 &window,
                 asset_store.clone(),
                 workspace_root,
                 Rc::new(move || {
+                    {
+                        let mut tabs = tabs_for_saved.borrow_mut();
+                        for tab in tabs.iter_mut() {
+                            let TabContent::Workspace(workspace) = &mut tab.content else {
+                                continue;
+                            };
+                            let Some(workspace_root) = tab.workspace_root.as_ref() else {
+                                continue;
+                            };
+                            let assets = asset_store_for_saved
+                                .load_assets_for_workspace_root(workspace_root)
+                                .assets;
+                            workspace.assets = assets.clone();
+                            workspace.runtime.update_assets(assets);
+                        }
+                    }
                     if let Some(refresh) = refresh_launch_tabs.borrow().as_ref() {
                         refresh();
                     }
