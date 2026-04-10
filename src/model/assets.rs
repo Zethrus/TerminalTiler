@@ -41,6 +41,17 @@ pub struct RunbookVariable {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SnippetVariable {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub default_value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
 pub enum RunbookTarget {
     AllPanes,
@@ -93,6 +104,20 @@ pub struct Runbook {
     pub steps: Vec<RunbookStep>,
     #[serde(default)]
     pub confirm_policy: RunbookConfirmPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CliSnippet {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub command: String,
+    #[serde(default)]
+    pub variables: Vec<SnippetVariable>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +263,8 @@ pub struct WorkspaceAssets {
     pub role_templates: Vec<AgentRoleTemplate>,
     #[serde(default)]
     pub runbooks: Vec<Runbook>,
+    #[serde(default)]
+    pub snippets: Vec<CliSnippet>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

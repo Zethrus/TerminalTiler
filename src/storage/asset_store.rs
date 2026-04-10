@@ -33,6 +33,8 @@ struct AssetDocument {
     role_templates: Vec<crate::model::assets::AgentRoleTemplate>,
     #[serde(default)]
     runbooks: Vec<crate::model::assets::Runbook>,
+    #[serde(default)]
+    snippets: Vec<crate::model::assets::CliSnippet>,
 }
 
 #[derive(Debug)]
@@ -119,6 +121,7 @@ impl AssetStore {
                     inventory_groups: document.inventory_groups,
                     role_templates: document.role_templates,
                     runbooks: document.runbooks,
+                    snippets: document.snippets,
                 }),
                 warning: None,
             },
@@ -189,9 +192,11 @@ impl AssetStore {
                 inventory_groups: Vec::new(),
                 role_templates: assets.role_templates.clone(),
                 runbooks: Vec::new(),
+                snippets: Vec::new(),
             })
             .role_templates,
             runbooks: assets.runbooks.clone(),
+            snippets: assets.snippets.clone(),
         };
         let serialized = toml::to_string_pretty(&document)
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -274,6 +279,9 @@ pub fn merge_workspace_assets_for_view(
             item.id.as_str()
         }),
         runbooks: merge_by_id(&global.runbooks, &workspace.runbooks, |item| {
+            item.id.as_str()
+        }),
+        snippets: merge_by_id(&global.snippets, &workspace.snippets, |item| {
             item.id.as_str()
         }),
     }

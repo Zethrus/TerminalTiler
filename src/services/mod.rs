@@ -7,4 +7,5 @@ pub mod output_helpers;
 pub mod project_suggestions;
 pub mod runbooks;
 pub mod session_restore;
+pub mod snippets;
 pub mod tile_draft;

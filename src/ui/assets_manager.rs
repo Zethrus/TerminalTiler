@@ -5,16 +5,16 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use crate::model::assets::{
-    AgentRoleTemplate, ConnectionKind, ConnectionProfile, InventoryGroup, InventoryHost,
-    OutputHelperRule, OutputSeverity, Runbook, RunbookConfirmPolicy, RunbookStep, RunbookTarget,
-    RunbookVariable, WorkspaceAssets,
+    AgentRoleTemplate, CliSnippet, ConnectionKind, ConnectionProfile, InventoryGroup,
+    InventoryHost, OutputHelperRule, OutputSeverity, Runbook, RunbookConfirmPolicy,
+    RunbookStep, RunbookTarget, RunbookVariable, SnippetVariable, WorkspaceAssets,
 };
 use crate::model::layout::ReconnectPolicy;
 use crate::model::workspace_config::ConfigScope;
 use crate::services::assets_editor::{
     AssetItemSource, AssetSection, AssetValidationIssue, connection_source,
     effective_assets_for_scope, group_source, host_source, prune_blank_drafts, role_source,
-    runbook_source, validate_assets,
+    runbook_source, snippet_source, validate_assets,
 };
 use crate::storage::asset_store::AssetStore;
 
@@ -38,6 +38,7 @@ struct AssetsPages {
     groups: gtk::Box,
     roles: gtk::Box,
     runbooks: gtk::Box,
+    snippets: gtk::Box,
     raw_text_view: gtk::TextView,
 }
 
@@ -85,7 +86,7 @@ pub fn present(
         .build();
     header.append(
         &gtk::Label::builder()
-            .label("Edit connections, hosts, groups, roles, and runbooks without touching raw structure.")
+            .label("Edit connections, hosts, groups, roles, runbooks, and snippets without touching raw structure.")
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["card-title"])
@@ -160,6 +161,7 @@ pub fn present(
     let groups_page = make_page_shell();
     let roles_page = make_page_shell();
     let runbooks_page = make_page_shell();
+    let snippets_page = make_page_shell();
     let raw_page = make_page_shell();
 
     stack.add_titled(
@@ -179,6 +181,11 @@ pub fn present(
         &runbooks_page.0,
         Some("runbooks"),
         AssetSection::Runbooks.title(),
+    );
+    stack.add_titled(
+        &snippets_page.0,
+        Some("snippets"),
+        AssetSection::Snippets.title(),
     );
 
     let raw_text_view = gtk::TextView::builder()
@@ -218,6 +225,7 @@ pub fn present(
         make_nav_button(&sidebar, &stack, "groups", AssetSection::Groups.title()),
         make_nav_button(&sidebar, &stack, "roles", AssetSection::Roles.title()),
         make_nav_button(&sidebar, &stack, "runbooks", AssetSection::Runbooks.title()),
+        make_nav_button(&sidebar, &stack, "snippets", AssetSection::Snippets.title()),
         make_nav_button(&sidebar, &stack, "raw", AssetSection::RawToml.title()),
     ];
 
@@ -253,6 +261,7 @@ pub fn present(
         groups: groups_page.1,
         roles: roles_page.1,
         runbooks: runbooks_page.1,
+        snippets: snippets_page.1,
         raw_text_view,
     });
 
@@ -378,6 +387,18 @@ pub fn present(
                         clear_box(&pages.runbooks);
                         render_runbooks_page(
                             &pages.runbooks,
+                            &state,
+                            token,
+                            &refresh_token,
+                            &refresh_status,
+                            &refresh_pages_handle,
+                            &dialog,
+                        );
+                    }
+                    "snippets" => {
+                        clear_box(&pages.snippets);
+                        render_snippets_page(
+                            &pages.snippets,
                             &state,
                             token,
                             &refresh_token,
@@ -667,6 +688,7 @@ fn render_overview_page(container: &gtk::Box, state: &AssetsManagerState) {
         format!("Groups: {}", effective.inventory_groups.len()),
         format!("Roles: {}", effective.role_templates.len()),
         format!("Runbooks: {}", effective.runbooks.len()),
+        format!("Snippets: {}", effective.snippets.len()),
     ] {
         summary.append(
             &gtk::Label::builder()
@@ -1953,6 +1975,193 @@ fn render_runbooks_page(
     }
 }
 
+fn render_snippets_page(
+    container: &gtk::Box,
+    state: &Rc<RefCell<AssetsManagerState>>,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
+    refresh_status: &Rc<dyn Fn()>,
+    refresh_pages: &RefreshHandle,
+    dialog: &gtk::Dialog,
+) {
+    render_section_header(
+        container,
+        AssetSection::Snippets,
+        state,
+        refresh_pages,
+        dialog,
+        move |snapshot| {
+            snapshot.current_assets.snippets.push(CliSnippet {
+                id: String::new(),
+                name: String::new(),
+                description: String::new(),
+                command: String::new(),
+                variables: Vec::new(),
+                tags: Vec::new(),
+            });
+        },
+    );
+
+    let snapshot = state.borrow().clone();
+    let effective = effective_assets_for_scope(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
+    let current_ids = snapshot
+        .current_assets
+        .snippets
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+
+    for (index, snippet) in snapshot.current_assets.snippets.iter().cloned().enumerate() {
+        let badge = snippet_source(
+            snapshot.scope,
+            &snippet.id,
+            &snapshot.current_assets,
+            &snapshot.global_assets,
+        );
+        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
+            "Remove override"
+        } else {
+            "Remove"
+        };
+        let card = asset_card_shell(
+            &snippet.name,
+            &snippet.id,
+            badge,
+            token,
+            refresh_token,
+            dialog,
+            state,
+            move |snapshot| {
+                snapshot.current_assets.snippets.remove(index);
+            },
+            remove_label,
+            Some(Rc::new({
+                let state = state.clone();
+                move || {
+                    let mut snapshot = state.borrow_mut();
+                    let mut cloned = snapshot.current_assets.snippets[index].clone();
+                    cloned.id = String::new();
+                    cloned.name = format!("{} copy", cloned.name);
+                    snapshot.current_assets.snippets.push(cloned);
+                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                    snapshot.raw_error = None;
+                }
+            })),
+            refresh_pages,
+        );
+        append_entry_field(
+            &card,
+            "ID",
+            &snippet.id,
+            "restart-service",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[index].id = value;
+            },
+        );
+        append_entry_field(
+            &card,
+            "Name",
+            &snippet.name,
+            "Restart service",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[index].name = value;
+            },
+        );
+        append_entry_field(
+            &card,
+            "Description",
+            &snippet.description,
+            "Fast macro for the active pane.",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[index].description = value;
+            },
+        );
+        append_entry_field(
+            &card,
+            "Command",
+            &snippet.command,
+            "sudo systemctl restart {{service}}",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[index].command = value;
+            },
+        );
+        append_entry_field(
+            &card,
+            "Tags",
+            &snippet.tags.join(", "),
+            "ops, deploy",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[index].tags = parse_csv(&value);
+            },
+        );
+        append_snippet_variables_editor(
+            &card,
+            state,
+            refresh_status,
+            refresh_pages,
+            token,
+            refresh_token,
+            index,
+            &snippet.variables,
+        );
+        container.append(&card);
+    }
+
+    if snapshot.scope == ConfigScope::Workspace {
+        for snippet in effective
+            .snippets
+            .iter()
+            .filter(|item| !current_ids.contains(&item.id))
+            .cloned()
+        {
+            let readonly = readonly_card(
+                snippet.name.as_str(),
+                snippet.id.as_str(),
+                AssetItemSource::Global,
+                "Inherited from global defaults. Override it here to customize the macro for this workspace.",
+            );
+            readonly.append(&readonly_line(snippet.command.clone()));
+            if !snippet.description.trim().is_empty() {
+                readonly.append(&readonly_line(snippet.description.clone()));
+            }
+            append_override_button(
+                readonly.upcast_ref(),
+                state,
+                refresh_pages,
+                dialog,
+                move |snapshot| {
+                    snapshot.current_assets.snippets.push(snippet.clone());
+                },
+            );
+            container.append(&readonly);
+        }
+    }
+}
+
 fn render_section_header<F>(
     container: &gtk::Box,
     section: AssetSection,
@@ -2770,6 +2979,145 @@ fn append_runbook_variables_editor(
     card.append(&section);
 }
 
+fn append_snippet_variables_editor(
+    card: &gtk::Box,
+    state: &Rc<RefCell<AssetsManagerState>>,
+    refresh_status: &Rc<dyn Fn()>,
+    refresh_pages: &RefreshHandle,
+    token: u64,
+    refresh_token: &Rc<Cell<u64>>,
+    snippet_index: usize,
+    variables: &[SnippetVariable],
+) {
+    let section = nested_section("Variables");
+    let add = gtk::Button::builder()
+        .label("Add argument")
+        .css_classes(["flat"])
+        .halign(gtk::Align::Start)
+        .build();
+    let state_add = state.clone();
+    let refresh_status_add = refresh_status.clone();
+    let refresh_pages_add = refresh_pages.clone();
+    let add_rt = refresh_token.clone();
+    add.connect_clicked(move |_| {
+        if add_rt.get() != token {
+            return;
+        }
+        {
+            let mut snapshot = state_add.borrow_mut();
+            snapshot.current_assets.snippets[snippet_index]
+                .variables
+                .push(SnippetVariable {
+                    id: String::new(),
+                    label: String::new(),
+                    description: String::new(),
+                    default_value: String::new(),
+                });
+            snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+            snapshot.raw_error = None;
+        }
+        refresh_status_add();
+        if let Some(refresh) = refresh_pages_add.borrow().as_ref() {
+            refresh();
+        }
+    });
+    section.append(&add);
+
+    for (variable_index, variable) in variables.iter().cloned().enumerate() {
+        let variable_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .css_classes(["asset-nested-card"])
+            .build();
+        append_entry_field(
+            &variable_row,
+            "Variable ID",
+            &variable.id,
+            "service",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[snippet_index].variables[variable_index].id =
+                    value;
+            },
+        );
+        append_entry_field(
+            &variable_row,
+            "Label",
+            &variable.label,
+            "Service name",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[snippet_index].variables[variable_index].label =
+                    value;
+            },
+        );
+        append_entry_field(
+            &variable_row,
+            "Description",
+            &variable.description,
+            "Prompt shown before the snippet runs.",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[snippet_index].variables[variable_index]
+                    .description = value;
+            },
+        );
+        append_entry_field(
+            &variable_row,
+            "Default value",
+            &variable.default_value,
+            "nginx",
+            state,
+            refresh_status,
+            token,
+            refresh_token.clone(),
+            move |snapshot, value| {
+                snapshot.current_assets.snippets[snippet_index].variables[variable_index]
+                    .default_value = value;
+            },
+        );
+        let remove = gtk::Button::builder()
+            .label("Remove argument")
+            .css_classes(["flat", "destructive-button"])
+            .halign(gtk::Align::Start)
+            .build();
+        let remove_state = state.clone();
+        let remove_refresh_status = refresh_status.clone();
+        let remove_refresh_pages = refresh_pages.clone();
+        let remove_rt = refresh_token.clone();
+        remove.connect_clicked(move |_| {
+            if remove_rt.get() != token {
+                return;
+            }
+            {
+                let mut snapshot = remove_state.borrow_mut();
+                snapshot.current_assets.snippets[snippet_index]
+                    .variables
+                    .remove(variable_index);
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+            }
+            remove_refresh_status();
+            if let Some(refresh) = remove_refresh_pages.borrow().as_ref() {
+                refresh();
+            }
+        });
+        variable_row.append(&remove);
+        section.append(&variable_row);
+    }
+
+    card.append(&section);
+}
+
 fn append_runbook_steps_editor(
     card: &gtk::Box,
     state: &Rc<RefCell<AssetsManagerState>>,
@@ -3026,7 +3374,7 @@ fn make_nav_button(
     button
 }
 
-fn sync_nav_buttons(stack: &gtk::Stack, buttons: &[gtk::Button; 7]) {
+fn sync_nav_buttons(stack: &gtk::Stack, buttons: &[gtk::Button; 8]) {
     let active = stack.visible_child_name();
     for button in buttons {
         button.remove_css_class("suggested-action");
@@ -3037,7 +3385,8 @@ fn sync_nav_buttons(stack: &gtk::Stack, buttons: &[gtk::Button; 7]) {
         "groups" => 3,
         "roles" => 4,
         "runbooks" => 5,
-        "raw" => 6,
+        "snippets" => 6,
+        "raw" => 7,
         _ => 0,
     };
     buttons[index].add_css_class("suggested-action");

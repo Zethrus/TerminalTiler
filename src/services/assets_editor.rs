@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use regex::Regex;
 
 use crate::model::assets::{
-    AgentRoleTemplate, ConnectionProfile, InventoryGroup, InventoryHost, OutputHelperRule, Runbook,
-    RunbookStep, RunbookTarget, RunbookVariable, WorkspaceAssets, builtin_role_templates,
+    AgentRoleTemplate, CliSnippet, ConnectionProfile, InventoryGroup, InventoryHost,
+    OutputHelperRule, Runbook, RunbookStep, RunbookTarget, RunbookVariable, SnippetVariable,
+    WorkspaceAssets, builtin_role_templates,
 };
 use crate::model::workspace_config::ConfigScope;
 use crate::storage::asset_store::{merge_assets_with_builtins, merge_workspace_assets_for_view};
@@ -17,6 +18,7 @@ pub enum AssetSection {
     Groups,
     Roles,
     Runbooks,
+    Snippets,
     RawToml,
 }
 
@@ -29,6 +31,7 @@ impl AssetSection {
             Self::Groups => "Groups",
             Self::Roles => "Roles",
             Self::Runbooks => "Runbooks",
+            Self::Snippets => "Snippets",
             Self::RawToml => "Raw TOML",
         }
     }
@@ -41,6 +44,7 @@ impl AssetSection {
             Self::Groups => "Shared host groups for inventory organization.",
             Self::Roles => "Role templates with startup defaults and output helpers.",
             Self::Runbooks => "Reusable commands that target panes, roles, or connections.",
+            Self::Snippets => "Single-pane CLI macros with optional variable prompts.",
             Self::RawToml => "Advanced editing for the current scope document.",
         }
     }
@@ -112,6 +116,7 @@ pub fn validate_assets(
         &effective_assets,
     );
     validate_runbooks(&mut issues, &sanitized_assets.runbooks, &effective_assets);
+    validate_snippets(&mut issues, &sanitized_assets.snippets);
 
     issues
 }
@@ -133,6 +138,12 @@ pub fn prune_blank_drafts(mut assets: WorkspaceAssets) -> WorkspaceAssets {
             .variables
             .retain(|item| !is_blank_runbook_variable(item));
         runbook.steps.retain(|item| !is_blank_runbook_step(item));
+    }
+    assets.snippets.retain(|item| !is_blank_snippet(item));
+    for snippet in &mut assets.snippets {
+        snippet
+            .variables
+            .retain(|item| !is_blank_snippet_variable(item));
     }
     assets
 }
@@ -250,6 +261,29 @@ pub fn runbook_source(
             .collect::<HashSet<_>>(),
         &global_assets
             .runbooks
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>(),
+        &HashSet::new(),
+    )
+}
+
+pub fn snippet_source(
+    scope: ConfigScope,
+    id: &str,
+    current_assets: &WorkspaceAssets,
+    global_assets: &WorkspaceAssets,
+) -> AssetItemSource {
+    simple_source(
+        scope,
+        id,
+        &current_assets
+            .snippets
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>(),
+        &global_assets
+            .snippets
             .iter()
             .map(|item| item.id.as_str())
             .collect::<HashSet<_>>(),
@@ -631,6 +665,72 @@ fn validate_runbooks(
     }
 }
 
+fn validate_snippets(issues: &mut Vec<AssetValidationIssue>, snippets: &[CliSnippet]) {
+    validate_duplicate_ids(
+        issues,
+        AssetSection::Snippets,
+        snippets.iter().map(|item| item.id.as_str()),
+    );
+
+    for snippet in snippets {
+        if is_blank_snippet(snippet) {
+            continue;
+        }
+        require_field(
+            issues,
+            AssetSection::Snippets,
+            &snippet.id,
+            "Snippets need an ID.",
+            !snippet.id.trim().is_empty(),
+        );
+        require_field(
+            issues,
+            AssetSection::Snippets,
+            &snippet.id,
+            "Snippets need a name.",
+            !snippet.name.trim().is_empty(),
+        );
+        require_field(
+            issues,
+            AssetSection::Snippets,
+            &snippet.id,
+            "Snippets need a command.",
+            !snippet.command.trim().is_empty(),
+        );
+
+        let mut variable_ids = HashMap::<&str, usize>::new();
+        for variable in &snippet.variables {
+            if is_blank_snippet_variable(variable) {
+                continue;
+            }
+            *variable_ids.entry(variable.id.as_str()).or_insert(0) += 1;
+            require_field(
+                issues,
+                AssetSection::Snippets,
+                &snippet.id,
+                "Snippet variables need an ID.",
+                !variable.id.trim().is_empty(),
+            );
+            require_field(
+                issues,
+                AssetSection::Snippets,
+                &snippet.id,
+                "Snippet variables need a label.",
+                !variable.label.trim().is_empty(),
+            );
+        }
+        for (variable_id, count) in variable_ids {
+            if !variable_id.trim().is_empty() && count > 1 {
+                issues.push(AssetValidationIssue {
+                    section: AssetSection::Snippets,
+                    item_id: Some(snippet.id.clone()),
+                    message: format!("Snippet variable ID \"{variable_id}\" is duplicated."),
+                });
+            }
+        }
+    }
+}
+
 fn is_blank_connection_profile(item: &ConnectionProfile) -> bool {
     item.id.trim().is_empty()
         && item.name.trim().is_empty()
@@ -759,6 +859,22 @@ fn is_blank_runbook_step(item: &RunbookStep) -> bool {
         && item.label.trim().is_empty()
         && item.command.trim().is_empty()
         && item.append_newline
+}
+
+fn is_blank_snippet(item: &CliSnippet) -> bool {
+    item.id.trim().is_empty()
+        && item.name.trim().is_empty()
+        && item.description.trim().is_empty()
+        && item.command.trim().is_empty()
+        && item.tags.is_empty()
+        && item.variables.iter().all(is_blank_snippet_variable)
+}
+
+fn is_blank_snippet_variable(item: &SnippetVariable) -> bool {
+    item.id.trim().is_empty()
+        && item.label.trim().is_empty()
+        && item.description.trim().is_empty()
+        && item.default_value.trim().is_empty()
 }
 
 fn validate_duplicate_ids<'a, I>(

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -6,11 +7,12 @@ use gtk::prelude::*;
 
 use vte4::prelude::*;
 
-use crate::model::assets::{OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
+use crate::model::assets::{CliSnippet, OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::resolve_tile_launch;
 use crate::services::output_helpers::{helper_summary_text, scan_output};
+use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 
 pub struct TileView {
@@ -101,6 +103,12 @@ pub fn build(
     recovery_button.set_visible(false);
     recovery_button.set_sensitive(false);
 
+    let snippet_button = build_header_icon_button(
+        "insert-text-symbolic",
+        "Run CLI snippet",
+    );
+    snippet_button.add_css_class("tile-snippet-action");
+
     let close_button = build_header_icon_button(
         "window-close-symbolic",
         if can_close {
@@ -125,6 +133,7 @@ pub fn build(
         .build();
     actions.append(&status);
     actions.append(&recovery_button);
+    actions.append(&snippet_button);
     actions.append(&close_button);
 
     header.append(&left);
@@ -156,6 +165,37 @@ pub fn build(
         let show_recovery_prompt = show_recovery_prompt.clone();
         recovery_button.connect_clicked(move |_| {
             show_recovery_prompt();
+        });
+    }
+
+    let snippet_popover = build_snippet_popover(
+        &snippet_button,
+        &assets.snippets,
+        &session,
+        show_recovery_prompt.clone(),
+    );
+    {
+        let snippet_popover = snippet_popover.clone();
+        let snippets = Rc::new(assets.snippets.clone());
+        let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        snippet_button.connect_clicked(move |_| {
+            if session.needs_recovery_prompt() {
+                snippet_popover.popdown();
+                show_recovery_prompt();
+                return;
+            }
+            refresh_snippet_list(
+                &snippet_popover,
+                snippets.clone(),
+                session.clone(),
+                show_recovery_prompt.clone(),
+            );
+            if snippet_popover.is_visible() {
+                snippet_popover.popdown();
+            } else {
+                snippet_popover.popup();
+            }
         });
     }
 
@@ -341,6 +381,306 @@ fn build_header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
         let _ = img.pango_context();
     }
     button
+}
+
+fn build_snippet_popover(
+    button: &gtk::Button,
+    snippets: &[CliSnippet],
+    session: &TerminalSession,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("snippet-popover");
+    popover.set_autohide(true);
+    popover.set_has_arrow(true);
+    popover.set_position(gtk::PositionType::Bottom);
+    popover.set_parent(button);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    popover.set_child(Some(&content));
+
+    refresh_snippet_list(
+        &popover,
+        Rc::new(snippets.to_vec()),
+        session.clone(),
+        show_recovery_prompt,
+    );
+    popover
+}
+
+fn refresh_snippet_list(
+    popover: &gtk::Popover,
+    snippets: Rc<Vec<CliSnippet>>,
+    session: TerminalSession,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) {
+    let Some(content) = popover.child().and_then(|child| child.downcast::<gtk::Box>().ok()) else {
+        return;
+    };
+    clear_box(&content);
+    content.append(
+        &gtk::Label::builder()
+            .label("CLI Snippets")
+            .halign(gtk::Align::Start)
+            .css_classes(["tile-header-popover-label"])
+            .build(),
+    );
+
+    if snippets.is_empty() {
+        content.append(
+            &gtk::Label::builder()
+                .label("No snippets configured yet. Add them in Assets.")
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["snippet-empty-state"])
+                .build(),
+        );
+        return;
+    }
+
+    for snippet in snippets.iter().cloned() {
+        let button = build_snippet_button(&snippet);
+        let popover = popover.clone();
+        let snippets = snippets.clone();
+        let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        let form_content = content.clone();
+        button.connect_clicked(move |_| {
+            if snippet.variables.is_empty() {
+                let variables = HashMap::new();
+                let _ = execute_snippet(
+                    &snippet,
+                    &variables,
+                    &session,
+                    &popover,
+                    show_recovery_prompt.clone(),
+                );
+            } else {
+                show_snippet_variable_form(
+                    &form_content,
+                    snippet.clone(),
+                    snippets.clone(),
+                    session.clone(),
+                    popover.clone(),
+                    show_recovery_prompt.clone(),
+                );
+            }
+        });
+        content.append(&button);
+    }
+}
+
+fn show_snippet_variable_form(
+    content: &gtk::Box,
+    snippet: CliSnippet,
+    snippets: Rc<Vec<CliSnippet>>,
+    session: TerminalSession,
+    popover: gtk::Popover,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) {
+    clear_box(content);
+
+    content.append(
+        &gtk::Label::builder()
+            .label(&snippet.name)
+            .halign(gtk::Align::Start)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    if !snippet.description.trim().is_empty() {
+        content.append(
+            &gtk::Label::builder()
+                .label(&snippet.description)
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["field-hint"])
+                .build(),
+        );
+    }
+
+    let form = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["snippet-variable-form"])
+        .build();
+    let mut fields = Vec::new();
+    for variable in &snippet.variables {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        row.append(
+            &gtk::Label::builder()
+                .label(&variable.label)
+                .halign(gtk::Align::Start)
+                .css_classes(["tile-header-popover-label"])
+                .build(),
+        );
+        if !variable.description.trim().is_empty() {
+            row.append(
+                &gtk::Label::builder()
+                    .label(&variable.description)
+                    .halign(gtk::Align::Start)
+                    .wrap(true)
+                    .css_classes(["field-hint"])
+                    .build(),
+            );
+        }
+        let entry = gtk::Entry::builder()
+            .hexpand(true)
+            .text(&variable.default_value)
+            .placeholder_text(&variable.id)
+            .build();
+        row.append(&entry);
+        form.append(&row);
+        fields.push((variable.id.clone(), entry));
+    }
+    content.append(&form);
+
+    let feedback = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .visible(false)
+        .css_classes(["snippet-error"])
+        .build();
+    content.append(&feedback);
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    let back_button = gtk::Button::builder()
+        .label("Back")
+        .focus_on_click(false)
+        .css_classes(["flat", "surface-button"])
+        .build();
+    {
+        let popover = popover.clone();
+        let snippets = snippets.clone();
+        let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        back_button.connect_clicked(move |_| {
+            refresh_snippet_list(
+                &popover,
+                snippets.clone(),
+                session.clone(),
+                show_recovery_prompt.clone(),
+            );
+        });
+    }
+    actions.append(&back_button);
+
+    let run_button = gtk::Button::builder()
+        .label("Run")
+        .focus_on_click(false)
+        .css_classes(["flat", "surface-button"])
+        .build();
+    {
+        let snippet = snippet.clone();
+        let popover = popover.clone();
+        let session = session.clone();
+        let feedback = feedback.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        let fields = fields.clone();
+        run_button.connect_clicked(move |_| {
+            let variables = fields
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.text().to_string()))
+                .collect::<HashMap<_, _>>();
+            if let Err(error) = execute_snippet(
+                &snippet,
+                &variables,
+                &session,
+                &popover,
+                show_recovery_prompt.clone(),
+            ) {
+                feedback.set_text(&error);
+                feedback.set_visible(true);
+            }
+        });
+    }
+    actions.append(&run_button);
+    content.append(&actions);
+}
+
+fn build_snippet_button(snippet: &CliSnippet) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .focus_on_click(false)
+        .css_classes(["flat", "snippet-list-item"])
+        .build();
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .build();
+    shell.append(
+        &gtk::Label::builder()
+            .label(&snippet.name)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .css_classes(["snippet-name"])
+            .build(),
+    );
+
+    let mut summary_parts = Vec::new();
+    if !snippet.description.trim().is_empty() {
+        summary_parts.push(snippet.description.trim().to_string());
+    }
+    if !snippet.tags.is_empty() {
+        summary_parts.push(format!("#{}", snippet.tags.join(" #")));
+    }
+    if !snippet.variables.is_empty() {
+        summary_parts.push(format!("{} args", snippet.variables.len()));
+    }
+    if !summary_parts.is_empty() {
+        shell.append(
+            &gtk::Label::builder()
+                .label(summary_parts.join("  •  "))
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["snippet-description"])
+                .build(),
+        );
+    }
+
+    button.set_child(Some(&shell));
+    button
+}
+
+fn execute_snippet(
+    snippet: &CliSnippet,
+    variables: &HashMap<String, String>,
+    session: &TerminalSession,
+    popover: &gtk::Popover,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) -> Result<(), String> {
+    if session.needs_recovery_prompt() {
+        popover.popdown();
+        show_recovery_prompt();
+        return Ok(());
+    }
+
+    let command = resolve_snippet(snippet, variables)?;
+    if session.send_text(&command) {
+        popover.popdown();
+        Ok(())
+    } else {
+        Err("This pane is not ready to receive input.".into())
+    }
+}
+
+fn clear_box(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
 }
 
 fn initial_status_snapshot(
