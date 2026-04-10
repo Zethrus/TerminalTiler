@@ -457,6 +457,7 @@ mod tests {
         assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
+        assert_eq!(store.load().max_reconnect_attempts, 5);
     }
 
     #[test]
@@ -477,6 +478,7 @@ mod tests {
             command_palette_shortcut: "<Ctrl>P".into(),
             settings_dialog_width: 640,
             settings_dialog_height: 540,
+            max_reconnect_attempts: 7,
         });
 
         assert_eq!(
@@ -494,6 +496,7 @@ mod tests {
                 command_palette_shortcut: "<Ctrl>P".into(),
                 settings_dialog_width: 640,
                 settings_dialog_height: 540,
+                max_reconnect_attempts: 7,
             }
         );
     }
@@ -521,6 +524,7 @@ mod tests {
                 command_palette_shortcut: "<Ctrl><Shift>P".into(),
                 settings_dialog_width: 528,
                 settings_dialog_height: 760,
+                max_reconnect_attempts: 5,
             }
         );
     }

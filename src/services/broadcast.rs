@@ -69,6 +69,9 @@ mod tests {
             reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: None,
             output_helpers: Vec::new(),
+            tile_kind: Default::default(),
+            url: None,
+            auto_refresh_seconds: None,
         }
     }
 

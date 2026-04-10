@@ -143,6 +143,9 @@ mod tests {
             reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: Some("ops".into()),
             output_helpers: Vec::new(),
+            tile_kind: Default::default(),
+            url: None,
+            auto_refresh_seconds: None,
         }
     }
 
