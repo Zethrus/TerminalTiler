@@ -143,8 +143,9 @@ impl WorkspaceRuntime {
         for tile in self.inner.tiles.borrow().iter() {
             if target.includes(&tile.tile) {
                 if let Some(session) = &tile.session {
-                    session.send_text(text);
-                    sent += 1;
+                    if session.send_text(text) {
+                        sent += 1;
+                    }
                 }
             }
         }
@@ -1296,10 +1297,15 @@ fn install_tile_alert_hooks(
             if should_auto_reconnect(&tile, &session, status, max_reconnect_attempts) {
                 let attempt = session.register_auto_reconnect_attempt();
                 let delay = reconnect_delay_seconds(attempt.into());
+                session.set_auto_reconnect_pending(true);
                 let session = session.clone();
                 let alert_store = alert_store.clone();
                 let tile = tile.clone();
                 gtk::glib::timeout_add_seconds_local_once(delay, move || {
+                    if !session.auto_reconnect_pending() {
+                        return;
+                    }
+                    session.set_auto_reconnect_pending(false);
                     match session.reconnect() {
                         Ok(_) => {
                             let mut reconnect_alert = AlertEventInput::new(

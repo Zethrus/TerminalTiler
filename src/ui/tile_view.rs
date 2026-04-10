@@ -93,6 +93,14 @@ pub fn build(
         .css_classes(["status-chip"])
         .build();
 
+    let recovery_button = build_header_icon_button(
+        "system-run-symbolic",
+        "Recover pane",
+    );
+    recovery_button.add_css_class("tile-recovery-action");
+    recovery_button.set_visible(false);
+    recovery_button.set_sensitive(false);
+
     let close_button = build_header_icon_button(
         "window-close-symbolic",
         if can_close {
@@ -116,6 +124,7 @@ pub fn build(
         .valign(gtk::Align::Center)
         .build();
     actions.append(&status);
+    actions.append(&recovery_button);
     actions.append(&close_button);
 
     header.append(&left);
@@ -132,7 +141,26 @@ pub fn build(
 
     let terminal = session.widget();
     terminal.add_css_class("terminal-surface");
-    install_terminal_context_menu(&terminal, &session);
+
+    let recovery_popover = build_terminal_recovery_popover(&terminal, &session);
+    let show_recovery_prompt: Rc<dyn Fn()> = {
+        let terminal = terminal.clone();
+        let recovery_popover = recovery_popover.clone();
+        Rc::new(move || {
+            recovery_popover.set_pointing_to(Some(&default_recovery_prompt_rect(&terminal)));
+            recovery_popover.popup();
+            terminal.grab_focus();
+        })
+    };
+    {
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        recovery_button.connect_clicked(move |_| {
+            show_recovery_prompt();
+        });
+    }
+
+    install_terminal_context_menu(&terminal, &session, show_recovery_prompt.clone());
+    install_terminal_recovery_key_controller(&terminal, &session, show_recovery_prompt.clone());
     terminal_frame.append(&terminal);
     shell.append(&terminal_frame);
 
@@ -150,6 +178,8 @@ pub fn build(
         let terminal_for_update = terminal.clone();
         let session_for_update = session.clone();
         let status = status.clone();
+        let recovery_button = recovery_button.clone();
+        let shell = shell.clone();
         let tile = tile.clone();
         let workspace_root = workspace_root.to_path_buf();
         let assets = assets.clone();
@@ -161,8 +191,21 @@ pub fn build(
                 &terminal_for_update,
                 &session_for_update,
             );
-            status.set_text(&snapshot.to_line());
-            sync_status_severity(&status, snapshot.helper_severity);
+            let disconnected = session_for_update.needs_recovery_prompt();
+            if disconnected {
+                status.set_text(&disconnected_status_line(&snapshot));
+            } else {
+                status.set_text(&snapshot.to_line());
+            }
+            sync_terminal_recovery_state(&shell, &status, &recovery_button, disconnected);
+            sync_status_severity(
+                &status,
+                if disconnected {
+                    None
+                } else {
+                    snapshot.helper_severity
+                },
+            );
         };
         update();
         let update = Rc::new(update);
@@ -202,6 +245,7 @@ pub fn build(
     {
         let shell = shell.clone();
         let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
         file_drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
 
@@ -215,7 +259,12 @@ pub fn build(
                 .filter_map(|file| file.path())
                 .collect::<Vec<PathBuf>>();
 
-            session.paste_dropped_paths(&paths)
+            if session.needs_recovery_prompt() {
+                show_recovery_prompt();
+                true
+            } else {
+                session.paste_dropped_paths(&paths)
+            }
         });
     }
     shell.add_controller(file_drop_target);
@@ -373,7 +422,43 @@ fn sync_status_severity(status: &gtk::Label, severity: Option<OutputSeverity>) {
     }
 }
 
-fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSession) {
+fn sync_terminal_recovery_state(
+    shell: &gtk::Box,
+    status: &gtk::Label,
+    recovery_button: &gtk::Button,
+    disconnected: bool,
+) {
+    if disconnected {
+        shell.add_css_class("is-disconnected");
+        status.add_css_class("recovery-chip");
+        status.set_tooltip_text(Some(
+            "This pane exited. Press Enter or type to choose Reconnect Session or Open Local Shell.",
+        ));
+        recovery_button.set_visible(true);
+        recovery_button.set_sensitive(true);
+    } else {
+        shell.remove_css_class("is-disconnected");
+        status.remove_css_class("recovery-chip");
+        status.set_tooltip_text(None);
+        recovery_button.set_visible(false);
+        recovery_button.set_sensitive(false);
+    }
+}
+
+fn disconnected_status_line(snapshot: &PaneStatusSnapshot) -> String {
+    let mut parts = vec!["Disconnected".to_string()];
+    if !snapshot.connection_label.trim().is_empty() {
+        parts.push(snapshot.connection_label.trim().to_string());
+    }
+    parts.push("Reconnect or open local shell".into());
+    parts.join("  •  ")
+}
+
+fn install_terminal_context_menu(
+    terminal: &vte4::Terminal,
+    session: &TerminalSession,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) {
     let popover = gtk::Popover::new();
     popover.add_css_class("terminal-context-popover");
     popover.set_autohide(true);
@@ -413,8 +498,13 @@ fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSe
     {
         let session = session.clone();
         let popover = popover.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
         paste_button.connect_clicked(move |_| {
-            session.paste_clipboard();
+            if session.needs_recovery_prompt() {
+                show_recovery_prompt();
+            } else {
+                session.paste_clipboard();
+            }
             popover.popdown();
         });
     }
@@ -431,6 +521,18 @@ fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSe
         });
     }
     menu.append(&reconnect_button);
+
+    let local_shell_button = build_terminal_context_button("Open Local Shell", None);
+    {
+        let session = session.clone();
+        let popover = popover.clone();
+        local_shell_button.connect_clicked(move |_| {
+            session.reset_auto_reconnect_attempts();
+            let _ = session.open_local_shell();
+            popover.popdown();
+        });
+    }
+    menu.append(&local_shell_button);
 
     let transcript_button = build_terminal_context_button("Show Transcript", None);
     {
@@ -453,9 +555,14 @@ fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSe
     {
         let terminal = terminal.clone();
         let popover = popover.clone();
+        let session = session.clone();
+        let paste_button = paste_button.clone();
+        let local_shell_button = local_shell_button.clone();
         right_click.connect_pressed(move |gesture, _, x, y| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
             terminal.grab_focus();
+            paste_button.set_sensitive(session.has_active_process() || session.needs_recovery_prompt());
+            local_shell_button.set_sensitive(session.needs_recovery_prompt());
             popover.set_pointing_to(Some(&gdk::Rectangle::new(
                 x.round() as i32,
                 y.round() as i32,
@@ -466,6 +573,124 @@ fn install_terminal_context_menu(terminal: &vte4::Terminal, session: &TerminalSe
         });
     }
     terminal.add_controller(right_click);
+}
+
+fn build_terminal_recovery_popover(
+    terminal: &vte4::Terminal,
+    session: &TerminalSession,
+) -> gtk::Popover {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("terminal-recovery-popover");
+    popover.set_autohide(true);
+    popover.set_has_arrow(true);
+    popover.set_position(gtk::PositionType::Bottom);
+    popover.set_parent(terminal);
+
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .margin_top(10)
+        .margin_bottom(10)
+        .margin_start(10)
+        .margin_end(10)
+        .build();
+    shell.append(
+        &gtk::Label::builder()
+            .label("Session ended")
+            .halign(gtk::Align::Start)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    shell.append(
+        &gtk::Label::builder()
+            .label("Reconnect the configured session or open a local shell in this pane.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint"])
+            .build(),
+    );
+
+    let reconnect_button = gtk::Button::builder()
+        .label("Reconnect Session")
+        .focus_on_click(false)
+        .css_classes(["flat", "surface-button"])
+        .build();
+    {
+        let session = session.clone();
+        let popover = popover.clone();
+        reconnect_button.connect_clicked(move |_| {
+            session.reset_auto_reconnect_attempts();
+            let _ = session.reconnect();
+            popover.popdown();
+        });
+    }
+    shell.append(&reconnect_button);
+
+    let local_shell_button = gtk::Button::builder()
+        .label("Open Local Shell")
+        .focus_on_click(false)
+        .css_classes(["flat", "surface-button"])
+        .build();
+    {
+        let session = session.clone();
+        let popover = popover.clone();
+        local_shell_button.connect_clicked(move |_| {
+            session.reset_auto_reconnect_attempts();
+            let _ = session.open_local_shell();
+            popover.popdown();
+        });
+    }
+    shell.append(&local_shell_button);
+
+    popover.set_child(Some(&shell));
+    popover
+}
+
+fn install_terminal_recovery_key_controller(
+    terminal: &vte4::Terminal,
+    session: &TerminalSession,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) {
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let session = session.clone();
+    key_controller.connect_key_pressed(move |_, key, _, state| {
+        if !session.needs_recovery_prompt() || !should_open_recovery_prompt_for_key(key, state) {
+            return gtk::glib::Propagation::Proceed;
+        }
+
+        show_recovery_prompt();
+        gtk::glib::Propagation::Stop
+    });
+    terminal.add_controller(key_controller);
+}
+
+fn should_open_recovery_prompt_for_key(
+    key: gdk::Key,
+    state: gdk::ModifierType,
+) -> bool {
+    let modifiers = state & gtk::accelerator_get_default_mod_mask();
+    if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::BackSpace | gdk::Key::Delete)
+        && (modifiers.is_empty() || modifiers == gdk::ModifierType::SHIFT_MASK)
+    {
+        return true;
+    }
+
+    if modifiers
+        == (gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK)
+        && key
+            .to_unicode()
+            .is_some_and(|value| value.eq_ignore_ascii_case(&'v'))
+    {
+        return true;
+    }
+
+    (modifiers.is_empty() || modifiers == gdk::ModifierType::SHIFT_MASK)
+        && key.to_unicode().is_some_and(|value| !value.is_control())
+}
+
+fn default_recovery_prompt_rect(terminal: &vte4::Terminal) -> gdk::Rectangle {
+    gdk::Rectangle::new((terminal.allocated_width() / 2).max(1), 8, 1, 1)
 }
 
 fn build_terminal_context_button(label: &str, shortcut: Option<&str>) -> gtk::Button {

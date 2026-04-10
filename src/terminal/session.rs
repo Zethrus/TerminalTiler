@@ -54,7 +54,14 @@ struct TerminalSessionState {
     termination_requested: bool,
     last_exit_status: Option<i32>,
     auto_reconnect_attempts: u8,
+    auto_reconnect_pending: bool,
     kill_timeout: Option<glib::SourceId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalLaunchMode {
+    ConfiguredSession,
+    LocalShell,
 }
 
 impl TerminalSessionState {
@@ -67,8 +74,22 @@ impl TerminalSessionState {
 
 struct TerminalLaunchSpec {
     working_directory: String,
-    argv: Vec<String>,
+    configured_argv: Vec<String>,
+    local_shell_argv: Vec<String>,
     envv: Vec<String>,
+}
+
+impl TerminalLaunchSpec {
+    fn argv_for_mode(&self, mode: TerminalLaunchMode) -> &[String] {
+        match mode {
+            TerminalLaunchMode::ConfiguredSession => &self.configured_argv,
+            TerminalLaunchMode::LocalShell => &self.local_shell_argv,
+        }
+    }
+
+    fn supports_recovery_options(&self) -> bool {
+        supports_recovery_options(&self.configured_argv, &self.local_shell_argv)
+    }
 }
 
 impl TerminalSession {
@@ -93,6 +114,7 @@ impl TerminalSession {
         let working_dir = tile.working_directory.resolve(workspace_root);
         let state = Rc::new(RefCell::new(TerminalSessionState::default()));
         let transcript = Rc::new(RefCell::new(TranscriptBuffer::default()));
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
         let descriptor: Rc<str> = format!(
             "tile='{}' agent='{}' dir='{}'",
             tile.title,
@@ -122,16 +144,20 @@ impl TerminalSession {
             mark_state_exited(&state);
             Rc::new(TerminalLaunchSpec {
                 working_directory: working_dir.display().to_string(),
-                argv: Vec::new(),
+                configured_argv: Vec::new(),
+                local_shell_argv: build_local_shell_argv(&shell),
                 envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
             })
         } else {
             match resolve_tile_launch(tile, workspace_root, assets) {
                 Ok(resolved_launch) => {
-                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
                     Rc::new(TerminalLaunchSpec {
                         working_directory: working_dir.display().to_string(),
-                        argv: build_spawn_argv(&shell, resolved_launch.command.as_deref()),
+                        configured_argv: build_spawn_argv(
+                            &shell,
+                            resolved_launch.command.as_deref(),
+                        ),
+                        local_shell_argv: build_local_shell_argv(&shell),
                         envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
                     })
                 }
@@ -140,7 +166,8 @@ impl TerminalSession {
                     mark_state_exited(&state);
                     Rc::new(TerminalLaunchSpec {
                         working_directory: working_dir.display().to_string(),
-                        argv: Vec::new(),
+                        configured_argv: Vec::new(),
+                        local_shell_argv: build_local_shell_argv(&shell),
                         envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
                     })
                 }
@@ -155,8 +182,8 @@ impl TerminalSession {
             transcript,
         };
 
-        if !session.launch_spec.argv.is_empty() {
-            session.spawn_from_spec();
+        if !session.launch_spec.configured_argv.is_empty() {
+            session.spawn_from_mode(TerminalLaunchMode::ConfiguredSession);
         }
 
         session
@@ -191,10 +218,19 @@ impl TerminalSession {
         paste_terminal_clipboard(&self.terminal);
     }
 
-    pub fn send_text(&self, text: &str) {
+    pub fn send_text(&self, text: &str) -> bool {
+        if !self.has_active_process() {
+            logging::info(format!(
+                "skipped terminal input for inactive session {}",
+                self.descriptor
+            ));
+            return false;
+        }
+
         self.transcript.borrow_mut().push_input(text);
         self.terminal.grab_focus();
         self.terminal.feed_child(text.as_bytes());
+        true
     }
 
     pub fn recent_output(&self, row_count: i64) -> String {
@@ -218,6 +254,26 @@ impl TerminalSession {
         !state.exited && !state.termination_requested
     }
 
+    pub fn supports_recovery_options(&self) -> bool {
+        self.launch_spec.supports_recovery_options()
+    }
+
+    pub fn needs_recovery_prompt(&self) -> bool {
+        let state = self.state.borrow();
+        state.exited
+            && !state.termination_requested
+            && !state.auto_reconnect_pending
+            && self.supports_recovery_options()
+    }
+
+    pub fn auto_reconnect_pending(&self) -> bool {
+        self.state.borrow().auto_reconnect_pending
+    }
+
+    pub fn set_auto_reconnect_pending(&self, pending: bool) {
+        self.state.borrow_mut().auto_reconnect_pending = pending;
+    }
+
     pub fn auto_reconnect_attempts(&self) -> u8 {
         self.state.borrow().auto_reconnect_attempts
     }
@@ -233,15 +289,32 @@ impl TerminalSession {
     }
 
     pub fn reconnect(&self) -> Result<(), String> {
+        self.spawn_launch_mode(
+            TerminalLaunchMode::ConfiguredSession,
+            b"\r\n[terminaltiler] reconnecting terminal session\r\n",
+        )
+    }
+
+    pub fn open_local_shell(&self) -> Result<(), String> {
+        self.spawn_launch_mode(
+            TerminalLaunchMode::LocalShell,
+            b"\r\n[terminaltiler] opening local shell\r\n",
+        )
+    }
+
+    fn spawn_launch_mode(
+        &self,
+        mode: TerminalLaunchMode,
+        notice: &[u8],
+    ) -> Result<(), String> {
         if let Some(error) = validate_working_dir(Path::new(&self.launch_spec.working_directory)) {
             self.report_spawn_problem(&error);
             self.mark_exited();
             return Err(error);
         }
 
-        self.terminal
-            .feed(b"\r\n[terminaltiler] reconnecting terminal session\r\n");
-        self.spawn_from_spec();
+        self.terminal.feed(notice);
+        self.spawn_from_mode(mode);
         Ok(())
     }
 
@@ -249,6 +322,14 @@ impl TerminalSession {
         let Some(payload) = serialize_dropped_paths(paths) else {
             return false;
         };
+
+        if !self.has_active_process() {
+            logging::info(format!(
+                "skipped dropped-path paste for inactive session {}",
+                self.descriptor
+            ));
+            return false;
+        }
 
         self.transcript.borrow_mut().push_input(&payload);
         self.terminal.grab_focus();
@@ -264,16 +345,12 @@ impl TerminalSession {
         report_spawn_problem(&self.terminal, &self.descriptor, message);
     }
 
-    fn spawn_from_spec(&self) {
-        if self.launch_spec.argv.is_empty() {
+    fn spawn_from_mode(&self, mode: TerminalLaunchMode) {
+        let argv = self.launch_spec.argv_for_mode(mode);
+        if argv.is_empty() {
             return;
         }
-        let argv_refs = self
-            .launch_spec
-            .argv
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
+        let argv_refs = argv.iter().map(String::as_str).collect::<Vec<_>>();
         let env_refs = self
             .launch_spec
             .envv
@@ -286,6 +363,7 @@ impl TerminalSession {
             state.child_pid = None;
             state.last_exit_status = None;
             state.termination_requested = false;
+            state.auto_reconnect_pending = false;
             state.clear_kill_timeout();
         }
         let state_for_spawn = self.state.clone();
@@ -499,6 +577,7 @@ fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {
     state.exited = true;
     state.child_pid = None;
     state.last_exit_status = None;
+    state.auto_reconnect_pending = false;
     state.clear_kill_timeout();
 }
 
@@ -518,6 +597,7 @@ fn request_process_termination(
         }
 
         state.termination_requested = true;
+        state.auto_reconnect_pending = false;
         state.clear_kill_timeout();
         state.child_pid
     };
@@ -646,12 +726,18 @@ fn validate_working_dir(path: &Path) -> Option<String> {
 }
 
 fn build_spawn_argv(shell: &str, command: Option<&str>) -> Vec<String> {
-    let mut argv = vec![shell.to_string()];
-    if let Some(command) = command.filter(|value| !value.trim().is_empty()) {
-        argv.push("-lc".into());
-        argv.push(command.to_string());
+    match command.filter(|value| !value.trim().is_empty()) {
+        Some(command) => vec![shell.to_string(), "-lc".into(), command.to_string()],
+        None => build_local_shell_argv(shell),
     }
-    argv
+}
+
+fn build_local_shell_argv(shell: &str) -> Vec<String> {
+    vec![shell.to_string()]
+}
+
+fn supports_recovery_options(configured_argv: &[String], local_shell_argv: &[String]) -> bool {
+    !configured_argv.is_empty() && configured_argv != local_shell_argv
 }
 
 fn report_spawn_problem(terminal: &vte4::Terminal, descriptor: &str, message: &str) {
@@ -686,7 +772,8 @@ fn shell_quote_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_spawn_argv, process_group_target, serialize_dropped_paths, validate_working_dir,
+        build_local_shell_argv, build_spawn_argv, process_group_target,
+        serialize_dropped_paths, supports_recovery_options, validate_working_dir,
     };
     use std::path::{Path, PathBuf};
 
@@ -743,6 +830,22 @@ mod tests {
         let argv = build_spawn_argv("/bin/bash", Some("   "));
 
         assert_eq!(argv, vec!["/bin/bash"]);
+    }
+
+    #[test]
+    fn startup_command_launches_offer_recovery_options() {
+        let configured = build_spawn_argv("/bin/bash", Some("ssh host.example.com"));
+        let local_shell = build_local_shell_argv("/bin/bash");
+
+        assert!(supports_recovery_options(&configured, &local_shell));
+    }
+
+    #[test]
+    fn plain_shell_launches_do_not_offer_recovery_options() {
+        let configured = build_spawn_argv("/bin/bash", None);
+        let local_shell = build_local_shell_argv("/bin/bash");
+
+        assert!(!supports_recovery_options(&configured, &local_shell));
     }
 
     #[test]
