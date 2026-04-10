@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gdk::prelude::StaticType;
@@ -17,6 +17,7 @@ pub struct WebTileView {
     pub web_view: webkit6::WebView,
     pub tile: TileSpec,
     pub refresh_source_id: Rc<RefCell<Option<glib::SourceId>>>,
+    pub shutdown_flag: Rc<Cell<bool>>,
     pub close_button: gtk::Button,
 }
 
@@ -33,6 +34,7 @@ pub fn build(
     can_close: bool,
 ) -> WebTileView {
     let web_view = webkit6::WebView::new();
+    let shutdown_flag = Rc::new(Cell::new(false));
 
     if use_dark_palette {
         if let Some(settings) = webkit6::prelude::WebViewExt::settings(&web_view) {
@@ -242,7 +244,11 @@ pub fn build(
     {
         let title_label = title.clone();
         let web_view = web_view.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_title_notify(move |wv| {
+            if shutdown_flag.get() {
+                return;
+            }
             if let Some(new_title) = wv.title() {
                 let new_title = new_title.to_string();
                 if !new_title.is_empty() {
@@ -256,7 +262,11 @@ pub fn build(
     {
         let status = status.clone();
         let web_view = web_view.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_uri_notify(move |wv| {
+            if shutdown_flag.get() {
+                return;
+            }
             if let Some(uri) = wv.uri() {
                 status.set_text(&domain_from_url(uri.as_str()));
             }
@@ -265,7 +275,11 @@ pub fn build(
 
     {
         let tile_id = tile.id.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_load_changed(move |wv, event| {
+            if shutdown_flag.get() {
+                return;
+            }
             logging::info(format!(
                 "web tile {} load event {:?} uri='{}'",
                 tile_id,
@@ -278,7 +292,11 @@ pub fn build(
     }
     {
         let tile_id = tile.id.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_load_failed(move |_, event, failing_uri, error| {
+            if shutdown_flag.get() {
+                return false;
+            }
             logging::error(format!(
                 "web tile {} load failed event={:?} uri='{}' error='{}'",
                 tile_id, event, failing_uri, error
@@ -288,7 +306,11 @@ pub fn build(
     }
     {
         let tile_id = tile.id.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_load_failed_with_tls_errors(move |_, failing_uri, _, errors| {
+            if shutdown_flag.get() {
+                return false;
+            }
             logging::error(format!(
                 "web tile {} TLS load failure uri='{}' errors={:?}",
                 tile_id, failing_uri, errors
@@ -298,7 +320,11 @@ pub fn build(
     }
     {
         let tile_id = tile.id.clone();
+        let shutdown_flag = shutdown_flag.clone();
         web_view.connect_web_process_terminated(move |wv, reason| {
+            if shutdown_flag.get() {
+                return;
+            }
             logging::error(format!(
                 "web tile {} web process terminated reason={:?} uri='{}'",
                 tile_id,
@@ -397,6 +423,7 @@ pub fn build(
         web_view,
         tile: tile.clone(),
         refresh_source_id,
+        shutdown_flag,
         close_button,
     }
 }

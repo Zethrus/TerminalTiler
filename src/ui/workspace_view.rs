@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -32,6 +32,7 @@ struct WorkspaceTile {
     session: Option<TerminalSession>,
     web_view: Option<webkit6::WebView>,
     refresh_source_id: Option<Rc<RefCell<Option<glib::SourceId>>>>,
+    shutdown_flag: Option<Rc<Cell<bool>>>,
     close_button: gtk::Button,
     handlers_bound: bool,
 }
@@ -76,10 +77,31 @@ impl WorkspaceRuntime {
     }
 
     pub fn terminate_all(&self, reason: &str) {
-        for tile in self.inner.tiles.borrow().iter() {
-            if let Some(session) = &tile.session {
-                session.terminate(reason);
-            }
+        let resources = {
+            let tiles = self.inner.tiles.borrow();
+            tiles
+                .iter()
+                .map(|tile| {
+                    (
+                        tile.tile.id.clone(),
+                        tile.session.clone(),
+                        tile.web_view.clone(),
+                        tile.refresh_source_id.clone(),
+                        tile.shutdown_flag.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for (tile_id, session, web_view, refresh_source_id, shutdown_flag) in resources {
+            shutdown_tile_resources(
+                &tile_id,
+                session.as_ref(),
+                web_view.as_ref(),
+                refresh_source_id.as_ref(),
+                shutdown_flag.as_ref(),
+                reason,
+            );
         }
     }
 
@@ -232,10 +254,14 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
 
         for (_, removed_tile) in existing_tiles {
-            clear_web_refresh_timer(removed_tile.refresh_source_id.as_ref());
-            if let Some(session) = removed_tile.session {
-                session.terminate("tile closed");
-            }
+            shutdown_tile_resources(
+                &removed_tile.tile.id,
+                removed_tile.session.as_ref(),
+                removed_tile.web_view.as_ref(),
+                removed_tile.refresh_source_id.as_ref(),
+                removed_tile.shutdown_flag.as_ref(),
+                "tile closed",
+            );
         }
 
         let next_focused_tile = self
@@ -552,6 +578,7 @@ impl WorkspaceRuntime {
                     session: None,
                     web_view: Some(web.web_view),
                     refresh_source_id: Some(web.refresh_source_id),
+                    shutdown_flag: Some(web.shutdown_flag),
                     close_button: web.close_button,
                     handlers_bound: false,
                 }
@@ -580,6 +607,7 @@ impl WorkspaceRuntime {
                     session: Some(tile_view.session),
                     web_view: None,
                     refresh_source_id: None,
+                    shutdown_flag: None,
                     close_button: tile_view.close_button,
                     handlers_bound: false,
                 }
@@ -625,7 +653,11 @@ impl WorkspaceRuntime {
             if let Some(web_view) = &tile.web_view {
                 let runtime = self.clone();
                 let tile_id = tile.tile.id.clone();
+                let shutdown_flag = tile.shutdown_flag.clone();
                 web_view.connect_uri_notify(move |wv| {
+                    if shutdown_flag.as_ref().is_some_and(|flag| flag.get()) {
+                        return;
+                    }
                     if let Some(uri) = wv.uri() {
                         runtime.record_web_tile_uri(&tile_id, uri.as_str());
                     }
@@ -767,6 +799,36 @@ fn configure_web_refresh_timer(
         glib::ControlFlow::Continue
     });
     *refresh_source_id.borrow_mut() = Some(source_id);
+}
+
+fn shutdown_tile_resources(
+    tile_id: &str,
+    session: Option<&TerminalSession>,
+    web_view: Option<&webkit6::WebView>,
+    refresh_source_id: Option<&Rc<RefCell<Option<glib::SourceId>>>>,
+    shutdown_flag: Option<&Rc<Cell<bool>>>,
+    reason: &str,
+) {
+    clear_web_refresh_timer(refresh_source_id);
+
+    if let Some(session) = session {
+        session.terminate(reason);
+    }
+
+    let Some(web_view) = web_view else {
+        return;
+    };
+
+    if let Some(shutdown_flag) = shutdown_flag {
+        shutdown_flag.set(true);
+    }
+
+    logging::info(format!(
+        "shutting down web tile {} reason='{}'",
+        tile_id, reason
+    ));
+    web_view.stop_loading();
+    web_view.load_uri("about:blank");
 }
 
 pub struct WorkspaceView {
