@@ -39,9 +39,7 @@ pub fn build(
     let web_view = webkit6::WebView::new();
     let shutdown_flag = Rc::new(Cell::new(false));
 
-    if use_dark_palette
-        && let Some(settings) = webkit6::prelude::WebViewExt::settings(&web_view)
-    {
+    if use_dark_palette && let Some(settings) = webkit6::prelude::WebViewExt::settings(&web_view) {
         settings.set_enable_developer_extras(false);
     }
 

@@ -13,10 +13,7 @@ pub struct LayoutShell {
     pub slots: Vec<gtk::Box>,
 }
 
-pub fn build(
-    node: &LayoutNode,
-    on_ratio_changed: Option<RatioChangedHandler>,
-) -> LayoutShell {
+pub fn build(node: &LayoutNode, on_ratio_changed: Option<RatioChangedHandler>) -> LayoutShell {
     build_with_path(node, &[], on_ratio_changed)
 }
 
