@@ -9,7 +9,7 @@ use webkit6::prelude::*;
 
 use crate::logging;
 use crate::model::assets::WorkspaceAssets;
-use crate::model::layout::{DEFAULT_WEB_URL, TileSpec};
+use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 
 pub struct WebTileView {
@@ -42,9 +42,9 @@ pub fn build(
         }
     }
 
-    let url = tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL);
+    let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
 
-    web_view.load_uri(url);
+    web_view.load_uri(&url);
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -81,7 +81,7 @@ pub fn build(
     left.append(&title);
 
     let status = gtk::Label::builder()
-        .label(domain_from_url(url))
+        .label(domain_from_url(&url))
         .css_classes(["status-chip"])
         .build();
 

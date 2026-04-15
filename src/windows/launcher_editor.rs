@@ -23,6 +23,7 @@ mod imp {
     use crate::model::assets::{TileConnectionTarget, WorkspaceAssets};
     use crate::model::layout::{
         DEFAULT_WEB_URL, LayoutNode, ReconnectPolicy, SplitAxis, TileKind, TileSpec,
+        normalize_web_url,
     };
     use crate::services::layout_editor::{close_tile, split_tile, split_tile_with_kind};
     use crate::services::tile_draft::apply_role_to_tile;
@@ -277,7 +278,7 @@ mod imp {
                                 tile.url = if value.is_empty() {
                                     None
                                 } else {
-                                    Some(value.clone())
+                                    Some(normalize_web_url(&value))
                                 };
                             });
                             refresh_hint(state);

@@ -2760,10 +2760,12 @@ mod imp {
                 pane.id,
                 pane.parent_hwnd,
                 pane.output_hwnd,
-                pane.tile
-                    .url
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_WEB_URL.to_string()),
+                normalize_web_url(
+                    pane.tile
+                        .url
+                        .as_deref()
+                        .unwrap_or(DEFAULT_WEB_URL),
+                ),
                 pane.tile.auto_refresh_seconds,
             )
         };

@@ -10,6 +10,7 @@ use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
     DEFAULT_WEB_URL, LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec,
+    normalize_web_url,
     builtin_templates, generate_layout,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
@@ -2010,7 +2011,11 @@ fn build_tile_editor_row(
         url_entry.connect_changed(move |entry| {
             update_tile_spec(&layout_state, index, |tile| {
                 let value = entry.text().trim().to_string();
-                tile.url = if value.is_empty() { None } else { Some(value) };
+                tile.url = if value.is_empty() {
+                    None
+                } else {
+                    Some(normalize_web_url(&value))
+                };
             });
             refresh_hint();
         });

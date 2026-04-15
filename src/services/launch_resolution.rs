@@ -327,6 +327,7 @@ mod tests {
             inventory_groups: Vec::new(),
             role_templates: Vec::new(),
             runbooks: Vec::new(),
+            snippets: Vec::new(),
         };
         let resolved = resolve_tile_launch(&tile, Path::new("/workspace"), &assets)
             .expect("ssh launch should resolve");
