@@ -43,25 +43,37 @@ function Convert-ToTomlPath {
     return ($Path -replace '\\', '\\\\')
 }
 
+function Join-SmokePaths {
+    param(
+        [string]$Root,
+        [string[]]$RelativePaths
+    )
+
+    return $RelativePaths | ForEach-Object { Join-Path $Root $_ }
+}
+
 function Initialize-SmokeProfile {
     param([string]$SandboxRoot)
 
     $workspaceRoot = Join-Path $SandboxRoot "workspace"
     $roamingRoot = Join-Path $SandboxRoot "AppData\Roaming"
     $localRoot = Join-Path $SandboxRoot "AppData\Local"
-    $configTargets = @(
-        Join-Path $roamingRoot "dev\Zethrus\TerminalTiler\config",
-        Join-Path $roamingRoot "dev\Zethrus\TerminalTiler"
+    $configTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
+        "dev\Zethrus\TerminalTiler\config"
+        "dev\Zethrus\TerminalTiler"
     )
-    $dataTargets = @(
-        Join-Path $roamingRoot "dev\Zethrus\TerminalTiler\data",
-        Join-Path $roamingRoot "dev\Zethrus\TerminalTiler"
+    $dataTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
+        "dev\Zethrus\TerminalTiler\data"
+        "dev\Zethrus\TerminalTiler"
     )
 
     New-Item -ItemType Directory -Force -Path (Join-Path $workspaceRoot "src") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $localRoot "dev\Zethrus\TerminalTiler\state\logs") | Out-Null
 
     foreach ($dir in $configTargets + $dataTargets) {
+        if ($dir -isnot [string]) {
+            throw "Smoke profile target path must be a string, got '$($dir.GetType().FullName)'"
+        }
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
 
