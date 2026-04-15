@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     libvte-2.91-gtk4-dev \
     libwebkitgtk-6.0-dev \
     libsoup-3.0-dev \
+    patchelf \
     pkg-config \
     python3 \
     wget \

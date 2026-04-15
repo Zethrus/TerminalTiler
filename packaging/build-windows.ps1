@@ -79,6 +79,33 @@ function Save-SuccessfulBuildVersion {
     Set-Content -Path $LastSuccessfulVersionFile -Value $Version -NoNewline
 }
 
+function Find-ExecutablePath {
+    param(
+        [string[]]$CommandNames,
+        [string[]]$CandidatePaths = @()
+    )
+
+    foreach ($commandName in $CommandNames) {
+        $command = Get-Command $commandName -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    foreach ($candidate in $CandidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        if (Test-Path $expanded) {
+            return (Resolve-Path $expanded).Path
+        }
+    }
+
+    return $null
+}
+
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -148,16 +175,23 @@ Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
-$Makensis = Get-Command makensis -ErrorAction SilentlyContinue
-$Candle = Get-Command candle.exe -ErrorAction SilentlyContinue
-if (-not $Candle) {
-    $Candle = Get-Command candle -ErrorAction SilentlyContinue
-}
+$Makensis = Find-ExecutablePath -CommandNames @("makensis.exe", "makensis") -CandidatePaths @(
+    "$env:ProgramFiles(x86)\NSIS\makensis.exe",
+    "$env:ProgramFiles\NSIS\makensis.exe",
+    "$env:ChocolateyInstall\bin\makensis.exe"
+)
 
-$Light = Get-Command light.exe -ErrorAction SilentlyContinue
-if (-not $Light) {
-    $Light = Get-Command light -ErrorAction SilentlyContinue
-}
+$Candle = Find-ExecutablePath -CommandNames @("candle.exe", "candle") -CandidatePaths @(
+    "$env:WIX\bin\candle.exe",
+    "$env:ProgramFiles(x86)\WiX Toolset v3.11\bin\candle.exe",
+    "$env:ProgramFiles\WiX Toolset v3.11\bin\candle.exe"
+)
+
+$Light = Find-ExecutablePath -CommandNames @("light.exe", "light") -CandidatePaths @(
+    "$env:WIX\bin\light.exe",
+    "$env:ProgramFiles(x86)\WiX Toolset v3.11\bin\light.exe",
+    "$env:ProgramFiles\WiX Toolset v3.11\bin\light.exe"
+)
 
 if ($RequireInstallers -and -not $Makensis) {
     throw "NSIS is required when -RequireInstallers is set"
@@ -170,7 +204,7 @@ if ($RequireInstallers -and (-not $Candle -or -not $Light)) {
 if ($Makensis) {
     Write-Host "==> building NSIS installer"
     Remove-Item -Force $InstallerPath, $InstallerLatestPath -ErrorAction SilentlyContinue
-    & $Makensis.Source `
+    & $Makensis `
         "/DAPP_VERSION=$ResolvedVersion" `
         "/DSTAGE_DIR=$PortableRoot" `
         "/DOUT_FILE=$InstallerPath" `
@@ -194,7 +228,7 @@ if ($Candle -and $Light) {
     New-Item -ItemType Directory -Force -Path $WixBuildDir | Out-Null
     Remove-Item -Force $WixObjectPath, $MsiPath, $MsiLatestPath -ErrorAction SilentlyContinue
 
-    & $Candle.Source `
+    & $Candle `
         "-nologo" `
         "-dProductVersion=$ResolvedVersion" `
         "-dStageDir=$PortableRoot" `
@@ -205,7 +239,7 @@ if ($Candle -and $Light) {
         throw "WiX candle failed while compiling $WixScript"
     }
 
-    & $Light.Source `
+    & $Light `
         "-nologo" `
         "-out" $MsiPath `
         $WixObjectPath
