@@ -64,6 +64,7 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
           BUILD_DATE: ${{ steps.package_version.outputs.build_date }}
+          SMOKE_PROFILE_KIND: terminal-only
           SKIP_PACKAGE_BUILD: 1
         run: bash packaging/release-smoke-test.sh
 

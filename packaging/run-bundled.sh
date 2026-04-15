@@ -4,6 +4,9 @@ set -euo pipefail
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIB_DIR="$APP_ROOT/lib"
 SHARE_DIR="$APP_ROOT/share"
+GTK_MODULE_BASE="$LIB_DIR/gtk-4.0"
+WEBKIT_EXEC_DIR="$APP_ROOT/libexec/webkitgtk-6.0"
+WEBKIT_INJECTED_BUNDLE_DIR="$WEBKIT_EXEC_DIR/injected-bundle"
 if [[ -n "${XDG_STATE_HOME:-}" ]]; then
   :
 elif [[ -n "${HOME:-}" ]]; then
@@ -27,6 +30,9 @@ export GSETTINGS_SCHEMA_DIR="$SHARE_DIR/glib-2.0/schemas"
 export XDG_DATA_DIRS="$SHARE_DIR${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 export GTK_DATA_PREFIX="$APP_ROOT"
 export GTK_EXE_PREFIX="$APP_ROOT"
+export GTK_PATH="$GTK_MODULE_BASE"
+export WEBKIT_EXEC_PATH="$WEBKIT_EXEC_DIR"
+export WEBKIT_INJECTED_BUNDLE_PATH="$WEBKIT_INJECTED_BUNDLE_DIR"
 
 printf '[%s] launcher runtime lib_dir=%s runpath=embedded\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -61,5 +67,12 @@ for candidate in "$LIB_DIR"/gdk-pixbuf-2.0/*; do
     break
   fi
 done
+
+if [[ -d "$WEBKIT_EXEC_DIR" ]]; then
+  printf '[%s] launcher webkit_exec=%s injected_bundle=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$WEBKIT_EXEC_DIR" \
+    "$WEBKIT_INJECTED_BUNDLE_DIR" >&2
+fi
 
 exec "$APP_ROOT/bin/terminaltiler-bin" "$@"

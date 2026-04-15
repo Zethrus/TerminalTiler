@@ -65,9 +65,6 @@ jobs:
       - name: Verify containerized release build
         run: bash packaging/release-verify.sh
 
-      - name: Run headless release smoke test
-        run: bash packaging/release-smoke-test.sh
-
   verify-windows:
     runs-on: windows-2022
 

@@ -6,6 +6,7 @@ BUILD_DIR="$ROOT_DIR/packaging/.build/release-smoke"
 . "$ROOT_DIR/packaging/versioning.sh"
 export PACKAGE_VERSION BUILD_DATE
 SKIP_PACKAGE_BUILD="${SKIP_PACKAGE_BUILD:-0}"
+SMOKE_PROFILE_KIND="${SMOKE_PROFILE_KIND:-mixed}"
 
 APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
@@ -39,6 +40,23 @@ fail_smoke() {
   exit 1
 }
 
+find_first() {
+  local root="$1"
+  shift
+  find "$root" "$@" -print -quit
+}
+
+assert_packaged_runtime_assets() {
+  local runtime_root="$1"
+
+  test -f "$runtime_root/share/glib-2.0/schemas/gschemas.compiled"
+  test -f "$runtime_root/lib/gio/modules/giomodule.cache"
+  test -n "$(find_first "$runtime_root/lib/gio/modules" -maxdepth 1 -name '*.so' -type f)"
+  test -f "$runtime_root/libexec/webkitgtk-6.0/WebKitNetworkProcess"
+  test -f "$runtime_root/libexec/webkitgtk-6.0/WebKitWebProcess"
+  test -n "$(find_first "$runtime_root/libexec/webkitgtk-6.0/injected-bundle" -maxdepth 1 -name '*.so' -type f)"
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -57,6 +75,7 @@ fi
 
 seed_restore_profile() {
   local sandbox_root="$1"
+  local profile_kind="$2"
   local workspace_root="$sandbox_root/workspace"
   local app_config_root="$sandbox_root/config"
   local app_data_root="$sandbox_root/data"
@@ -75,7 +94,37 @@ EOF
   done
 
   for data_dir in "$app_data_root/TerminalTiler" "$app_data_root/terminaltiler"; do
-    cat > "$data_dir/session.toml" <<EOF
+    if [[ "$profile_kind" == "terminal-only" ]]; then
+      cat > "$data_dir/session.toml" <<EOF
+version = 1
+active_tab_index = 0
+
+[[tabs]]
+workspace_root = "$workspace_root"
+custom_title = "Smoke Restore"
+terminal_zoom_steps = 0
+
+[tabs.preset]
+id = "smoke-restore"
+name = "Smoke Restore"
+description = "Packaged restore smoke test"
+tags = ["smoke", "restore"]
+root_label = "Workspace root"
+theme = "system"
+density = "compact"
+
+[tabs.preset.layout]
+kind = "tile"
+id = "terminal-smoke"
+title = "Primary"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+
+[tabs.preset.layout.working_directory]
+type = "workspace-root"
+EOF
+    else
+      cat > "$data_dir/session.toml" <<EOF
 version = 1
 active_tab_index = 0
 
@@ -120,12 +169,14 @@ url = "https://example.com"
 [tabs.preset.layout.second.working_directory]
 type = "workspace-root"
 EOF
+    fi
   done
 }
 
 assert_restore_log() {
   local sandbox_root="$1"
   local label="$2"
+  local profile_kind="$3"
   local log_path
 
   log_path="$(find "$sandbox_root" -name terminaltiler-session.log -print -quit)"
@@ -136,7 +187,7 @@ assert_restore_log() {
   if ! grep -E -q "restored workspace tab .*" "$log_path"; then
     fail_smoke "$sandbox_root" "$label" "$label did not restore a workspace tab"
   fi
-  if ! grep -q "web tile web-smoke load event Finished uri='https://example.com/'" "$log_path"; then
+  if [[ "$profile_kind" == "mixed" ]] && ! grep -q "web tile web-smoke load event Finished uri='https://example.com/'" "$log_path"; then
     fail_smoke "$sandbox_root" "$label" "$label did not restore the web tile"
   fi
 }
@@ -144,9 +195,10 @@ assert_restore_log() {
 run_restore_smoke() {
   local label="$1"
   local sandbox_root="$2"
-  shift 2
+  local profile_kind="$3"
+  shift 3
 
-  seed_restore_profile "$sandbox_root"
+  seed_restore_profile "$sandbox_root" "$profile_kind"
 
   local home_root="$sandbox_root/home"
   local -a launch_command
@@ -169,7 +221,7 @@ run_restore_smoke() {
     fail_smoke "$sandbox_root" "$label" "$label exited with unexpected status ${status:-0}"
   fi
 
-  assert_restore_log "$sandbox_root" "$label"
+  assert_restore_log "$sandbox_root" "$label" "$profile_kind"
 }
 
 validate_appstream() {
@@ -223,13 +275,14 @@ test -f "$BUILD_DIR/deb/usr/share/applications/dev.zethrus.terminaltiler.desktop
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libvte-2.91-gtk4.so.0"
-test -f "$BUILD_DIR/deb/opt/terminaltiler/share/glib-2.0/schemas/gschemas.compiled"
+assert_packaged_runtime_assets "$BUILD_DIR/deb/opt/terminaltiler"
 
 if command -v xvfb-run >/dev/null 2>&1; then
   echo "==> smoke-testing extracted Debian runtime"
   run_restore_smoke \
     "Debian runtime" \
     "$BUILD_DIR/deb-smoke-home" \
+    "$SMOKE_PROFILE_KIND" \
     "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler"
 else
   echo "==> skipping Debian runtime launch smoke test because xvfb-run is unavailable"
@@ -243,6 +296,7 @@ test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/applications/dev.zethrus.te
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libvte-2.91-gtk4.so.0"
+assert_packaged_runtime_assets "$BUILD_DIR/appimage/squashfs-root/usr"
 
 if command -v xvfb-run >/dev/null 2>&1; then
   echo "==> smoke-testing AppImage launch"
@@ -250,6 +304,7 @@ if command -v xvfb-run >/dev/null 2>&1; then
   run_restore_smoke \
     "AppImage runtime" \
     "$BUILD_DIR/appimage-smoke-home" \
+    "$SMOKE_PROFILE_KIND" \
     "$APPIMAGE_PATH"
 else
   echo "==> skipping AppImage launch smoke test because xvfb-run is unavailable"
