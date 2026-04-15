@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 
 const MAX_TRANSCRIPT_OUTPUT_LINES: usize = 4_000;

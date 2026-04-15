@@ -51,19 +51,14 @@ pub struct SnippetVariable {
     pub default_value: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
 pub enum RunbookTarget {
+    #[default]
     AllPanes,
     PaneGroup(String),
     Role(String),
     ConnectionProfile(String),
-}
-
-impl Default for RunbookTarget {
-    fn default() -> Self {
-        Self::AllPanes
-    }
 }
 
 impl RunbookTarget {
@@ -120,17 +115,12 @@ pub struct CliSnippet {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind", content = "value")]
 pub enum TileConnectionTarget {
+    #[default]
     Local,
     Profile(String),
-}
-
-impl Default for TileConnectionTarget {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,9 +216,10 @@ pub struct AgentRoleTemplate {
     pub default_output_helpers: Vec<OutputHelperRule>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RestoreLaunchMode {
+    #[default]
     Prompt,
     RerunStartupCommands,
     ShellOnly,
@@ -242,12 +233,6 @@ impl RestoreLaunchMode {
             Self::RerunStartupCommands => "Resume And Rerun",
             Self::ShellOnly => "Resume As Shells",
         }
-    }
-}
-
-impl Default for RestoreLaunchMode {
-    fn default() -> Self {
-        Self::Prompt
     }
 }
 

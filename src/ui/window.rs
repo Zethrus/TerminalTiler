@@ -187,6 +187,7 @@ struct TabStripController {
     request_tab_rename: TabActionHandle,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn present(
     app: &adw::Application,
     preference_store: PreferenceStore,
@@ -1221,7 +1222,7 @@ pub fn present(
                                 Rc::new({
                                     let window = window.clone();
                                     move || {
-                                        let _ = gio::prelude::ActionGroupExt::activate_action(
+                                        gio::prelude::ActionGroupExt::activate_action(
                                             &window,
                                             "win.open-command-palette",
                                             None,
@@ -1330,7 +1331,7 @@ pub fn present(
                                 Rc::new({
                                     let window = window.clone();
                                     move || {
-                                        let _ = gio::prelude::ActionGroupExt::activate_action(
+                                        gio::prelude::ActionGroupExt::activate_action(
                                             &window,
                                             "win.open-command-palette",
                                             None,
@@ -3166,6 +3167,7 @@ fn workspace_runtimes(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_tab_close(
     view: &adw::TabView,
     page: &adw::TabPage,

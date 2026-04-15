@@ -22,6 +22,7 @@ pub struct TileView {
     pub close_button: gtk::Button,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     tile: &TileSpec,
     workspace_root: &Path,

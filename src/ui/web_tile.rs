@@ -12,6 +12,8 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 
+type GetWebTileSettings = Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>;
+
 pub struct WebTileView {
     pub widget: gtk::Widget,
     pub web_view: webkit6::WebView,
@@ -21,6 +23,7 @@ pub struct WebTileView {
     pub close_button: gtk::Button,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     tile: &TileSpec,
     _assets: &WorkspaceAssets,
@@ -30,16 +33,16 @@ pub fn build(
     on_close: Rc<dyn Fn(String)>,
     on_update_settings: Rc<dyn Fn(String, String, Option<u32>)>,
     on_reload: Rc<dyn Fn(String)>,
-    get_settings: Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>,
+    get_settings: GetWebTileSettings,
     can_close: bool,
 ) -> WebTileView {
     let web_view = webkit6::WebView::new();
     let shutdown_flag = Rc::new(Cell::new(false));
 
-    if use_dark_palette {
-        if let Some(settings) = webkit6::prelude::WebViewExt::settings(&web_view) {
-            settings.set_enable_developer_extras(false);
-        }
+    if use_dark_palette
+        && let Some(settings) = webkit6::prelude::WebViewExt::settings(&web_view)
+    {
+        settings.set_enable_developer_extras(false);
     }
 
     let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
@@ -407,15 +410,15 @@ pub fn build(
 
     // Auto-refresh timer
     let refresh_source_id: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-    if let Some(interval) = tile.auto_refresh_seconds {
-        if interval > 0 {
-            let wv = web_view.clone();
-            let source_id = glib::timeout_add_seconds_local(interval, move || {
-                wv.reload();
-                glib::ControlFlow::Continue
-            });
-            *refresh_source_id.borrow_mut() = Some(source_id);
-        }
+    if let Some(interval) = tile.auto_refresh_seconds
+        && interval > 0
+    {
+        let wv = web_view.clone();
+        let source_id = glib::timeout_add_seconds_local(interval, move || {
+            wv.reload();
+            glib::ControlFlow::Continue
+        });
+        *refresh_source_id.borrow_mut() = Some(source_id);
     }
 
     WebTileView {

@@ -152,12 +152,11 @@ impl WorkspaceRuntime {
     pub fn send_text_to_target(&self, target: &BroadcastTarget, text: &str) -> usize {
         let mut sent = 0usize;
         for tile in self.inner.tiles.borrow().iter() {
-            if target.includes(&tile.tile) {
-                if let Some(session) = &tile.session {
-                    if session.send_text(text) {
-                        sent += 1;
-                    }
-                }
+            if target.includes(&tile.tile)
+                && let Some(session) = &tile.session
+                && session.send_text(text)
+            {
+                sent += 1;
             }
         }
         sent

@@ -361,7 +361,7 @@ mod tests {
 active_tab_index = 0
 
 [[tabs]]
-workspace_root = "{}"
+workspace_root = '{}'
 custom_title = "Smoke Restore"
 terminal_zoom_steps = 0
 

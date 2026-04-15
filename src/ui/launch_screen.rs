@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -1428,7 +1428,7 @@ fn rebuild_suggestion_panel<F>(
     section: &gtk::Box,
     row: &gtk::Box,
     cards: &Rc<RefCell<Vec<gtk::Widget>>>,
-    workspace_root: &PathBuf,
+    workspace_root: &Path,
     assets: &Rc<WorkspaceAssets>,
     on_select: F,
 ) where

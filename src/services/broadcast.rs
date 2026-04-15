@@ -2,18 +2,13 @@ use std::collections::BTreeSet;
 
 use crate::model::layout::TileSpec;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum BroadcastTarget {
+    #[default]
     Off,
     AllPanes,
     SavedGroup(String),
     AdHocSelection(BTreeSet<String>),
-}
-
-impl Default for BroadcastTarget {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 impl BroadcastTarget {

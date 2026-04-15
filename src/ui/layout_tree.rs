@@ -6,6 +6,8 @@ use gtk::prelude::*;
 
 use crate::model::layout::LayoutNode;
 
+type RatioChangedHandler = Rc<dyn Fn(Vec<bool>, f32)>;
+
 pub struct LayoutShell {
     pub widget: gtk::Widget,
     pub slots: Vec<gtk::Box>,
@@ -13,7 +15,7 @@ pub struct LayoutShell {
 
 pub fn build(
     node: &LayoutNode,
-    on_ratio_changed: Option<Rc<dyn Fn(Vec<bool>, f32)>>,
+    on_ratio_changed: Option<RatioChangedHandler>,
 ) -> LayoutShell {
     build_with_path(node, &[], on_ratio_changed)
 }
@@ -21,7 +23,7 @@ pub fn build(
 fn build_with_path(
     node: &LayoutNode,
     split_path: &[bool],
-    on_ratio_changed: Option<Rc<dyn Fn(Vec<bool>, f32)>>,
+    on_ratio_changed: Option<RatioChangedHandler>,
 ) -> LayoutShell {
     match node {
         LayoutNode::Tile(_) => {
