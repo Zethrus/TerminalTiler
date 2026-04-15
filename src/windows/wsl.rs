@@ -648,7 +648,7 @@ mod tests {
         collect_session_launch_commands, parse_verbose_list, resolve_wsl_runtime,
     };
     use crate::model::assets::{ConnectionKind, ConnectionProfile, InventoryHost, WorkspaceAssets};
-    use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
+    use crate::model::layout::{ReconnectPolicy, TileKind, TileSpec, WorkingDirectory};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::{SavedSession, SavedTab};
@@ -684,6 +684,9 @@ mod tests {
             reconnect_policy: ReconnectPolicy::Manual,
             applied_role_id: None,
             output_helpers: Vec::new(),
+            tile_kind: TileKind::Terminal,
+            url: None,
+            auto_refresh_seconds: None,
         }
     }
 
@@ -755,6 +758,7 @@ mod tests {
             inventory_groups: Vec::new(),
             role_templates: Vec::new(),
             runbooks: Vec::new(),
+            snippets: Vec::new(),
         }
     }
 

@@ -194,20 +194,20 @@ if ($Candle -and $Light) {
     New-Item -ItemType Directory -Force -Path $WixBuildDir | Out-Null
     Remove-Item -Force $WixObjectPath, $MsiPath, $MsiLatestPath -ErrorAction SilentlyContinue
 
-    & $Candle.Source \
-        "-nologo" \
-        "-dProductVersion=$ResolvedVersion" \
-        "-dStageDir=$PortableRoot" \
-        "-out" $WixObjectPath \
+    & $Candle.Source `
+        "-nologo" `
+        "-dProductVersion=$ResolvedVersion" `
+        "-dStageDir=$PortableRoot" `
+        "-out" $WixObjectPath `
         $WixScript
 
     if ($LASTEXITCODE -ne 0) {
         throw "WiX candle failed while compiling $WixScript"
     }
 
-    & $Light.Source \
-        "-nologo" \
-        "-out" $MsiPath \
+    & $Light.Source `
+        "-nologo" `
+        "-out" $MsiPath `
         $WixObjectPath
 
     if ($LASTEXITCODE -ne 0) {
