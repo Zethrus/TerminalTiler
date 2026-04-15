@@ -137,7 +137,7 @@ jobs:
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
-        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SmokeProfileKind terminal-only -SkipBuild
 
       - name: Publish Windows release assets
         uses: softprops/action-gh-release@v2

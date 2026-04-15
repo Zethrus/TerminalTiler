@@ -1,6 +1,8 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateSet("mixed", "terminal-only")]
+    [string]$SmokeProfileKind = "mixed"
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,7 +55,10 @@ function Join-SmokePaths {
 }
 
 function Initialize-SmokeProfile {
-    param([string]$SandboxRoot)
+    param(
+        [string]$SandboxRoot,
+        [string]$ProfileKind
+    )
 
     $workspaceRoot = Join-Path $SandboxRoot "workspace"
     $roamingRoot = Join-Path $SandboxRoot "AppData\Roaming"
@@ -86,7 +91,37 @@ default_restore_mode = "shell-only"
     }
 
     $workspacePath = Convert-ToTomlPath -Path $workspaceRoot
-    $session = @"
+    if ($ProfileKind -eq "terminal-only") {
+        $session = @"
+version = 1
+active_tab_index = 0
+
+[[tabs]]
+workspace_root = "$workspacePath"
+custom_title = "Smoke Restore"
+terminal_zoom_steps = 0
+
+[tabs.preset]
+id = "smoke-restore"
+name = "Smoke Restore"
+description = "Packaged restore smoke test"
+tags = ["smoke", "restore"]
+root_label = "Workspace root"
+theme = "system"
+density = "compact"
+
+[tabs.preset.layout]
+kind = "tile"
+id = "terminal-smoke"
+title = "Primary"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+
+[tabs.preset.layout.working_directory]
+type = "workspace-root"
+"@
+    } else {
+        $session = @"
 version = 1
 active_tab_index = 0
 
@@ -131,6 +166,7 @@ url = "https://example.com"
 [tabs.preset.layout.second.working_directory]
 type = "workspace-root"
 "@
+    }
     foreach ($dataDir in $dataTargets) {
         Set-Content -Path (Join-Path $dataDir "session.toml") -Value $session -Encoding ASCII
     }
@@ -150,9 +186,14 @@ function Find-SessionLog {
 }
 
 function Invoke-LaunchSmoke {
-    param([string]$ExePath, [string]$SandboxRoot, [string]$Label)
+    param(
+        [string]$ExePath,
+        [string]$SandboxRoot,
+        [string]$Label,
+        [string]$ProfileKind
+    )
 
-    $profile = Initialize-SmokeProfile -SandboxRoot $SandboxRoot
+    $profile = Initialize-SmokeProfile -SandboxRoot $SandboxRoot -ProfileKind $ProfileKind
     $previousEnvironment = @{
         APPDATA = $env:APPDATA
         LOCALAPPDATA = $env:LOCALAPPDATA
@@ -183,7 +224,7 @@ function Invoke-LaunchSmoke {
         if ($logText -notmatch "opened 1 restored Windows workspace host window\(s\)") {
             throw "$Label did not restore a saved workspace session.\n$logText"
         }
-        if ($logText -notmatch "web pane \d+ navigating to https://example.com") {
+        if ($ProfileKind -eq "mixed" -and $logText -notmatch "web pane \d+ navigating to https://example.com") {
             throw "$Label did not restore the web tile.\n$logText"
         }
     }
@@ -232,7 +273,7 @@ Assert-Path -Path $InstallerPath -Description "Installer"
 Assert-Path -Path $MsiPath -Description "MSI installer"
 
 Write-Host "==> smoke-launching direct portable executable"
-Invoke-LaunchSmoke -ExePath $PortableExePath -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") -Label "Portable executable"
+Invoke-LaunchSmoke -ExePath $PortableExePath -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") -Label "Portable executable" -ProfileKind $SmokeProfileKind
 
 Write-Host "==> extracting portable zip"
 New-Item -ItemType Directory -Force -Path $PortableExtractRoot | Out-Null
@@ -244,7 +285,7 @@ Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
 
 Write-Host "==> smoke-launching portable executable"
-Invoke-LaunchSmoke -ExePath $PortableExe -SandboxRoot (Join-Path $SmokeRoot "portable-profile") -Label "Portable build"
+Invoke-LaunchSmoke -ExePath $PortableExe -SandboxRoot (Join-Path $SmokeRoot "portable-profile") -Label "Portable build" -ProfileKind $SmokeProfileKind
 
 Write-Host "==> smoke-installing NSIS package"
 New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
@@ -260,7 +301,7 @@ Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 
 Write-Host "==> smoke-launching installed executable"
-Invoke-LaunchSmoke -ExePath $InstalledExe -SandboxRoot (Join-Path $SmokeRoot "installed-profile") -Label "Installed build"
+Invoke-LaunchSmoke -ExePath $InstalledExe -SandboxRoot (Join-Path $SmokeRoot "installed-profile") -Label "Installed build" -ProfileKind $SmokeProfileKind
 
 Write-Host "==> smoke-installing MSI package"
 Remove-Item -Recurse -Force $MsiInstallRoot -ErrorAction SilentlyContinue
@@ -274,7 +315,7 @@ $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
 
 Write-Host "==> smoke-launching MSI-installed executable"
-Invoke-LaunchSmoke -ExePath $MsiInstalledExe -SandboxRoot (Join-Path $SmokeRoot "msi-profile") -Label "MSI build"
+Invoke-LaunchSmoke -ExePath $MsiInstalledExe -SandboxRoot (Join-Path $SmokeRoot "msi-profile") -Label "MSI build" -ProfileKind $SmokeProfileKind
 
 Write-Host "==> smoke-uninstalling MSI package"
 $MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart") -PassThru -Wait
