@@ -52,13 +52,7 @@ jobs:
         run: bash packaging/resolve-package-version.sh
 
       - name: Install Linux validation dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            appstream \
-            dbus-x11 \
-            dpkg-dev \
-            xvfb
+        run: bash packaging/install-ubuntu-workflow-deps.sh
 
       - name: Build Linux release artifacts in Debian 12 container
         env:
@@ -84,7 +78,7 @@ jobs:
           fail_on_unmatched_files: true
 
   release-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Resolve release tag
@@ -128,11 +122,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install NSIS
-        run: choco install nsis -y
-
-      - name: Install WiX Toolset
-        run: choco install wixtoolset -y
+      - name: Verify installer toolchain
+        shell: pwsh
+        run: ./packaging/assert-windows-installer-tools.ps1
 
       - name: Build Windows release artifacts
         shell: pwsh

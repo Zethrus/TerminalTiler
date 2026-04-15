@@ -48,3 +48,4 @@ Thumbs.db
 
 # Version-specific AppImages (keep only latest)
 TerminalTiler-*.AppImage
+.omx/

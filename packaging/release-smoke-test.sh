@@ -11,6 +11,34 @@ APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
 METAINFO_PATH="$ROOT_DIR/resources/dev.zethrus.terminaltiler.appdata.xml"
 
+dump_smoke_logs() {
+  local sandbox_root="$1"
+  local label="$2"
+  local found=0
+  local log_path
+
+  while IFS= read -r log_path; do
+    [[ -n "$log_path" ]] || continue
+    found=1
+    echo "==> $label log dump: $log_path" >&2
+    cat "$log_path" >&2 || true
+  done < <(find "$sandbox_root" \( -name terminaltiler-session.log -o -name launcher-stderr.log \) -type f | sort)
+
+  if [[ $found -eq 0 ]]; then
+    echo "==> $label produced no smoke logs under $sandbox_root" >&2
+  fi
+}
+
+fail_smoke() {
+  local sandbox_root="$1"
+  local label="$2"
+  local reason="$3"
+
+  echo "$reason" >&2
+  dump_smoke_logs "$sandbox_root" "$label"
+  exit 1
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "missing required command: $1" >&2
@@ -96,23 +124,20 @@ EOF
 }
 
 assert_restore_log() {
-  local log_root="$1"
+  local sandbox_root="$1"
   local label="$2"
   local log_path
 
-  log_path="$(find "$log_root" -name terminaltiler-session.log -print -quit)"
+  log_path="$(find "$sandbox_root" -name terminaltiler-session.log -print -quit)"
 
-  test -n "$log_path"
-  test -f "$log_path"
+  if [[ -z "$log_path" || ! -f "$log_path" ]]; then
+    fail_smoke "$sandbox_root" "$label" "$label did not produce a session log"
+  fi
   if ! grep -E -q "restored workspace tab .*" "$log_path"; then
-    echo "$label did not restore a workspace tab" >&2
-    cat "$log_path" >&2 || true
-    exit 1
+    fail_smoke "$sandbox_root" "$label" "$label did not restore a workspace tab"
   fi
   if ! grep -q "web tile web-smoke load event Finished uri='https://example.com/'" "$log_path"; then
-    echo "$label did not restore the web tile" >&2
-    cat "$log_path" >&2 || true
-    exit 1
+    fail_smoke "$sandbox_root" "$label" "$label did not restore the web tile"
   fi
 }
 
@@ -141,10 +166,10 @@ run_restore_smoke() {
   timeout 12s "${launch_command[@]}" || status=$?
 
   if [[ ${status:-0} -ne 0 && ${status:-0} -ne 124 ]]; then
-    exit "$status"
+    fail_smoke "$sandbox_root" "$label" "$label exited with unexpected status ${status:-0}"
   fi
 
-  assert_restore_log "$sandbox_root/state" "$label"
+  assert_restore_log "$sandbox_root" "$label"
 }
 
 validate_appstream() {

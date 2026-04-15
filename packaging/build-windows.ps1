@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "windows-installer-tools.ps1")
 
 $VersionStateDir = Join-Path $PSScriptRoot ".build\versioning"
 $LastSuccessfulVersionFile = Join-Path $VersionStateDir "last-successful-version"
@@ -79,33 +80,6 @@ function Save-SuccessfulBuildVersion {
     Set-Content -Path $LastSuccessfulVersionFile -Value $Version -NoNewline
 }
 
-function Find-ExecutablePath {
-    param(
-        [string[]]$CommandNames,
-        [string[]]$CandidatePaths = @()
-    )
-
-    foreach ($commandName in $CommandNames) {
-        $command = Get-Command $commandName -ErrorAction SilentlyContinue
-        if ($command) {
-            return $command.Source
-        }
-    }
-
-    foreach ($candidate in $CandidatePaths) {
-        if ([string]::IsNullOrWhiteSpace($candidate)) {
-            continue
-        }
-
-        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
-        if (Test-Path $expanded) {
-            return (Resolve-Path $expanded).Path
-        }
-    }
-
-    return $null
-}
-
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -175,31 +149,10 @@ Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
-$Makensis = Find-ExecutablePath -CommandNames @("makensis.exe", "makensis") -CandidatePaths @(
-    "$env:ProgramFiles(x86)\NSIS\makensis.exe",
-    "$env:ProgramFiles\NSIS\makensis.exe",
-    "$env:ChocolateyInstall\bin\makensis.exe"
-)
-
-$Candle = Find-ExecutablePath -CommandNames @("candle.exe", "candle") -CandidatePaths @(
-    "$env:WIX\bin\candle.exe",
-    "$env:ProgramFiles(x86)\WiX Toolset v3.11\bin\candle.exe",
-    "$env:ProgramFiles\WiX Toolset v3.11\bin\candle.exe"
-)
-
-$Light = Find-ExecutablePath -CommandNames @("light.exe", "light") -CandidatePaths @(
-    "$env:WIX\bin\light.exe",
-    "$env:ProgramFiles(x86)\WiX Toolset v3.11\bin\light.exe",
-    "$env:ProgramFiles\WiX Toolset v3.11\bin\light.exe"
-)
-
-if ($RequireInstallers -and -not $Makensis) {
-    throw "NSIS is required when -RequireInstallers is set"
-}
-
-if ($RequireInstallers -and (-not $Candle -or -not $Light)) {
-    throw "WiX Toolset is required when -RequireInstallers is set"
-}
+$InstallerTools = Assert-WindowsInstallerTools -RequireInstallers:$RequireInstallers
+$Makensis = $InstallerTools.Makensis
+$Candle = $InstallerTools.Candle
+$Light = $InstallerTools.Light
 
 if ($Makensis) {
     Write-Host "==> building NSIS installer"

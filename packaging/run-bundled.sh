@@ -25,6 +25,8 @@ printf '[%s] launcher start app_root=%s argc=%s\n' \
 
 export GSETTINGS_SCHEMA_DIR="$SHARE_DIR/glib-2.0/schemas"
 export XDG_DATA_DIRS="$SHARE_DIR${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+export GTK_DATA_PREFIX="$APP_ROOT"
+export GTK_EXE_PREFIX="$APP_ROOT"
 
 printf '[%s] launcher runtime lib_dir=%s runpath=embedded\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
