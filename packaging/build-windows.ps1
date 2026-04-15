@@ -1,6 +1,7 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
-    [switch]$SkipCargoBuild
+    [switch]$SkipCargoBuild,
+    [switch]$RequireInstallers
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,11 +87,16 @@ $BinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler.exe"
 $StageRoot = Join-Path $RootDir "packaging\.build\windows-stage"
 $PortableRoot = Join-Path $StageRoot "portable"
 $DistDir = Join-Path $RootDir "dist"
+$PortableExePath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-portable-x86_64.exe"
+$PortableExeLatestPath = Join-Path $DistDir "TerminalTiler-latest-portable-x86_64.exe"
 $ZipPath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-windows-x86_64.zip"
 $ZipLatestPath = Join-Path $DistDir "TerminalTiler-latest-windows-x86_64.zip"
 $InstallerPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.exe"
 $InstallerLatestPath = Join-Path $DistDir "TerminalTiler-setup-latest-x86_64.exe"
+$MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
+$MsiLatestPath = Join-Path $DistDir "TerminalTiler-setup-latest-x86_64.msi"
 $NsisScript = Join-Path $RootDir "packaging\windows\installer.nsi"
+$WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
 
 if (-not $SkipCargoBuild) {
     Write-Host "==> building Windows release binary"
@@ -132,12 +138,35 @@ Support:
 - Windows 11 is the supported Windows target.
 "@ | Set-Content -Path $ReadmePath -Encoding ASCII
 
+Write-Host "==> publishing direct portable executable"
+Remove-Item -Force $PortableExePath, $PortableExeLatestPath -ErrorAction SilentlyContinue
+Copy-Item -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Destination $PortableExePath -Force
+Copy-Item -Path $PortableExePath -Destination $PortableExeLatestPath -Force
+
 Write-Host "==> creating portable zip"
 Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
 $Makensis = Get-Command makensis -ErrorAction SilentlyContinue
+$Candle = Get-Command candle.exe -ErrorAction SilentlyContinue
+if (-not $Candle) {
+    $Candle = Get-Command candle -ErrorAction SilentlyContinue
+}
+
+$Light = Get-Command light.exe -ErrorAction SilentlyContinue
+if (-not $Light) {
+    $Light = Get-Command light -ErrorAction SilentlyContinue
+}
+
+if ($RequireInstallers -and -not $Makensis) {
+    throw "NSIS is required when -RequireInstallers is set"
+}
+
+if ($RequireInstallers -and (-not $Candle -or -not $Light)) {
+    throw "WiX Toolset is required when -RequireInstallers is set"
+}
+
 if ($Makensis) {
     Write-Host "==> building NSIS installer"
     Remove-Item -Force $InstallerPath, $InstallerLatestPath -ErrorAction SilentlyContinue
@@ -157,9 +186,51 @@ if ($Makensis) {
     Write-Host "    To build the installer, install NSIS from https://nsis.sourceforge.io/"
 }
 
+if ($Candle -and $Light) {
+    Write-Host "==> building MSI installer"
+    $WixBuildDir = Join-Path $StageRoot "wix"
+    $WixObjectPath = Join-Path $WixBuildDir "terminaltiler-installer.wixobj"
+
+    New-Item -ItemType Directory -Force -Path $WixBuildDir | Out-Null
+    Remove-Item -Force $WixObjectPath, $MsiPath, $MsiLatestPath -ErrorAction SilentlyContinue
+
+    & $Candle.Source \
+        "-nologo" \
+        "-dProductVersion=$ResolvedVersion" \
+        "-dStageDir=$PortableRoot" \
+        "-out" $WixObjectPath \
+        $WixScript
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "WiX candle failed while compiling $WixScript"
+    }
+
+    & $Light.Source \
+        "-nologo" \
+        "-out" $MsiPath \
+        $WixObjectPath
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "WiX light failed while linking $MsiPath"
+    }
+
+    if (-not (Test-Path $MsiPath)) {
+        throw "Expected MSI installer was not created at $MsiPath"
+    }
+
+    Copy-Item -Path $MsiPath -Destination $MsiLatestPath -Force
+} else {
+    Write-Host "==> WiX Toolset not found - skipping MSI build"
+    Write-Host "    To build the MSI, install WiX Toolset from https://wixtoolset.org/"
+}
+
 Save-SuccessfulBuildVersion -Version $ResolvedVersion
 Write-Host "Windows packaging complete"
+Write-Host "  portable exe: $PortableExePath"
 Write-Host "  zip: $ZipPath"
 if ($Makensis) {
     Write-Host "  installer: $InstallerPath"
+}
+if ($Candle -and $Light) {
+    Write-Host "  msi: $MsiPath"
 }

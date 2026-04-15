@@ -1,0 +1,119 @@
+name: Package Artifacts
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-version:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    outputs:
+      package_version: ${{ steps.package_version.outputs.package_version }}
+      build_date: ${{ steps.package_version.outputs.build_date }}
+      deb_path: ${{ steps.package_version.outputs.deb_path }}
+      appimage_path: ${{ steps.package_version.outputs.appimage_path }}
+      windows_portable_exe_path: ${{ steps.package_version.outputs.windows_portable_exe_path }}
+      windows_installer_path: ${{ steps.package_version.outputs.windows_installer_path }}
+      windows_msi_path: ${{ steps.package_version.outputs.windows_msi_path }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve package version
+        id: package_version
+        env:
+          CI_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash packaging/resolve-package-version.sh
+
+  package-linux:
+    needs: resolve-version
+    if: needs.resolve-version.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream \
+            dbus-x11 \
+            dpkg-dev \
+            xvfb
+
+      - name: Build Linux artifacts in Debian 12 container
+        env:
+          PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+          BUILD_DATE: ${{ needs.resolve-version.outputs.build_date }}
+        run: bash packaging/build-in-container.sh
+
+      - name: Validate Linux artifacts
+        env:
+          PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+          BUILD_DATE: ${{ needs.resolve-version.outputs.build_date }}
+          SKIP_PACKAGE_BUILD: 1
+        run: bash packaging/release-smoke-test.sh
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminaltiler-linux-${{ needs.resolve-version.outputs.package_version }}
+          path: |
+            ${{ needs.resolve-version.outputs.deb_path }}
+            ${{ needs.resolve-version.outputs.appimage_path }}
+          if-no-files-found: error
+
+  package-windows:
+    needs: resolve-version
+    if: needs.resolve-version.result == 'success'
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
+
+      - name: Build Windows artifacts
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+        run: ./packaging/build-windows.ps1 -PackageVersion $env:PACKAGE_VERSION -RequireInstallers
+
+      - name: Validate Windows artifacts
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SkipBuild
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminaltiler-windows-${{ needs.resolve-version.outputs.package_version }}
+          path: |
+            ${{ needs.resolve-version.outputs.windows_portable_exe_path }}
+            ${{ needs.resolve-version.outputs.windows_installer_path }}
+            ${{ needs.resolve-version.outputs.windows_msi_path }}
+          if-no-files-found: error

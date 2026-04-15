@@ -45,6 +45,8 @@ echo "==> building Debian 12 packaging image"
 
 echo "==> running release packaging in container"
 "$CONTAINER_TOOL" run --rm \
+  -e PACKAGE_VERSION \
+  -e BUILD_DATE \
   -e HOST_UID="$HOST_UID" \
   -e HOST_GID="$HOST_GID" \
   -v "$ROOT_DIR:/workspace" \

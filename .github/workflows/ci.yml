@@ -68,6 +68,7 @@ jobs:
             packaging/build-appimage.sh \
             packaging/build-deb.sh \
             packaging/build-in-container.sh \
+            packaging/resolve-package-version.sh \
             packaging/release-smoke-test.sh \
             packaging/release-verify.sh \
             packaging/run-bundled.sh \
@@ -98,6 +99,9 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y
 
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -109,7 +113,7 @@ jobs:
 
       - name: Build Windows release artifacts
         shell: pwsh
-        run: ./packaging/build-windows.ps1
+        run: ./packaging/build-windows.ps1 -RequireInstallers
 
       - name: Run Windows smoke test
         shell: pwsh

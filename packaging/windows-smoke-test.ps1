@@ -12,6 +12,14 @@ function Get-PackageVersion {
         return $PackageVersion
     }
 
+    $lastSuccessfulVersionFile = Join-Path $RootDir "packaging\.build\versioning\last-successful-version"
+    if (Test-Path $lastSuccessfulVersionFile) {
+        $lastSuccessfulVersion = (Get-Content -Path $lastSuccessfulVersionFile -Raw).Trim()
+        if ($lastSuccessfulVersion) {
+            return $lastSuccessfulVersion
+        }
+    }
+
     $cargoToml = Get-Content -Path (Join-Path $RootDir "Cargo.toml") -Raw
     $match = [regex]::Match($cargoToml, '(?ms)^\[package\].*?^version = "([^"]+)"')
     if (-not $match.Success) {
@@ -176,24 +184,45 @@ function Invoke-LaunchSmoke {
 }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$ResolvedVersion = Get-PackageVersion -RootDir $RootDir
 $DistDir = Join-Path $RootDir "dist"
+$ResolvedVersion = $null
+$PortableExePath = $null
 $ZipPath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-windows-x86_64.zip"
 $InstallerPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.exe"
+$MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
 $SmokeRoot = Join-Path $RootDir "packaging\.build\windows-smoke"
 $PortableExtractRoot = Join-Path $SmokeRoot "portable"
-$InstallRoot = Join-Path $SmokeRoot "install"
+$NsisInstallRoot = Join-Path $SmokeRoot "install-nsis"
+$MsiInstallRoot = Join-Path $SmokeRoot "install-msi"
 
 if (-not $SkipBuild) {
-    & (Join-Path $RootDir "packaging\build-windows.ps1") -PackageVersion $ResolvedVersion
+    $BuildScript = Join-Path $RootDir "packaging\build-windows.ps1"
+    if ($PackageVersion) {
+        & $BuildScript -PackageVersion $PackageVersion -RequireInstallers
+    } else {
+        & $BuildScript -RequireInstallers
+    }
 }
 
+$ResolvedVersion = Get-PackageVersion -RootDir $RootDir
+$PortableExePath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-portable-x86_64.exe"
+$ZipPath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-windows-x86_64.zip"
+$InstallerPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.exe"
+$MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
+
+Remove-Item -Recurse -Force $SmokeRoot -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $SmokeRoot | Out-Null
+
 Write-Host "==> checking Windows release artifacts"
+Assert-Path -Path $PortableExePath -Description "Portable executable"
 Assert-Path -Path $ZipPath -Description "Portable zip"
 Assert-Path -Path $InstallerPath -Description "Installer"
+Assert-Path -Path $MsiPath -Description "MSI installer"
+
+Write-Host "==> smoke-launching direct portable executable"
+Invoke-LaunchSmoke -ExePath $PortableExePath -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") -Label "Portable executable"
 
 Write-Host "==> extracting portable zip"
-Remove-Item -Recurse -Force $SmokeRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $PortableExtractRoot | Out-Null
 Expand-Archive -Path $ZipPath -DestinationPath $PortableExtractRoot -Force
 
@@ -206,19 +235,43 @@ Write-Host "==> smoke-launching portable executable"
 Invoke-LaunchSmoke -ExePath $PortableExe -SandboxRoot (Join-Path $SmokeRoot "portable-profile") -Label "Portable build"
 
 Write-Host "==> smoke-installing NSIS package"
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-$InstallerArgs = @("/S", "/D=$InstallRoot")
+New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
+$InstallerArgs = @("/S", "/D=$NsisInstallRoot")
 $InstallerProcess = Start-Process -FilePath $InstallerPath -ArgumentList $InstallerArgs -PassThru -Wait
 if ($InstallerProcess.ExitCode -ne 0) {
     throw "Installer exited with code $($InstallerProcess.ExitCode)"
 }
 
-$InstalledExe = Join-Path $InstallRoot "TerminalTiler.exe"
-$InstalledUninstaller = Join-Path $InstallRoot "Uninstall.exe"
+$InstalledExe = Join-Path $NsisInstallRoot "TerminalTiler.exe"
+$InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 
 Write-Host "==> smoke-launching installed executable"
 Invoke-LaunchSmoke -ExePath $InstalledExe -SandboxRoot (Join-Path $SmokeRoot "installed-profile") -Label "Installed build"
+
+Write-Host "==> smoke-installing MSI package"
+Remove-Item -Recurse -Force $MsiInstallRoot -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $MsiInstallRoot | Out-Null
+$MsiInstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru -Wait
+if ($MsiInstallProcess.ExitCode -ne 0) {
+    throw "MSI installer exited with code $($MsiInstallProcess.ExitCode)"
+}
+
+$MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
+Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
+
+Write-Host "==> smoke-launching MSI-installed executable"
+Invoke-LaunchSmoke -ExePath $MsiInstalledExe -SandboxRoot (Join-Path $SmokeRoot "msi-profile") -Label "MSI build"
+
+Write-Host "==> smoke-uninstalling MSI package"
+$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart") -PassThru -Wait
+if ($MsiUninstallProcess.ExitCode -ne 0) {
+    throw "MSI uninstall exited with code $($MsiUninstallProcess.ExitCode)"
+}
+
+if (Test-Path $MsiInstalledExe) {
+    throw "MSI uninstall left $MsiInstalledExe behind"
+}
 
 Write-Host "Windows smoke test passed"

@@ -32,6 +32,11 @@ is_clean_semver() {
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
+is_nonnegative_integer() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]]
+}
+
 read_last_successful_version() {
   if [[ -f "$LAST_SUCCESSFUL_VERSION_FILE" ]]; then
     tr -d '[:space:]' < "$LAST_SUCCESSFUL_VERSION_FILE"
@@ -119,6 +124,61 @@ derive_package_version() {
   fi
 }
 
+parse_release_tag_version() {
+  local tag="$1"
+
+  if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return
+  fi
+
+  echo "release tags must look like v0.2.0" >&2
+  exit 1
+}
+
+derive_ci_package_version() {
+  local build_number="$1"
+  local semver_major semver_minor semver_patch
+
+  if ! is_nonnegative_integer "$build_number"; then
+    echo "CI build number must be a non-negative integer" >&2
+    exit 1
+  fi
+
+  IFS='.' read -r semver_major semver_minor semver_patch <<< "$BASE_VERSION"
+  if (( build_number < semver_patch )); then
+    build_number="$semver_patch"
+  fi
+
+  printf '%s\n' "${semver_major}.${semver_minor}.${build_number}"
+}
+
+derive_default_package_version() {
+  local last_successful_version="$1"
+
+  if [[ -n "${RELEASE_TAG:-}" ]]; then
+    parse_release_tag_version "$RELEASE_TAG"
+    return
+  fi
+
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && "${GITHUB_REF_TYPE:-}" == "tag" && -n "${GITHUB_REF_NAME:-}" ]]; then
+    parse_release_tag_version "$GITHUB_REF_NAME"
+    return
+  fi
+
+  if [[ -n "${CI_BUILD_NUMBER:-}" ]]; then
+    derive_ci_package_version "$CI_BUILD_NUMBER"
+    return
+  fi
+
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_RUN_NUMBER:-}" ]]; then
+    derive_ci_package_version "$GITHUB_RUN_NUMBER"
+    return
+  fi
+
+  derive_package_version "$last_successful_version"
+}
+
 current_build_date() {
   date -u +%F
 }
@@ -137,7 +197,7 @@ LAST_SUCCESSFUL_VERSION="${LAST_SUCCESSFUL_VERSION:-$(read_last_successful_versi
 BUILD_DATE="${BUILD_DATE:-$(current_build_date)}"
 
 if [[ -z "${PACKAGE_VERSION:-}" ]]; then
-  PACKAGE_VERSION="$(derive_package_version "$LAST_SUCCESSFUL_VERSION")"
+  PACKAGE_VERSION="$(derive_default_package_version "$LAST_SUCCESSFUL_VERSION")"
 fi
 
 if ! is_clean_semver "$PACKAGE_VERSION"; then

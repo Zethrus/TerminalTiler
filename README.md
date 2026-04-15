@@ -77,17 +77,25 @@ The packaging scripts produce self-contained runtime bundles:
 - `packaging/build-deb.sh` stages the application under `packaging/.build/deb-root/opt/terminaltiler`, bundles the same runtime payload, and installs a launcher at `/usr/bin/terminaltiler`
 - `packaging/build-linux-release.sh` builds the release binary once, then emits both Linux artifacts with one shared semantic version
 - `packaging/build-in-container.sh` runs the Linux packaging flow inside a pinned Debian 12 build container for reproducible release artifacts
-- `packaging/release-smoke-test.sh` validates AppStream metadata, builds both artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
-- `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload, emits a portable zip, and generates an NSIS installer
-- `packaging/windows-smoke-test.ps1` validates the portable zip and installer, then performs timed launch smoke tests against both packaged Windows outputs
+- `packaging/release-smoke-test.sh` validates AppStream metadata, builds or reuses both Linux artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
+- `packaging/resolve-package-version.sh` resolves deterministic package versions for local builds, default-branch snapshot builds, and tagged releases
+- `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload, emits a direct portable `.exe`, a portable zip, an NSIS installer `.exe`, and a WiX `.msi`
+- `packaging/windows-smoke-test.ps1` validates the direct portable `.exe`, the portable zip payload, the NSIS installer, and the MSI package before launch smoke coverage
 
-Each packaging run now derives a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.2.0` and no prior successful packaging run has been recorded, the first build emits `0.2.0`, then `0.2.1`, then `0.2.2`, and so on.
+Local packaging runs still derive a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.2.0` and no prior successful local packaging run has been recorded, the first build emits `0.2.0`, then `0.2.1`, then `0.2.2`, and so on.
 
 If you change `Cargo.toml` to a new `major.minor` base such as `0.2.0` or `1.1.0`, the stored patch counter is ignored and the next successful build starts again from that exact base version, for example `0.2.0` or `1.1.0`. Later successful builds on that line continue with `0.2.1`, `0.2.2`, or `1.1.1`, `1.1.2`.
 
-The last successful build version is stored in `packaging/.build/versioning/last-successful-version`, which is already ignored by git. That file is only updated after a package build completes successfully, so failed runs do not consume a version number.
+The last successful local build version is stored in `packaging/.build/versioning/last-successful-version`, which is already ignored by git. That file is only updated after a package build completes successfully, so failed runs do not consume a version number.
 
-By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2.2_amd64.deb`, `dist/TerminalTiler-0.2.2-x86_64.AppImage`, `dist/TerminalTiler-0.2.2-windows-x86_64.zip`, and `dist/TerminalTiler-setup-0.2.2-x86_64.exe`. Linux builds refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks, while Windows builds refresh `dist/TerminalTiler-latest-windows-x86_64.zip` and `dist/TerminalTiler-setup-latest-x86_64.exe` copies.
+GitHub Actions does not rely on that local file. CI resolves versions with `packaging/resolve-package-version.sh`:
+
+- tagged releases use the exact `vX.Y.Z` tag value as `X.Y.Z`
+- default-branch snapshot builds keep the `major.minor` line from `Cargo.toml` and use the GitHub Actions run number as the patch version
+
+For example, if `Cargo.toml` is `0.2.0` and the packaging workflow run number is `156`, the snapshot artifacts are built as `0.2.156`.
+
+By default the scripts write versioned artifacts such as `dist/terminaltiler_0.2.2_amd64.deb`, `dist/TerminalTiler-0.2.2-x86_64.AppImage`, `dist/TerminalTiler-0.2.2-portable-x86_64.exe`, `dist/TerminalTiler-0.2.2-windows-x86_64.zip`, `dist/TerminalTiler-setup-0.2.2-x86_64.exe`, and `dist/TerminalTiler-setup-0.2.2-x86_64.msi`. Linux builds refresh `dist/terminaltiler_latest_amd64.deb` and `dist/TerminalTiler-latest-x86_64.AppImage` symlinks, while Windows builds refresh `dist/TerminalTiler-latest-portable-x86_64.exe`, `dist/TerminalTiler-latest-windows-x86_64.zip`, `dist/TerminalTiler-setup-latest-x86_64.exe`, and `dist/TerminalTiler-setup-latest-x86_64.msi` copies.
 
 You can override the generated version inputs when needed:
 
@@ -99,12 +107,12 @@ LAST_SUCCESSFUL_VERSION=0.3.9 bash packaging/build-appimage.sh
 
 ```powershell
 $env:PACKAGE_VERSION = "0.2.0"
-./packaging/build-windows.ps1
+./packaging/build-windows.ps1 -RequireInstallers
 ```
 
 The resulting AppImage and `.deb` are intended to run on supported Ubuntu and Debian desktops without separately installing GTK, libadwaita, or VTE runtime packages.
 
-The resulting Windows installer and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise. Browser tiles on Windows require Microsoft Edge WebView2 Runtime (Evergreen): install it before opening any preset or restored session that contains web tiles.
+The resulting Windows installer artifacts, MSI, portable `.exe`, and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise. Browser tiles on Windows require Microsoft Edge WebView2 Runtime (Evergreen): install it before opening any preset or restored session that contains web tiles.
 
 Both artifact formats now also ship reverse-DNS desktop metadata at `usr/share/applications/dev.zethrus.terminaltiler.desktop` and AppStream metadata at `usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml` for cleaner distribution tooling integration.
 
@@ -123,9 +131,12 @@ bash packaging/release-verify.sh
 GitHub Actions also publishes tagged releases automatically. Push a semver tag in the form `vX.Y.Z`, for example `v0.2.0`, and the `Release` workflow will:
 
 - set `PACKAGE_VERSION` from the tag value
-- build the versioned `.deb`, AppImage, Windows zip, and Windows installer artifacts
+- build the Linux `.deb` and AppImage artifacts through the pinned Debian 12 container path
+- build the Windows portable `.exe`, NSIS installer `.exe`, and WiX `.msi` artifacts
 - run the Linux and Windows smoke coverage already in the repo
-- attach `dist/terminaltiler_X.Y.Z_amd64.deb`, `dist/TerminalTiler-X.Y.Z-x86_64.AppImage`, `dist/TerminalTiler-X.Y.Z-windows-x86_64.zip`, and `dist/TerminalTiler-setup-X.Y.Z-x86_64.exe` to the GitHub Release for that tag
+- attach `dist/terminaltiler_X.Y.Z_amd64.deb`, `dist/TerminalTiler-X.Y.Z-x86_64.AppImage`, `dist/TerminalTiler-X.Y.Z-portable-x86_64.exe`, `dist/TerminalTiler-setup-X.Y.Z-x86_64.exe`, and `dist/TerminalTiler-setup-X.Y.Z-x86_64.msi` to the GitHub Release for that tag
+
+Pushes to the repository default branch also trigger the `Package Artifacts` workflow. That workflow resolves a snapshot package version automatically, builds the Linux and Windows distributables, runs the same smoke coverage, and uploads the resulting `.deb`, `.AppImage`, portable `.exe`, installer `.exe`, and `.msi` files as GitHub Actions artifacts for that run.
 
 Example:
 

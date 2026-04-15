@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="TerminalTiler"
+    Language="1033"
+    Version="$(var.ProductVersion)"
+    Manufacturer="Zethrus"
+    UpgradeCode="{8F8E5B8B-B392-42D3-8C48-5A0E7CE3E5B2}">
+    <Package
+      Description="TerminalTiler"
+      Compressed="yes"
+      InstallPrivileges="limited"
+      InstallerVersion="500"
+      InstallScope="perUser"
+      Platform="x64" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/zethrus/TerminalTiler" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="TerminalTilerProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="TerminalTiler" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="TerminalTiler" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExecutableComponent" Guid="{821A6AA1-C768-4E43-9B4D-F06A1E4C212B}" Win64="yes">
+        <File Id="MainExecutableFile" Source="$(var.StageDir)\TerminalTiler.exe" KeyPath="yes" Checksum="yes" />
+      </Component>
+      <Component Id="ReadmeComponent" Guid="{8B0EC7BB-B55A-4BA7-BBEB-859C077544B8}" Win64="yes">
+        <File Id="ReadmeFile" Source="$(var.StageDir)\README-windows.txt" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ShortcutComponent" Guid="{9761F1E4-A877-4E17-8A66-5AF96A1A7E5E}" Win64="yes">
+        <Shortcut
+          Id="ApplicationShortcut"
+          Name="TerminalTiler"
+          Description="Launch TerminalTiler"
+          Target="[INSTALLFOLDER]TerminalTiler.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="ApplicationProgramsFolderRemove" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Zethrus\TerminalTiler"
+          Name="Installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="TerminalTiler" Level="1">
+      <ComponentRef Id="MainExecutableComponent" />
+      <ComponentRef Id="ReadmeComponent" />
+      <ComponentRef Id="ShortcutComponent" />
+    </Feature>
+  </Product>
+</Wix>

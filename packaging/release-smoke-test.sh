@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/packaging/.build/release-smoke"
 . "$ROOT_DIR/packaging/versioning.sh"
 export PACKAGE_VERSION BUILD_DATE
+SKIP_PACKAGE_BUILD="${SKIP_PACKAGE_BUILD:-0}"
 
 APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
@@ -17,11 +18,14 @@ need_cmd() {
   fi
 }
 
-need_cmd cargo
 need_cmd dpkg-deb
 need_cmd appstreamcli
-need_cmd appimagetool
 need_cmd timeout
+
+if [[ "$SKIP_PACKAGE_BUILD" != "1" ]]; then
+  need_cmd cargo
+  need_cmd appimagetool
+fi
 
 seed_restore_profile() {
   local sandbox_root="$1"
@@ -166,15 +170,19 @@ validate_appstream
 
 echo "==> release version $PACKAGE_VERSION"
 
-echo "==> building release binary"
-cd "$ROOT_DIR"
-cargo build --release
+if [[ "$SKIP_PACKAGE_BUILD" != "1" ]]; then
+  echo "==> building release binary"
+  cd "$ROOT_DIR"
+  cargo build --release
 
-echo "==> building Debian package"
-SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-deb.sh"
+  echo "==> building Debian package"
+  SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-deb.sh"
 
-echo "==> building AppImage"
-SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-appimage.sh"
+  echo "==> building AppImage"
+  SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-appimage.sh"
+else
+  echo "==> using existing Linux artifacts"
+fi
 
 test -f "$DEB_PATH"
 test -f "$APPIMAGE_PATH"
