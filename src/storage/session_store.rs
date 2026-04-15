@@ -348,4 +348,71 @@ mod tests {
         assert_eq!(session.tabs.len(), 1);
         assert_eq!(session.tabs[0].terminal_zoom_steps, 0);
     }
+
+    #[test]
+    fn loads_mixed_terminal_and_web_session_document() {
+        let dir = temp_dir("mixed-web-session");
+        let valid_root = dir.join("workspace");
+        fs::create_dir_all(&valid_root).unwrap();
+
+        let path = dir.join("session.toml");
+        let raw = format!(
+            r#"version = 1
+active_tab_index = 0
+
+[[tabs]]
+workspace_root = "{}"
+custom_title = "Smoke Restore"
+terminal_zoom_steps = 0
+
+[tabs.preset]
+id = "smoke-restore"
+name = "Smoke Restore"
+description = "Packaged restore smoke test"
+tags = ["smoke", "restore"]
+root_label = "Workspace root"
+theme = "system"
+density = "compact"
+
+[tabs.preset.layout]
+kind = "split"
+axis = "horizontal"
+ratio = 0.5
+
+[tabs.preset.layout.first]
+kind = "tile"
+id = "terminal-smoke"
+title = "Primary"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+
+[tabs.preset.layout.first.working_directory]
+type = "workspace-root"
+
+[tabs.preset.layout.second]
+kind = "tile"
+id = "web-smoke"
+title = "Docs"
+agent_label = "Browser"
+accent_class = "accent-amber"
+tile_kind = "web-view"
+url = "https://example.com"
+
+[tabs.preset.layout.second.working_directory]
+type = "workspace-root"
+"#,
+            valid_root.display()
+        );
+        fs::write(&path, raw).unwrap();
+        let store = SessionStore::from_path(path);
+
+        let outcome = store.load_with_status();
+
+        let session = outcome.session.expect("mixed session should load");
+        let tiles = session.tabs[0].preset.layout.tile_specs();
+        assert_eq!(tiles.len(), 2);
+        assert_eq!(tiles[0].tile_kind, crate::model::layout::TileKind::Terminal);
+        assert_eq!(tiles[1].tile_kind, crate::model::layout::TileKind::WebView);
+        assert_eq!(tiles[1].url.as_deref(), Some("https://example.com"));
+    }
 }

@@ -119,6 +119,11 @@ Runtime selection:
 - WSL2 is preferred when a valid distro is available.
 - TerminalTiler falls back to PowerShell when WSL2 is unavailable.
 
+Browser tiles:
+- Web tiles require Microsoft Edge WebView2 Runtime (Evergreen).
+- Install it before opening any preset or restored session that includes browser tiles.
+- Download: https://go.microsoft.com/fwlink/p/?LinkId=2124703
+
 Launch:
 - Run TerminalTiler.exe
 - The native launcher and workspace host are both included in this build.

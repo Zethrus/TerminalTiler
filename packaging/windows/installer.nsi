@@ -41,6 +41,9 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "NoRepair" 1
+
+  IfSilent +2 0
+  MessageBox MB_OK "Browser tiles require Microsoft Edge WebView2 Runtime. Install the Evergreen runtime from https://go.microsoft.com/fwlink/p/?LinkId=2124703 before opening presets or restored sessions that include web tiles."
 SectionEnd
 
 Section "Uninstall"

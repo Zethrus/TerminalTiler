@@ -549,6 +549,14 @@ mod imp {
         }
     }
 
+    pub fn probe_webview2_runtime() -> Result<(), String> {
+        static WEBVIEW2_RUNTIME_PROBE: OnceLock<Result<(), String>> = OnceLock::new();
+
+        WEBVIEW2_RUNTIME_PROBE
+            .get_or_init(|| create_webview_environment().map(|_| ()))
+            .clone()
+    }
+
     pub fn open_saved_workspaces(
         session: &SavedSession,
         runtime: &WindowsRuntime,
@@ -2559,6 +2567,8 @@ mod imp {
             return Ok(());
         }
 
+        logging::info(format!("web pane {pane_id} navigating to {url}"));
+
         unsafe {
             webview
                 .Navigate(&HSTRING::from(url.as_str()))
@@ -2874,6 +2884,7 @@ mod imp {
                 right: 0,
                 bottom: 0,
             });
+            logging::info(format!("web pane {pane_id} navigating to {initial_url}"));
             webview
                 .Navigate(&HSTRING::from(initial_url.as_str()))
                 .map_err(|error| format!("Initial WebView2 navigation failed: {error}"))?;
@@ -5059,3 +5070,5 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 pub use imp::open_saved_workspaces;
+#[cfg(target_os = "windows")]
+pub use imp::probe_webview2_runtime;

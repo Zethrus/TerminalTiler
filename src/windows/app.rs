@@ -39,7 +39,9 @@ mod imp {
 
     use crate::logging;
     use crate::model::assets::{ProjectSuggestion, RestoreLaunchMode, WorkspaceAssets};
-    use crate::model::layout::{LayoutNode, LayoutTemplate, builtin_templates, generate_layout};
+    use crate::model::layout::{
+        LayoutNode, LayoutTemplate, TileKind, builtin_templates, generate_layout,
+    };
     use crate::model::preset::{
         ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
     };
@@ -180,6 +182,7 @@ mod imp {
         session_store: SessionStore,
         runtime: Option<WindowsRuntime>,
         runtime_error: Option<String>,
+        webview2_error: Option<String>,
         templates: Vec<LayoutTemplate>,
         presets: Vec<WorkspacePreset>,
         suggestions: Vec<ProjectSuggestion>,
@@ -266,6 +269,7 @@ mod imp {
             asset_store: AssetStore::new(),
             runtime: None,
             runtime_error: None,
+            webview2_error: None,
             templates: builtin_templates(),
             presets: Vec::new(),
             suggestions: Vec::new(),
@@ -1316,6 +1320,7 @@ mod imp {
         let preferred_distribution = preferences.windows_wsl_distribution.clone();
         state.runtime = None;
         state.runtime_error = None;
+        state.webview2_error = workspace::probe_webview2_runtime().err();
 
         match wsl::probe_runtime(preferred_distribution.as_deref()) {
             Ok(runtime) => state.runtime = Some(runtime),
@@ -1342,11 +1347,11 @@ mod imp {
             sync_status_text(state);
             EnableWindow(
                 state.launch_preset_button_hwnd,
-                (state.runtime.is_some() && has_launcher_selection(state)) as i32,
+                can_launch_selected_preset(state) as i32,
             );
             EnableWindow(
                 state.launch_button_hwnd,
-                (state.runtime.is_some() && state.session.is_some()) as i32,
+                can_launch_saved_session(state) as i32,
             );
             EnableWindow(
                 state.apply_suggestion_button_hwnd,
@@ -1432,6 +1437,13 @@ mod imp {
         let Some(preset) = launcher_preset_snapshot(state) else {
             return;
         };
+        if let Err(message) = require_webview2_for_preset(state, &preset) {
+            unsafe {
+                SetWindowTextW(state.status_hwnd, wide(&message).as_ptr());
+            }
+            logging::error(&message);
+            return;
+        }
 
         let workspace_root_input = read_window_text(state.workspace_path_hwnd);
         let workspace_root =
@@ -1508,6 +1520,13 @@ mod imp {
         let Some(runtime) = state.runtime.as_ref() else {
             return;
         };
+        if let Err(message) = require_webview2_for_session(state, session) {
+            unsafe {
+                SetWindowTextW(state.status_hwnd, wide(&message).as_ptr());
+            }
+            logging::error(&message);
+            return;
+        }
 
         match wsl::collect_session_launch_commands(session, runtime) {
             Ok(_) => match workspace::open_saved_workspaces(session, runtime) {
@@ -1596,6 +1615,18 @@ mod imp {
             if let Some(error) = state.runtime_error.as_deref() {
                 lines.push(format!("Runtime status: {}", error));
             }
+        }
+
+        lines.push(String::new());
+        if let Some(error) = state.webview2_error.as_deref() {
+            lines.push("Browser runtime: unavailable".into());
+            lines.push(
+                "Web tiles require Microsoft Edge WebView2 Runtime and cannot be launched until it is installed."
+                    .into(),
+            );
+            lines.push(format!("Browser status: {}", error));
+        } else {
+            lines.push("Browser runtime: WebView2 available".into());
         }
 
         lines.push(String::new());
@@ -1700,6 +1731,30 @@ mod imp {
             }
         ));
 
+        if selected_launcher_requires_webview2(state) {
+            lines.push(format!(
+                "Selected launch includes web tiles: {}",
+                if state.webview2_error.is_none() {
+                    "ready"
+                } else {
+                    "blocked until WebView2 is installed"
+                }
+            ));
+        }
+
+        if let Some(session) = state.session.as_ref()
+            && session_requires_webview2(session)
+        {
+            lines.push(format!(
+                "Restored session includes web tiles: {}",
+                if state.webview2_error.is_none() {
+                    "ready"
+                } else {
+                    "blocked until WebView2 is installed"
+                }
+            ));
+        }
+
         lines.push(String::new());
         lines.push("Actions:".into());
         lines.push(
@@ -1723,6 +1778,70 @@ mod imp {
         );
 
         lines.join("\r\n")
+    }
+
+    fn layout_requires_webview2(layout: &LayoutNode) -> bool {
+        layout
+            .tile_specs()
+            .into_iter()
+            .any(|tile| tile.tile_kind == TileKind::WebView)
+    }
+
+    fn session_requires_webview2(session: &SavedSession) -> bool {
+        session
+            .tabs
+            .iter()
+            .any(|tab| layout_requires_webview2(&tab.preset.layout))
+    }
+
+    fn selected_launcher_requires_webview2(state: &AppWindowState) -> bool {
+        launcher_preset_snapshot(state)
+            .map(|preset| layout_requires_webview2(&preset.layout))
+            .unwrap_or(false)
+    }
+
+    fn can_launch_selected_preset(state: &AppWindowState) -> bool {
+        state.runtime.is_some()
+            && has_launcher_selection(state)
+            && (!selected_launcher_requires_webview2(state) || state.webview2_error.is_none())
+    }
+
+    fn can_launch_saved_session(state: &AppWindowState) -> bool {
+        state.runtime.is_some()
+            && state
+                .session
+                .as_ref()
+                .is_some_and(|session| !session_requires_webview2(session) || state.webview2_error.is_none())
+    }
+
+    fn require_webview2_for_preset(
+        state: &AppWindowState,
+        preset: &WorkspacePreset,
+    ) -> Result<(), String> {
+        if layout_requires_webview2(&preset.layout)
+            && let Some(error) = state.webview2_error.as_deref()
+        {
+            return Err(format!(
+                "Cannot launch '{}' because it includes web tiles and Microsoft Edge WebView2 Runtime is unavailable.\r\n\r\n{}",
+                preset.name, error
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_webview2_for_session(
+        state: &AppWindowState,
+        session: &SavedSession,
+    ) -> Result<(), String> {
+        if session_requires_webview2(session)
+            && let Some(error) = state.webview2_error.as_deref()
+        {
+            return Err(format!(
+                "Cannot open the restored session because it includes web tiles and Microsoft Edge WebView2 Runtime is unavailable.\r\n\r\n{}",
+                error
+            ));
+        }
+        Ok(())
     }
 
     fn install_tray_icon(hwnd: HWND, state: &mut AppWindowState) {
@@ -2737,8 +2856,18 @@ mod imp {
             ),
             Err(error) => format!("Runtime unavailable:\r\n{error}"),
         };
+        let browser_text = match workspace::probe_webview2_runtime() {
+            Ok(()) => "Browser runtime: WebView2 available".to_string(),
+            Err(error) => format!(
+                "Browser runtime: unavailable\r\nWeb tiles require Microsoft Edge WebView2 Runtime.\r\n{}",
+                error
+            ),
+        };
         unsafe {
-            SetWindowTextW(state.runtime_status_hwnd, wide(&runtime_text).as_ptr());
+            SetWindowTextW(
+                state.runtime_status_hwnd,
+                wide(&format!("{}\r\n\r\n{}", runtime_text, browser_text)).as_ptr(),
+            );
         }
     }
 

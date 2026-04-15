@@ -104,7 +104,7 @@ $env:PACKAGE_VERSION = "0.2.0"
 
 The resulting AppImage and `.deb` are intended to run on supported Ubuntu and Debian desktops without separately installing GTK, libadwaita, or VTE runtime packages.
 
-The resulting Windows installer and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise.
+The resulting Windows installer and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise. Browser tiles on Windows require Microsoft Edge WebView2 Runtime (Evergreen): install it before opening any preset or restored session that contains web tiles.
 
 Both artifact formats now also ship reverse-DNS desktop metadata at `usr/share/applications/dev.zethrus.terminaltiler.desktop` and AppStream metadata at `usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml` for cleaner distribution tooling integration.
 

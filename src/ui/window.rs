@@ -2573,6 +2573,12 @@ fn restore_saved_session(
             .expect("restored workspace tab should exist");
         context.tab_view.append(&page_shell);
         sync_tab_page_metadata(&context.tab_view, &tab);
+        logging::info(format!(
+            "restored workspace tab {} preset='{}' root='{}'",
+            tab_id,
+            preset.name,
+            workspace_root.display()
+        ));
         restored_ids.push(tab_id);
     }
 
