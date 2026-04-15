@@ -1,0 +1,41 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_linux_release:
+        description: Run packaging/release-verify.sh before creating the tag
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: create-release-tag
+  cancel-in-progress: false
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Create next release tag
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          VERIFY_LINUX_RELEASE: ${{ inputs.verify_linux_release }}
+        shell: bash
+        run: |
+          args=()
+          if [[ "$VERIFY_LINUX_RELEASE" != "true" ]]; then
+            args+=(--skip-verify)
+          fi
+
+          bash packaging/create-release-tag.sh "${args[@]}"

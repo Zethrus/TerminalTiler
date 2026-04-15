@@ -104,6 +104,76 @@ same_major_minor_version() {
   [[ "$left_major" == "$right_major" && "$left_minor" == "$right_minor" ]]
 }
 
+try_parse_release_tag_version() {
+  local tag="$1"
+
+  if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  return 1
+}
+
+release_tag_for_version() {
+  local version="$1"
+
+  if ! is_clean_semver "$version"; then
+    echo "release versions must look like 0.2.0" >&2
+    exit 1
+  fi
+
+  printf 'v%s\n' "$version"
+}
+
+latest_release_tag_for_version_line() {
+  local version_line="$1"
+  local tag version
+
+  while IFS= read -r tag; do
+    [[ -z "$tag" ]] && continue
+
+    if ! version="$(try_parse_release_tag_version "$tag")"; then
+      continue
+    fi
+
+    if same_major_minor_version "$version" "$version_line"; then
+      printf '%s\n' "$tag"
+      return 0
+    fi
+  done < <(git -C "$ROOT_DIR" tag --list 'v*.*.*' --sort=-version:refname)
+
+  return 1
+}
+
+next_release_version_for_base_version() {
+  local base_version="$1"
+  local latest_tag latest_version
+
+  if ! is_clean_semver "$base_version"; then
+    echo "base release version must look like 0.2.0" >&2
+    exit 1
+  fi
+
+  if ! latest_tag="$(latest_release_tag_for_version_line "$base_version")"; then
+    printf '%s\n' "$base_version"
+    return 0
+  fi
+
+  latest_version="$(try_parse_release_tag_version "$latest_tag")"
+  if [[ "$(compare_semver "$latest_version" "$base_version")" -lt 0 ]]; then
+    printf '%s\n' "$base_version"
+    return 0
+  fi
+
+  bump_patch_version "$latest_version"
+}
+
+next_release_tag_for_base_version() {
+  local base_version="$1"
+  release_tag_for_version "$(next_release_version_for_base_version "$base_version")"
+}
+
 derive_package_version() {
   local last_successful_version="$1"
 
@@ -127,8 +197,7 @@ derive_package_version() {
 parse_release_tag_version() {
   local tag="$1"
 
-  if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
+  if try_parse_release_tag_version "$tag"; then
     return
   fi
 

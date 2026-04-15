@@ -138,9 +138,28 @@ GitHub Actions also publishes tagged releases automatically. Push a semver tag i
 
 Pushes to the repository default branch also trigger the `Package Artifacts` workflow. That workflow resolves a snapshot package version automatically, builds the Linux and Windows distributables, runs the same smoke coverage, and uploads the resulting `.deb`, `.AppImage`, portable `.exe`, installer `.exe`, and `.msi` files as GitHub Actions artifacts for that run.
 
-Example:
+Patch release tags can be generated automatically from the latest matching git tag on the current `major.minor` line in `Cargo.toml`. If `Cargo.toml` still says `0.2.0` and the latest tag is `v0.2.157`, the next generated tag will be `v0.2.158`. When you intentionally start a new release line, update `version = "..."` in `Cargo.toml` first.
+
+Local release tagging:
 
 ```bash
-git tag v0.2.0
+bash packaging/create-release-tag.sh --dry-run
+bash packaging/create-release-tag.sh
+```
+
+The local script:
+
+- fetches `origin` tags for the default branch
+- requires a clean checkout on `main` that matches `origin/main`
+- derives the next patch tag automatically
+- runs `packaging/release-verify.sh` by default before creating the tag
+- creates and pushes an annotated tag, which triggers the `Release` workflow
+
+GitHub Actions also exposes a manual `Create Release Tag` workflow. Run it from the Actions UI when you want GitHub to create and push the next tag for you. By default it skips the local Linux preflight and lets the downstream `Release` workflow handle build validation, but you can enable the preflight input when you want that extra gate before tagging.
+
+Manual equivalent:
+
+```bash
+git tag -a v0.2.0 -m "Release v0.2.0"
 git push origin v0.2.0
 ```
