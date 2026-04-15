@@ -13,11 +13,11 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
         ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA,
-        GetClientRect, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU,
-        IDC_ARROW, LoadCursorW, RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE,
-        WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        GetClientRect, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+        LoadCursorW, RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW,
+        SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE,
+        WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::model::assets::{
@@ -501,7 +501,10 @@ mod imp {
             ConfigScope::Workspace => {
                 if let Some(workspace_root) = state.workspace_root.as_ref() {
                     (
-                        state.asset_store.load_workspace_config(workspace_root).assets,
+                        state
+                            .asset_store
+                            .load_workspace_config(workspace_root)
+                            .assets,
                         combine_warnings(
                             global_outcome.warning,
                             state
@@ -572,10 +575,7 @@ mod imp {
                 section.title().to_string()
             };
             unsafe {
-                SetWindowTextW(
-                    *hwnd,
-                    wide(&label).as_ptr(),
-                );
+                SetWindowTextW(*hwnd, wide(&label).as_ptr());
             }
         }
     }
@@ -616,10 +616,7 @@ mod imp {
         )
     }
 
-    fn build_issues_text(
-        state: &AssetsWindowState,
-        issues: &[AssetValidationIssue],
-    ) -> String {
+    fn build_issues_text(state: &AssetsWindowState, issues: &[AssetValidationIssue]) -> String {
         let mut lines = Vec::new();
         if let Some(message) = state.status_message.as_deref() {
             lines.push(message.to_string());
@@ -669,10 +666,7 @@ mod imp {
         lines.join("\r\n")
     }
 
-    fn render_section_text(
-        state: &AssetsWindowState,
-        issues: &[AssetValidationIssue],
-    ) -> String {
+    fn render_section_text(state: &AssetsWindowState, issues: &[AssetValidationIssue]) -> String {
         match state.active_section {
             AssetSection::Overview => build_overview_text(state, issues),
             AssetSection::Connections => toml::to_string_pretty(&ConnectionsDocument {
@@ -704,10 +698,7 @@ mod imp {
         }
     }
 
-    fn build_overview_text(
-        state: &AssetsWindowState,
-        issues: &[AssetValidationIssue],
-    ) -> String {
+    fn build_overview_text(state: &AssetsWindowState, issues: &[AssetValidationIssue]) -> String {
         let effective_assets =
             effective_assets_for_scope(state.scope, &state.current_assets, &state.global_assets);
         let counts = [
@@ -755,7 +746,11 @@ mod imp {
         lines.push(String::new());
         lines.push("Effective asset view seen by workspaces:".into());
         for (section, _, effective_count) in counts {
-            lines.push(format!("- {}: {} item(s)", section.title(), effective_count));
+            lines.push(format!(
+                "- {}: {} item(s)",
+                section.title(),
+                effective_count
+            ));
         }
         lines.push(String::new());
         lines.push("Use the section buttons above to edit one asset area at a time, or switch to Raw TOML for full-document edits.".into());
@@ -764,19 +759,19 @@ mod imp {
 
     fn save_scope(state: &mut AssetsWindowState) {
         let raw = read_window_text(state.text_hwnd);
-        let next_assets = match parse_section_text(state.active_section, &raw, &state.current_assets)
-        {
-            Ok(assets) => prune_blank_drafts(assets),
-            Err(error) => {
-                state.status_message = Some(format!(
-                    "Failed to parse {}: {}",
-                    state.active_section.title(),
-                    error
-                ));
-                refresh_view(state);
-                return;
-            }
-        };
+        let next_assets =
+            match parse_section_text(state.active_section, &raw, &state.current_assets) {
+                Ok(assets) => prune_blank_drafts(assets),
+                Err(error) => {
+                    state.status_message = Some(format!(
+                        "Failed to parse {}: {}",
+                        state.active_section.title(),
+                        error
+                    ));
+                    refresh_view(state);
+                    return;
+                }
+            };
 
         match state.asset_store.save_assets_for_scope(
             &next_assets,
@@ -812,8 +807,8 @@ mod imp {
         match section {
             AssetSection::Overview => {}
             AssetSection::Connections => {
-                next_assets.connection_profiles = toml::from_str::<ConnectionsDocument>(raw)?
-                    .connection_profiles;
+                next_assets.connection_profiles =
+                    toml::from_str::<ConnectionsDocument>(raw)?.connection_profiles;
             }
             AssetSection::Hosts => {
                 next_assets.inventory_hosts = toml::from_str::<HostsDocument>(raw)?.inventory_hosts;

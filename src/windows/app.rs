@@ -1808,10 +1808,9 @@ mod imp {
 
     fn can_launch_saved_session(state: &AppWindowState) -> bool {
         state.runtime.is_some()
-            && state
-                .session
-                .as_ref()
-                .is_some_and(|session| !session_requires_webview2(session) || state.webview2_error.is_none())
+            && state.session.as_ref().is_some_and(|session| {
+                !session_requires_webview2(session) || state.webview2_error.is_none()
+            })
     }
 
     fn require_webview2_for_preset(

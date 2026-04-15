@@ -470,11 +470,16 @@ impl WorkspaceRuntime {
         }
 
         let keep_selection = !selected_id.is_empty()
-            && assets.runbooks.iter().any(|runbook| runbook.id == selected_id);
+            && assets
+                .runbooks
+                .iter()
+                .any(|runbook| runbook.id == selected_id);
         self.inner
             .runbook_selector
             .set_active_id(Some(if keep_selection { &selected_id } else { "" }));
-        self.inner.runbook_button.set_sensitive(!assets.runbooks.is_empty());
+        self.inner
+            .runbook_button
+            .set_sensitive(!assets.runbooks.is_empty());
     }
 
     fn web_tile_settings(&self, tile_id: &str) -> Option<(String, Option<u32>)> {
@@ -1093,7 +1098,10 @@ pub fn build_with_layout_change_handler(
                 return;
             }
             let assets = runtime.current_assets();
-            let Some(runbook) = assets.runbooks.iter().find(|runbook| runbook.id == runbook_id)
+            let Some(runbook) = assets
+                .runbooks
+                .iter()
+                .find(|runbook| runbook.id == runbook_id)
             else {
                 return;
             };

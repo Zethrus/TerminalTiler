@@ -150,17 +150,12 @@ impl TerminalSession {
             })
         } else {
             match resolve_tile_launch(tile, workspace_root, assets) {
-                Ok(resolved_launch) => {
-                    Rc::new(TerminalLaunchSpec {
-                        working_directory: working_dir.display().to_string(),
-                        configured_argv: build_spawn_argv(
-                            &shell,
-                            resolved_launch.command.as_deref(),
-                        ),
-                        local_shell_argv: build_local_shell_argv(&shell),
-                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
-                    })
-                }
+                Ok(resolved_launch) => Rc::new(TerminalLaunchSpec {
+                    working_directory: working_dir.display().to_string(),
+                    configured_argv: build_spawn_argv(&shell, resolved_launch.command.as_deref()),
+                    local_shell_argv: build_local_shell_argv(&shell),
+                    envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                }),
                 Err(error) => {
                     report_spawn_problem(&terminal, &descriptor, &error);
                     mark_state_exited(&state);
@@ -302,11 +297,7 @@ impl TerminalSession {
         )
     }
 
-    fn spawn_launch_mode(
-        &self,
-        mode: TerminalLaunchMode,
-        notice: &[u8],
-    ) -> Result<(), String> {
+    fn spawn_launch_mode(&self, mode: TerminalLaunchMode, notice: &[u8]) -> Result<(), String> {
         if let Some(error) = validate_working_dir(Path::new(&self.launch_spec.working_directory)) {
             self.report_spawn_problem(&error);
             self.mark_exited();
@@ -772,8 +763,8 @@ fn shell_quote_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_local_shell_argv, build_spawn_argv, process_group_target,
-        serialize_dropped_paths, supports_recovery_options, validate_working_dir,
+        build_local_shell_argv, build_spawn_argv, process_group_target, serialize_dropped_paths,
+        supports_recovery_options, validate_working_dir,
     };
     use std::path::{Path, PathBuf};
 

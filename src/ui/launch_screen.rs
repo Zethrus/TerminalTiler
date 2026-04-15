@@ -9,9 +9,8 @@ use uuid::Uuid;
 use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
 use crate::model::layout::{
-    DEFAULT_WEB_URL, LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec,
-    normalize_web_url,
-    builtin_templates, generate_layout,
+    DEFAULT_WEB_URL, LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates,
+    generate_layout, normalize_web_url,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};

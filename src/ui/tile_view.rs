@@ -96,18 +96,12 @@ pub fn build(
         .css_classes(["status-chip"])
         .build();
 
-    let recovery_button = build_header_icon_button(
-        "system-run-symbolic",
-        "Recover pane",
-    );
+    let recovery_button = build_header_icon_button("system-run-symbolic", "Recover pane");
     recovery_button.add_css_class("tile-recovery-action");
     recovery_button.set_visible(false);
     recovery_button.set_sensitive(false);
 
-    let snippet_button = build_header_icon_button(
-        "insert-text-symbolic",
-        "Run CLI snippet",
-    );
+    let snippet_button = build_header_icon_button("insert-text-symbolic", "Run CLI snippet");
     snippet_button.add_css_class("tile-snippet-action");
 
     let close_button = build_header_icon_button(
@@ -422,7 +416,10 @@ fn refresh_snippet_list(
     session: TerminalSession,
     show_recovery_prompt: Rc<dyn Fn()>,
 ) {
-    let Some(content) = popover.child().and_then(|child| child.downcast::<gtk::Box>().ok()) else {
+    let Some(content) = popover
+        .child()
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+    else {
         return;
     };
     clear_box(&content);
@@ -902,7 +899,8 @@ fn install_terminal_context_menu(
         right_click.connect_pressed(move |gesture, _, x, y| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
             terminal.grab_focus();
-            paste_button.set_sensitive(session.has_active_process() || session.needs_recovery_prompt());
+            paste_button
+                .set_sensitive(session.has_active_process() || session.needs_recovery_prompt());
             local_shell_button.set_sensitive(session.needs_recovery_prompt());
             popover.set_pointing_to(Some(&gdk::Rectangle::new(
                 x.round() as i32,
@@ -1006,19 +1004,17 @@ fn install_terminal_recovery_key_controller(
     terminal.add_controller(key_controller);
 }
 
-fn should_open_recovery_prompt_for_key(
-    key: gdk::Key,
-    state: gdk::ModifierType,
-) -> bool {
+fn should_open_recovery_prompt_for_key(key: gdk::Key, state: gdk::ModifierType) -> bool {
     let modifiers = state & gtk::accelerator_get_default_mod_mask();
-    if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::BackSpace | gdk::Key::Delete)
-        && (modifiers.is_empty() || modifiers == gdk::ModifierType::SHIFT_MASK)
+    if matches!(
+        key,
+        gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::BackSpace | gdk::Key::Delete
+    ) && (modifiers.is_empty() || modifiers == gdk::ModifierType::SHIFT_MASK)
     {
         return true;
     }
 
-    if modifiers
-        == (gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK)
+    if modifiers == (gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK)
         && key
             .to_unicode()
             .is_some_and(|value| value.eq_ignore_ascii_case(&'v'))

@@ -6,8 +6,8 @@ use adw::prelude::*;
 
 use crate::model::assets::{
     AgentRoleTemplate, CliSnippet, ConnectionKind, ConnectionProfile, InventoryGroup,
-    InventoryHost, OutputHelperRule, OutputSeverity, Runbook, RunbookConfirmPolicy,
-    RunbookStep, RunbookTarget, RunbookVariable, SnippetVariable, WorkspaceAssets,
+    InventoryHost, OutputHelperRule, OutputSeverity, Runbook, RunbookConfirmPolicy, RunbookStep,
+    RunbookTarget, RunbookVariable, SnippetVariable, WorkspaceAssets,
 };
 use crate::model::layout::ReconnectPolicy;
 use crate::model::workspace_config::ConfigScope;
