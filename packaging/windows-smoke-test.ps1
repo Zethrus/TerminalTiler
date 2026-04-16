@@ -235,6 +235,26 @@ function Invoke-LaunchSmoke {
         $env:USERPROFILE = $previousEnvironment.USERPROFILE
         $env:HOME = $previousEnvironment.HOME
     }
+
+}
+
+function Invoke-OptionalLaunchSmoke {
+    param(
+        [string]$ExePath,
+        [string]$SandboxRoot,
+        [string]$Label,
+        [string]$ProfileKind,
+        [bool]$SkipLaunchSmoke,
+        [string]$SkipMessage
+    )
+
+    if ($SkipLaunchSmoke) {
+        Write-Host "==> $SkipMessage"
+        return
+    }
+
+    Write-Host "==> smoke-launching $Label"
+    Invoke-LaunchSmoke -ExePath $ExePath -SandboxRoot $SandboxRoot -Label $Label -ProfileKind $ProfileKind
 }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -273,12 +293,13 @@ Assert-Path -Path $ZipPath -Description "Portable zip"
 Assert-Path -Path $InstallerPath -Description "Installer"
 Assert-Path -Path $MsiPath -Description "MSI installer"
 
-if (-not $SkipLaunchSmoke) {
-    Write-Host "==> smoke-launching direct portable executable"
-    Invoke-LaunchSmoke -ExePath $PortableExePath -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") -Label "Portable executable" -ProfileKind $SmokeProfileKind
-} else {
-    Write-Host "==> skipping direct portable executable launch smoke"
-}
+Invoke-OptionalLaunchSmoke `
+    -ExePath $PortableExePath `
+    -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") `
+    -Label "Portable executable" `
+    -ProfileKind $SmokeProfileKind `
+    -SkipLaunchSmoke $SkipLaunchSmoke `
+    -SkipMessage "skipping direct portable executable launch smoke"
 
 Write-Host "==> extracting portable zip"
 New-Item -ItemType Directory -Force -Path $PortableExtractRoot | Out-Null
@@ -289,12 +310,13 @@ $PortableReadme = Join-Path $PortableExtractRoot "README-windows.txt"
 Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
 
-if (-not $SkipLaunchSmoke) {
-    Write-Host "==> smoke-launching portable executable"
-    Invoke-LaunchSmoke -ExePath $PortableExe -SandboxRoot (Join-Path $SmokeRoot "portable-profile") -Label "Portable build" -ProfileKind $SmokeProfileKind
-} else {
-    Write-Host "==> skipping portable executable launch smoke"
-}
+Invoke-OptionalLaunchSmoke `
+    -ExePath $PortableExe `
+    -SandboxRoot (Join-Path $SmokeRoot "portable-profile") `
+    -Label "Portable build" `
+    -ProfileKind $SmokeProfileKind `
+    -SkipLaunchSmoke $SkipLaunchSmoke `
+    -SkipMessage "skipping portable executable launch smoke"
 
 Write-Host "==> smoke-installing NSIS package"
 New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
@@ -309,12 +331,13 @@ $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 
-if (-not $SkipLaunchSmoke) {
-    Write-Host "==> smoke-launching installed executable"
-    Invoke-LaunchSmoke -ExePath $InstalledExe -SandboxRoot (Join-Path $SmokeRoot "installed-profile") -Label "Installed build" -ProfileKind $SmokeProfileKind
-} else {
-    Write-Host "==> skipping NSIS-installed executable launch smoke"
-}
+Invoke-OptionalLaunchSmoke `
+    -ExePath $InstalledExe `
+    -SandboxRoot (Join-Path $SmokeRoot "installed-profile") `
+    -Label "Installed build" `
+    -ProfileKind $SmokeProfileKind `
+    -SkipLaunchSmoke $SkipLaunchSmoke `
+    -SkipMessage "skipping NSIS-installed executable launch smoke"
 
 Write-Host "==> smoke-installing MSI package"
 Remove-Item -Recurse -Force $MsiInstallRoot -ErrorAction SilentlyContinue
@@ -327,12 +350,13 @@ if ($MsiInstallProcess.ExitCode -ne 0) {
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
 
-if (-not $SkipLaunchSmoke) {
-    Write-Host "==> smoke-launching MSI-installed executable"
-    Invoke-LaunchSmoke -ExePath $MsiInstalledExe -SandboxRoot (Join-Path $SmokeRoot "msi-profile") -Label "MSI build" -ProfileKind $SmokeProfileKind
-} else {
-    Write-Host "==> skipping MSI-installed executable launch smoke"
-}
+Invoke-OptionalLaunchSmoke `
+    -ExePath $MsiInstalledExe `
+    -SandboxRoot (Join-Path $SmokeRoot "msi-profile") `
+    -Label "MSI build" `
+    -ProfileKind $SmokeProfileKind `
+    -SkipLaunchSmoke $SkipLaunchSmoke `
+    -SkipMessage "skipping MSI-installed executable launch smoke"
 
 Write-Host "==> smoke-uninstalling MSI package"
 $MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru -Wait
