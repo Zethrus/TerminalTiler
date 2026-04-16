@@ -46,31 +46,51 @@ struct AssetsPages {
 
 type RefreshHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
-#[allow(deprecated)]
 pub fn present(
     window: &adw::ApplicationWindow,
     asset_store: Rc<AssetStore>,
     workspace_root: Option<PathBuf>,
     on_saved: Rc<dyn Fn()>,
 ) {
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .title("Assets Manager")
-        .default_width(1120)
-        .default_height(760)
-        .resizable(true)
-        .build();
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Assets Manager");
+    dialog.set_follows_content_size(false);
+    dialog.set_content_width(1120);
+    dialog.set_content_height(760);
+    dialog.set_can_close(false);
     dialog.add_css_class("assets-manager-window");
-    dialog.add_button("Close", gtk::ResponseType::Close);
-    dialog.set_default_response(gtk::ResponseType::Close);
 
-    let content = dialog.content_area();
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
     content.set_spacing(12);
     content.set_margin_top(16);
     content.set_margin_bottom(16);
     content.set_margin_start(16);
     content.set_margin_end(16);
+    root.append(&content);
+
+    let close_button = gtk::Button::with_label("Close");
+    close_button.add_css_class("pill-button");
+    close_button.add_css_class("ghost-link-button");
+    close_button.add_css_class("settings-close-button");
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::End)
+        .margin_top(12)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+    footer.append(&close_button);
+    root.append(&footer);
+    dialog.set_child(Some(&root));
+    dialog.set_default_widget(Some(&close_button));
 
     let scope = if workspace_root.is_some() {
         ConfigScope::Workspace
@@ -579,25 +599,36 @@ pub fn present(
         });
     }
 
-    {
+    let request_close: Rc<dyn Fn()> = {
         let state = state.clone();
-        let dialog_for_prompt = dialog.clone();
-        dialog.connect_response(move |dialog, response| {
-            if response != gtk::ResponseType::Close {
-                return;
-            }
+        let dialog = dialog.clone();
+        Rc::new(move || {
             let should_prompt = {
                 let snapshot = state.borrow().clone();
                 is_dirty(&snapshot)
             };
-            maybe_discard_unsaved(&dialog_for_prompt, should_prompt, {
+            maybe_discard_unsaved(&dialog, should_prompt, {
                 let dialog = dialog.clone();
-                move || dialog.close()
+                move || dialog.force_close()
             });
+        })
+    };
+
+    {
+        let request_close = request_close.clone();
+        close_button.connect_clicked(move |_| {
+            request_close();
         });
     }
 
-    dialog.present();
+    {
+        let request_close = request_close.clone();
+        dialog.connect_close_attempt(move |_| {
+            request_close();
+        });
+    }
+
+    dialog.present(Some(window));
 }
 
 fn load_scope_state(
@@ -710,7 +741,7 @@ fn render_connections_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -967,7 +998,7 @@ fn render_hosts_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -1294,7 +1325,7 @@ fn render_groups_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -1447,7 +1478,7 @@ fn render_roles_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -1751,7 +1782,7 @@ fn render_runbooks_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -1984,7 +2015,7 @@ fn render_snippets_page(
     refresh_token: &Rc<Cell<u64>>,
     refresh_status: &Rc<dyn Fn()>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
 ) {
     render_section_header(
         container,
@@ -2169,7 +2200,7 @@ fn render_section_header<F>(
     section: AssetSection,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
     on_add: F,
 ) where
     F: Fn(&mut AssetsManagerState) + Clone + 'static,
@@ -2234,7 +2265,7 @@ fn asset_card_shell<F>(
     badge: AssetItemSource,
     token: u64,
     refresh_token: &Rc<Cell<u64>>,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
     state: &Rc<RefCell<AssetsManagerState>>,
     on_remove: F,
     remove_label: &str,
@@ -2389,7 +2420,7 @@ fn append_override_button<F>(
     card: &gtk::Widget,
     state: &Rc<RefCell<AssetsManagerState>>,
     refresh_pages: &RefreshHandle,
-    dialog: &gtk::Dialog,
+    dialog: &adw::Dialog,
     on_override: F,
 ) where
     F: Fn(&mut AssetsManagerState) + Clone + 'static,
@@ -3445,7 +3476,7 @@ fn format_issue_summary(issues: &[AssetValidationIssue]) -> String {
         .join("\n")
 }
 
-fn maybe_discard_invalid_raw<F>(dialog: &gtk::Dialog, has_invalid_raw: bool, on_confirm: F)
+fn maybe_discard_invalid_raw<F>(dialog: &adw::Dialog, has_invalid_raw: bool, on_confirm: F)
 where
     F: Fn() + 'static,
 {
@@ -3453,27 +3484,56 @@ where
         on_confirm();
         return;
     }
-    let prompt = adw::MessageDialog::builder()
-        .modal(true)
-        .transient_for(dialog)
-        .heading("Discard invalid raw TOML changes?")
-        .body("The Raw TOML page contains parse errors. Continue and discard the invalid text, or stay and fix it.")
+    let prompt = adw::Dialog::new();
+    prompt.set_title("Discard invalid raw TOML changes?");
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
         .build();
-    prompt.add_response("cancel", "Stay Here");
-    prompt.add_response("discard", "Discard Invalid Text");
-    prompt.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-    prompt.set_default_response(Some("cancel"));
-    prompt.set_close_response("cancel");
-    prompt.connect_response(None, move |prompt, response| {
-        if response == "discard" {
+    content.append(
+        &gtk::Label::builder()
+            .label("The Raw TOML page contains parse errors. Continue and discard the invalid text, or stay and fix it.")
+            .wrap(true)
+            .halign(gtk::Align::Start)
+            .build(),
+    );
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let stay_button = gtk::Button::with_label("Stay Here");
+    stay_button.add_css_class("pill-button");
+    stay_button.add_css_class("flat");
+    let discard_button = gtk::Button::with_label("Discard Invalid Text");
+    discard_button.add_css_class("pill-button");
+    discard_button.add_css_class("destructive-action");
+    actions.append(&stay_button);
+    actions.append(&discard_button);
+    content.append(&actions);
+    prompt.set_child(Some(&content));
+    prompt.set_default_widget(Some(&stay_button));
+    {
+        let prompt = prompt.clone();
+        stay_button.connect_clicked(move |_| {
+            prompt.close();
+        });
+    }
+    {
+        let prompt = prompt.clone();
+        discard_button.connect_clicked(move |_| {
             on_confirm();
-        }
-        prompt.close();
-    });
-    prompt.present();
+            prompt.close();
+        });
+    }
+    prompt.present(Some(dialog));
 }
 
-fn maybe_discard_unsaved<F>(dialog: &gtk::Dialog, has_unsaved_changes: bool, on_confirm: F)
+fn maybe_discard_unsaved<F>(dialog: &adw::Dialog, has_unsaved_changes: bool, on_confirm: F)
 where
     F: Fn() + 'static,
 {
@@ -3481,22 +3541,51 @@ where
         on_confirm();
         return;
     }
-    let prompt = adw::MessageDialog::builder()
-        .modal(true)
-        .transient_for(dialog)
-        .heading("Discard unsaved assets changes?")
-        .body("You have unsaved edits in this scope. Continue and discard them, or cancel to keep editing.")
+    let prompt = adw::Dialog::new();
+    prompt.set_title("Discard unsaved assets changes?");
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
         .build();
-    prompt.add_response("cancel", "Keep Editing");
-    prompt.add_response("discard", "Discard Changes");
-    prompt.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-    prompt.set_default_response(Some("cancel"));
-    prompt.set_close_response("cancel");
-    prompt.connect_response(None, move |prompt, response| {
-        if response == "discard" {
+    content.append(
+        &gtk::Label::builder()
+            .label("You have unsaved edits in this scope. Continue and discard them, or cancel to keep editing.")
+            .wrap(true)
+            .halign(gtk::Align::Start)
+            .build(),
+    );
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let keep_button = gtk::Button::with_label("Keep Editing");
+    keep_button.add_css_class("pill-button");
+    keep_button.add_css_class("flat");
+    let discard_button = gtk::Button::with_label("Discard Changes");
+    discard_button.add_css_class("pill-button");
+    discard_button.add_css_class("destructive-action");
+    actions.append(&keep_button);
+    actions.append(&discard_button);
+    content.append(&actions);
+    prompt.set_child(Some(&content));
+    prompt.set_default_widget(Some(&keep_button));
+    {
+        let prompt = prompt.clone();
+        keep_button.connect_clicked(move |_| {
+            prompt.close();
+        });
+    }
+    {
+        let prompt = prompt.clone();
+        discard_button.connect_clicked(move |_| {
             on_confirm();
-        }
-        prompt.close();
-    });
-    prompt.present();
+            prompt.close();
+        });
+    }
+    prompt.present(Some(dialog));
 }

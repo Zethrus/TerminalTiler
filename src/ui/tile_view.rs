@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use adw::prelude::*;
 use gdk::prelude::StaticType;
-use gtk::prelude::*;
 
 use vte4::prelude::*;
 
@@ -1054,7 +1054,6 @@ fn build_terminal_context_button(label: &str, shortcut: Option<&str>) -> gtk::Bu
     button
 }
 
-#[allow(deprecated)]
 fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
     let Some(window) = terminal
         .root()
@@ -1062,20 +1061,19 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
     else {
         return;
     };
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(&window)
-        .title("Recent Transcript")
-        .default_width(820)
-        .default_height(480)
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Recent Transcript");
+    dialog.set_follows_content_size(false);
+    dialog.set_content_width(820);
+    dialog.set_content_height(480);
+    let area = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
         .build();
-    dialog.add_button("Close", gtk::ResponseType::Close);
-    let area = dialog.content_area();
-    area.set_spacing(12);
-    area.set_margin_top(16);
-    area.set_margin_bottom(16);
-    area.set_margin_start(16);
-    area.set_margin_end(16);
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -1091,6 +1089,18 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
     text.buffer().set_text(transcript);
     scroller.set_child(Some(&text));
     area.append(&scroller);
-    dialog.connect_response(|dialog, _| dialog.close());
-    dialog.present();
+    let close_button = gtk::Button::with_label("Close");
+    close_button.add_css_class("pill-button");
+    close_button.add_css_class("flat");
+    close_button.set_halign(gtk::Align::End);
+    area.append(&close_button);
+    dialog.set_child(Some(&area));
+    dialog.set_default_widget(Some(&close_button));
+    {
+        let dialog = dialog.clone();
+        close_button.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+    dialog.present(Some(&window));
 }

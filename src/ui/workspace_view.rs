@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use adw::prelude::*;
 use gtk::glib;
-use gtk::prelude::*;
 use vte4::prelude::TerminalExt;
 use webkit6::prelude::WebViewExt;
 
@@ -1427,20 +1427,16 @@ fn present_runbook_dialog(
     else {
         return;
     };
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(&window)
-        .title(format!("Run {}", runbook.name))
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&format!("Run {}", runbook.name));
+    let area = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
         .build();
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Run", gtk::ResponseType::Accept);
-    dialog.set_default_response(gtk::ResponseType::Accept);
-    let area = dialog.content_area();
-    area.set_spacing(12);
-    area.set_margin_top(16);
-    area.set_margin_bottom(16);
-    area.set_margin_start(16);
-    area.set_margin_end(16);
     area.append(
         &gtk::Label::builder()
             .label(if runbook.description.trim().is_empty() {
@@ -1470,6 +1466,7 @@ fn present_runbook_dialog(
             let entry = gtk::Entry::builder()
                 .placeholder_text(&variable.label)
                 .text(variable.default_value.clone().unwrap_or_default())
+                .activates_default(true)
                 .build();
             area.append(
                 &gtk::Label::builder()
@@ -1496,12 +1493,36 @@ fn present_runbook_dialog(
             .build(),
     );
 
+    let action_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let cancel_button = gtk::Button::with_label("Cancel");
+    cancel_button.add_css_class("pill-button");
+    cancel_button.add_css_class("flat");
+    let run_button = gtk::Button::with_label("Run");
+    run_button.add_css_class("pill-button");
+    run_button.add_css_class("suggested-action");
+    action_row.append(&cancel_button);
+    action_row.append(&run_button);
+    area.append(&action_row);
+    dialog.set_child(Some(&area));
+    dialog.set_default_widget(Some(&run_button));
+
     let runtime = runtime.clone();
     let runbook = runbook.clone();
     let alert_store = alert_store.clone();
     let broadcast_state = broadcast_state.clone();
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
+    {
+        let dialog = dialog.clone();
+        cancel_button.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        run_button.connect_clicked(move |_| {
             let variables = entries
                 .iter()
                 .map(|(id, entry)| (id.clone(), entry.text().to_string()))
@@ -1513,10 +1534,10 @@ fn present_runbook_dialog(
                 &alert_store,
                 &broadcast_state,
             );
-        }
-        dialog.close();
-    });
-    dialog.present();
+            dialog.close();
+        });
+    }
+    dialog.present(Some(&window));
 }
 
 fn execute_runbook(

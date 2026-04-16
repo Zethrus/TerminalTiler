@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use gtk::prelude::*;
+use adw::prelude::*;
 
 #[derive(Clone)]
 pub struct PaletteAction {
@@ -9,24 +9,21 @@ pub struct PaletteAction {
     pub on_activate: Rc<dyn Fn()>,
 }
 
-#[allow(deprecated)]
 pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .title("Command Palette")
-        .default_width(720)
-        .default_height(560)
-        .build();
-    dialog.add_button("Close", gtk::ResponseType::Close);
-    dialog.set_default_response(gtk::ResponseType::Close);
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Command Palette");
+    dialog.set_follows_content_size(false);
+    dialog.set_content_width(720);
+    dialog.set_content_height(560);
 
-    let content = dialog.content_area();
-    content.set_spacing(12);
-    content.set_margin_top(16);
-    content.set_margin_bottom(16);
-    content.set_margin_start(16);
-    content.set_margin_end(16);
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
 
     let search = gtk::Entry::builder()
         .placeholder_text("Search commands")
@@ -44,6 +41,14 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
         .build();
     scroller.set_child(Some(&list));
     content.append(&scroller);
+
+    let close_button = gtk::Button::with_label("Close");
+    close_button.add_css_class("pill-button");
+    close_button.add_css_class("flat");
+    close_button.set_halign(gtk::Align::End);
+    content.append(&close_button);
+    dialog.set_child(Some(&content));
+    dialog.set_default_widget(Some(&close_button));
 
     let actions = Rc::new(actions);
     let rebuild: Rc<dyn Fn()> = {
@@ -107,7 +112,13 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
         search.connect_changed(move |_| rebuild());
     }
 
-    dialog.connect_response(|dialog, _| dialog.close());
-    dialog.present();
+    {
+        let dialog = dialog.clone();
+        close_button.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+
+    dialog.present(Some(window));
     search.grab_focus();
 }

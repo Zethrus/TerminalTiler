@@ -2631,26 +2631,21 @@ impl TitleChrome {
     }
 }
 
-#[allow(deprecated)]
 fn prompt_tab_rename<F>(window: &adw::ApplicationWindow, current_title: &str, on_submit: F)
 where
     F: Fn(Option<String>) + 'static,
 {
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .title("Rename Workspace")
-        .build();
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Apply", gtk::ResponseType::Accept);
-    dialog.set_default_response(gtk::ResponseType::Accept);
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Rename Workspace");
 
-    let content = dialog.content_area();
-    content.set_spacing(12);
-    content.set_margin_top(18);
-    content.set_margin_bottom(18);
-    content.set_margin_start(18);
-    content.set_margin_end(18);
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(18)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
+        .build();
 
     let body = gtk::Label::builder()
         .label("Enter a new workspace tab name. Leave it blank to restore automatic naming.")
@@ -2665,21 +2660,46 @@ where
     content.append(&body);
     content.append(&entry);
 
+    let action_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let cancel_button = gtk::Button::with_label("Cancel");
+    cancel_button.add_css_class("pill-button");
+    cancel_button.add_css_class("flat");
+    let apply_button = gtk::Button::with_label("Apply");
+    apply_button.add_css_class("pill-button");
+    apply_button.add_css_class("suggested-action");
+    action_row.append(&cancel_button);
+    action_row.append(&apply_button);
+    content.append(&action_row);
+    dialog.set_child(Some(&content));
+    dialog.set_default_widget(Some(&apply_button));
+
     let on_submit = Rc::new(on_submit);
-    let entry_for_response = entry.clone();
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            let requested_title = entry_for_response.text().trim().to_string();
+    {
+        let dialog = dialog.clone();
+        cancel_button.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        let entry_for_submit = entry.clone();
+        let on_submit = on_submit.clone();
+        apply_button.connect_clicked(move |_| {
+            let requested_title = entry_for_submit.text().trim().to_string();
             if requested_title.is_empty() {
                 on_submit(None);
             } else {
                 on_submit(Some(requested_title));
             }
-        }
-        dialog.close();
-    });
+            dialog.close();
+        });
+    }
 
-    dialog.present();
+    dialog.present(Some(window));
     entry.grab_focus();
     entry.set_position(-1);
 }
@@ -2692,7 +2712,8 @@ fn apply_shell_profile(
     configure_window_controls(header);
 
     logging::info(format!(
-        "applying shell profile preset='{}' theme={} density={}",
+        "applying shell profile preset='{}' theme={} density={}"
+        ,
         preset.name,
         preset.theme.label(),
         preset.density.label()
@@ -2710,7 +2731,8 @@ fn apply_launch_profile(
 ) {
     configure_window_controls(header);
     logging::info(format!(
-        "applying launch profile theme={} density={}",
+        "applying launch profile theme={} density={}"
+        ,
         preferences.default_theme.label(),
         preferences.default_density.label()
     ));
@@ -2731,9 +2753,11 @@ fn toggle_workspace_fullscreen(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
 ) {
-    if active_tab_is_workspace(tabs, active_tab_id) || window.is_fullscreen() {
-        window.set_fullscreened(!window.is_fullscreen());
+    if !active_tab_is_workspace(tabs, active_tab_id) {
+        return;
     }
+
+    window.set_fullscreened(!window.is_fullscreen());
 }
 
 fn cycle_active_workspace_density(
@@ -2767,7 +2791,8 @@ fn cycle_active_workspace_density(
     );
     apply_window_density(window, Some(next_density));
     logging::info(format!(
-        "cycled workspace density preset='{}' density={}",
+        "cycled workspace density preset='{}' density={}"
+        ,
         workspace_name,
         next_density.label()
     ));

@@ -178,15 +178,15 @@ fn default_settings_dialog_size(
     (width, height)
 }
 
-fn persist_dialog_size(dialog: &gtk::Dialog, on_size_changed: &Rc<dyn Fn(i32, i32)>) {
-    let width = dialog.width();
-    let height = dialog.height();
+fn persist_dialog_size(dialog: &adw::Dialog, on_size_changed: &Rc<dyn Fn(i32, i32)>) {
+    let width = dialog.content_width();
+    let height = dialog.content_height();
     if width > 0 && height > 0 {
         on_size_changed(width, height);
     }
 }
 
-fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &gtk::Dialog) {
+fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &adw::Dialog) {
     dialog.add_css_class("settings-dialog-window");
     for class_name in [
         "theme-light",
@@ -202,7 +202,6 @@ fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &gtk::Dia
     }
 }
 
-#[allow(deprecated)]
 pub fn present(
     window: &adw::ApplicationWindow,
     input: SettingsDialogInput,
@@ -237,28 +236,21 @@ pub fn present(
     } = actions;
     let (default_width, default_height) =
         default_settings_dialog_size(window, settings_dialog_width, settings_dialog_height);
-    let dialog = gtk::Dialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .title("Application Settings")
-        .default_width(default_width)
-        .default_height(default_height)
-        .resizable(true)
-        .build();
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Application Settings");
+    dialog.set_follows_content_size(false);
+    dialog.set_content_width(default_width);
+    dialog.set_content_height(default_height);
     sync_dialog_chrome_classes(window, &dialog);
-    dialog.add_button("Close", gtk::ResponseType::Close);
-    dialog.set_default_response(gtk::ResponseType::Close);
-    if let Some(close_button) = dialog
-        .widget_for_response(gtk::ResponseType::Close)
-        .and_then(|widget| widget.downcast::<gtk::Button>().ok())
-    {
-        close_button.add_css_class("pill-button");
-        close_button.add_css_class("ghost-link-button");
-        close_button.add_css_class("settings-close-button");
-    }
+    let close_button = gtk::Button::with_label("Close");
+    close_button.add_css_class("pill-button");
+    close_button.add_css_class("ghost-link-button");
+    close_button.add_css_class("settings-close-button");
 
-    let content_area = dialog.content_area();
-    content_area.set_vexpand(true);
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -267,7 +259,20 @@ pub fn present(
         .css_classes(["settings-dialog-scroller"])
         .build();
     scroller.set_has_frame(false);
-    content_area.append(&scroller);
+    root.append(&scroller);
+
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::End)
+        .margin_top(12)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+    footer.append(&close_button);
+    root.append(&footer);
+    dialog.set_child(Some(&root));
+    dialog.set_default_widget(Some(&close_button));
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1230,21 +1235,19 @@ pub fn present(
     }
     {
         let size_changed_callback = size_changed_callback.clone();
-        dialog.connect_response(move |dialog, _| {
+        dialog.connect_closed(move |dialog| {
             persist_dialog_size(dialog, &size_changed_callback);
-            dialog.close();
         });
     }
 
     {
-        let size_changed_callback = size_changed_callback.clone();
-        dialog.connect_close_request(move |dialog| {
-            persist_dialog_size(dialog, &size_changed_callback);
-            glib::Propagation::Proceed
+        let dialog = dialog.clone();
+        close_button.connect_clicked(move |_| {
+            dialog.close();
         });
     }
 
-    dialog.present();
+    dialog.present(Some(window));
 }
 
 fn build_shortcut_capture_control(
