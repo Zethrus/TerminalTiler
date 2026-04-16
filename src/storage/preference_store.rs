@@ -257,38 +257,24 @@ impl PreferenceStore {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_default_density(&self, density: ApplicationDensity) {
         let mut preferences = self.load();
         preferences.default_density = density;
         self.save(&preferences);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_default_theme(&self, theme: ThemeMode) {
         let mut preferences = self.load();
         preferences.default_theme = theme;
         self.save(&preferences);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_close_to_background(&self, close_to_background: bool) {
         let mut preferences = self.load();
         preferences.close_to_background = close_to_background;
-        self.save(&preferences);
-    }
-
-    #[allow(dead_code)]
-    pub fn save_default_restore_mode(&self, restore_mode: RestoreLaunchMode) {
-        let mut preferences = self.load();
-        preferences.default_restore_mode = restore_mode;
-        self.save(&preferences);
-    }
-
-    #[allow(dead_code)]
-    pub fn save_windows_wsl_distribution(&self, distribution: Option<&str>) {
-        let mut preferences = self.load();
-        preferences.windows_wsl_distribution = normalize_windows_wsl_distribution(distribution);
         self.save(&preferences);
     }
 
@@ -327,7 +313,7 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_max_reconnect_attempts(&self, attempts: u32) {
         let mut preferences = self.load();
         preferences.max_reconnect_attempts = attempts;

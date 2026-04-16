@@ -51,6 +51,7 @@ impl AssetSection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub enum AssetItemSource {
     BuiltIn,
     Global,
@@ -59,6 +60,7 @@ pub enum AssetItemSource {
 }
 
 impl AssetItemSource {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn label(&self) -> &'static str {
         match self {
             Self::BuiltIn => "Built-in",
@@ -148,6 +150,7 @@ pub fn prune_blank_drafts(mut assets: WorkspaceAssets) -> WorkspaceAssets {
     assets
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn connection_source(
     scope: ConfigScope,
     id: &str,
@@ -171,6 +174,7 @@ pub fn connection_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn host_source(
     scope: ConfigScope,
     id: &str,
@@ -194,6 +198,7 @@ pub fn host_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn group_source(
     scope: ConfigScope,
     id: &str,
@@ -217,6 +222,7 @@ pub fn group_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn role_source(
     scope: ConfigScope,
     id: &str,
@@ -245,6 +251,7 @@ pub fn role_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn runbook_source(
     scope: ConfigScope,
     id: &str,
@@ -268,6 +275,7 @@ pub fn runbook_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn snippet_source(
     scope: ConfigScope,
     id: &str,
@@ -291,6 +299,7 @@ pub fn snippet_source(
     )
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn simple_source(
     scope: ConfigScope,
     id: &str,

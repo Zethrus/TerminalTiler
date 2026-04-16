@@ -46,7 +46,7 @@ pub fn close_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNod
     remove_tile(layout, target_tile_id)
 }
 
-#[allow(dead_code)]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn update_split_ratio(
     layout: &LayoutNode,
     split_path: &[bool],

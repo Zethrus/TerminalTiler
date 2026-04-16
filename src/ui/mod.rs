@@ -1,5 +1,6 @@
 pub mod assets_manager;
 pub mod command_palette;
+mod header_actions;
 pub mod launch_screen;
 pub mod layout_tree;
 pub mod settings_dialog;

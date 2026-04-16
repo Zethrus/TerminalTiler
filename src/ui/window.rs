@@ -7,7 +7,6 @@ use adw::prelude::*;
 use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
-use crate::app::tray::TrayController;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
@@ -17,6 +16,7 @@ use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
+use crate::tray::TrayController;
 use crate::ui::{assets_manager, command_palette, launch_screen, settings_dialog, workspace_view};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;

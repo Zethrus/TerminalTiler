@@ -82,7 +82,7 @@ mod imp {
     };
 
     use crate::logging;
-    use crate::model::assets::WorkspaceAssets;
+    use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
     use crate::model::preset::ApplicationDensity;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
@@ -2022,7 +2022,7 @@ mod imp {
     fn execute_runbook(
         state: &mut WorkspaceWindowState,
         runbook: &crate::model::assets::Runbook,
-        variables: &std::collections::HashMap<String, String>,
+        variables: &TemplateVariableValues,
     ) {
         match resolve_runbook(
             runbook,
@@ -2049,6 +2049,7 @@ mod imp {
                 push_alert(state, alert);
             }
             Err(error) => {
+                let error = error.to_string();
                 let mut alert = AlertEventInput::new(
                     AlertSourceKind::Runbook,
                     AlertSeverity::Error,
@@ -2087,19 +2088,17 @@ mod imp {
                             && runbook.confirm_policy
                                 == crate::model::assets::RunbookConfirmPolicy::Never
                         {
-                            execute_runbook(state, &runbook, &std::collections::HashMap::new());
+                            execute_runbook(state, &runbook, &TemplateVariableValues::new());
                             return;
                         }
 
                         let runbook_for_dialog = runbook.clone();
                         let runbook_for_submit = runbook.clone();
-                        let on_submit = Rc::new(
-                            move |variables: std::collections::HashMap<String, String>| {
-                                if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                                    execute_runbook(state, &runbook_for_submit, &variables);
-                                }
-                            },
-                        );
+                        let on_submit = Rc::new(move |variables: TemplateVariableValues| {
+                            if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                                execute_runbook(state, &runbook_for_submit, &variables);
+                            }
+                        });
                         if let Err(error) =
                             runbook_dialog::present(hwnd, runbook_for_dialog, on_submit)
                         {

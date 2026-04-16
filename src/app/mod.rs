@@ -1,5 +1,3 @@
-pub mod tray;
-
 use adw::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,6 +9,7 @@ use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::SessionStore;
+use crate::tray;
 use crate::ui::window;
 
 pub const APP_ID: &str = "dev.zethrus.terminaltiler";

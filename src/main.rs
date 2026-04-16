@@ -11,6 +11,8 @@ mod storage;
 mod terminal;
 mod transcript;
 #[cfg(target_os = "linux")]
+mod tray;
+#[cfg(target_os = "linux")]
 mod ui;
 #[cfg(target_os = "windows")]
 mod windows;

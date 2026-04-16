@@ -80,6 +80,7 @@ fn proc_flag_eq(path: &str, expected: u64) -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn configure_webkit_process_environment() {}
 
 fn windows_home_dir() -> Option<PathBuf> {

@@ -115,11 +115,6 @@ impl WorkspacePreset {
     pub fn template_badge(&self) -> String {
         format!("{} tiles", self.tile_count())
     }
-
-    #[allow(dead_code)]
-    pub fn tile_summaries(&self) -> Vec<String> {
-        self.layout.tile_summaries()
-    }
 }
 
 const BUILTIN_IDS: &[&str] = &["solo-operator", "review-pair", "delivery-fleet"];

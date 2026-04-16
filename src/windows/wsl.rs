@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
@@ -53,6 +54,31 @@ pub struct WindowsLaunchCommand {
     pub args: Vec<String>,
     pub runtime: WindowsLaunchRuntime,
     pub working_directory: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PowerShellPathError {
+    EmptyPath,
+    RequiresWsl(String),
+    NotWindowsAbsolute(String),
+}
+
+impl fmt::Display for PowerShellPathError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyPath => formatter.write_str("path is empty"),
+            Self::RequiresWsl(path) => write!(
+                formatter,
+                "path '{}' requires WSL and cannot be used with PowerShell fallback",
+                path
+            ),
+            Self::NotWindowsAbsolute(path) => write!(
+                formatter,
+                "path '{}' is not a native Windows absolute path",
+                path
+            ),
+        }
+    }
 }
 
 pub fn probe_runtime(preferred_distribution: Option<&str>) -> Result<WindowsRuntime, String> {
@@ -168,33 +194,6 @@ pub fn collect_session_launch_commands(
     }
 
     Ok(commands)
-}
-
-#[allow(dead_code)]
-pub fn spawn_launch_command(command: &WindowsLaunchCommand) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::CREATE_NEW_CONSOLE;
-
-        Command::new(&command.program)
-            .args(&command.args)
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| {
-                format!(
-                    "failed to spawn '{}' with args {:?}: {}",
-                    command.program, command.args, error
-                )
-            })
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = command;
-        Err("launching Windows terminal commands is only supported on Windows".into())
-    }
 }
 
 impl WindowsRuntime {
@@ -389,7 +388,8 @@ fn build_wsl_launch_command(
     distribution: &str,
 ) -> Result<WindowsLaunchCommand, String> {
     let workspace_root =
-        translate_path_for_wsl(&workspace_root.display().to_string(), distribution)?;
+        translate_path_for_wsl(&workspace_root.display().to_string(), distribution)
+            .map_err(|error| error.to_string())?;
     let working_directory =
         resolve_wsl_working_directory(working_directory_spec, &workspace_root, distribution)?;
     let command_script = build_wsl_shell_script(&working_directory, startup_command);
@@ -493,6 +493,7 @@ fn resolve_wsl_working_directory(
         WorkingDirectory::Relative(path) => Ok(join_posix(workspace_root, path)),
         WorkingDirectory::Absolute(path) => {
             translate_path_for_wsl(&path.display().to_string(), distribution)
+                .map_err(|error| error.to_string())
         }
     }
 }
@@ -501,37 +502,37 @@ fn resolve_powershell_working_directory(
     working_directory: &WorkingDirectory,
     workspace_root: &Path,
 ) -> Result<String, String> {
-    let workspace_root = validate_powershell_path(&workspace_root.display().to_string())?;
+    let workspace_root = validate_powershell_path(&workspace_root.display().to_string())
+        .map_err(|error| error.to_string())?;
 
     match working_directory {
         WorkingDirectory::Home => {
-            let home = home_dir()
-                .and_then(|path| validate_powershell_path(&path.display().to_string()).ok())
-                .unwrap_or_else(|| workspace_root.clone());
-            Ok(home)
+            let Some(home_dir) = home_dir() else {
+                return Ok(workspace_root.clone());
+            };
+
+            validate_powershell_path(&home_dir.display().to_string()).map_err(|error| {
+                format!("home directory is not valid for PowerShell fallback: {error}")
+            })
         }
         WorkingDirectory::WorkspaceRoot => Ok(workspace_root),
         WorkingDirectory::Relative(path) => Ok(join_windows_path(&workspace_root, path)),
-        WorkingDirectory::Absolute(path) => validate_powershell_path(&path.display().to_string()),
+        WorkingDirectory::Absolute(path) => {
+            validate_powershell_path(&path.display().to_string()).map_err(|error| error.to_string())
+        }
     }
 }
 
-fn validate_powershell_path(path: &str) -> Result<String, String> {
+fn validate_powershell_path(path: &str) -> Result<String, PowerShellPathError> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("path is empty".into());
+        return Err(PowerShellPathError::EmptyPath);
     }
     if parse_wsl_unc_path(trimmed).is_some() || looks_like_wsl_absolute_path(trimmed) {
-        return Err(format!(
-            "path '{}' requires WSL and cannot be used with PowerShell fallback",
-            trimmed
-        ));
+        return Err(PowerShellPathError::RequiresWsl(trimmed.to_string()));
     }
     if !looks_like_windows_absolute_path(trimmed) {
-        return Err(format!(
-            "path '{}' is not a native Windows absolute path",
-            trimmed
-        ));
+        return Err(PowerShellPathError::NotWindowsAbsolute(trimmed.to_string()));
     }
     Ok(normalize_windows_path(trimmed))
 }
@@ -645,7 +646,8 @@ mod tests {
     use super::{
         PowerShellRuntime, WindowsLaunchRuntime, WindowsRuntime, WslDistribution,
         build_launch_command, build_powershell_script, build_wsl_shell_script,
-        collect_session_launch_commands, parse_verbose_list, resolve_wsl_runtime,
+        collect_session_launch_commands, parse_verbose_list, resolve_powershell_working_directory,
+        resolve_wsl_runtime,
     };
     use crate::model::assets::{ConnectionKind, ConnectionProfile, InventoryHost, WorkspaceAssets};
     use crate::model::layout::{ReconnectPolicy, TileKind, TileSpec, WorkingDirectory};
@@ -653,6 +655,32 @@ mod tests {
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::{SavedSession, SavedTab};
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_home_env<T>(value: Option<&str>, run: impl FnOnce() -> T) -> T {
+        let _guard = HOME_ENV_LOCK.lock().expect("home env lock poisoned");
+        let previous = std::env::var_os("HOME");
+
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let result = run();
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        result
+    }
 
     fn sample_distributions() -> Vec<WslDistribution> {
         vec![
@@ -914,6 +942,31 @@ mod tests {
         let error = build_launch_command(&tile, &root, &resolved, &sample_powershell_runtime())
             .expect_err("WSL path should fail in PowerShell mode");
 
+        assert!(error.contains("requires WSL"));
+    }
+
+    #[test]
+    fn powershell_home_directory_falls_back_to_workspace_root_when_home_is_unavailable() {
+        let root = PathBuf::from(r"C:\Users\dev\project");
+
+        let resolved = with_home_env(None, || {
+            resolve_powershell_working_directory(&WorkingDirectory::Home, &root)
+        })
+        .expect("missing home should keep the workspace-root fallback");
+
+        assert_eq!(resolved, r"C:\Users\dev\project");
+    }
+
+    #[test]
+    fn powershell_home_directory_rejects_invalid_home_paths() {
+        let root = PathBuf::from(r"C:\Users\dev\project");
+
+        let error = with_home_env(Some("/home/dev"), || {
+            resolve_powershell_working_directory(&WorkingDirectory::Home, &root)
+        })
+        .expect_err("invalid home path should not silently fall back to the workspace root");
+
+        assert!(error.contains("home directory is not valid for PowerShell fallback"));
         assert!(error.contains("requires WSL"));
     }
 

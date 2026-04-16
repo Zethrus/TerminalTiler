@@ -10,7 +10,7 @@ pub struct TranscriptBuffer {
 }
 
 impl TranscriptBuffer {
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn replace_output(&mut self, snapshot: &str) {
         self.output_lines = snapshot
             .replace('\r', "")
@@ -26,7 +26,7 @@ impl TranscriptBuffer {
             .collect();
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn push_output(&mut self, text: &str) {
         for line in text
             .replace('\r', "")

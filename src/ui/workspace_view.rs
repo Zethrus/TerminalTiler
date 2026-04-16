@@ -9,7 +9,7 @@ use vte4::prelude::TerminalExt;
 use webkit6::prelude::WebViewExt;
 
 use crate::logging;
-use crate::model::assets::{Runbook, WorkspaceAssets};
+use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
@@ -977,7 +977,6 @@ pub fn build_with_layout_change_handler(
     runtime.rebuild_from_layout();
     runtime.sync_runbook_controls();
 
-    // Navigate on Enter
     {
         let runtime = runtime.clone();
         url_entry.connect_activate(move |entry| {
@@ -991,7 +990,6 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    // Reload button
     {
         let runtime = runtime.clone();
         url_reload_button.connect_clicked(move |_| {
@@ -1415,7 +1413,7 @@ fn present_runbook_dialog(
     {
         execute_runbook(
             runbook,
-            &HashMap::new(),
+            &TemplateVariableValues::new(),
             runtime,
             alert_store,
             broadcast_state,
@@ -1507,7 +1505,7 @@ fn present_runbook_dialog(
             let variables = entries
                 .iter()
                 .map(|(id, entry)| (id.clone(), entry.text().to_string()))
-                .collect::<HashMap<_, _>>();
+                .collect::<TemplateVariableValues>();
             execute_runbook(
                 &runbook,
                 &variables,
@@ -1523,7 +1521,7 @@ fn present_runbook_dialog(
 
 fn execute_runbook(
     runbook: &Runbook,
-    variables: &HashMap<String, String>,
+    variables: &TemplateVariableValues,
     runtime: &WorkspaceRuntime,
     alert_store: &AlertStore,
     broadcast_state: &gtk::Label,
@@ -1545,6 +1543,7 @@ fn execute_runbook(
             alert_store.push(alert);
         }
         Err(error) => {
+            let error = error.to_string();
             let mut alert = AlertEventInput::new(
                 AlertSourceKind::Runbook,
                 AlertSeverity::Error,

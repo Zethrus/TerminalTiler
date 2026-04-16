@@ -27,6 +27,7 @@ pub enum TileKind {
 }
 
 impl TileKind {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Terminal => "Terminal",
@@ -45,6 +46,7 @@ pub enum ReconnectPolicy {
 }
 
 impl ReconnectPolicy {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Manual => "Manual",
@@ -117,24 +119,7 @@ pub struct TileSpec {
     pub auto_refresh_seconds: Option<u32>,
 }
 
-impl TileSpec {
-    #[allow(dead_code)]
-    pub fn startup_label(&self) -> &str {
-        self.startup_command.as_deref().unwrap_or("Shell")
-    }
-
-    #[allow(dead_code)]
-    pub fn summary_line(&self) -> String {
-        format!(
-            "{}  •  {}  •  {}  •  {}  •  {}",
-            self.title,
-            self.agent_label,
-            self.working_directory.short_label(),
-            self.startup_label(),
-            self.reconnect_policy.label()
-        )
-    }
-}
+impl TileSpec {}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,23 +168,6 @@ impl LayoutNode {
         let target_index = specs.iter().position(|tile| tile.id == target_id)?;
         specs.swap(dragged_index, target_index);
         Some(self.with_tile_specs(&specs))
-    }
-
-    #[allow(dead_code)]
-    pub fn tile_summaries(&self) -> Vec<String> {
-        let mut summaries = Vec::new();
-        self.collect_tile_summaries(&mut summaries);
-        summaries
-    }
-
-    fn collect_tile_summaries(&self, summaries: &mut Vec<String>) {
-        match self {
-            Self::Split { first, second, .. } => {
-                first.collect_tile_summaries(summaries);
-                second.collect_tile_summaries(summaries);
-            }
-            Self::Tile(tile) => summaries.push(tile.summary_line()),
-        }
     }
 
     fn collect_tile_specs(&self, tiles: &mut Vec<TileSpec>) {

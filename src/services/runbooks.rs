@@ -1,10 +1,13 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
 
-use regex::Regex;
-
-use crate::model::assets::{Runbook, RunbookConfirmPolicy, RunbookTarget};
+use crate::model::assets::{Runbook, RunbookConfirmPolicy, RunbookTarget, TemplateVariableValues};
 use crate::model::layout::TileSpec;
 use crate::services::broadcast::BroadcastTarget;
+use crate::services::template_variables::{
+    TemplateRenderError, TemplateVariableContext, render_variables,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedRunbook {
@@ -15,11 +18,51 @@ pub struct ResolvedRunbook {
     pub confirmation_required: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunbookResolveError {
+    NoMatchingPanes {
+        runbook_name: String,
+        target_label: String,
+    },
+    Template(TemplateRenderError),
+}
+
+impl fmt::Display for RunbookResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoMatchingPanes {
+                runbook_name,
+                target_label,
+            } => write!(
+                formatter,
+                "Runbook '{}' does not match any panes for {}.",
+                runbook_name, target_label
+            ),
+            Self::Template(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for RunbookResolveError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NoMatchingPanes { .. } => None,
+            Self::Template(error) => Some(error),
+        }
+    }
+}
+
+impl From<TemplateRenderError> for RunbookResolveError {
+    fn from(error: TemplateRenderError) -> Self {
+        Self::Template(error)
+    }
+}
+
 pub fn resolve_runbook(
     runbook: &Runbook,
-    variables: &HashMap<String, String>,
+    variables: &TemplateVariableValues,
     tiles: &[TileSpec],
-) -> Result<ResolvedRunbook, String> {
+) -> Result<ResolvedRunbook, RunbookResolveError> {
     let matching_tile_ids: BTreeSet<String> = match &runbook.target {
         RunbookTarget::AllPanes => tiles.iter().map(|tile| tile.id.clone()).collect(),
         RunbookTarget::PaneGroup(group) => tiles
@@ -50,25 +93,25 @@ pub fn resolve_runbook(
     };
 
     if matching_tile_ids.is_empty() {
-        return Err(format!(
-            "Runbook '{}' does not match any panes for {}.",
-            runbook.name,
-            runbook.target.label()
-        ));
+        return Err(RunbookResolveError::NoMatchingPanes {
+            runbook_name: runbook.name.clone(),
+            target_label: runbook.target.label(),
+        });
     }
 
     let commands = runbook
         .steps
         .iter()
         .map(|step| {
-            let rendered = render_variables(&step.command, variables)?;
+            let rendered =
+                render_variables(&step.command, variables, TemplateVariableContext::Runbook)?;
             Ok(if step.append_newline && !rendered.ends_with('\n') {
                 format!("{rendered}\n")
             } else {
                 rendered
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, RunbookResolveError>>()?;
 
     let target = match &runbook.target {
         RunbookTarget::AllPanes => BroadcastTarget::AllPanes,
@@ -97,38 +140,14 @@ pub fn resolve_runbook(
         confirmation_required,
     })
 }
-
-fn render_variables(command: &str, variables: &HashMap<String, String>) -> Result<String, String> {
-    let variable_pattern =
-        Regex::new(r"\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}").map_err(|error| error.to_string())?;
-    let mut rendered = String::new();
-    let mut last_end = 0;
-    for captures in variable_pattern.captures_iter(command) {
-        let Some(variable_match) = captures.get(0) else {
-            continue;
-        };
-        let Some(key_match) = captures.get(1) else {
-            continue;
-        };
-        rendered.push_str(&command[last_end..variable_match.start()]);
-        let key = key_match.as_str();
-        let value = variables
-            .get(key)
-            .ok_or_else(|| format!("Missing runbook variable '{key}'."))?;
-        rendered.push_str(value);
-        last_end = variable_match.end();
-    }
-    rendered.push_str(&command[last_end..]);
-    Ok(rendered)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::resolve_runbook;
+    use super::{RunbookResolveError, resolve_runbook};
     use crate::model::assets::{Runbook, RunbookConfirmPolicy, RunbookStep, RunbookTarget};
     use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
+    use crate::services::template_variables::{TemplateRenderError, TemplateVariableContext};
 
     fn tile(id: &str) -> TileSpec {
         TileSpec {
@@ -175,6 +194,36 @@ mod tests {
         assert_eq!(
             resolved.commands,
             vec![String::from("sudo systemctl restart nginx\n")]
+        );
+    }
+
+    #[test]
+    fn reports_missing_variables_with_a_typed_error() {
+        let runbook = Runbook {
+            id: "restart".into(),
+            name: "Restart".into(),
+            description: String::new(),
+            tags: Vec::new(),
+            target: RunbookTarget::PaneGroup("ops".into()),
+            variables: Vec::new(),
+            steps: vec![RunbookStep {
+                id: "step-1".into(),
+                label: "Restart".into(),
+                command: "sudo systemctl restart {{service}}".into(),
+                append_newline: true,
+            }],
+            confirm_policy: RunbookConfirmPolicy::Always,
+        };
+
+        let error = resolve_runbook(&runbook, &HashMap::new(), &[tile("pane-1")])
+            .expect_err("missing variable should fail");
+
+        assert_eq!(
+            error,
+            RunbookResolveError::Template(TemplateRenderError::MissingVariable {
+                context: TemplateVariableContext::Runbook,
+                key: "service".into(),
+            })
         );
     }
 }

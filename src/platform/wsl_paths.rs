@@ -1,20 +1,49 @@
+use std::error::Error;
+use std::fmt;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WslUncPath {
     pub distro: String,
     pub path: String,
 }
 
-pub fn translate_path_for_wsl(path: &str, expected_distro: &str) -> Result<String, String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WslPathTranslationError {
+    EmptyPath,
+    UnexpectedDistro { actual: String, expected: String },
+    UnsupportedPath(String),
+}
+
+impl fmt::Display for WslPathTranslationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyPath => formatter.write_str("path is empty"),
+            Self::UnexpectedDistro { actual, expected } => write!(
+                formatter,
+                "WSL UNC path targets distro '{}' instead of '{}'",
+                actual, expected
+            ),
+            Self::UnsupportedPath(path) => write!(formatter, "unsupported WSL path '{}'", path),
+        }
+    }
+}
+
+impl Error for WslPathTranslationError {}
+
+pub fn translate_path_for_wsl(
+    path: &str,
+    expected_distro: &str,
+) -> Result<String, WslPathTranslationError> {
     if path.trim().is_empty() {
-        return Err("path is empty".into());
+        return Err(WslPathTranslationError::EmptyPath);
     }
 
     if let Some(unc) = parse_wsl_unc_path(path) {
         if !unc.distro.eq_ignore_ascii_case(expected_distro) {
-            return Err(format!(
-                "WSL UNC path targets distro '{}' instead of '{}'",
-                unc.distro, expected_distro
-            ));
+            return Err(WslPathTranslationError::UnexpectedDistro {
+                actual: unc.distro,
+                expected: expected_distro.to_string(),
+            });
         }
         return Ok(unc.path);
     }
@@ -27,7 +56,7 @@ pub fn translate_path_for_wsl(path: &str, expected_distro: &str) -> Result<Strin
         return Ok(wsl_path);
     }
 
-    Err(format!("unsupported WSL path '{}'", path))
+    Err(WslPathTranslationError::UnsupportedPath(path.to_string()))
 }
 
 pub fn parse_wsl_unc_path(path: &str) -> Option<WslUncPath> {
@@ -75,7 +104,7 @@ fn translate_windows_drive_path(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_wsl_unc_path, translate_path_for_wsl};
+    use super::{WslPathTranslationError, parse_wsl_unc_path, translate_path_for_wsl};
 
     #[test]
     fn parses_matching_wsl_unc_paths() {
@@ -110,7 +139,12 @@ mod tests {
         let error = translate_path_for_wsl(r"\\wsl$\Debian\home\dev", "Ubuntu")
             .expect_err("cross-distro path should fail");
 
-        assert!(error.contains("Debian"));
-        assert!(error.contains("Ubuntu"));
+        assert_eq!(
+            error,
+            WslPathTranslationError::UnexpectedDistro {
+                actual: "Debian".into(),
+                expected: "Ubuntu".into(),
+            }
+        );
     }
 }

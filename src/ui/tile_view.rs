@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -7,13 +6,16 @@ use gtk::prelude::*;
 
 use vte4::prelude::*;
 
-use crate::model::assets::{CliSnippet, OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
+use crate::model::assets::{
+    CliSnippet, OutputSeverity, PaneStatusSnapshot, TemplateVariableValues, WorkspaceAssets,
+};
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::resolve_tile_launch;
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
+use crate::ui::header_actions::build_header_icon_button;
 
 pub struct TileView {
     pub widget: gtk::Widget,
@@ -366,19 +368,6 @@ pub fn build(
     }
 }
 
-fn build_header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .icon_name(icon_name)
-        .focus_on_click(false)
-        .css_classes(["flat", "tile-header-action", "tile-header-close"])
-        .build();
-    button.set_tooltip_text(Some(tooltip));
-    if let Some(img) = button.first_child() {
-        let _ = img.pango_context();
-    }
-    button
-}
-
 fn build_snippet_popover(
     button: &gtk::Button,
     snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
@@ -453,7 +442,7 @@ fn refresh_snippet_list(
         let form_content = content.clone();
         button.connect_clicked(move |_| {
             if snippet.variables.is_empty() {
-                let variables = HashMap::new();
+                let variables = TemplateVariableValues::new();
                 let _ = execute_snippet(
                     &snippet,
                     &variables,
@@ -592,7 +581,7 @@ fn show_snippet_variable_form(
             let variables = fields
                 .iter()
                 .map(|(id, entry)| (id.clone(), entry.text().to_string()))
-                .collect::<HashMap<_, _>>();
+                .collect::<TemplateVariableValues>();
             if let Err(error) = execute_snippet(
                 &snippet,
                 &variables,
@@ -656,7 +645,7 @@ fn build_snippet_button(snippet: &CliSnippet) -> gtk::Button {
 
 fn execute_snippet(
     snippet: &CliSnippet,
-    variables: &HashMap<String, String>,
+    variables: &TemplateVariableValues,
     session: &TerminalSession,
     popover: &gtk::Popover,
     show_recovery_prompt: Rc<dyn Fn()>,
@@ -667,7 +656,7 @@ fn execute_snippet(
         return Ok(());
     }
 
-    let command = resolve_snippet(snippet, variables)?;
+    let command = resolve_snippet(snippet, variables).map_err(|error| error.to_string())?;
     if session.send_text(&command) {
         popover.popdown();
         Ok(())

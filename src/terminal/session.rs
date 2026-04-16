@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -79,6 +80,29 @@ struct TerminalLaunchSpec {
     envv: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum WorkingDirectoryValidationError {
+    Missing(PathBuf),
+    NotDirectory(PathBuf),
+}
+
+impl fmt::Display for WorkingDirectoryValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing(path) => write!(
+                formatter,
+                "The working directory does not exist:\n{}",
+                path.display()
+            ),
+            Self::NotDirectory(path) => write!(
+                formatter,
+                "The working directory is not a directory:\n{}",
+                path.display()
+            ),
+        }
+    }
+}
+
 impl TerminalLaunchSpec {
     fn argv_for_mode(&self, mode: TerminalLaunchMode) -> &[String] {
         match mode {
@@ -139,7 +163,8 @@ impl TerminalSession {
             });
         }
 
-        let launch_spec = if let Some(error) = validate_working_dir(&working_dir) {
+        let launch_spec = if let Err(error) = validate_working_dir(&working_dir) {
+            let error = error.to_string();
             report_spawn_problem(&terminal, &descriptor, &error);
             mark_state_exited(&state);
             Rc::new(TerminalLaunchSpec {
@@ -298,7 +323,8 @@ impl TerminalSession {
     }
 
     fn spawn_launch_mode(&self, mode: TerminalLaunchMode, notice: &[u8]) -> Result<(), String> {
-        if let Some(error) = validate_working_dir(Path::new(&self.launch_spec.working_directory)) {
+        if let Err(error) = validate_working_dir(Path::new(&self.launch_spec.working_directory)) {
+            let error = error.to_string();
             self.report_spawn_problem(&error);
             self.mark_exited();
             return Err(error);
@@ -698,22 +724,18 @@ fn signal_name(signal: libc::c_int) -> &'static str {
     }
 }
 
-fn validate_working_dir(path: &Path) -> Option<String> {
+fn validate_working_dir(path: &Path) -> Result<(), WorkingDirectoryValidationError> {
     if !path.exists() {
-        return Some(format!(
-            "The working directory does not exist:\n{}",
-            path.display()
-        ));
+        return Err(WorkingDirectoryValidationError::Missing(path.to_path_buf()));
     }
 
     if !path.is_dir() {
-        return Some(format!(
-            "The working directory is not a directory:\n{}",
-            path.display()
+        return Err(WorkingDirectoryValidationError::NotDirectory(
+            path.to_path_buf(),
         ));
     }
 
-    None
+    Ok(())
 }
 
 fn build_spawn_argv(shell: &str, command: Option<&str>) -> Vec<String> {
@@ -763,8 +785,9 @@ fn shell_quote_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_local_shell_argv, build_spawn_argv, process_group_target, serialize_dropped_paths,
-        supports_recovery_options, validate_working_dir,
+        WorkingDirectoryValidationError, build_local_shell_argv, build_spawn_argv,
+        process_group_target, serialize_dropped_paths, supports_recovery_options,
+        validate_working_dir,
     };
     use std::path::{Path, PathBuf};
 
@@ -841,13 +864,14 @@ mod tests {
 
     #[test]
     fn rejects_missing_working_directories() {
-        let message = validate_working_dir(Path::new("/definitely/not/here"));
+        let error = validate_working_dir(Path::new("/definitely/not/here"))
+            .expect_err("missing working directory should fail");
 
-        assert!(
-            message
-                .as_deref()
-                .is_some_and(|value| value.contains("does not exist"))
-        );
+        assert!(matches!(
+            error,
+            WorkingDirectoryValidationError::Missing(path)
+                if path == Path::new("/definitely/not/here")
+        ));
     }
 
     #[test]

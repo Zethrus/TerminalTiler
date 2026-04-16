@@ -53,7 +53,7 @@ impl AssetStore {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn ensure_seeded(&self) {
         let Some(path) = &self.path else {
             return;
@@ -66,6 +66,7 @@ impl AssetStore {
         }
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn load_assets(&self) -> WorkspaceAssets {
         self.load_assets_with_status().assets
     }

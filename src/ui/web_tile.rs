@@ -11,6 +11,7 @@ use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
+use crate::ui::header_actions::build_header_icon_button;
 
 type GetWebTileSettings = Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>;
 
@@ -241,7 +242,6 @@ pub fn build(
     header.append(&actions);
     shell.append(&header);
 
-    // Update title from page title
     {
         let title_label = title.clone();
         let web_view = web_view.clone();
@@ -259,7 +259,6 @@ pub fn build(
         });
     }
 
-    // Update status from URI changes
     {
         let status = status.clone();
         let web_view = web_view.clone();
@@ -349,10 +348,8 @@ pub fn build(
     web_frame.append(&web_view);
     shell.append(&web_frame);
 
-    // Context menu
     install_web_context_menu(&web_view, &shell);
 
-    // Drag source on header
     let drag_source = gtk::DragSource::builder()
         .actions(gdk::DragAction::MOVE)
         .build();
@@ -376,7 +373,6 @@ pub fn build(
     }
     left.add_controller(drag_source);
 
-    // Drop target on shell
     let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
     {
         let shell = shell.clone();
@@ -406,7 +402,6 @@ pub fn build(
     }
     shell.add_controller(drop_target);
 
-    // Auto-refresh timer
     let refresh_source_id: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
     if let Some(interval) = tile.auto_refresh_seconds
         && interval > 0
@@ -427,19 +422,6 @@ pub fn build(
         shutdown_flag,
         close_button,
     }
-}
-
-fn build_header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .icon_name(icon_name)
-        .focus_on_click(false)
-        .css_classes(["flat", "tile-header-action", "tile-header-close"])
-        .build();
-    button.set_tooltip_text(Some(tooltip));
-    if let Some(img) = button.first_child() {
-        let _ = img.pango_context();
-    }
-    button
 }
 
 fn build_settings_label(label: &str) -> gtk::Label {

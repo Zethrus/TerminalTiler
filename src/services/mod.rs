@@ -8,4 +8,5 @@ pub mod project_suggestions;
 pub mod runbooks;
 pub mod session_restore;
 pub mod snippets;
+mod template_variables;
 pub mod tile_draft;

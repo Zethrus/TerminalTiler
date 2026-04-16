@@ -1,6 +1,5 @@
 #[cfg(target_os = "windows")]
 mod imp {
-    use std::collections::HashMap;
     use std::mem;
     use std::ptr;
     use std::rc::Rc;
@@ -21,7 +20,7 @@ mod imp {
         WS_VSCROLL,
     };
 
-    use crate::model::assets::Runbook;
+    use crate::model::assets::{Runbook, TemplateVariableValues};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsRunbookDialog";
     const ID_INFO: isize = 1001;
@@ -45,7 +44,7 @@ mod imp {
     struct RunbookDialogState {
         parent_hwnd: HWND,
         runbook: Runbook,
-        on_submit: Rc<dyn Fn(HashMap<String, String>)>,
+        on_submit: Rc<dyn Fn(TemplateVariableValues)>,
         info_hwnd: HWND,
         preview_hwnd: HWND,
         status_hwnd: HWND,
@@ -57,7 +56,7 @@ mod imp {
     pub fn present(
         parent_hwnd: HWND,
         runbook: Runbook,
-        on_submit: Rc<dyn Fn(HashMap<String, String>)>,
+        on_submit: Rc<dyn Fn(TemplateVariableValues)>,
     ) -> Result<(), String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
@@ -376,7 +375,7 @@ mod imp {
 
     fn prepare_submit(
         state: &RunbookDialogState,
-    ) -> Option<(Rc<dyn Fn(HashMap<String, String>)>, HashMap<String, String>)> {
+    ) -> Option<(Rc<dyn Fn(TemplateVariableValues)>, TemplateVariableValues)> {
         let values = current_values(state);
         for field in &state.fields {
             if field.required
@@ -422,7 +421,7 @@ mod imp {
         }
     }
 
-    fn current_values(state: &RunbookDialogState) -> HashMap<String, String> {
+    fn current_values(state: &RunbookDialogState) -> TemplateVariableValues {
         state
             .fields
             .iter()
@@ -430,7 +429,7 @@ mod imp {
             .collect()
     }
 
-    fn render_preview_command(command: &str, values: &HashMap<String, String>) -> String {
+    fn render_preview_command(command: &str, values: &TemplateVariableValues) -> String {
         let Ok(variable_pattern) = Regex::new(r"\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}") else {
             return command.to_string();
         };
