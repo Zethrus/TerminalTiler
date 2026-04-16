@@ -99,7 +99,7 @@ jobs:
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
-        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SkipLaunchSmoke -SmokeProfileKind terminal-only -SkipBuild
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

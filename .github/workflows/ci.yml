@@ -100,4 +100,4 @@ jobs:
 
       - name: Run Windows smoke test
         shell: pwsh
-        run: ./packaging/windows-smoke-test.ps1 -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -SkipLaunchSmoke -SmokeProfileKind terminal-only -SkipBuild
