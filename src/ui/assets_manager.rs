@@ -46,6 +46,16 @@ struct AssetsPages {
 
 type RefreshHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
+fn build_window_close_action_group(request_close: Rc<dyn Fn()>) -> gtk::gio::SimpleActionGroup {
+    let close_actions = gtk::gio::SimpleActionGroup::new();
+    let close_action = gtk::gio::SimpleAction::new("close", None);
+    close_action.connect_activate(move |_, _| {
+        request_close();
+    });
+    close_actions.add_action(&close_action);
+    close_actions
+}
+
 pub fn present(
     window: &adw::ApplicationWindow,
     asset_store: Rc<AssetStore>,
@@ -613,6 +623,11 @@ pub fn present(
             });
         })
     };
+
+    {
+        let close_actions = build_window_close_action_group(request_close.clone());
+        dialog.insert_action_group("window", Some(&close_actions));
+    }
 
     {
         let request_close = request_close.clone();
@@ -3588,4 +3603,25 @@ where
         });
     }
     prompt.present(Some(dialog));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_window_close_action_group;
+    use gtk::gio::prelude::ActionGroupExt;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn window_close_action_group_invokes_request_close() {
+        let called = Rc::new(Cell::new(false));
+        let close_actions = build_window_close_action_group({
+            let called = called.clone();
+            Rc::new(move || called.set(true))
+        });
+
+        close_actions.activate_action("close", None);
+
+        assert!(called.get());
+    }
 }
