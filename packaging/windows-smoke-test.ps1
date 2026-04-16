@@ -335,7 +335,7 @@ if (-not $SkipLaunchSmoke) {
 }
 
 Write-Host "==> smoke-uninstalling MSI package"
-$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart") -PassThru -Wait
+$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru -Wait
 if ($MsiUninstallProcess.ExitCode -ne 0) {
     throw "MSI uninstall exited with code $($MsiUninstallProcess.ExitCode)"
 }
