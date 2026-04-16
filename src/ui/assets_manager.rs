@@ -19,6 +19,7 @@ use crate::services::assets_editor::{
     runbook_source, snippet_source, validate_assets,
 };
 use crate::storage::asset_store::AssetStore;
+use crate::ui::dialog_smoke;
 
 #[derive(Clone)]
 struct AssetsManagerState {
@@ -627,6 +628,36 @@ pub fn present(
     {
         let close_actions = build_window_close_action_group(request_close.clone());
         dialog.insert_action_group("window", Some(&close_actions));
+    }
+
+    if dialog_smoke::is_enabled() {
+        let mark_dirty: Rc<dyn Fn()> = {
+            let state = state.clone();
+            let refresh_pages = refresh_pages.clone();
+            Rc::new(move || {
+                let mut snapshot = state.borrow_mut();
+                snapshot
+                    .current_assets
+                    .connection_profiles
+                    .push(ConnectionProfile {
+                        id: String::new(),
+                        name: String::new(),
+                        kind: ConnectionKind::Local,
+                        inventory_host_id: None,
+                        tags: Vec::new(),
+                        remote_working_directory: None,
+                        shell_program: None,
+                        startup_prefix: None,
+                    });
+                snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
+                snapshot.raw_error = None;
+                drop(snapshot);
+                refresh_pages();
+            })
+        };
+        let smoke_actions = dialog_smoke::build_assets_smoke_action_group(mark_dirty);
+        dialog.insert_action_group("dialog-smoke", Some(&smoke_actions));
+        dialog_smoke::register_assets_dialog(&dialog);
     }
 
     {
@@ -3589,17 +3620,39 @@ where
     content.append(&actions);
     prompt.set_child(Some(&content));
     prompt.set_default_widget(Some(&keep_button));
-    {
+    let on_confirm: Rc<dyn Fn()> = Rc::new(on_confirm);
+    let keep_editing: Rc<dyn Fn()> = {
         let prompt = prompt.clone();
-        keep_button.connect_clicked(move |_| {
+        Rc::new(move || {
             prompt.close();
+        })
+    };
+    let discard_changes: Rc<dyn Fn()> = {
+        let prompt = prompt.clone();
+        let on_confirm = on_confirm.clone();
+        Rc::new(move || {
+            on_confirm();
+            prompt.close();
+        })
+    };
+    if dialog_smoke::is_enabled() {
+        let smoke_actions = dialog_smoke::build_prompt_smoke_action_group(
+            keep_editing.clone(),
+            discard_changes.clone(),
+        );
+        prompt.insert_action_group("dialog-smoke", Some(&smoke_actions));
+        dialog_smoke::register_assets_prompt(&prompt);
+    }
+    {
+        let keep_editing = keep_editing.clone();
+        keep_button.connect_clicked(move |_| {
+            keep_editing();
         });
     }
     {
-        let prompt = prompt.clone();
+        let discard_changes = discard_changes.clone();
         discard_button.connect_clicked(move |_| {
-            on_confirm();
-            prompt.close();
+            discard_changes();
         });
     }
     prompt.present(Some(dialog));

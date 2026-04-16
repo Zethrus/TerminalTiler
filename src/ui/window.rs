@@ -17,7 +17,9 @@ use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
-use crate::ui::{assets_manager, command_palette, launch_screen, settings_dialog, workspace_view};
+use crate::ui::{
+    assets_manager, command_palette, dialog_smoke, launch_screen, settings_dialog, workspace_view,
+};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -1808,6 +1810,11 @@ pub fn present(
 
     window.present();
 
+    if dialog_smoke::is_enabled() {
+        dialog_smoke::start(&window);
+        return;
+    }
+
     if let Some(saved_session) = saved_session {
         let resume_session = saved_session.clone();
         let tabs_for_restore = tabs.clone();
@@ -2712,8 +2719,7 @@ fn apply_shell_profile(
     configure_window_controls(header);
 
     logging::info(format!(
-        "applying shell profile preset='{}' theme={} density={}"
-        ,
+        "applying shell profile preset='{}' theme={} density={}",
         preset.name,
         preset.theme.label(),
         preset.density.label()
@@ -2731,8 +2737,7 @@ fn apply_launch_profile(
 ) {
     configure_window_controls(header);
     logging::info(format!(
-        "applying launch profile theme={} density={}"
-        ,
+        "applying launch profile theme={} density={}",
         preferences.default_theme.label(),
         preferences.default_density.label()
     ));
@@ -2791,8 +2796,7 @@ fn cycle_active_workspace_density(
     );
     apply_window_density(window, Some(next_density));
     logging::info(format!(
-        "cycled workspace density preset='{}' density={}"
-        ,
+        "cycled workspace density preset='{}' density={}",
         workspace_name,
         next_density.label()
     ));

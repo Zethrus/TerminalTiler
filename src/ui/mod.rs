@@ -1,5 +1,6 @@
 pub mod assets_manager;
 pub mod command_palette;
+pub(crate) mod dialog_smoke;
 mod header_actions;
 pub mod launch_screen;
 pub mod layout_tree;

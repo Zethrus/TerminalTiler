@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
+use crate::ui::dialog_smoke;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsState {
@@ -241,6 +242,7 @@ pub fn present(
     dialog.set_follows_content_size(false);
     dialog.set_content_width(default_width);
     dialog.set_content_height(default_height);
+    dialog_smoke::register_settings_dialog(&dialog);
     sync_dialog_chrome_classes(window, &dialog);
     let close_button = gtk::Button::with_label("Close");
     close_button.add_css_class("pill-button");
@@ -273,6 +275,21 @@ pub fn present(
     root.append(&footer);
     dialog.set_child(Some(&root));
     dialog.set_default_widget(Some(&close_button));
+
+    let request_close: Rc<dyn Fn()> = {
+        let dialog = dialog.clone();
+        Rc::new(move || {
+            let dialog = dialog.clone();
+            glib::idle_add_local_once(move || {
+                if !dialog.close() {
+                    dialog.force_close();
+                }
+            });
+        })
+    };
+    if dialog_smoke::is_enabled() {
+        dialog_smoke::register_settings_close(request_close.clone());
+    }
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1241,9 +1258,9 @@ pub fn present(
     }
 
     {
-        let dialog = dialog.clone();
+        let request_close = request_close.clone();
         close_button.connect_clicked(move |_| {
-            dialog.close();
+            request_close();
         });
     }
 
