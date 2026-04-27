@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE_TAG="${IMAGE_TAG:-terminaltiler-build:debian12}"
+IMAGE_TAG="${IMAGE_TAG:-terminaltiler-build:debian13}"
 CONTAINER_TOOL="${CONTAINER_TOOL:-}"
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
@@ -37,9 +37,9 @@ chown -R "$HOST_UID:$HOST_GID" /workspace/dist /workspace/packaging/.build
 EOF
 )"
 
-echo "==> building Debian 12 packaging image"
+echo "==> building Debian 13 packaging image"
 "$CONTAINER_TOOL" build \
-  -f "$ROOT_DIR/packaging/container/debian12/Dockerfile" \
+  -f "$ROOT_DIR/packaging/container/debian13/Dockerfile" \
   -t "$IMAGE_TAG" \
   "$ROOT_DIR"
 

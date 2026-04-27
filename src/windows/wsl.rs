@@ -661,21 +661,46 @@ mod tests {
 
     fn with_home_env<T>(value: Option<&str>, run: impl FnOnce() -> T) -> T {
         let _guard = HOME_ENV_LOCK.lock().expect("home env lock poisoned");
-        let previous = std::env::var_os("HOME");
+        let previous_home = std::env::var_os("HOME");
+        let previous_userprofile = std::env::var_os("USERPROFILE");
+        let previous_homedrive = std::env::var_os("HOMEDRIVE");
+        let previous_homepath = std::env::var_os("HOMEPATH");
 
         unsafe {
             match value {
-                Some(value) => std::env::set_var("HOME", value),
-                None => std::env::remove_var("HOME"),
+                Some(value) => {
+                    std::env::set_var("HOME", value);
+                    std::env::remove_var("USERPROFILE");
+                    std::env::remove_var("HOMEDRIVE");
+                    std::env::remove_var("HOMEPATH");
+                }
+                None => {
+                    std::env::remove_var("HOME");
+                    std::env::remove_var("USERPROFILE");
+                    std::env::remove_var("HOMEDRIVE");
+                    std::env::remove_var("HOMEPATH");
+                }
             }
         }
 
         let result = run();
 
         unsafe {
-            match previous {
+            match previous_home {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
+            }
+            match previous_userprofile {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match previous_homedrive {
+                Some(value) => std::env::set_var("HOMEDRIVE", value),
+                None => std::env::remove_var("HOMEDRIVE"),
+            }
+            match previous_homepath {
+                Some(value) => std::env::set_var("HOMEPATH", value),
+                None => std::env::remove_var("HOMEPATH"),
             }
         }
 
