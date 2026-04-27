@@ -29,6 +29,7 @@ sudo apt update
 sudo apt install -y \
   build-essential \
   pkg-config \
+  patchelf \
   libgtk-4-dev \
   libadwaita-1-dev \
   libvte-2.91-gtk4-dev \
