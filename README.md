@@ -18,9 +18,13 @@ TerminalTiler is a native desktop application for launching premium multi-termin
 
 ## Build-time dependencies
 
-On Ubuntu or Debian, install the GTK and VTE development packages before building from source:
+On Ubuntu or Debian, install Rust and the GTK/VTE development packages before building from source:
 
 ```bash
+# Install Rust (rustup is the recommended way)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
 sudo apt update
 sudo apt install -y \
   build-essential \
