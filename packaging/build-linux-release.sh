@@ -27,8 +27,9 @@ check_build_dependencies() {
   fi
 
   # Required GTK/WebKit dev packages via pkg-config
+  # Note: pkg-config names vary across distributions (e.g. gtk-4 on Debian, gtk4 on Ubuntu)
   for pkg in \
-    "libgtk-4-dev:gtk-4" \
+    "libgtk-4-dev:gtk4" \
     "libadwaita-1-dev:libadwaita-1" \
     "libvte-2.91-gtk4-dev:vte-2.91-gtk4" \
     "libgraphene-1.0-dev:graphene-1.0" \
