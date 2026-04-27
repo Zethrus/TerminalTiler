@@ -30,6 +30,8 @@ sudo apt install -y \
   build-essential \
   pkg-config \
   patchelf \
+  file \
+  wget \
   libgtk-4-dev \
   libadwaita-1-dev \
   libvte-2.91-gtk4-dev \
@@ -37,6 +39,11 @@ sudo apt install -y \
   libsoup-3.0-dev \
   libjavascriptcoregtk-6.0-dev \
   libwebkitgtk-6.0-dev
+
+# Download appimagetool (required for AppImage packaging; not available in apt)
+sudo wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+  -O /usr/local/bin/appimagetool \
+  && sudo chmod +x /usr/local/bin/appimagetool
 ```
 
 ## Development
