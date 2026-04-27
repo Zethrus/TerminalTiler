@@ -54,7 +54,7 @@ jobs:
       - name: Install Linux validation dependencies
         run: bash packaging/install-ubuntu-workflow-deps.sh
 
-      - name: Build Linux release artifacts in Debian 12 container
+      - name: Build Linux release artifacts in Debian 13 container
         env:
           PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
           BUILD_DATE: ${{ steps.package_version.outputs.build_date }}
