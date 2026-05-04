@@ -36,9 +36,12 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\TerminalTiler\Uninstall TerminalTiler.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "DisplayName" "TerminalTiler"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "Publisher" "Zethrus"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "UninstallString" "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "URLInfoAbout" "https://terminaltiler.app"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "HelpLink" "https://terminaltiler.app"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "NoRepair" 1
 

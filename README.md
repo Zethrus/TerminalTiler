@@ -1,6 +1,10 @@
 # TerminalTiler
 
-TerminalTiler is a native desktop application for launching premium multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 builds use a native Win32 shell with ConPTY and prefer WSL2, falling back to PowerShell when WSL2 is unavailable.
+TerminalTiler is a native desktop application for launching polished multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 builds use a native Win32 shell with ConPTY and prefer WSL2, falling back to PowerShell when WSL2 is unavailable.
+
+- Product site: <https://terminaltiler.app>
+- Source code: <https://github.com/Zethrus/TerminalTiler>
+- Releases: <https://github.com/Zethrus/TerminalTiler/releases>
 
 ## Current scope
 
@@ -15,6 +19,12 @@ TerminalTiler is a native desktop application for launching premium multi-termin
 - Native Windows 11 workspace host with WSL2-first and PowerShell-fallback runtime selection
 - Linux `.deb` and AppImage packaging
 - Windows `.exe` installer and portable zip packaging
+
+## License and commercial model
+
+This repository is the public TerminalTiler core and is released under the MIT License. See [LICENSE](LICENSE) for details.
+
+TerminalTiler follows an open-core product model: the core app stays public and useful, while future Pro offerings may add paid workflow packs, convenience features, official support, or private extensions. The public repository remains the source of truth for the open-source core.
 
 ## Build-time dependencies
 
