@@ -12,8 +12,6 @@ pub const SETTINGS_DIALOG_TITLE: &str = "TerminalTiler Core Settings";
 pub const SETTINGS_SUMMARY_COPY: &str = "MIT-licensed core settings for local workspaces, launch defaults, tray behavior, and shortcuts.";
 #[cfg(target_os = "windows")]
 pub const WINDOWS_SHELL_TITLE: &str = "TerminalTiler Core for Windows";
-#[cfg(target_os = "windows")]
-pub const WINDOWS_SETTINGS_TITLE: &str = "TerminalTiler Core Settings";
 
 pub fn display_name_with_version() -> String {
     format!("{PRODUCT_DISPLAY_NAME} v{PRODUCT_VERSION}")
