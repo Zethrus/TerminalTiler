@@ -65,7 +65,7 @@ mod imp {
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const SETTINGS_WINDOW_CLASS: &str = "TerminalTilerWindowsSettings";
     const WINDOW_TITLE: &str = product::WINDOWS_SHELL_TITLE;
-    const SETTINGS_WINDOW_TITLE: &str = product::WINDOWS_SETTINGS_TITLE;
+    const SETTINGS_WINDOW_TITLE: &str = product::SETTINGS_DIALOG_TITLE;
     const ID_STATUS: isize = 1001;
     const ID_REFRESH: isize = 1002;
     const ID_LAUNCH: isize = 1003;
