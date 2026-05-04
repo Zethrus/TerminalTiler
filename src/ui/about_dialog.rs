@@ -28,7 +28,7 @@ pub fn present(window: &adw::ApplicationWindow) {
     );
     content.append(
         &gtk::Label::builder()
-            .label(&product::display_name_with_version())
+            .label(product::display_name_with_version())
             .halign(gtk::Align::Start)
             .css_classes(["field-hint"])
             .build(),

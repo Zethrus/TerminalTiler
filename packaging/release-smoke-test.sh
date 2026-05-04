@@ -226,7 +226,7 @@ run_restore_smoke() {
 
 validate_appstream() {
   local output
-  if output="$(appstreamcli validate "$METAINFO_PATH" 2>&1)"; then
+  if output="$(appstreamcli validate --no-net "$METAINFO_PATH" 2>&1)"; then
     printf '%s\n' "$output"
     return 0
   fi
