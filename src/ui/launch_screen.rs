@@ -14,6 +14,7 @@ use crate::model::layout::{
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
+use crate::product;
 use crate::services::layout_editor::{close_tile, split_tile};
 use crate::services::project_suggestions::detect_project_suggestions;
 use crate::services::tile_draft::{
@@ -951,6 +952,7 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .valign(gtk::Align::Center)
         .css_classes(["launch-overview-meta"])
         .build();
+    meta.append(&build_launch_meta_chip(product::PRODUCT_DISPLAY_NAME));
     meta.append(&build_launch_meta_chip("4-step flow"));
     meta.append(&build_launch_meta_chip("Live preview"));
     meta.append(&build_launch_meta_chip(default_restore_mode.label()));

@@ -5,6 +5,7 @@ use gtk::glib;
 use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::product;
 use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_smoke;
 
@@ -238,7 +239,7 @@ pub fn present(
     let (default_width, default_height) =
         default_settings_dialog_size(window, settings_dialog_width, settings_dialog_height);
     let dialog = adw::Dialog::new();
-    dialog.set_title("Application Settings");
+    dialog.set_title(product::SETTINGS_DIALOG_TITLE);
     dialog.set_follows_content_size(false);
     dialog.set_content_width(default_width);
     dialog.set_content_height(default_height);
@@ -1521,14 +1522,14 @@ fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
         .build();
     body.append(
         &gtk::Label::builder()
-            .label("Application Settings")
+            .label(product::PRODUCT_DISPLAY_NAME)
             .halign(gtk::Align::Start)
             .css_classes(["section-title", "settings-title", "settings-summary-title"])
             .build(),
     );
     body.append(
         &gtk::Label::builder()
-            .label("Set launch defaults, tray behavior, and workspace shortcuts in one place. Changes apply immediately, while workspace zoom stays session-scoped.")
+            .label(product::SETTINGS_SUMMARY_COPY)
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["field-hint", "settings-copy", "settings-summary-copy"])
@@ -1542,8 +1543,8 @@ fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
         .valign(gtk::Align::Center)
         .css_classes(["settings-summary-actions"])
         .build();
-    actions.append(&build_meta_chip("Saved automatically"));
-    actions.append(&build_meta_chip("Defaults live"));
+    actions.append(&build_meta_chip("MIT core"));
+    actions.append(&build_meta_chip("Public source"));
     actions.append(reset_button);
     shell.append(&actions);
 

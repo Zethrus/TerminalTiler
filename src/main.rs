@@ -5,6 +5,7 @@ mod app;
 mod logging;
 mod model;
 mod platform;
+mod product;
 mod services;
 mod storage;
 #[cfg(target_os = "linux")]

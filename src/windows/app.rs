@@ -46,6 +46,7 @@ mod imp {
         ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
     };
     use crate::platform::{home_dir, resolve_workspace_root};
+    use crate::product;
     use crate::services::project_suggestions::detect_project_suggestions;
     use crate::services::session_restore::{
         RestoreStartupAction, session_for_restore_mode, session_for_startup_action,
@@ -63,8 +64,8 @@ mod imp {
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const SETTINGS_WINDOW_CLASS: &str = "TerminalTilerWindowsSettings";
-    const WINDOW_TITLE: &str = "TerminalTiler for Windows";
-    const SETTINGS_WINDOW_TITLE: &str = "TerminalTiler Settings";
+    const WINDOW_TITLE: &str = product::WINDOWS_SHELL_TITLE;
+    const SETTINGS_WINDOW_TITLE: &str = product::WINDOWS_SETTINGS_TITLE;
     const ID_STATUS: isize = 1001;
     const ID_REFRESH: isize = 1002;
     const ID_LAUNCH: isize = 1003;
@@ -1587,7 +1588,9 @@ mod imp {
 
     fn build_status_text(state: &AppWindowState, preferred_distribution: Option<&str>) -> String {
         let mut lines = Vec::new();
-        lines.push("TerminalTiler Windows shell".to_string());
+        lines.push(format!("{} Windows shell", product::PRODUCT_DISPLAY_NAME));
+        lines.push(format!("License: {}", product::PRODUCT_LICENSE));
+        lines.push(format!("Source: {}", product::PRODUCT_SOURCE_URL));
         lines.push(String::new());
 
         if let Some(runtime) = state.runtime.as_ref() {
@@ -2070,7 +2073,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            "Application Settings",
+            product::PRODUCT_DISPLAY_NAME,
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_SUMMARY_TITLE,
@@ -2078,7 +2081,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            "Set launch defaults, tray behavior, and workspace shortcuts in one place. Changes apply immediately, while workspace zoom stays session-scoped.",
+            product::SETTINGS_SUMMARY_COPY,
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_SUMMARY_COPY,
@@ -2086,7 +2089,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            "Saved automatically",
+            "MIT core",
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_META_AUTOSAVE,
@@ -2094,7 +2097,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            "Defaults live",
+            "Public source",
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_META_LIVE,
@@ -3513,6 +3516,11 @@ mod imp {
     fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
         let mut actions = Vec::new();
         actions.push(command_palette::PaletteAction {
+            title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+            subtitle: "Version, license, source, and open-core model.".into(),
+            on_activate: Rc::new(move || show_about_dialog(hwnd)),
+        });
+        actions.push(command_palette::PaletteAction {
             title: "Refresh Runtime".into(),
             subtitle: "Probe WSL and PowerShell availability again.".into(),
             on_activate: Rc::new(move || {
@@ -3582,6 +3590,19 @@ mod imp {
             });
         }
         let _ = command_palette::present(hwnd, "Command Palette", actions);
+    }
+
+    fn show_about_dialog(parent_hwnd: HWND) {
+        let body = product::about_body();
+        let title = product::about_title();
+        unsafe {
+            MessageBoxW(
+                parent_hwnd,
+                wide(&body).as_ptr(),
+                wide(&title).as_ptr(),
+                MB_OK,
+            );
+        }
     }
 
     fn handle_shell_shortcuts(hwnd: HWND, state: &mut AppWindowState, virtual_key: u32) -> bool {

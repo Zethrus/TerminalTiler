@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=TerminalTiler
+Name=TerminalTiler Core
 Comment=Launch tiling terminal workspaces with per-tile commands
 Exec=terminaltiler
 Icon=terminaltiler

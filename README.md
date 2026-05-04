@@ -26,6 +26,12 @@ This repository is the public TerminalTiler core and is released under the MIT L
 
 TerminalTiler follows an open-core product model: the core app stays public and useful, while this repository stays focused on the public desktop application. The public repository remains the source of truth for the open-source core.
 
+## TerminalTiler Core
+
+This public repository contains TerminalTiler Core: the MIT-licensed desktop app, local workspace launcher, release packaging, and public development history. Core should remain useful without external repositories, external services, external credentials, or unpublished build steps.
+
+External materials must stay outside this repository; this repository remains the source of truth for the open-source core.
+
 ## Build-time dependencies
 
 On Ubuntu or Debian, install Rust and the GTK/VTE development packages before building from source:
