@@ -3,8 +3,9 @@ name = "terminaltiler"
 version = "0.2.0"
 edition = "2024"
 description = "Native tiling terminal workspace launcher for Linux desktops"
-homepage = "https://github.com/zethrus/TerminalTiler"
-repository = "https://github.com/zethrus/TerminalTiler"
+homepage = "https://terminaltiler.app"
+repository = "https://github.com/Zethrus/TerminalTiler"
+license = "MIT"
 
 [dependencies]
 directories = "6.0.0"

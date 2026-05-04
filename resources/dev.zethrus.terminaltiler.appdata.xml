@@ -2,12 +2,15 @@
 <component type="desktop-application">
   <id>dev.zethrus.terminaltiler</id>
   <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
   <name>TerminalTiler</name>
   <summary>Launch polished multi-terminal workspaces from reusable layouts</summary>
   <developer id="dev.zethrus">
     <name>Zethrus</name>
   </developer>
-  <url type="homepage">https://github.com/zethrus/TerminalTiler</url>
+  <url type="homepage">https://terminaltiler.app</url>
+  <url type="bugtracker">https://github.com/Zethrus/TerminalTiler/issues</url>
+  <url type="vcs-browser">https://github.com/Zethrus/TerminalTiler</url>
   <launchable type="desktop-id">dev.zethrus.terminaltiler.desktop</launchable>
   <provides>
     <binary>terminaltiler</binary>
