@@ -10,6 +10,7 @@ use gtk::{gdk, gio, glib, pango};
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::product;
 use crate::services::session_restore::{session_for_restore_mode, shell_only_session};
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -18,7 +19,8 @@ use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
 use crate::ui::{
-    assets_manager, command_palette, dialog_smoke, launch_screen, settings_dialog, workspace_view,
+    about_dialog, assets_manager, command_palette, dialog_smoke, launch_screen, settings_dialog,
+    workspace_view,
 };
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -266,7 +268,7 @@ pub fn present(
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("TerminalTiler")
+        .title(product::PRODUCT_DISPLAY_NAME)
         .default_width(1280)
         .default_height(680)
         .resizable(true)
@@ -1454,6 +1456,10 @@ pub fn present(
         let request_tab_rename = request_tab_rename.clone();
         let open_settings_dialog = open_settings_dialog.clone();
         let open_assets_manager = open_assets_manager.clone();
+        let open_about_dialog: Rc<dyn Fn()> = {
+            let window = window.clone();
+            Rc::new(move || about_dialog::present(&window))
+        };
         Rc::new(move || {
             let snapshot = tabs.borrow().clone();
             let active_id = active_tab_id.get();
@@ -1472,6 +1478,14 @@ pub fn present(
                     on_activate: Rc::new({
                         let open_assets_manager = open_assets_manager.clone();
                         move || open_assets_manager()
+                    }),
+                },
+                command_palette::PaletteAction {
+                    title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+                    subtitle: "Version, license, source, and open-core model.".into(),
+                    on_activate: Rc::new({
+                        let open_about_dialog = open_about_dialog.clone();
+                        move || open_about_dialog()
                     }),
                 },
                 command_palette::PaletteAction {

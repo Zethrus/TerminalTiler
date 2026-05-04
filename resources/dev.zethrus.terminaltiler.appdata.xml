@@ -3,7 +3,7 @@
   <id>dev.zethrus.terminaltiler</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>TerminalTiler</name>
+  <name>TerminalTiler Core</name>
   <summary>Launch polished multi-terminal workspaces from reusable layouts</summary>
   <developer id="dev.zethrus">
     <name>Zethrus</name>
@@ -17,13 +17,18 @@
   </provides>
   <description>
     <p>
-      TerminalTiler is a native Ubuntu and Debian desktop application for launching
+      TerminalTiler Core is a native Ubuntu and Debian desktop application for launching
       split-terminal workspaces with per-tile startup commands, working directories,
       and reusable launch profiles.
     </p>
     <p>
       It is designed for operator workflows that need multiple coordinated terminals
       in one polished window without rebuilding the layout every time.
+    </p>
+    <p>
+      TerminalTiler Core is the public, MIT-licensed foundation of TerminalTiler.
+      Future Pro offerings may add paid workflow packs, convenience features,
+      official support, or private extensions.
     </p>
     <ul>
       <li>Reusable launch presets with customizable split layouts</li>

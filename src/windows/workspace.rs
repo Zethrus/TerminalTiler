@@ -85,6 +85,7 @@ mod imp {
     use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
     use crate::model::preset::ApplicationDensity;
+    use crate::product;
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
     use crate::services::launch_resolution::resolve_tile_launch;
@@ -2213,6 +2214,11 @@ mod imp {
     fn open_workspace_command_palette(hwnd: HWND, state: &mut WorkspaceWindowState) {
         let mut actions = Vec::new();
         actions.push(command_palette::PaletteAction {
+            title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+            subtitle: "Version, license, source, and open-core model.".into(),
+            on_activate: Rc::new(move || show_about_dialog(hwnd)),
+        });
+        actions.push(command_palette::PaletteAction {
             title: "Open Alerts".into(),
             subtitle: "Inspect unread workspace alerts.".into(),
             on_activate: Rc::new(move || {
@@ -2269,6 +2275,19 @@ mod imp {
             });
         }
         let _ = command_palette::present(hwnd, "Workspace Commands", actions);
+    }
+
+    fn show_about_dialog(parent_hwnd: HWND) {
+        let body = product::about_body();
+        let title = product::about_title();
+        unsafe {
+            MessageBoxW(
+                parent_hwnd,
+                wide(&body).as_ptr(),
+                wide(&title).as_ptr(),
+                MB_OK,
+            );
+        }
     }
 
     fn focus_pane(state: &WorkspaceWindowState, pane_id: &str) {
