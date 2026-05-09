@@ -10,7 +10,7 @@ static VARIABLE_PATTERN: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(target_os = "windows", allow(dead_code))]
-pub(crate) enum TemplateVariableContext {
+pub enum TemplateVariableContext {
     Snippet,
     Runbook,
 }
@@ -25,7 +25,7 @@ impl fmt::Display for TemplateVariableContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TemplateRenderError {
+pub enum TemplateRenderError {
     MissingVariable {
         context: TemplateVariableContext,
         key: String,

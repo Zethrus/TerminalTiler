@@ -26,6 +26,12 @@ This repository is the public TerminalTiler core and is released under the MIT L
 
 TerminalTiler follows an open-core product model: the core app stays public and useful, while this repository stays focused on the public desktop application. The public repository remains the source of truth for the open-source core.
 
+## Open-core boundary
+
+TerminalTiler Core is and will remain the free, public, MIT-licensed desktop application. This repository contains the public desktop application and must remain buildable and useful on its own. Core must remain buildable and useful without external code, external credentials, or unpublished build steps.
+
+The dependency direction is intentionally one-way: External projects may use Core public APIs, but Core must remain independent. Existing Core features should not be removed or degraded.
+
 ## TerminalTiler Core
 
 This public repository contains TerminalTiler Core: the MIT-licensed desktop app, local workspace launcher, release packaging, and public development history. Core should remain useful without external repositories, external services, external credentials, or unpublished build steps.
@@ -34,7 +40,7 @@ External materials must stay outside this repository; this repository remains th
 
 ## Build-time dependencies
 
-On Ubuntu or Debian, install Rust and the GTK/VTE development packages before building from source:
+On Ubuntu 24.04 LTS (recommended) or Debian 12, install Rust and the GTK/VTE development packages before building from source:
 
 ```bash
 # Install Rust (rustup is the recommended way)
@@ -48,6 +54,7 @@ sudo apt install -y \
   patchelf \
   file \
   wget \
+  ca-certificates \
   libgtk-4-dev \
   libadwaita-1-dev \
   libvte-2.91-gtk4-dev \

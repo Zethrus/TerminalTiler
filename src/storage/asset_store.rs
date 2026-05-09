@@ -43,6 +43,12 @@ pub struct AssetLoadOutcome {
     pub warning: Option<String>,
 }
 
+impl Default for AssetStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AssetStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")

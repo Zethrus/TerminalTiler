@@ -187,6 +187,12 @@ fn normalize_command_palette_shortcut(shortcut: &str) -> String {
     }
 }
 
+impl Default for PreferenceStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreferenceStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")

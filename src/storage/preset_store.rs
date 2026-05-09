@@ -28,6 +28,12 @@ pub struct PresetLoadOutcome {
     pub warning: Option<String>,
 }
 
+impl Default for PresetStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PresetStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")

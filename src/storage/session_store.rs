@@ -49,6 +49,12 @@ pub struct SessionLoadOutcome {
     pub warning: Option<String>,
 }
 
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionStore {
     pub fn new() -> Self {
         let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
