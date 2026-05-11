@@ -1,32 +1,38 @@
 #[cfg(target_os = "linux")]
-pub mod app;
-pub mod logging;
-pub mod model;
-pub mod platform;
-pub mod companion;
-pub mod product;
-pub mod services;
-pub mod storage;
+mod app;
+mod logging;
+mod model;
+mod platform;
+mod product;
+mod services;
+mod storage;
 #[cfg(target_os = "linux")]
-pub mod terminal;
-pub mod transcript;
+mod terminal;
+mod transcript;
 #[cfg(target_os = "linux")]
-pub mod tray;
+mod tray;
 #[cfg(target_os = "linux")]
-pub mod ui;
+mod ui;
 #[cfg(target_os = "windows")]
-pub mod windows;
+mod windows;
 
+/// Public entrypoint for launching the TerminalTiler application.
+///
+/// This keeps the public Core package reusable from external binaries, including
+/// private external applications that need to embed the open-core app without
+/// introducing any external-specific dependency back into this repository.
 #[cfg(target_os = "linux")]
 pub fn run() -> adw::glib::ExitCode {
     app::run()
 }
 
+/// Public entrypoint for launching the TerminalTiler application.
 #[cfg(target_os = "windows")]
 pub fn run() -> std::process::ExitCode {
     windows::run()
 }
 
+/// Public entrypoint for launching the TerminalTiler application.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn run() {
     logging::init();
