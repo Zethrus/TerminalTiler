@@ -1374,6 +1374,20 @@ mod imp {
         resolve_workspace_root(&PathBuf::from(workspace_root_input.trim())).ok()
     }
 
+    fn preset_workspace_root(state: &AppWindowState) -> Option<PathBuf> {
+        let workspace_root_input = read_window_text(state.workspace_path_hwnd);
+        let workspace_root_input = workspace_root_input.trim();
+        match resolve_workspace_root(&PathBuf::from(workspace_root_input)) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                logging::error(format!(
+                    "could not resolve workspace root while saving preset: {error}"
+                ));
+                (!workspace_root_input.is_empty()).then(|| PathBuf::from(workspace_root_input))
+            }
+        }
+    }
+
     fn current_launcher_assets(state: &AppWindowState) -> WorkspaceAssets {
         current_workspace_root(state)
             .map(|workspace_root| {
@@ -1435,7 +1449,7 @@ mod imp {
         let Some(runtime) = state.runtime.as_ref() else {
             return;
         };
-        let Some(preset) = launcher_preset_snapshot(state) else {
+        let Some(mut preset) = launcher_preset_snapshot(state) else {
             return;
         };
         if let Err(message) = require_webview2_for_preset(state, &preset) {
@@ -1459,6 +1473,7 @@ mod imp {
                     return;
                 }
             };
+        preset.workspace_root = Some(workspace_root.clone());
 
         let launch_name = read_window_text(state.session_name_hwnd);
         let trimmed_launch_name = launch_name.trim();
@@ -3654,6 +3669,12 @@ mod imp {
                             state.tile_count_hwnd,
                             wide(&preset.layout.tile_count().to_string()).as_ptr(),
                         );
+                        if let Some(workspace_root) = preset.workspace_root.as_ref() {
+                            SetWindowTextW(
+                                state.workspace_path_hwnd,
+                                wide(&workspace_root.display().to_string()).as_ptr(),
+                            );
+                        }
                     }
                 }
             }
@@ -4018,6 +4039,7 @@ mod imp {
                     description: template.subtitle.to_string(),
                     tags: vec!["template".into(), "windows".into()],
                     root_label: "Workspace root".into(),
+                    workspace_root: preset_workspace_root(state),
                     theme: state.active_theme,
                     density: state.active_density,
                     layout: state.active_layout.clone(),
@@ -4026,6 +4048,7 @@ mod imp {
         };
         preset.theme = state.active_theme;
         preset.density = state.active_density;
+        preset.workspace_root = preset_workspace_root(state);
         let desired_name = read_window_text(state.session_name_hwnd);
         let desired_name = desired_name.trim();
         if !desired_name.is_empty() {

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::model::layout::{LayoutNode, SplitAxis, WorkingDirectory, split, tile};
@@ -99,6 +101,8 @@ pub struct WorkspacePreset {
     pub description: String,
     pub tags: Vec<String>,
     pub root_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
     pub theme: ThemeMode,
     #[serde(alias = "chrome")]
     pub density: ApplicationDensity,
@@ -135,6 +139,7 @@ fn solo_operator() -> WorkspacePreset {
             .into(),
         tags: vec!["focused".into(), "codex".into()],
         root_label: "Workspace root".into(),
+        workspace_root: None,
         theme: ThemeMode::Dark,
         density: ApplicationDensity::Compact,
         layout: tile(
@@ -155,6 +160,7 @@ fn review_pair() -> WorkspacePreset {
         description: "Implementation on the left, verification on the right, with split ownership by directory.".into(),
         tags: vec!["pairing".into(), "review".into()],
         root_label: "Project directory".into(),
+        workspace_root: None,
         theme: ThemeMode::System,
         density: ApplicationDensity::Standard,
         layout: split(
@@ -187,6 +193,7 @@ fn delivery_fleet() -> WorkspacePreset {
         description: "Planner, implementation, and release terminals arranged for multi-step project execution.".into(),
         tags: vec!["fleet".into(), "release".into(), "premium".into()],
         root_label: "Delivery workspace".into(),
+        workspace_root: None,
         theme: ThemeMode::Dark,
         density: ApplicationDensity::Compact,
         layout: split(

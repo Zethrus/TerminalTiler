@@ -612,6 +612,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     let tile_editor = tile_editor.clone();
                     let theme_preview_callback = theme_preview_callback.clone();
                     let session_name_entry = session_name_entry.clone();
+                    let path_entry = path_entry.clone();
                     let chosen_theme = chosen_theme.clone();
                     let chosen_density = chosen_density.clone();
                     let theme_strip = theme_strip.clone();
@@ -630,6 +631,9 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                             p.description
                         ));
                         session_name_entry.set_text(&p.name);
+                        if let Some(workspace_root) = p.workspace_root.as_ref() {
+                            path_entry.set_text(&workspace_root.display().to_string());
+                        }
                         chosen_theme.set(p.theme);
                         chosen_density.set(p.density);
                         theme_preview_callback(p.theme);
@@ -685,6 +689,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             let preset_store = preset_store.clone();
             let on_presets_changed = on_presets_changed.clone();
             let session_name_entry = session_name_entry.clone();
+            let path_entry = path_entry.clone();
             let chosen_theme = chosen_theme.clone();
             let chosen_density = chosen_density.clone();
             let active_layout = active_layout.clone();
@@ -699,6 +704,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 let theme = chosen_theme.get();
                 let density = chosen_density.get();
                 let layout = active_layout.borrow().clone();
+                let workspace_root = preset_workspace_root(&path_entry);
 
                 let default_name = if session_name.trim().is_empty() {
                     match selected.get() {
@@ -724,6 +730,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                         &presets,
                         &layout,
                         &session_name,
+                        workspace_root.clone(),
                         theme,
                         density,
                     );
@@ -752,6 +759,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             let preset_store = preset_store.clone();
             let on_presets_changed = on_presets_changed.clone();
             let session_name_entry = session_name_entry.clone();
+            let path_entry = path_entry.clone();
             let chosen_theme = chosen_theme.clone();
             let chosen_density = chosen_density.clone();
             let active_layout = active_layout.clone();
@@ -769,6 +777,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 let session_name = session_name_entry.text().to_string();
                 let theme = chosen_theme.get();
                 let density = chosen_density.get();
+                let workspace_root = preset_workspace_root(&path_entry);
 
                 if is_builtin_preset_id(&existing.id) {
                     let default_name = if session_name.trim().is_empty() {
@@ -791,6 +800,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                             &presets,
                             &layout,
                             &session_name,
+                            workspace_root.clone(),
                             theme,
                             density,
                         );
@@ -810,6 +820,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                         &presets,
                         &layout,
                         &session_name,
+                        workspace_root,
                         theme,
                         density,
                     );
@@ -871,6 +882,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     &presets,
                     &active_layout.borrow().clone(),
                     &session_name,
+                    Some(workspace_root.clone()),
                     chosen_theme.get(),
                     chosen_density.get(),
                 );
@@ -1525,6 +1537,7 @@ fn build_launch_preset(
     presets: &[WorkspacePreset],
     layout: &LayoutNode,
     session_name: &str,
+    workspace_root: Option<PathBuf>,
     theme: ThemeMode,
     density: ApplicationDensity,
 ) -> WorkspacePreset {
@@ -1543,6 +1556,7 @@ fn build_launch_preset(
                 description: String::new(),
                 tags: Vec::new(),
                 root_label: "Workspace root".into(),
+                workspace_root,
                 theme,
                 density,
                 layout: layout.clone(),
@@ -1555,6 +1569,7 @@ fn build_launch_preset(
             }
             preset.theme = theme;
             preset.density = density;
+            preset.workspace_root = workspace_root;
             preset.layout = layout.clone();
             preset
         }
@@ -2151,6 +2166,20 @@ fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
 fn validate_workspace_path(path_entry: &gtk::Entry) -> Result<PathBuf, String> {
     let text = path_entry.text();
     validate_workspace_path_text(text.as_str())
+}
+
+fn preset_workspace_root(path_entry: &gtk::Entry) -> Option<PathBuf> {
+    let raw_path = path_entry.text().trim().to_string();
+    match validate_workspace_path(path_entry) {
+        Ok(workspace_root) => Some(workspace_root),
+        Err(message) => {
+            logging::error(format!(
+                "Could not save workspace root with preset: {}",
+                message
+            ));
+            (!raw_path.is_empty()).then(|| PathBuf::from(raw_path))
+        }
+    }
 }
 
 fn validate_workspace_path_text(text: &str) -> Result<PathBuf, String> {

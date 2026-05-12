@@ -7,6 +7,7 @@ BUILD_DIR="$ROOT_DIR/packaging/.build/release-smoke"
 export PACKAGE_VERSION BUILD_DATE
 SKIP_PACKAGE_BUILD="${SKIP_PACKAGE_BUILD:-0}"
 SMOKE_PROFILE_KIND="${SMOKE_PROFILE_KIND:-mixed}"
+SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-12s}"
 
 APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
@@ -201,8 +202,11 @@ run_restore_smoke() {
   seed_restore_profile "$sandbox_root" "$profile_kind"
 
   local home_root="$sandbox_root/home"
+  local runtime_root="$sandbox_root/run"
+  local portal_root="$sandbox_root/portals"
   local -a launch_command
-  mkdir -p "$home_root"
+  mkdir -p "$home_root" "$runtime_root" "$portal_root"
+  chmod 700 "$runtime_root"
 
   if command -v dbus-run-session >/dev/null 2>&1; then
     launch_command=(dbus-run-session -- xvfb-run -a "$@")
@@ -215,7 +219,13 @@ run_restore_smoke() {
   XDG_CONFIG_HOME="$sandbox_root/config" \
   XDG_DATA_HOME="$sandbox_root/data" \
   XDG_STATE_HOME="$sandbox_root/state" \
-  timeout 12s "${launch_command[@]}" || status=$?
+  XDG_RUNTIME_DIR="$runtime_root" \
+  XDG_DESKTOP_PORTAL_DIR="$portal_root" \
+  GIO_USE_VFS=local \
+  GSETTINGS_BACKEND=memory \
+  GTK_USE_PORTAL=0 \
+  NO_AT_BRIDGE=1 \
+  timeout "$SMOKE_LAUNCH_TIMEOUT" "${launch_command[@]}" || status=$?
 
   if [[ ${status:-0} -ne 0 && ${status:-0} -ne 124 ]]; then
     fail_smoke "$sandbox_root" "$label" "$label exited with unexpected status ${status:-0}"

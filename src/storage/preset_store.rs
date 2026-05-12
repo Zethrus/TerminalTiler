@@ -211,7 +211,7 @@ impl PresetStore {
 
 #[cfg(test)]
 mod tests {
-    use super::PresetStore;
+    use super::{PresetDocument, PresetStore, STORE_VERSION};
     use crate::model::layout::{WorkingDirectory, tile};
     use crate::model::preset::{
         ApplicationDensity, ThemeMode, WorkspacePreset, builtin_presets, is_builtin_preset_id,
@@ -233,6 +233,7 @@ mod tests {
             description: format!("{name} description"),
             tags: vec!["custom".into()],
             root_label: "Workspace root".into(),
+            workspace_root: None,
             theme: ThemeMode::Light,
             density: ApplicationDensity::Comfortable,
             layout: tile(
@@ -244,6 +245,50 @@ mod tests {
                 Some("bash"),
             ),
         }
+    }
+
+    #[test]
+    fn saves_and_loads_workspace_root_with_preset() {
+        let dir = temp_dir("preset-workspace-root");
+        let path = dir.join("presets.toml");
+        let workspace_root = dir.join("workspace");
+        fs::create_dir_all(&workspace_root).unwrap();
+        let store = PresetStore::from_path(path.clone());
+        let mut preset = custom_preset("rooted-preset", "Rooted Preset");
+        preset.workspace_root = Some(workspace_root.clone());
+
+        store.upsert_preset(preset).unwrap();
+
+        let loaded = store.load_presets();
+        let rooted = loaded
+            .iter()
+            .find(|preset| preset.id == "rooted-preset")
+            .expect("saved preset should load");
+        assert_eq!(
+            rooted.workspace_root.as_deref(),
+            Some(workspace_root.as_path())
+        );
+        assert!(fs::read_to_string(path).unwrap().contains("workspace_root"));
+    }
+
+    #[test]
+    fn loads_legacy_presets_without_workspace_root() {
+        let dir = temp_dir("preset-legacy-rootless");
+        let path = dir.join("presets.toml");
+        let store = PresetStore::from_path(path.clone());
+        let document = PresetDocument {
+            version: STORE_VERSION,
+            presets: vec![custom_preset("legacy-preset", "Legacy Preset")],
+        };
+        fs::write(&path, toml::to_string_pretty(&document).unwrap()).unwrap();
+
+        let loaded = store.load_presets();
+
+        let legacy = loaded
+            .iter()
+            .find(|preset| preset.id == "legacy-preset")
+            .expect("legacy preset should load");
+        assert_eq!(legacy.workspace_root, None);
     }
 
     #[test]

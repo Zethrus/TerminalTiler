@@ -138,7 +138,7 @@ main() {
   require_synced_with_origin
 
   if [[ "$VERIFY_BEFORE_TAG" == "1" ]]; then
-    bash "$ROOT_DIR/packaging/release-verify.sh"
+    PACKAGE_VERSION="$next_version" RELEASE_TAG="$next_tag" bash "$ROOT_DIR/packaging/release-verify.sh"
   fi
 
   git -C "$ROOT_DIR" tag -a "$next_tag" -m "Release ${next_tag}"

@@ -60,6 +60,7 @@ mod tests {
             description: String::new(),
             tags: Vec::new(),
             root_label: "Workspace root".into(),
+            workspace_root: None,
             theme: ThemeMode::System,
             density: ApplicationDensity::Compact,
             layout: tile(
