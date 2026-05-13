@@ -22,6 +22,8 @@ use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::{layout_tree, tile_view, web_tile};
 
+const ACTIVE_TILE_CLASS: &str = "is-active-tile";
+
 fn reconnect_delay_seconds(attempt: u32) -> u32 {
     2u32.pow(attempt.saturating_sub(1).min(5)).min(60)
 }
@@ -546,9 +548,7 @@ impl WorkspaceRuntime {
         *self.inner.layout.borrow_mut() = next_layout.clone();
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
-        *self.inner.focused_tile_id.borrow_mut() = Some(new_tile_id.clone());
-        *self.inner.focused_web_tile_id.borrow_mut() = Some(new_tile_id.clone());
-        self.refresh_navigation_controls();
+        self.set_focused_tile(Some(new_tile_id.clone()), true);
         (self.inner.on_layout_changed)(next_layout);
 
         Some(new_tile_id)
@@ -559,6 +559,7 @@ impl WorkspaceRuntime {
         remount_tiles(&self.inner.slots.borrow(), &tiles);
         *self.inner.tiles.borrow_mut() = tiles;
         self.sync_tile_close_buttons();
+        self.sync_active_tile_styles();
         self.refresh_navigation_controls();
     }
 
@@ -739,7 +740,18 @@ impl WorkspaceRuntime {
     fn set_focused_tile(&self, tile_id: Option<String>, is_web: bool) {
         *self.inner.focused_tile_id.borrow_mut() = tile_id.clone();
         *self.inner.focused_web_tile_id.borrow_mut() = if is_web { tile_id } else { None };
+        self.sync_active_tile_styles();
         self.refresh_navigation_controls();
+    }
+
+    fn sync_active_tile_styles(&self) {
+        let focused_tile_id = self.inner.focused_tile_id.borrow().clone();
+        for tile in self.inner.tiles.borrow().iter() {
+            set_tile_active_class(
+                &tile.widget,
+                focused_tile_id.as_deref() == Some(tile.tile.id.as_str()),
+            );
+        }
     }
 
     fn record_web_tile_uri(&self, tile_id: &str, uri: &str) {
@@ -876,6 +888,14 @@ fn shutdown_tile_resources(
     ));
     web_view.stop_loading();
     web_view.load_uri("about:blank");
+}
+
+fn set_tile_active_class(widget: &gtk::Widget, is_active: bool) {
+    if is_active {
+        widget.add_css_class(ACTIVE_TILE_CLASS);
+    } else {
+        widget.remove_css_class(ACTIVE_TILE_CLASS);
+    }
 }
 
 pub struct WorkspaceView {

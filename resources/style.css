@@ -1273,6 +1273,14 @@ button.tile-header-action:disabled {
     transform 140ms ease;
 }
 
+.terminal-card.is-active-tile {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 0 0 2px rgba(255, 255, 255, 0.03);
+}
+
 .terminal-card.is-dragging {
   opacity: 0.84;
 }
@@ -2541,6 +2549,13 @@ window.window-shell.theme-light .terminal-card {
   background:
     linear-gradient(180deg, rgba(252, 248, 241, 0.98), rgba(236, 240, 246, 0.98)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
+}
+
+window.window-shell.theme-light .terminal-card.is-active-tile {
+  border-color: rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 14px 28px rgba(15, 23, 42, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.34);
 }
 
 window.window-shell.theme-light .terminal-card.is-disconnected {
