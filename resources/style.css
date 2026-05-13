@@ -1296,12 +1296,10 @@ button.tile-header-action:disabled {
 }
 
 .terminal-card.is-drop-target {
-  border-color: rgba(240, 179, 75, 0.72);
+  border-color: rgba(240, 179, 75, 0.30);
   box-shadow:
-    0 20px 44px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(240, 179, 75, 0.24),
-    0 0 28px rgba(240, 179, 75, 0.12);
-  transform: translateY(-1px);
+    0 14px 34px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(240, 179, 75, 0.10);
 }
 
 .terminal-card.is-disconnected {

@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gdk::prelude::StaticType;
+use gtk::glib;
 
 use vte4::prelude::*;
 
@@ -23,6 +24,10 @@ pub struct TileView {
     pub tile: TileSpec,
     pub close_button: gtk::Button,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, glib::Boxed)]
+#[boxed_type(name = "TerminalTilerTileDragPayload")]
+struct TileDragPayload(String);
 
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -265,6 +270,76 @@ pub fn build(
         });
     }
 
+    install_dropped_file_target(&shell, &session, show_recovery_prompt.clone());
+
+    let drag_source = gtk::DragSource::builder()
+        .actions(gdk::DragAction::MOVE)
+        .build();
+    {
+        let tile_id = tile.id.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gdk::ContentProvider::for_value(
+                &TileDragPayload(tile_id.clone()).to_value(),
+            ))
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_begin(move |_, _| {
+            shell.add_css_class("is-dragging");
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            shell.remove_css_class("is-dragging");
+        });
+    }
+    left.add_controller(drag_source);
+
+    let drop_target = gtk::DropTarget::new(TileDragPayload::static_type(), gdk::DragAction::MOVE);
+    {
+        let shell = shell.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gdk::DragAction::MOVE
+        });
+    }
+    {
+        let shell = shell.clone();
+        drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let target_id = tile.id.clone();
+        let on_swap = on_swap.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+
+            let Ok(TileDragPayload(dragged_id)) = value.get::<TileDragPayload>() else {
+                return false;
+            };
+            on_swap(dragged_id, target_id.clone());
+            true
+        });
+    }
+    shell.add_controller(drop_target);
+
+    TileView {
+        widget: shell.upcast(),
+        session,
+        tile: tile.clone(),
+        close_button,
+    }
+}
+
+fn install_dropped_file_target(
+    shell: &gtk::Box,
+    session: &TerminalSession,
+    show_recovery_prompt: Rc<dyn Fn()>,
+) {
     let file_list_drop_target =
         gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     {
@@ -330,65 +405,80 @@ pub fn build(
     }
     shell.add_controller(single_file_drop_target);
 
-    let drag_source = gtk::DragSource::builder()
-        .actions(gdk::DragAction::MOVE)
-        .build();
-    {
-        let tile_id = tile.id.clone();
-        drag_source.connect_prepare(move |_, _, _| {
-            Some(gdk::ContentProvider::for_value(&tile_id.to_value()))
-        });
-    }
+    let uri_list_formats =
+        gdk::ContentFormats::new(&["text/uri-list", "x-special/gnome-copied-files"]);
+    let uri_list_drop_target =
+        gtk::DropTargetAsync::new(Some(uri_list_formats), gdk::DragAction::COPY);
+    uri_list_drop_target
+        .connect_accept(|_, drop| drop_formats_can_contain_uri_list(&drop.formats()));
     {
         let shell = shell.clone();
-        drag_source.connect_drag_begin(move |_, _| {
-            shell.add_css_class("is-dragging");
-        });
-    }
-    {
-        let shell = shell.clone();
-        drag_source.connect_drag_end(move |_, _, _| {
-            shell.remove_css_class("is-dragging");
-        });
-    }
-    left.add_controller(drag_source);
-
-    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
-    {
-        let shell = shell.clone();
-        drop_target.connect_enter(move |_, _, _| {
+        uri_list_drop_target.connect_drag_enter(move |_, _, _, _| {
             shell.add_css_class("is-drop-target");
-            gdk::DragAction::MOVE
+            gdk::DragAction::COPY
         });
     }
     {
         let shell = shell.clone();
-        drop_target.connect_leave(move |_| {
+        uri_list_drop_target.connect_drag_leave(move |_, _| {
             shell.remove_css_class("is-drop-target");
         });
     }
     {
         let shell = shell.clone();
-        let target_id = tile.id.clone();
-        let on_swap = on_swap.clone();
-        drop_target.connect_drop(move |_, value, _, _| {
-            shell.remove_css_class("is-drop-target");
-
-            let Ok(dragged_id) = value.get::<String>() else {
-                return false;
-            };
-            on_swap(dragged_id, target_id.clone());
+        let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        uri_list_drop_target.connect_drop(move |_, drop, _, _| {
+            let shell = shell.clone();
+            let session = session.clone();
+            let show_recovery_prompt = show_recovery_prompt.clone();
+            let drop = drop.clone();
+            let drop_for_finish = drop.clone();
+            drop.read_async(
+                &["text/uri-list", "x-special/gnome-copied-files"],
+                glib::Priority::DEFAULT,
+                None::<&gtk::gio::Cancellable>,
+                move |result| {
+                    shell.remove_css_class("is-drop-target");
+                    let Ok((stream, _mime_type)) = result else {
+                        drop_for_finish.finish(gdk::DragAction::empty());
+                        return;
+                    };
+                    let Ok(text) = read_drop_stream_text(&stream) else {
+                        drop_for_finish.finish(gdk::DragAction::empty());
+                        return;
+                    };
+                    let paths = local_paths_from_uri_list_text(&text);
+                    let accepted =
+                        paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref());
+                    drop_for_finish.finish(if accepted {
+                        gdk::DragAction::COPY
+                    } else {
+                        gdk::DragAction::empty()
+                    });
+                },
+            );
             true
         });
     }
-    shell.add_controller(drop_target);
+    shell.add_controller(uri_list_drop_target);
+}
 
-    TileView {
-        widget: shell.upcast(),
-        session,
-        tile: tile.clone(),
-        close_button,
+fn drop_formats_can_contain_uri_list(formats: &gdk::ContentFormats) -> bool {
+    formats.contain_mime_type("text/uri-list")
+        || formats.contain_mime_type("x-special/gnome-copied-files")
+}
+
+fn read_drop_stream_text(stream: &gtk::gio::InputStream) -> Result<String, gtk::glib::Error> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = stream.read_bytes(16 * 1024, None::<&gtk::gio::Cancellable>)?;
+        if chunk.is_empty() {
+            break;
+        }
+        bytes.extend_from_slice(chunk.as_ref());
     }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn local_paths_from_gio_files<I>(files: I) -> Vec<PathBuf>
@@ -396,6 +486,26 @@ where
     I: IntoIterator<Item = gtk::gio::File>,
 {
     files.into_iter().filter_map(|file| file.path()).collect()
+}
+
+fn local_paths_from_uri_list_text(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with('#'))
+        .filter(|line| !line.eq_ignore_ascii_case("copy") && !line.eq_ignore_ascii_case("cut"))
+        .filter_map(local_path_from_drop_text_line)
+        .collect()
+}
+
+fn local_path_from_drop_text_line(line: &str) -> Option<PathBuf> {
+    if line.starts_with("file://") {
+        gtk::gio::File::for_uri(line).path()
+    } else if line.starts_with('/') {
+        Some(PathBuf::from(line))
+    } else {
+        None
+    }
 }
 
 fn paste_dropped_file_paths(
@@ -1150,7 +1260,9 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::local_paths_from_gio_files;
+    use super::{TileDragPayload, local_paths_from_gio_files, local_paths_from_uri_list_text};
+    use adw::prelude::*;
+    use gdk::prelude::StaticType;
     use std::path::PathBuf;
 
     #[test]
@@ -1184,5 +1296,54 @@ mod tests {
         let file = gtk::gio::File::for_uri("sftp://example.com/tmp/remote.txt");
 
         assert!(local_paths_from_gio_files([file]).is_empty());
+    }
+
+    #[test]
+    fn extracts_local_paths_from_uri_list_drop_payloads() {
+        let payload =
+            "# source:file-manager\nfile:///tmp/photo%201.jpg\r\nfile:///home/me/second.png\r\n";
+
+        assert_eq!(
+            local_paths_from_uri_list_text(payload),
+            vec![
+                PathBuf::from("/tmp/photo 1.jpg"),
+                PathBuf::from("/home/me/second.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_local_paths_from_gnome_copied_files_payloads() {
+        let payload = "copy\nfile:///tmp/photo.jpg\nfile:///tmp/second%20file.jpg\n";
+
+        assert_eq!(
+            local_paths_from_uri_list_text(payload),
+            vec![
+                PathBuf::from("/tmp/photo.jpg"),
+                PathBuf::from("/tmp/second file.jpg"),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_remote_and_non_file_uri_list_entries() {
+        let payload = "sftp://example.com/tmp/remote.jpg\nhttps://example.com/image.jpg\nfile:///tmp/local.jpg\n";
+
+        assert_eq!(
+            local_paths_from_uri_list_text(payload),
+            vec![PathBuf::from("/tmp/local.jpg")]
+        );
+    }
+
+    #[test]
+    fn tile_reorder_payload_is_not_a_plain_string_drop() {
+        assert_ne!(TileDragPayload::static_type(), String::static_type());
+
+        let value = TileDragPayload("pane-a".into()).to_value();
+        assert!(value.get::<String>().is_err());
+        assert_eq!(
+            value.get::<TileDragPayload>().unwrap(),
+            TileDragPayload("pane-a".into())
+        );
     }
 }
