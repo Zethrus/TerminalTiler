@@ -38,6 +38,12 @@ struct TileEditorPanel {
     scroller: gtk::ScrolledWindow,
 }
 
+#[derive(Clone)]
+struct WizardStepper {
+    root: gtk::Box,
+    steps: Vec<gtk::Label>,
+}
+
 pub struct LaunchScreenInput {
     pub load_warning: Option<String>,
     pub presets: Vec<WorkspacePreset>,
@@ -106,11 +112,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
     let stage = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(16)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
+        .spacing(12)
+        .margin_top(14)
+        .margin_bottom(14)
+        .margin_start(16)
+        .margin_end(16)
         .hexpand(true)
         .halign(gtk::Align::Fill)
         .valign(gtk::Align::Start)
@@ -131,12 +137,52 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         stage.append(&warning);
     }
 
+    let mode_stack = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::SlideLeftRight)
+        .hhomogeneous(false)
+        .vhomogeneous(false)
+        .hexpand(true)
+        .vexpand(false)
+        .css_classes(["launch-mode-stack"])
+        .build();
+    stage.append(&mode_stack);
+
+    let dashboard = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(14)
+        .css_classes(["launch-dashboard"])
+        .build();
+    mode_stack.add_named(&dashboard, Some("dashboard"));
+
+    let wizard = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["launch-wizard-shell"])
+        .build();
+    mode_stack.add_named(&wizard, Some("wizard"));
+
+    let wizard_stepper = build_wizard_stepper();
+    wizard.append(&wizard_stepper.root);
+
+    let wizard_steps = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::SlideLeftRight)
+        .hhomogeneous(false)
+        .vhomogeneous(false)
+        .hexpand(true)
+        .vexpand(false)
+        .css_classes(["launch-wizard-steps"])
+        .build();
+    wizard.append(&wizard_steps);
+
+    let wizard_step_index = Rc::new(Cell::new(0usize));
+    let wizard_step_names = Rc::new(vec!["setup", "appearance", "layout", "tiles"]);
+
     let directory_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
         .css_classes(["config-panel", "directory-panel", "setup-panel"])
         .build();
-    stage.append(&directory_panel);
+    wizard_steps.add_named(&directory_panel, Some("setup"));
     directory_panel.append(&build_section_header(
         "Step 1",
         "Workspace setup",
@@ -287,7 +333,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             "launch-appearance-panel",
         ])
         .build();
-    stage.append(&options_panel);
+    wizard_steps.add_named(&options_panel, Some("appearance"));
     options_panel.append(&build_section_header(
         "Step 2",
         "Appearance",
@@ -376,7 +422,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .spacing(10)
         .css_classes(["config-panel", "layout-selection-panel"])
         .build();
-    stage.append(&layout_panel);
+    wizard_steps.add_named(&layout_panel, Some("layout"));
     layout_panel.append(&build_section_header(
         "Step 3",
         "Choose a layout",
@@ -579,7 +625,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             .spacing(10)
             .css_classes(["config-panel", "presets-section", "launch-presets-panel"])
             .build();
-        stage.append(&presets_section);
+        layout_panel.append(&presets_section);
         presets_section.append(&build_section_header(
             "Saved presets",
             "Reuse a preset",
@@ -724,16 +770,16 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
 
                 prompt_preset_name(window.as_ref(), &default_name, move |name| {
-                    let mut preset = build_launch_preset(
-                        &selected,
-                        &templates_ref_inner,
-                        &presets,
-                        &layout,
-                        &session_name,
-                        workspace_root.clone(),
+                    let mut preset = build_launch_preset(LaunchPresetDraft {
+                        selected: &selected,
+                        templates: &templates_ref_inner,
+                        presets: &presets,
+                        layout: &layout,
+                        session_name: &session_name,
+                        workspace_root: workspace_root.clone(),
                         theme,
                         density,
-                    );
+                    });
                     preset.id = unique_preset_id(&name);
                     preset.name = name;
 
@@ -794,16 +840,16 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     let on_presets_changed = on_presets_changed.clone();
 
                     prompt_preset_name(window.as_ref(), &default_name, move |name| {
-                        let mut preset = build_launch_preset(
-                            &selected,
-                            &templates_ref_inner,
-                            &presets,
-                            &layout,
-                            &session_name,
-                            workspace_root.clone(),
+                        let mut preset = build_launch_preset(LaunchPresetDraft {
+                            selected: &selected,
+                            templates: &templates_ref_inner,
+                            presets: &presets,
+                            layout: &layout,
+                            session_name: &session_name,
+                            workspace_root: workspace_root.clone(),
                             theme,
                             density,
-                        );
+                        });
                         preset.id = unique_preset_id(&name);
                         preset.name = name;
 
@@ -814,16 +860,16 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                         }
                     });
                 } else {
-                    let mut preset = build_launch_preset(
-                        &selected,
-                        &templates_ref,
-                        &presets,
-                        &layout,
-                        &session_name,
+                    let mut preset = build_launch_preset(LaunchPresetDraft {
+                        selected: &selected,
+                        templates: &templates_ref,
+                        presets: &presets,
+                        layout: &layout,
+                        session_name: &session_name,
                         workspace_root,
                         theme,
                         density,
-                    );
+                    });
                     preset.id = existing.id.clone();
 
                     if let Err(err) = preset_store.upsert_preset(preset) {
@@ -838,7 +884,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         preset_actions.append(&edit_preset_button);
     }
 
-    stage.append(&tile_editor.root);
+    wizard_steps.add_named(&tile_editor.root, Some("tiles"));
 
     let action_bar = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -846,21 +892,80 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .hexpand(true)
         .css_classes(["action-bar-bottom", "launch-action-bar"])
         .build();
-    stage.append(&action_bar);
+    wizard.append(&action_bar);
 
-    let cancel_button = gtk::Button::with_label("Cancel");
+    let dashboard_button = gtk::Button::with_label("Workspaces");
+    dashboard_button.add_css_class("pill-button");
+    dashboard_button.add_css_class("secondary-button");
+    {
+        let mode_stack = mode_stack.clone();
+        dashboard_button.connect_clicked(move |_| {
+            mode_stack.set_visible_child_name("dashboard");
+        });
+    }
+    action_bar.append(&dashboard_button);
+
+    let cancel_button = gtk::Button::with_label("Close Tab");
     cancel_button.add_css_class("pill-button");
     cancel_button.add_css_class("ghost-link-button");
     cancel_button.connect_clicked(move |_| on_cancel());
     action_bar.append(&cancel_button);
 
+    let previous_button = gtk::Button::with_label("Back");
+    previous_button.add_css_class("pill-button");
+    previous_button.add_css_class("secondary-button");
+    action_bar.append(&previous_button);
+
     let spacer = gtk::Box::builder().hexpand(true).build();
     action_bar.append(&spacer);
 
-    let configure_button = gtk::Button::with_label("Launch Workspace");
+    let configure_button = gtk::Button::with_label("Next");
     configure_button.add_css_class("pill-button");
     configure_button.add_css_class("primary-cta-button");
     action_bar.append(&configure_button);
+
+    let sync_wizard_navigation = Rc::new({
+        let wizard_steps = wizard_steps.clone();
+        let wizard_stepper = wizard_stepper.clone();
+        let wizard_step_names = wizard_step_names.clone();
+        let wizard_step_index = wizard_step_index.clone();
+        let previous_button = previous_button.clone();
+        let configure_button = configure_button.clone();
+        move || {
+            let index = wizard_step_index
+                .get()
+                .min(wizard_step_names.len().saturating_sub(1));
+            wizard_step_index.set(index);
+            wizard_steps.set_visible_child_name(wizard_step_names[index]);
+            previous_button.set_sensitive(index > 0);
+            configure_button.set_label(if index + 1 == wizard_step_names.len() {
+                "Launch Workspace"
+            } else {
+                "Next"
+            });
+            for (step_index, label) in wizard_stepper.steps.iter().enumerate() {
+                label.remove_css_class("is-active");
+                label.remove_css_class("is-complete");
+                if step_index == index {
+                    label.add_css_class("is-active");
+                } else if step_index < index {
+                    label.add_css_class("is-complete");
+                }
+            }
+        }
+    });
+
+    {
+        let wizard_step_index = wizard_step_index.clone();
+        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        previous_button.connect_clicked(move |_| {
+            let index = wizard_step_index.get();
+            if index > 0 {
+                wizard_step_index.set(index - 1);
+                sync_wizard_navigation();
+            }
+        });
+    }
 
     {
         let path_entry = path_entry.clone();
@@ -872,32 +977,266 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let chosen_theme = chosen_theme.clone();
         let chosen_density = chosen_density.clone();
         let active_layout = active_layout.clone();
+        let wizard_step_index = wizard_step_index.clone();
+        let wizard_step_names = wizard_step_names.clone();
+        let sync_wizard_navigation = sync_wizard_navigation.clone();
 
-        configure_button.connect_clicked(move |_| match validate_workspace_path(&path_entry) {
-            Ok(workspace_root) => {
-                let session_name = session_name_entry.text().to_string();
-                let preset = build_launch_preset(
-                    &selected,
-                    &templates_ref,
-                    &presets,
-                    &active_layout.borrow().clone(),
-                    &session_name,
-                    Some(workspace_root.clone()),
-                    chosen_theme.get(),
-                    chosen_density.get(),
-                );
-                logging::info(format!(
-                    "launching preset '{}' with {} tiles",
-                    preset.name,
-                    preset.tile_count()
-                ));
-                launch_callback(preset, workspace_root);
+        configure_button.connect_clicked(move |_| {
+            let index = wizard_step_index.get();
+            if index + 1 < wizard_step_names.len() {
+                wizard_step_index.set(index + 1);
+                sync_wizard_navigation();
+                return;
             }
-            Err(msg) => {
-                logging::error(format!("Cannot launch: {}", msg));
+
+            match validate_workspace_path(&path_entry) {
+                Ok(workspace_root) => {
+                    let session_name = session_name_entry.text().to_string();
+                    let preset = build_launch_preset(LaunchPresetDraft {
+                        selected: &selected,
+                        templates: &templates_ref,
+                        presets: &presets,
+                        layout: &active_layout.borrow().clone(),
+                        session_name: &session_name,
+                        workspace_root: Some(workspace_root.clone()),
+                        theme: chosen_theme.get(),
+                        density: chosen_density.get(),
+                    });
+                    logging::info(format!(
+                        "launching preset '{}' with {} tiles",
+                        preset.name,
+                        preset.tile_count()
+                    ));
+                    launch_callback(preset, workspace_root);
+                }
+                Err(msg) => {
+                    logging::error(format!("Cannot launch: {}", msg));
+                }
             }
         });
     }
+
+    sync_wizard_navigation();
+
+    let show_new_workspace_wizard: Rc<dyn Fn()> = Rc::new({
+        let selected = selected.clone();
+        let summary = summary.clone();
+        let template_buttons = template_buttons.clone();
+        let preset_buttons = preset_buttons.clone();
+        let active_layout = active_layout.clone();
+        let tile_editor = tile_editor.clone();
+        let theme_preview_callback = theme_preview_callback.clone();
+        let session_name_entry = session_name_entry.clone();
+        let chosen_theme = chosen_theme.clone();
+        let chosen_density = chosen_density.clone();
+        let theme_strip = theme_strip.clone();
+        let density_strip = density_strip.clone();
+        let edit_preset_button_handle = edit_preset_button_handle.clone();
+        let density_preview_callback = density_preview_callback.clone();
+        let assets = assets.clone();
+        let mode_stack = mode_stack.clone();
+        let wizard_step_index = wizard_step_index.clone();
+        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        move || {
+            selected.set(Selection::Template(0));
+            if let Some(template) = templates.first() {
+                summary.name_label.set_text(template.label);
+                summary.subtitle_label.set_text(template.subtitle);
+                session_name_entry.set_text(template.label);
+                *active_layout.borrow_mut() = generate_layout(template.tile_count);
+                tile_editor.tile_count.set_value(template.tile_count as f64);
+            }
+            chosen_theme.set(default_theme);
+            chosen_density.set(default_density);
+            theme_preview_callback(default_theme);
+            density_preview_callback(default_density);
+            sync_theme_strip_active(&theme_strip, default_theme);
+            sync_density_strip_active(&density_strip, default_density);
+            refresh_tile_editor(&tile_editor, &active_layout, &assets);
+
+            if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
+                button.set_visible(false);
+            }
+            for (index, btn) in template_buttons.borrow().iter().enumerate() {
+                if index == 0 {
+                    btn.add_css_class("is-selected");
+                } else {
+                    btn.remove_css_class("is-selected");
+                }
+            }
+            for btn in preset_buttons.borrow().iter() {
+                btn.remove_css_class("is-selected");
+            }
+
+            wizard_step_index.set(0);
+            sync_wizard_navigation();
+            mode_stack.set_visible_child_name("wizard");
+        }
+    });
+
+    let edit_workspace_from_dashboard: Rc<dyn Fn(usize)> = Rc::new({
+        let selected = selected.clone();
+        let summary = summary.clone();
+        let template_buttons = template_buttons.clone();
+        let preset_buttons = preset_buttons.clone();
+        let presets = presets.clone();
+        let active_layout = active_layout.clone();
+        let tile_editor = tile_editor.clone();
+        let theme_preview_callback = theme_preview_callback.clone();
+        let session_name_entry = session_name_entry.clone();
+        let path_entry = path_entry.clone();
+        let chosen_theme = chosen_theme.clone();
+        let chosen_density = chosen_density.clone();
+        let theme_strip = theme_strip.clone();
+        let density_strip = density_strip.clone();
+        let edit_preset_button_handle = edit_preset_button_handle.clone();
+        let density_preview_callback = density_preview_callback.clone();
+        let assets = assets.clone();
+        let mode_stack = mode_stack.clone();
+        let wizard_step_index = wizard_step_index.clone();
+        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        move |idx| {
+            let Some(p) = presets.get(idx) else {
+                return;
+            };
+            selected.set(Selection::Preset(idx));
+            summary.name_label.set_text(&p.name);
+            summary
+                .subtitle_label
+                .set_text(&format!("{} - {}", p.template_badge(), p.description));
+            session_name_entry.set_text(&p.name);
+            if let Some(workspace_root) = p.workspace_root.as_ref() {
+                path_entry.set_text(&workspace_root.display().to_string());
+            }
+            chosen_theme.set(p.theme);
+            chosen_density.set(p.density);
+            theme_preview_callback(p.theme);
+            sync_theme_strip_active(&theme_strip, p.theme);
+            density_preview_callback(p.density);
+            sync_density_strip_active(&density_strip, p.density);
+            *active_layout.borrow_mut() = p.layout.clone();
+            tile_editor.tile_count.set_value(p.tile_count() as f64);
+            refresh_tile_editor(&tile_editor, &active_layout, &assets);
+
+            if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
+                button.set_visible(true);
+                button.set_label(if is_builtin_preset_id(&p.id) {
+                    "Save Copy"
+                } else {
+                    "Update Preset"
+                });
+            }
+
+            for btn in template_buttons.borrow().iter() {
+                btn.remove_css_class("is-selected");
+            }
+            for (index, btn) in preset_buttons.borrow().iter().enumerate() {
+                if index == idx {
+                    btn.add_css_class("is-selected");
+                } else {
+                    btn.remove_css_class("is-selected");
+                }
+            }
+
+            wizard_step_index.set(0);
+            sync_wizard_navigation();
+            mode_stack.set_visible_child_name("wizard");
+        }
+    });
+
+    let open_workspace_from_dashboard: Rc<dyn Fn(usize)> = Rc::new({
+        let presets = presets.clone();
+        let launch_callback = launch_callback.clone();
+        let current_dir = current_dir.clone();
+        let edit_workspace_from_dashboard = edit_workspace_from_dashboard.clone();
+        move |idx| {
+            let Some(preset) = presets.get(idx).cloned() else {
+                return;
+            };
+            let requested_root = preset
+                .workspace_root
+                .clone()
+                .unwrap_or_else(|| current_dir.clone());
+            match resolve_workspace_root(&requested_root) {
+                Ok(workspace_root) if workspace_root.is_dir() => {
+                    let mut launch_preset = preset.clone();
+                    launch_preset.workspace_root = Some(workspace_root.clone());
+                    logging::info(format!(
+                        "opening saved workspace '{}' from dashboard root='{}'",
+                        launch_preset.name,
+                        workspace_root.display()
+                    ));
+                    launch_callback(launch_preset, workspace_root);
+                }
+                Ok(workspace_root) => {
+                    logging::error(format!(
+                        "Saved workspace root is not a directory: {}",
+                        workspace_root.display()
+                    ));
+                    edit_workspace_from_dashboard(idx);
+                }
+                Err(error) => {
+                    logging::error(format!(
+                        "Cannot open saved workspace '{}': {}",
+                        preset.name, error
+                    ));
+                    edit_workspace_from_dashboard(idx);
+                }
+            }
+        }
+    });
+
+    dashboard.append(&build_dashboard_intro(presets.len(), {
+        let show_new_workspace_wizard = show_new_workspace_wizard.clone();
+        move || show_new_workspace_wizard()
+    }));
+
+    if presets.is_empty() {
+        dashboard.append(&build_dashboard_empty_state());
+    } else {
+        let saved_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .css_classes(["config-panel", "saved-workspaces-panel"])
+            .build();
+        saved_panel.append(&build_section_header(
+            "Saved workspaces",
+            "Load or edit an existing workspace",
+            "Open a saved layout immediately, or edit it in the wizard before launching.",
+        ));
+
+        let cards = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .row_spacing(10)
+            .column_spacing(10)
+            .min_children_per_line(1)
+            .max_children_per_line(3)
+            .homogeneous(true)
+            .hexpand(true)
+            .css_classes(["saved-workspace-grid"])
+            .build();
+        for (index, preset) in presets.iter().enumerate() {
+            cards.insert(
+                &build_saved_workspace_card(
+                    preset,
+                    index,
+                    {
+                        let open_workspace_from_dashboard = open_workspace_from_dashboard.clone();
+                        move |idx| open_workspace_from_dashboard(idx)
+                    },
+                    {
+                        let edit_workspace_from_dashboard = edit_workspace_from_dashboard.clone();
+                        move |idx| edit_workspace_from_dashboard(idx)
+                    },
+                ),
+                -1,
+            );
+        }
+        saved_panel.append(&cards);
+        dashboard.append(&saved_panel);
+    }
+
+    mode_stack.set_visible_child_name("dashboard");
 
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
@@ -911,6 +1250,183 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .build();
 
     scroller.upcast()
+}
+
+fn build_wizard_stepper() -> WizardStepper {
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["wizard-stepper", "config-panel"])
+        .build();
+
+    let mut steps = Vec::new();
+    for (index, label) in ["Setup", "Appearance", "Layout", "Tiles"]
+        .iter()
+        .enumerate()
+    {
+        let step = gtk::Label::builder()
+            .label(format!("{}  {}", index + 1, label))
+            .halign(gtk::Align::Center)
+            .hexpand(true)
+            .css_classes(["wizard-step-chip"])
+            .build();
+        root.append(&step);
+        steps.push(step);
+    }
+
+    WizardStepper { root, steps }
+}
+
+fn build_dashboard_intro<F>(saved_count: usize, on_new_workspace: F) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(18)
+        .css_classes(["config-panel", "launch-dashboard-hero"])
+        .build();
+
+    let copy = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .hexpand(true)
+        .build();
+    copy.append(
+        &gtk::Label::builder()
+            .label("Start from a saved workspace or create a new layout")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["hero-title", "launch-dashboard-title"])
+            .build(),
+    );
+    copy.append(
+        &gtk::Label::builder()
+            .label(if saved_count == 0 {
+                "No saved workspaces yet. Use the wizard to choose a folder, pick a layout, and configure tiles one step at a time."
+            } else {
+                "Open a known workspace immediately, edit a saved setup, or launch the wizard for a fresh layout."
+            })
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["hero-body", "launch-dashboard-copy"])
+            .build(),
+    );
+    let meta = gtk::Label::builder()
+        .label(format!("{} saved", saved_count))
+        .halign(gtk::Align::Start)
+        .css_classes(["status-chip", "launch-dashboard-count"])
+        .build();
+    copy.append(&meta);
+    card.append(&copy);
+
+    let new_button = gtk::Button::with_label("New Workspace Layout");
+    new_button.add_css_class("pill-button");
+    new_button.add_css_class("primary-cta-button");
+    new_button.add_css_class("new-workspace-layout-button");
+    new_button.set_valign(gtk::Align::Center);
+    new_button.connect_clicked(move |_| on_new_workspace());
+    card.append(&new_button);
+
+    card.upcast()
+}
+
+fn build_dashboard_empty_state() -> gtk::Widget {
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["config-panel", "saved-workspaces-empty"])
+        .build();
+    card.append(
+        &gtk::Label::builder()
+            .label("Your saved workspaces will appear here")
+            .halign(gtk::Align::Start)
+            .css_classes(["section-title"])
+            .build(),
+    );
+    card.append(
+        &gtk::Label::builder()
+            .label("After you save a workspace preset, this dashboard becomes your quick launcher and editing hub.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint"])
+            .build(),
+    );
+    card.upcast()
+}
+
+fn build_saved_workspace_card<FOpen, FEdit>(
+    preset: &WorkspacePreset,
+    index: usize,
+    on_open: FOpen,
+    on_edit: FEdit,
+) -> gtk::Widget
+where
+    FOpen: Fn(usize) + 'static,
+    FEdit: Fn(usize) + 'static,
+{
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .hexpand(true)
+        .css_classes(["preset-card-compact", "saved-workspace-card"])
+        .build();
+
+    let name = gtk::Label::builder()
+        .label(&preset.name)
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .css_classes(["card-title"])
+        .build();
+    card.append(&name);
+
+    let detail = gtk::Label::builder()
+        .label(format!(
+            "{} • {}",
+            preset.template_badge(),
+            preset.description
+        ))
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .css_classes(["card-meta"])
+        .build();
+    card.append(&detail);
+
+    let root_label = preset
+        .workspace_root
+        .as_ref()
+        .map(|root| root.display().to_string())
+        .unwrap_or_else(|| "Uses current folder when opened".into());
+    card.append(
+        &gtk::Label::builder()
+            .label(root_label)
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .css_classes(["field-hint", "saved-workspace-root"])
+            .build(),
+    );
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::Fill)
+        .build();
+    let open_button = gtk::Button::with_label("Open");
+    open_button.add_css_class("pill-button");
+    open_button.add_css_class("primary-cta-button");
+    open_button.set_hexpand(true);
+    open_button.connect_clicked(move |_| on_open(index));
+    actions.append(&open_button);
+
+    let edit_button = gtk::Button::with_label("Edit");
+    edit_button.add_css_class("pill-button");
+    edit_button.add_css_class("secondary-button");
+    edit_button.set_hexpand(true);
+    edit_button.connect_clicked(move |_| on_edit(index));
+    actions.append(&edit_button);
+    card.append(&actions);
+
+    card.upcast()
 }
 
 fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
@@ -940,7 +1456,7 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .build();
     body.append(
         &gtk::Label::builder()
-            .label("Configure Layout")
+            .label("Workspace Launch Deck")
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["hero-title", "config-title", "launch-overview-title"])
@@ -949,7 +1465,7 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
     body.append(
         &gtk::Label::builder()
             .label(
-                "Pick a starting layout, preview the shell, then tune the tiles you want to open.",
+                "Open a saved workspace or create a new layout with a guided step-by-step wizard.",
             )
             .halign(gtk::Align::Start)
             .wrap(true)
@@ -965,7 +1481,7 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .css_classes(["launch-overview-meta"])
         .build();
     meta.append(&build_launch_meta_chip(product::PRODUCT_DISPLAY_NAME));
-    meta.append(&build_launch_meta_chip("4-step flow"));
+    meta.append(&build_launch_meta_chip("Dashboard + wizard"));
     meta.append(&build_launch_meta_chip("Live preview"));
     meta.append(&build_launch_meta_chip(default_restore_mode.label()));
     card.append(&meta);
@@ -1531,46 +2047,48 @@ fn apply_project_suggestion(
     session_name_entry.set_text(&suggestion.title);
 }
 
-fn build_launch_preset(
-    selected: &Rc<Cell<Selection>>,
-    templates: &[LayoutTemplate],
-    presets: &[WorkspacePreset],
-    layout: &LayoutNode,
-    session_name: &str,
+struct LaunchPresetDraft<'a> {
+    selected: &'a Rc<Cell<Selection>>,
+    templates: &'a [LayoutTemplate],
+    presets: &'a [WorkspacePreset],
+    layout: &'a LayoutNode,
+    session_name: &'a str,
     workspace_root: Option<PathBuf>,
     theme: ThemeMode,
     density: ApplicationDensity,
-) -> WorkspacePreset {
-    let custom_name = if session_name.is_empty() {
+}
+
+fn build_launch_preset(draft: LaunchPresetDraft<'_>) -> WorkspacePreset {
+    let custom_name = if draft.session_name.is_empty() {
         None
     } else {
-        Some(session_name.to_string())
+        Some(draft.session_name.to_string())
     };
 
-    match selected.get() {
+    match draft.selected.get() {
         Selection::Template(idx) => {
-            let template = &templates[idx];
+            let template = &draft.templates[idx];
             WorkspacePreset {
                 id: format!("session-{}", template.tile_count),
                 name: custom_name.unwrap_or_else(|| template.label.to_string()),
                 description: String::new(),
                 tags: Vec::new(),
                 root_label: "Workspace root".into(),
-                workspace_root,
-                theme,
-                density,
-                layout: layout.clone(),
+                workspace_root: draft.workspace_root,
+                theme: draft.theme,
+                density: draft.density,
+                layout: draft.layout.clone(),
             }
         }
         Selection::Preset(idx) => {
-            let mut preset = presets[idx].clone();
+            let mut preset = draft.presets[idx].clone();
             if let Some(name) = custom_name {
                 preset.name = name;
             }
-            preset.theme = theme;
-            preset.density = density;
-            preset.workspace_root = workspace_root;
-            preset.layout = layout.clone();
+            preset.theme = draft.theme;
+            preset.density = draft.density;
+            preset.workspace_root = draft.workspace_root;
+            preset.layout = draft.layout.clone();
             preset
         }
     }

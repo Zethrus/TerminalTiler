@@ -123,23 +123,23 @@ window.profile-comfortable button.app-tab-add {
 }
 
 window.profile-comfortable .launch-stage {
-  margin-top: 24px;
-  margin-bottom: 24px;
-  margin-left: 24px;
-  margin-right: 24px;
+  margin-top: 18px;
+  margin-bottom: 18px;
+  margin-left: 20px;
+  margin-right: 20px;
 }
 
 window.profile-comfortable .hero-title {
-  font-size: 28px;
+  font-size: 26px;
 }
 
 window.profile-comfortable .config-panel,
 window.profile-comfortable .preview-card {
-  padding: 20px;
+  padding: 18px;
 }
 
 window.profile-comfortable .directory-panel {
-  padding: 18px;
+  padding: 16px;
 }
 
 window.profile-comfortable .workspace-path entry,
@@ -411,8 +411,8 @@ window.profile-compact .tile-editor-row {
 }
 
 window.profile-compact .action-bar-bottom {
-  padding: 10px 0 0;
-  margin-top: 6px;
+  padding: 6px 0 0;
+  margin-top: 2px;
 }
 
 window.profile-compact .workspace-summary {
@@ -1832,8 +1832,85 @@ button.tile-header-action:disabled {
 }
 
 .launch-action-bar {
-  padding-top: 10px;
-  margin-top: 6px;
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+.launch-mode-stack,
+.launch-wizard-steps,
+.launch-wizard-shell,
+.launch-dashboard {
+  min-width: 0;
+}
+
+.launch-dashboard-hero {
+  padding: 16px;
+}
+
+.launch-dashboard-title {
+  font-size: 20px;
+}
+
+.launch-dashboard-copy {
+  max-width: 760px;
+  line-height: 1.45;
+}
+
+button.new-workspace-layout-button {
+  min-height: 42px;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.saved-workspaces-panel {
+  min-width: 0;
+}
+
+.saved-workspace-grid {
+  margin-top: 2px;
+}
+
+.saved-workspace-card {
+  min-width: 220px;
+  padding: 12px;
+}
+
+.saved-workspace-root {
+  font-size: 11px;
+}
+
+.saved-workspaces-empty {
+  border-style: dashed;
+}
+
+.wizard-stepper {
+  padding: 8px;
+  box-shadow: none;
+}
+
+.wizard-step-chip {
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wizard-step-chip.is-active {
+  background: linear-gradient(180deg, rgba(244, 193, 107, 0.22), rgba(190, 97, 45, 0.14));
+  border-color: rgba(240, 179, 75, 0.28);
+  color: #fffaf0;
+}
+
+.wizard-step-chip.is-complete {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.74);
 }
 
 window.profile-comfortable .terminal-frame {
@@ -2179,6 +2256,39 @@ window.theme-light .settings-dialog-content .settings-shortcut-card {
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.78),
     0 10px 20px rgba(15, 23, 42, 0.03);
+}
+
+window.window-shell.theme-light .launch-dashboard-hero,
+window.window-shell.theme-light .saved-workspaces-panel,
+window.window-shell.theme-light .saved-workspaces-empty,
+window.window-shell.theme-light .wizard-stepper {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 248, 252, 0.92)),
+    radial-gradient(circle at top left, rgba(196, 112, 54, 0.07), transparent 40%);
+  border-color: rgba(101, 119, 151, 0.14);
+}
+
+window.window-shell.theme-light .saved-workspace-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(244, 248, 252, 0.88));
+  border-color: rgba(101, 119, 151, 0.14);
+}
+
+window.window-shell.theme-light .wizard-step-chip {
+  background: rgba(25, 35, 50, 0.04);
+  border-color: rgba(25, 35, 50, 0.08);
+  color: rgba(25, 35, 50, 0.56);
+}
+
+window.window-shell.theme-light .wizard-step-chip.is-active {
+  background: linear-gradient(180deg, rgba(196, 112, 54, 0.16), rgba(241, 193, 104, 0.12));
+  border-color: rgba(196, 112, 54, 0.22);
+  color: rgba(25, 35, 50, 0.94);
+}
+
+window.window-shell.theme-light .wizard-step-chip.is-complete {
+  background: rgba(25, 35, 50, 0.06);
+  border-color: rgba(25, 35, 50, 0.10);
+  color: rgba(25, 35, 50, 0.72);
 }
 
 window.window-shell.theme-light .launch-setting-copy,
