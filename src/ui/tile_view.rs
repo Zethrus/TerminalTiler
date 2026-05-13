@@ -444,17 +444,22 @@ fn install_dropped_file_target(
                         drop_for_finish.finish(gdk::DragAction::empty());
                         return;
                     };
-                    let Ok(text) = read_drop_stream_text(&stream) else {
-                        drop_for_finish.finish(gdk::DragAction::empty());
-                        return;
-                    };
-                    let paths = local_paths_from_uri_list_text(&text);
-                    let accepted =
-                        paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref());
-                    drop_for_finish.finish(if accepted {
-                        gdk::DragAction::COPY
-                    } else {
-                        gdk::DragAction::empty()
+                    glib::MainContext::default().spawn_local(async move {
+                        let Ok(text) = read_drop_stream_text(stream).await else {
+                            drop_for_finish.finish(gdk::DragAction::empty());
+                            return;
+                        };
+                        let paths = local_paths_from_uri_list_text(&text);
+                        let accepted = paste_dropped_file_paths(
+                            &session,
+                            &paths,
+                            show_recovery_prompt.as_ref(),
+                        );
+                        drop_for_finish.finish(if accepted {
+                            gdk::DragAction::COPY
+                        } else {
+                            gdk::DragAction::empty()
+                        });
                     });
                 },
             );
@@ -469,10 +474,12 @@ fn drop_formats_can_contain_uri_list(formats: &gdk::ContentFormats) -> bool {
         || formats.contain_mime_type("x-special/gnome-copied-files")
 }
 
-fn read_drop_stream_text(stream: &gtk::gio::InputStream) -> Result<String, gtk::glib::Error> {
+async fn read_drop_stream_text(stream: gtk::gio::InputStream) -> Result<String, gtk::glib::Error> {
     let mut bytes = Vec::new();
     loop {
-        let chunk = stream.read_bytes(16 * 1024, None::<&gtk::gio::Cancellable>)?;
+        let chunk = stream
+            .read_bytes_future(16 * 1024, glib::Priority::DEFAULT)
+            .await?;
         if chunk.is_empty() {
             break;
         }
@@ -1260,7 +1267,10 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TileDragPayload, local_paths_from_gio_files, local_paths_from_uri_list_text};
+    use super::{
+        TileDragPayload, local_paths_from_gio_files, local_paths_from_uri_list_text,
+        read_drop_stream_text,
+    };
     use adw::prelude::*;
     use gdk::prelude::StaticType;
     use std::path::PathBuf;
@@ -1296,6 +1306,23 @@ mod tests {
         let file = gtk::gio::File::for_uri("sftp://example.com/tmp/remote.txt");
 
         assert!(local_paths_from_gio_files([file]).is_empty());
+    }
+
+    #[test]
+    fn reads_uri_list_drop_stream_asynchronously() {
+        let context = gtk::glib::MainContext::default();
+        let bytes = gtk::glib::Bytes::from_static(b"file:///tmp/photo%201.jpg\n");
+        let stream = gtk::gio::MemoryInputStream::from_bytes(&bytes).upcast();
+
+        let text = context
+            .block_on(read_drop_stream_text(stream))
+            .expect("drop stream should be readable");
+
+        assert_eq!(text, "file:///tmp/photo%201.jpg\n");
+        assert_eq!(
+            local_paths_from_uri_list_text(&text),
+            vec![PathBuf::from("/tmp/photo 1.jpg")]
+        );
     }
 
     #[test]
