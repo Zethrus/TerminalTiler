@@ -852,6 +852,7 @@ entry.path-valid {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.58);
   font-weight: 500;
+  transition: color 140ms ease;
 }
 
 .section-title {
@@ -1201,6 +1202,9 @@ button.destructive-button:hover {
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
+  transition:
+    background 140ms ease,
+    border-bottom-color 140ms ease;
 }
 
 button.tile-header-action {
@@ -1273,12 +1277,13 @@ button.tile-header-action:disabled {
     transform 140ms ease;
 }
 
-.terminal-card.is-active-tile {
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow:
-    0 14px 34px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(255, 255, 255, 0.07),
-    0 0 0 2px rgba(255, 255, 255, 0.03);
+.terminal-card.is-active-tile .terminal-header {
+  /* State emphasis is intentionally header-local to avoid full-height split-pane rings. */
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+}
+
+.terminal-card.is-active-tile .tile-title {
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .terminal-card.is-dragging {
@@ -1295,19 +1300,28 @@ button.tile-header-action:disabled {
   font-family: monospace;
 }
 
-.terminal-card.is-drop-target {
-  border-color: rgba(240, 179, 75, 0.30);
-  box-shadow:
-    0 14px 34px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(240, 179, 75, 0.10);
+.terminal-card.is-disconnected .terminal-header {
+  /* Disconnected feedback stays in the header and recovery chip. */
+  background:
+    linear-gradient(180deg, rgba(240, 179, 75, 0.09), rgba(240, 179, 75, 0.035)),
+    radial-gradient(circle at top left, rgba(240, 179, 75, 0.11), transparent 42%);
+  border-bottom-color: rgba(240, 179, 75, 0.18);
 }
 
-.terminal-card.is-disconnected {
-  border-color: rgba(240, 179, 75, 0.34);
-  box-shadow:
-    0 18px 40px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(240, 179, 75, 0.14),
-    0 0 28px rgba(240, 179, 75, 0.08);
+.terminal-card.is-disconnected .tile-title {
+  color: rgba(255, 236, 197, 0.78);
+}
+
+.terminal-card.is-drop-target .terminal-header {
+  /* Drag/drop feedback is carried by the header, not the full card edge. */
+  background:
+    linear-gradient(180deg, rgba(240, 179, 75, 0.11), rgba(240, 179, 75, 0.045)),
+    radial-gradient(circle at top left, rgba(240, 179, 75, 0.15), transparent 42%);
+  border-bottom-color: rgba(240, 179, 75, 0.26);
+}
+
+.terminal-card.is-drop-target .tile-title {
+  color: rgba(255, 236, 197, 0.84);
 }
 
 .status-chip.recovery-chip {
@@ -2659,26 +2673,41 @@ window.window-shell.theme-light .terminal-card {
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
 }
 
-window.window-shell.theme-light .terminal-card.is-active-tile {
-  border-color: rgba(255, 255, 255, 0.72);
-  box-shadow:
-    0 14px 28px rgba(15, 23, 42, 0.08),
-    0 0 0 1px rgba(255, 255, 255, 0.34);
-}
-
-window.window-shell.theme-light .terminal-card.is-disconnected {
-  border-color: rgba(196, 112, 54, 0.28);
-  box-shadow:
-    0 18px 34px rgba(15, 23, 42, 0.10),
-    0 0 0 1px rgba(196, 112, 54, 0.10),
-    0 0 24px rgba(196, 112, 54, 0.06);
-}
-
 window.window-shell.theme-light .terminal-header {
   background:
     linear-gradient(180deg, rgba(255, 250, 242, 0.92), rgba(238, 232, 222, 0.96)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.08), transparent 40%);
   border-bottom-color: rgba(25, 35, 50, 0.15);
+}
+
+window.window-shell.theme-light .terminal-card.is-active-tile .terminal-header {
+  border-bottom-color: rgba(25, 35, 50, 0.24);
+}
+
+window.window-shell.theme-light .terminal-card.is-active-tile .tile-title {
+  color: rgba(25, 35, 50, 0.94);
+}
+
+window.window-shell.theme-light .terminal-card.is-disconnected .terminal-header {
+  background:
+    linear-gradient(180deg, rgba(196, 112, 54, 0.12), rgba(196, 112, 54, 0.055)),
+    radial-gradient(circle at top left, rgba(196, 112, 54, 0.12), transparent 40%);
+  border-bottom-color: rgba(196, 112, 54, 0.24);
+}
+
+window.window-shell.theme-light .terminal-card.is-disconnected .tile-title {
+  color: rgba(97, 52, 16, 0.90);
+}
+
+window.window-shell.theme-light .terminal-card.is-drop-target .terminal-header {
+  background:
+    linear-gradient(180deg, rgba(196, 112, 54, 0.14), rgba(196, 112, 54, 0.065)),
+    radial-gradient(circle at top left, rgba(196, 112, 54, 0.16), transparent 40%);
+  border-bottom-color: rgba(196, 112, 54, 0.30);
+}
+
+window.window-shell.theme-light .terminal-card.is-drop-target .tile-title {
+  color: rgba(97, 52, 16, 0.94);
 }
 
 window.window-shell.theme-light button.tile-header-action {
