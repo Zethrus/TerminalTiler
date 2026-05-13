@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
 use vte4::prelude::*;
 
+use crate::dropped_paths;
 use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
@@ -336,7 +337,9 @@ impl TerminalSession {
     }
 
     pub fn paste_dropped_paths(&self, paths: &[PathBuf]) -> bool {
-        let Some(payload) = serialize_dropped_paths(paths) else {
+        let Some(payload) = dropped_paths::serialize_posix_paths(
+            paths.iter().map(|path| path.as_os_str().to_string_lossy()),
+        ) else {
             return false;
         };
 
@@ -762,75 +765,13 @@ fn report_spawn_problem(terminal: &vte4::Terminal, descriptor: &str, message: &s
     terminal.feed(rendered.as_bytes());
 }
 
-fn serialize_dropped_paths(paths: &[PathBuf]) -> Option<String> {
-    let serialized = paths
-        .iter()
-        .map(|path| path.as_os_str())
-        .filter(|path| !path.is_empty())
-        .map(|path| shell_quote_path(&path.to_string_lossy()))
-        .collect::<Vec<_>>();
-
-    if serialized.is_empty() {
-        None
-    } else {
-        Some(format!("{} ", serialized.join(" ")))
-    }
-}
-
-fn shell_quote_path(path: &str) -> String {
-    let escaped = path.replace('\'', "'\"'\"'");
-    format!("'{escaped}'")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         WorkingDirectoryValidationError, build_local_shell_argv, build_spawn_argv,
-        process_group_target, serialize_dropped_paths, supports_recovery_options,
-        validate_working_dir,
+        process_group_target, supports_recovery_options, validate_working_dir,
     };
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn serializes_single_path_for_shell_paste() {
-        let payload = serialize_dropped_paths(&[PathBuf::from("/tmp/report.txt")]);
-
-        assert_eq!(payload.as_deref(), Some("'/tmp/report.txt' "));
-    }
-
-    #[test]
-    fn serializes_multiple_paths_with_spaces() {
-        let payload = serialize_dropped_paths(&[
-            PathBuf::from("/tmp/screenshot 1.png"),
-            PathBuf::from("/workspace/notes.md"),
-        ]);
-
-        assert_eq!(
-            payload.as_deref(),
-            Some("'/tmp/screenshot 1.png' '/workspace/notes.md' ")
-        );
-    }
-
-    #[test]
-    fn escapes_single_quotes_in_paths() {
-        let payload = serialize_dropped_paths(&[PathBuf::from("/tmp/it's-here.txt")]);
-
-        assert_eq!(payload.as_deref(), Some("'/tmp/it'\"'\"'s-here.txt' "));
-    }
-
-    #[test]
-    fn preserves_raw_directory_paths() {
-        let payload = serialize_dropped_paths(&[PathBuf::from("/workspace/project")]);
-
-        assert_eq!(payload.as_deref(), Some("'/workspace/project' "));
-    }
-
-    #[test]
-    fn ignores_empty_drop_payloads() {
-        let payload = serialize_dropped_paths(&[]);
-
-        assert_eq!(payload, None);
-    }
+    use std::path::Path;
 
     #[test]
     fn builds_login_shell_argv_for_startup_commands() {

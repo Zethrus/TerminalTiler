@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 mod app;
+mod dropped_paths;
 mod logging;
 mod model;
 mod platform;

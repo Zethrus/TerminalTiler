@@ -64,7 +64,9 @@ mod imp {
         GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DELETE,
         VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
     };
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::Shell::{
+        DragAcceptFiles, DragFinish, DragQueryFileW, HDROP, ShellExecuteW,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BN_DBLCLK, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
@@ -81,6 +83,7 @@ mod imp {
         WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
+    use crate::dropped_paths;
     use crate::logging;
     use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
@@ -99,7 +102,7 @@ mod imp {
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
-    use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsRuntime};
+    use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsLaunchRuntime, WindowsRuntime};
     use crate::windows::{
         alert_center, assets_manager, command_palette, runbook_dialog, shortcut_capture,
         transcript_viewer,
@@ -123,6 +126,7 @@ mod imp {
     const MIN_PANE_CHARS_Y: i16 = 12;
     const DEFAULT_FONT_FACE: &str = "JetBrains Mono";
     const CF_UNICODETEXT: u32 = 13;
+    const WM_DROPFILES_MESSAGE: u32 = 0x0233;
     const MIN_TERMINAL_FONT_POINTS: i32 = 7;
     const MAX_TERMINAL_FONT_POINTS: i32 = 20;
     const MENU_COPY_SELECTION: usize = 1;
@@ -257,6 +261,7 @@ mod imp {
         reconnect_attempts: u8,
         termination_requested: bool,
         session: Option<PaneSession>,
+        launch_runtime: Option<WindowsLaunchRuntime>,
     }
 
     impl Drop for PaneState {
@@ -1147,6 +1152,19 @@ mod imp {
                 }
                 0
             }
+            WM_DROPFILES_MESSAGE => {
+                let paths = extract_dropped_file_paths(wparam as HDROP);
+                if !is_web_pane
+                    && let Some(pane) = unsafe { pane_state_mut(hwnd) }
+                    && !paths.is_empty()
+                {
+                    unsafe {
+                        SetFocus(hwnd);
+                    }
+                    paste_dropped_file_paths_into_pane(pane, &paths);
+                }
+                0
+            }
             WM_CHAR => {
                 if is_web_pane {
                     return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
@@ -1900,6 +1918,7 @@ mod imp {
 
             match PaneSession::spawn(hwnd, pane.id, &command, columns, rows) {
                 Ok(session) => {
+                    pane.launch_runtime = Some(command.runtime.clone());
                     pane.session = Some(session);
                     pane.termination_requested = false;
                     pane.reconnect_attempts = 0;
@@ -1909,6 +1928,7 @@ mod imp {
                     ));
                 }
                 Err(error) => {
+                    pane.launch_runtime = None;
                     pane.terminal
                         .process(&format!("Could not spawn tile process.\r\n\r\n{error}\r\n"));
                 }
@@ -2408,6 +2428,7 @@ mod imp {
         pane.termination_requested = false;
         match PaneSession::spawn(pane.parent_hwnd, pane.id, &command, columns, rows) {
             Ok(session) => {
+                pane.launch_runtime = Some(command.runtime.clone());
                 pane.session = Some(session);
                 pane.reconnect_attempts = 0;
                 let pane_title = pane.tile.title.clone();
@@ -2433,7 +2454,10 @@ mod imp {
                 push_alert(state, reconnect_alert);
                 Ok(())
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                pane.launch_runtime = None;
+                Err(error)
+            }
         }
     }
 
@@ -3100,6 +3124,7 @@ mod imp {
                 reconnect_attempts: 0,
                 termination_requested: false,
                 session: None,
+                launch_runtime: None,
             });
             pane.title_hwnd = create_child_window(
                 hwnd,
@@ -3124,6 +3149,11 @@ mod imp {
                 0,
                 pane_ptr.cast(),
             );
+            if !is_web_tile && !pane.output_hwnd.is_null() {
+                unsafe {
+                    DragAcceptFiles(pane.output_hwnd, 1);
+                }
+            }
             if !pane.title_hwnd.is_null() {
                 unsafe {
                     SendMessageW(pane.title_hwnd, WM_SETFONT, ui_font as usize, 1);
@@ -4702,23 +4732,90 @@ mod imp {
         write_clipboard_text(&text)
     }
 
+    fn extract_dropped_file_paths(drop_handle: HDROP) -> Vec<String> {
+        let count = unsafe { DragQueryFileW(drop_handle, u32::MAX, ptr::null_mut(), 0) };
+        let mut paths = Vec::with_capacity(count as usize);
+
+        for index in 0..count {
+            let length = unsafe { DragQueryFileW(drop_handle, index, ptr::null_mut(), 0) };
+            if length == 0 {
+                continue;
+            }
+
+            let mut buffer = vec![0u16; length as usize + 1];
+            let copied = unsafe {
+                DragQueryFileW(drop_handle, index, buffer.as_mut_ptr(), buffer.len() as u32)
+            };
+            if copied == 0 {
+                continue;
+            }
+            paths.push(String::from_utf16_lossy(&buffer[..copied as usize]));
+        }
+
+        unsafe {
+            DragFinish(drop_handle);
+        }
+        paths
+    }
+
+    fn paste_dropped_file_paths_into_pane(pane: &mut PaneState, paths: &[String]) {
+        let Some(runtime) = pane.launch_runtime.as_ref() else {
+            logging::info(format!(
+                "skipped dropped-path paste for inactive pane '{}'",
+                pane.tile.title
+            ));
+            return;
+        };
+
+        let payload = match runtime {
+            WindowsLaunchRuntime::Wsl { distro } => {
+                let (payload, errors) =
+                    dropped_paths::serialize_wsl_paths(paths.iter().map(String::as_str), distro);
+                for error in errors {
+                    logging::error(format!(
+                        "skipped dropped path for WSL pane '{}': {}",
+                        pane.tile.title, error
+                    ));
+                }
+                payload
+            }
+            WindowsLaunchRuntime::PowerShell { .. } => {
+                dropped_paths::serialize_powershell_paths(paths.iter().map(String::as_str))
+            }
+            WindowsLaunchRuntime::Ssh { .. } => {
+                dropped_paths::serialize_posix_paths(paths.iter().map(String::as_str))
+            }
+        };
+
+        let Some(payload) = payload else {
+            return;
+        };
+        if let Err(error) = paste_text_into_pane(pane, &payload) {
+            logging::error(format!("dropped-path paste failed: {error}"));
+        }
+    }
+
     fn paste_clipboard_into_pane(pane: &mut PaneState) -> Result<(), String> {
         let Some(text) = read_clipboard_text()? else {
             return Ok(());
         };
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        paste_text_into_pane(pane, &normalized)
+    }
+
+    fn paste_text_into_pane(pane: &mut PaneState, text: &str) -> Result<(), String> {
         let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
         let Some(session) = pane.session.as_ref() else {
             return Ok(());
         };
         if pane.terminal.bracketed_paste() {
-            let wrapped = format!("\u{1b}[200~{normalized}\u{1b}[201~");
+            let wrapped = format!("\u{1b}[200~{text}\u{1b}[201~");
             pane.transcript.push_input(&wrapped);
             session.write_input(wrapped.as_bytes())
         } else {
-            pane.transcript.push_input(&normalized);
-            session.write_input(normalized.as_bytes())
+            pane.transcript.push_input(text);
+            session.write_input(text.as_bytes())
         }
     }
 

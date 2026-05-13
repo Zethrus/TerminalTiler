@@ -265,18 +265,18 @@ pub fn build(
         });
     }
 
-    let file_drop_target =
+    let file_list_drop_target =
         gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
     {
         let shell = shell.clone();
-        file_drop_target.connect_enter(move |_, _, _| {
+        file_list_drop_target.connect_enter(move |_, _, _| {
             shell.add_css_class("is-drop-target");
             gdk::DragAction::COPY
         });
     }
     {
         let shell = shell.clone();
-        file_drop_target.connect_leave(move |_| {
+        file_list_drop_target.connect_leave(move |_| {
             shell.remove_css_class("is-drop-target");
         });
     }
@@ -284,7 +284,7 @@ pub fn build(
         let shell = shell.clone();
         let session = session.clone();
         let show_recovery_prompt = show_recovery_prompt.clone();
-        file_drop_target.connect_drop(move |_, value, _, _| {
+        file_list_drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
 
             let Ok(files) = value.get::<gdk::FileList>() else {
@@ -297,15 +297,42 @@ pub fn build(
                 .filter_map(|file| file.path())
                 .collect::<Vec<PathBuf>>();
 
-            if session.needs_recovery_prompt() {
-                show_recovery_prompt();
-                true
-            } else {
-                session.paste_dropped_paths(&paths)
-            }
+            paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref())
         });
     }
-    shell.add_controller(file_drop_target);
+    shell.add_controller(file_list_drop_target);
+
+    let single_file_drop_target =
+        gtk::DropTarget::new(gtk::gio::File::static_type(), gdk::DragAction::COPY);
+    {
+        let shell = shell.clone();
+        single_file_drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gdk::DragAction::COPY
+        });
+    }
+    {
+        let shell = shell.clone();
+        single_file_drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let session = session.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
+        single_file_drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+
+            let Ok(file) = value.get::<gtk::gio::File>() else {
+                return false;
+            };
+            let paths = file.path().into_iter().collect::<Vec<PathBuf>>();
+
+            paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref())
+        });
+    }
+    shell.add_controller(single_file_drop_target);
 
     let drag_source = gtk::DragSource::builder()
         .actions(gdk::DragAction::MOVE)
@@ -365,6 +392,19 @@ pub fn build(
         session,
         tile: tile.clone(),
         close_button,
+    }
+}
+
+fn paste_dropped_file_paths(
+    session: &TerminalSession,
+    paths: &[PathBuf],
+    show_recovery_prompt: &dyn Fn(),
+) -> bool {
+    if session.needs_recovery_prompt() {
+        show_recovery_prompt();
+        true
+    } else {
+        session.paste_dropped_paths(paths)
     }
 }
 
