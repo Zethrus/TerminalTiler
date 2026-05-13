@@ -83,7 +83,7 @@ mod imp {
         WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
-    use crate::dropped_paths;
+    use crate::dropped_paths::{self, DroppedPathTarget};
     use crate::logging;
     use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
@@ -4767,25 +4767,19 @@ mod imp {
             return;
         };
 
-        let payload = match runtime {
-            WindowsLaunchRuntime::Wsl { distro } => {
-                let (payload, errors) =
-                    dropped_paths::serialize_wsl_paths(paths.iter().map(String::as_str), distro);
-                for error in errors {
-                    logging::error(format!(
-                        "skipped dropped path for WSL pane '{}': {}",
-                        pane.tile.title, error
-                    ));
-                }
-                payload
-            }
-            WindowsLaunchRuntime::PowerShell { .. } => {
-                dropped_paths::serialize_powershell_paths(paths.iter().map(String::as_str))
-            }
-            WindowsLaunchRuntime::Ssh { .. } => {
-                dropped_paths::serialize_posix_paths(paths.iter().map(String::as_str))
-            }
+        let target = match runtime {
+            WindowsLaunchRuntime::Wsl { distro } => DroppedPathTarget::Wsl { distro },
+            WindowsLaunchRuntime::PowerShell { .. } => DroppedPathTarget::PowerShell,
+            WindowsLaunchRuntime::Ssh { .. } => DroppedPathTarget::Posix,
         };
+        let (payload, errors) =
+            dropped_paths::serialize_for_target(paths.iter().map(String::as_str), target);
+        for error in errors {
+            logging::error(format!(
+                "skipped dropped path for WSL pane '{}': {}",
+                pane.tile.title, error
+            ));
+        }
 
         let Some(payload) = payload else {
             return;

@@ -291,11 +291,7 @@ pub fn build(
                 return false;
             };
 
-            let paths = files
-                .files()
-                .into_iter()
-                .filter_map(|file| file.path())
-                .collect::<Vec<PathBuf>>();
+            let paths = local_paths_from_gio_files(files.files());
 
             paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref())
         });
@@ -327,7 +323,7 @@ pub fn build(
             let Ok(file) = value.get::<gtk::gio::File>() else {
                 return false;
             };
-            let paths = file.path().into_iter().collect::<Vec<PathBuf>>();
+            let paths = local_paths_from_gio_files([file]);
 
             paste_dropped_file_paths(&session, &paths, show_recovery_prompt.as_ref())
         });
@@ -393,6 +389,13 @@ pub fn build(
         tile: tile.clone(),
         close_button,
     }
+}
+
+fn local_paths_from_gio_files<I>(files: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = gtk::gio::File>,
+{
+    files.into_iter().filter_map(|file| file.path()).collect()
 }
 
 fn paste_dropped_file_paths(
@@ -1143,4 +1146,43 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
         });
     }
     dialog.present(Some(&window));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_paths_from_gio_files;
+    use std::path::PathBuf;
+
+    #[test]
+    fn extracts_local_paths_from_single_gio_file_drop_payloads() {
+        let file = gtk::gio::File::for_path("/tmp/terminaltiler one.png");
+
+        assert_eq!(
+            local_paths_from_gio_files([file]),
+            vec![PathBuf::from("/tmp/terminaltiler one.png")]
+        );
+    }
+
+    #[test]
+    fn extracts_local_paths_from_multiple_gio_file_drop_payloads() {
+        let files = vec![
+            gtk::gio::File::for_path("/tmp/one.png"),
+            gtk::gio::File::for_path("/tmp/two words.txt"),
+        ];
+
+        assert_eq!(
+            local_paths_from_gio_files(files),
+            vec![
+                PathBuf::from("/tmp/one.png"),
+                PathBuf::from("/tmp/two words.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_non_local_gio_file_drop_payloads() {
+        let file = gtk::gio::File::for_uri("sftp://example.com/tmp/remote.txt");
+
+        assert!(local_paths_from_gio_files([file]).is_empty());
+    }
 }

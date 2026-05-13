@@ -1,6 +1,30 @@
 #[cfg(any(target_os = "windows", test))]
 use crate::platform::translate_path_for_wsl;
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DroppedPathTarget<'a> {
+    Posix,
+    PowerShell,
+    Wsl { distro: &'a str },
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub fn serialize_for_target<I, S>(
+    paths: I,
+    target: DroppedPathTarget<'_>,
+) -> (Option<String>, Vec<String>)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    match target {
+        DroppedPathTarget::Posix => (serialize_posix_paths(paths), Vec::new()),
+        DroppedPathTarget::PowerShell => (serialize_powershell_paths(paths), Vec::new()),
+        DroppedPathTarget::Wsl { distro } => serialize_wsl_paths(paths, distro),
+    }
+}
+
 pub fn serialize_posix_paths<I, S>(paths: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
@@ -76,7 +100,10 @@ fn powershell_quote_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{serialize_posix_paths, serialize_powershell_paths, serialize_wsl_paths};
+    use super::{
+        DroppedPathTarget, serialize_for_target, serialize_posix_paths, serialize_powershell_paths,
+        serialize_wsl_paths,
+    };
 
     #[test]
     fn serializes_single_posix_path_for_shell_paste() {
@@ -174,5 +201,34 @@ mod tests {
             Some("'/mnt/c/Users/dev/one.txt' '/mnt/d/two.txt' ")
         );
         assert_eq!(errors.len(), 1);
+    }
+
+    #[test]
+    fn target_serializer_uses_posix_quoting_for_ssh_local_path_text() {
+        let (payload, errors) =
+            serialize_for_target([r"C:\Users\me\a b.png"], DroppedPathTarget::Posix);
+
+        assert!(errors.is_empty());
+        assert_eq!(payload.as_deref(), Some(r"'C:\Users\me\a b.png' "));
+    }
+
+    #[test]
+    fn target_serializer_uses_powershell_quoting_for_native_windows_panes() {
+        let (payload, errors) =
+            serialize_for_target([r"C:\Users\me\it isn't.txt"], DroppedPathTarget::PowerShell);
+
+        assert!(errors.is_empty());
+        assert_eq!(payload.as_deref(), Some(r"'C:\Users\me\it isn''t.txt' "));
+    }
+
+    #[test]
+    fn target_serializer_translates_wsl_paths_for_wsl_panes() {
+        let (payload, errors) = serialize_for_target(
+            [r"C:\Users\dev\a b.png"],
+            DroppedPathTarget::Wsl { distro: "Ubuntu" },
+        );
+
+        assert!(errors.is_empty());
+        assert_eq!(payload.as_deref(), Some("'/mnt/c/Users/dev/a b.png' "));
     }
 }
