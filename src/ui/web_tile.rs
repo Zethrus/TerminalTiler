@@ -12,6 +12,7 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::ui::header_actions::build_header_icon_button;
+use crate::ui::tile_drag::TileDragPayload;
 
 const HEADER_BADGE_MAX_CHARS: i32 = 4;
 const HEADER_STATUS_MAX_CHARS: i32 = 28;
@@ -389,7 +390,9 @@ pub fn build(
     {
         let tile_id = tile.id.clone();
         drag_source.connect_prepare(move |_, _, _| {
-            Some(gdk::ContentProvider::for_value(&tile_id.to_value()))
+            Some(gdk::ContentProvider::for_value(
+                &TileDragPayload::new(tile_id.clone()).to_value(),
+            ))
         });
     }
     {
@@ -406,7 +409,7 @@ pub fn build(
     }
     left.add_controller(drag_source);
 
-    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+    let drop_target = gtk::DropTarget::new(TileDragPayload::static_type(), gdk::DragAction::MOVE);
     {
         let shell = shell.clone();
         drop_target.connect_enter(move |_, _, _| {
@@ -426,9 +429,10 @@ pub fn build(
         let on_swap = on_swap.clone();
         drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
-            let Ok(dragged_id) = value.get::<String>() else {
+            let Ok(payload) = value.get::<TileDragPayload>() else {
                 return false;
             };
+            let dragged_id = payload.into_tile_id();
             on_swap(dragged_id, target_id.clone());
             true
         });

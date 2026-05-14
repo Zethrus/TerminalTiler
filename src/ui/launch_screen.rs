@@ -1333,9 +1333,8 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .valign(gtk::Align::Start)
         .css_classes(["launch-overview-icon"])
         .build();
-    let launch_icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
-    launch_icon.set_valign(gtk::Align::Center);
-    icon.append(&launch_icon);
+    icon.add_css_class("is-brand-logo");
+    icon.append(&build_terminaltiler_logo_image());
     card.append(&icon);
 
     let body = gtk::Box::builder()
@@ -1377,6 +1376,21 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
     card.append(&meta);
 
     card.upcast()
+}
+
+fn build_terminaltiler_logo_image() -> gtk::Image {
+    let logo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/terminaltiler.svg");
+    let launch_icon = if logo_path.exists() {
+        gtk::Image::from_file(logo_path)
+    } else {
+        gtk::Image::from_icon_name("terminaltiler")
+    };
+    launch_icon.set_valign(gtk::Align::Center);
+    launch_icon.set_halign(gtk::Align::Center);
+    launch_icon.set_pixel_size(34);
+    launch_icon.set_size_request(34, 34);
+    launch_icon.add_css_class("launch-overview-logo-image");
+    launch_icon
 }
 
 fn build_section_header(kicker: &str, title: &str, body: &str) -> gtk::Widget {

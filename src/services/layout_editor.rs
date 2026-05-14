@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
+use crate::model::layout::{
+    DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec, normalize_web_url,
+};
 
 pub fn split_tile(
     layout: &LayoutNode,
@@ -39,6 +41,22 @@ pub fn split_tile_with_kind(
         }
     })
     .zip(created_tile_id)
+}
+
+pub fn split_web_tile(
+    layout: &LayoutNode,
+    target_tile_id: &str,
+    axis: SplitAxis,
+    initial_url: &str,
+) -> Option<(LayoutNode, String)> {
+    let (next_layout, new_tile_id) =
+        split_tile_with_kind(layout, target_tile_id, axis, false, TileKind::WebView)?;
+    let normalized_url = normalize_web_url(initial_url);
+    let mut tile_specs = next_layout.tile_specs();
+    if let Some(tile) = tile_specs.iter_mut().find(|tile| tile.id == new_tile_id) {
+        tile.url = Some(normalized_url);
+    }
+    Some((next_layout.with_tile_specs(&tile_specs), new_tile_id))
 }
 
 pub fn close_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNode> {
@@ -247,7 +265,8 @@ fn update_ratio_inner(layout: &LayoutNode, split_path: &[bool], ratio: f32) -> O
 #[cfg(test)]
 mod tests {
     use super::{
-        close_tile, plan_tile_reconciliation, split_tile, split_tile_with_kind, update_split_ratio,
+        close_tile, plan_tile_reconciliation, split_tile, split_tile_with_kind, split_web_tile,
+        update_split_ratio,
     };
     use crate::model::layout::{
         DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, default_tile_spec,
@@ -284,6 +303,53 @@ mod tests {
     }
 
     #[test]
+    fn split_web_tile_uses_normalized_initial_url() {
+        let layout = single_tile_layout();
+        let (next, new_tile_id) = split_web_tile(
+            &layout,
+            "tile-1",
+            SplitAxis::Horizontal,
+            "terminaltiler.app",
+        )
+        .unwrap();
+        let tiles = next.tile_specs();
+        let new_tile = tiles.iter().find(|tile| tile.id == new_tile_id).unwrap();
+
+        assert_eq!(new_tile.tile_kind, TileKind::WebView);
+        assert_eq!(new_tile.url.as_deref(), Some("https://terminaltiler.app"));
+        assert_eq!(new_tile.startup_command, None);
+    }
+
+    #[test]
+    fn split_web_tile_preserves_qualified_initial_url() {
+        let layout = single_tile_layout();
+        let (next, new_tile_id) = split_web_tile(
+            &layout,
+            "tile-1",
+            SplitAxis::Horizontal,
+            "http://localhost:3000",
+        )
+        .unwrap();
+        let tiles = next.tile_specs();
+        let new_tile = tiles.iter().find(|tile| tile.id == new_tile_id).unwrap();
+
+        assert_eq!(new_tile.tile_kind, TileKind::WebView);
+        assert_eq!(new_tile.url.as_deref(), Some("http://localhost:3000"));
+    }
+
+    #[test]
+    fn split_web_tile_defaults_blank_initial_url() {
+        let layout = single_tile_layout();
+        let (next, new_tile_id) =
+            split_web_tile(&layout, "tile-1", SplitAxis::Horizontal, "   ").unwrap();
+        let tiles = next.tile_specs();
+        let new_tile = tiles.iter().find(|tile| tile.id == new_tile_id).unwrap();
+
+        assert_eq!(new_tile.tile_kind, TileKind::WebView);
+        assert_eq!(new_tile.url.as_deref(), Some(DEFAULT_WEB_URL));
+    }
+
+    #[test]
     fn pane_reconciliation_plan_preserves_existing_ids_and_marks_inserted_web_tile() {
         let layout = single_tile_layout();
         let (next, new_tile_id) = split_tile_with_kind(
@@ -296,7 +362,7 @@ mod tests {
         .unwrap();
         let ordered_specs = next.tile_specs();
 
-        let plan = plan_tile_reconciliation(["tile-1"].into_iter(), &ordered_specs);
+        let plan = plan_tile_reconciliation(["tile-1"], &ordered_specs);
 
         assert_eq!(plan.ordered_existing_tile_ids, vec!["tile-1"]);
         assert_eq!(plan.created_tile_ids, vec![new_tile_id]);

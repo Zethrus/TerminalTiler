@@ -15,7 +15,7 @@ use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
 use crate::services::layout_editor::{
-    close_tile as close_layout_tile, split_tile_with_kind, update_split_ratio,
+    close_tile as close_layout_tile, split_web_tile, update_split_ratio,
 };
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
@@ -502,7 +502,11 @@ impl WorkspaceRuntime {
     }
 
     pub fn add_web_tile(&self) -> Option<String> {
-        let initial_url = DEFAULT_WEB_URL.to_string();
+        let initial_url = if self.has_web_tiles() {
+            self.inner.url_entry.text().to_string()
+        } else {
+            String::new()
+        };
         let target_tile_id = self.inner.focused_tile_id.borrow().clone().or_else(|| {
             self.inner
                 .tiles
@@ -512,19 +516,13 @@ impl WorkspaceRuntime {
         })?;
 
         let current_layout = self.inner.layout.borrow().clone();
-        let (next_layout, new_tile_id) = split_tile_with_kind(
+        let (next_layout, new_tile_id) = split_web_tile(
             &current_layout,
             &target_tile_id,
             SplitAxis::Horizontal,
-            false,
-            TileKind::WebView,
+            &initial_url,
         )?;
-
-        let mut ordered_specs = next_layout.tile_specs();
-        if let Some(tile) = ordered_specs.iter_mut().find(|tile| tile.id == new_tile_id) {
-            tile.url = Some(initial_url.clone());
-        }
-        let next_layout = next_layout.with_tile_specs(&ordered_specs);
+        let ordered_specs = next_layout.tile_specs();
         let mut existing_tiles = self
             .inner
             .tiles

@@ -92,7 +92,7 @@ mod imp {
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
     use crate::services::launch_resolution::resolve_tile_launch;
-    use crate::services::layout_editor::{plan_tile_reconciliation, split_tile_with_kind};
+    use crate::services::layout_editor::{plan_tile_reconciliation, split_web_tile};
     use crate::services::output_helpers::{helper_summary_text, scan_output};
     use crate::services::runbooks::resolve_runbook;
     use crate::storage::asset_store::AssetStore;
@@ -2342,13 +2342,17 @@ mod imp {
             return;
         };
 
+        let initial_url = if active_tab_has_web_tiles(state) {
+            current_web_entry_text(state)
+        } else {
+            String::new()
+        };
         let current_layout = active_tab(state).preset.layout.clone();
-        let Some((next_layout, new_tile_id)) = split_tile_with_kind(
+        let Some((next_layout, new_tile_id)) = split_web_tile(
             &current_layout,
             &target_tile_id,
             SplitAxis::Horizontal,
-            false,
-            TileKind::WebView,
+            &initial_url,
         ) else {
             return;
         };

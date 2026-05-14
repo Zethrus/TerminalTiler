@@ -1701,6 +1701,16 @@ button.tile-header-action:disabled {
   color: rgba(245, 196, 111, 0.96);
 }
 
+.launch-overview-icon.is-brand-logo {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.launch-overview-logo-image {
+  color: inherit;
+}
+
 .settings-summary-title,
 .launch-overview-title {
   font-size: 20px;
@@ -2886,6 +2896,10 @@ window.window-shell.theme-light .settings-summary-icon {
 window.window-shell.theme-light .launch-overview-icon image,
 window.window-shell.theme-light .settings-summary-icon image {
   color: rgba(166, 98, 14, 0.90);
+}
+window.window-shell.theme-light .launch-overview-icon.is-brand-logo {
+  background: transparent;
+  border-color: transparent;
 }
 
 /* ── Light mode: launch-meta-chip in launch screen ── */

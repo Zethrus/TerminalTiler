@@ -1,5 +1,6 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
+const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
@@ -121,6 +122,21 @@ fn web_tile_initial_navigation_waits_until_mapped() {
             && WEB_TILE_RS.contains("glib::idle_add_local_once")
             && WEB_TILE_RS.contains("web_view.load_uri(&url)"),
         "WebKit views should start initial navigation only after they are mapped into the rebuilt layout"
+    );
+}
+
+#[test]
+fn launch_deck_uses_terminaltiler_logo_asset() {
+    assert!(
+        LAUNCH_SCREEN_RS.contains("resources/terminaltiler.svg")
+            && LAUNCH_SCREEN_RS.contains("gtk::Image::from_icon_name(\"terminaltiler\")"),
+        "Workspace Launch Deck should use the TerminalTiler logo asset instead of a symbolic terminal icon"
+    );
+    assert!(
+        LAUNCH_SCREEN_RS.contains("build_terminaltiler_logo_image")
+            && LAUNCH_SCREEN_RS.contains("launch-overview-logo-image")
+            && STYLE_CSS.contains(".launch-overview-icon.is-brand-logo"),
+        "launch deck logo should have explicit brand-logo code and styling hooks"
     );
 }
 

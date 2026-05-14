@@ -17,6 +17,7 @@ use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::header_actions::build_header_icon_button;
+use crate::ui::tile_drag::TileDragPayload;
 
 const HEADER_BADGE_MAX_CHARS: i32 = 12;
 const HEADER_GROUP_MAX_CHARS: i32 = 16;
@@ -29,10 +30,6 @@ pub struct TileView {
     pub tile: TileSpec,
     pub close_button: gtk::Button,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq, glib::Boxed)]
-#[boxed_type(name = "TerminalTilerTileDragPayload")]
-struct TileDragPayload(String);
 
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -322,7 +319,7 @@ pub fn build(
         let tile_id = tile.id.clone();
         drag_source.connect_prepare(move |_, _, _| {
             Some(gdk::ContentProvider::for_value(
-                &TileDragPayload(tile_id.clone()).to_value(),
+                &TileDragPayload::new(tile_id.clone()).to_value(),
             ))
         });
     }
@@ -361,9 +358,10 @@ pub fn build(
         drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
 
-            let Ok(TileDragPayload(dragged_id)) = value.get::<TileDragPayload>() else {
+            let Ok(payload) = value.get::<TileDragPayload>() else {
                 return false;
             };
+            let dragged_id = payload.into_tile_id();
             on_swap(dragged_id, target_id.clone());
             true
         });
@@ -1328,11 +1326,9 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        TileDragPayload, local_paths_from_gio_files, local_paths_from_uri_list_text,
-        read_drop_stream_text,
+        local_paths_from_gio_files, local_paths_from_uri_list_text, read_drop_stream_text,
     };
-    use adw::prelude::*;
-    use gdk::prelude::StaticType;
+    use gtk::prelude::*;
     use std::path::PathBuf;
 
     #[test]
@@ -1419,18 +1415,6 @@ mod tests {
         assert_eq!(
             local_paths_from_uri_list_text(payload),
             vec![PathBuf::from("/tmp/local.jpg")]
-        );
-    }
-
-    #[test]
-    fn tile_reorder_payload_is_not_a_plain_string_drop() {
-        assert_ne!(TileDragPayload::static_type(), String::static_type());
-
-        let value = TileDragPayload("pane-a".into()).to_value();
-        assert!(value.get::<String>().is_err());
-        assert_eq!(
-            value.get::<TileDragPayload>().unwrap(),
-            TileDragPayload("pane-a".into())
         );
     }
 }
