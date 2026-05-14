@@ -3701,13 +3701,17 @@ fn present_detached_workspace_window(
         .show_end_title_buttons(true)
         .build();
     header.add_css_class("app-headerbar");
-    header.set_title_widget(Some(
-        &gtk::Label::builder()
-            .label(&title)
-            .single_line_mode(true)
-            .ellipsize(pango::EllipsizeMode::End)
-            .build(),
-    ));
+    let title_label = gtk::Label::builder()
+        .label(&title)
+        .single_line_mode(true)
+        .ellipsize(pango::EllipsizeMode::End)
+        .build();
+    let title_shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .build();
+    title_shell.append(&title_label);
+    header.set_title_widget(Some(&title_shell));
     let fullscreen_button = icons::labeled_button(
         "Fullscreen",
         icon_name::FULLSCREEN,
@@ -3727,7 +3731,6 @@ fn present_detached_workspace_window(
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
-    window_shell.append(&header);
     window_shell.append(&page_shell);
 
     let window = adw::ApplicationWindow::builder()
@@ -3738,6 +3741,7 @@ fn present_detached_workspace_window(
         .resizable(true)
         .content(&window_shell)
         .build();
+    window.set_titlebar(Some(&header));
     window.add_css_class("window-shell");
     apply_shell_profile(&header, &window, &preset);
     runtime.apply_appearance(
@@ -3815,7 +3819,7 @@ fn present_detached_workspace_window(
             });
         }
 
-        let popover = context_menu::popover(&header);
+        let popover = context_menu::popover(&title_shell);
         let menu = context_menu::menu_box();
         let menu_reattach_button = context_menu::action_button("Reattach", None);
         {
@@ -3840,6 +3844,19 @@ fn present_detached_workspace_window(
             });
         }
         header.add_controller(right_click);
+
+        let title_right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let popover = popover.clone();
+            title_right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        title_shell.add_controller(title_right_click);
 
         let force_close = Rc::new(Cell::new(false));
         let force_close_for_confirm = force_close.clone();
