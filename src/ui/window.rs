@@ -2239,43 +2239,9 @@ fn sync_tab_page_metadata(tab_view: &adw::TabView, tab: &WorkspaceTab) {
     page.set_icon(Some(&icon));
 }
 
-fn build_tab_drag_preview(title: &str, is_active: bool) -> gtk::Box {
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .build();
-    shell.add_css_class("app-tab-shell");
-    shell.add_css_class(if is_active {
-        "is-active"
-    } else {
-        "is-inactive"
-    });
-    shell.add_css_class("app-tab-drag-icon");
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .margin_start(12)
-        .margin_end(12)
-        .margin_top(4)
-        .margin_bottom(4)
-        .build();
-    let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
-    icon.set_valign(gtk::Align::Center);
-    icon.add_css_class("app-tab-icon");
-    let label = gtk::Label::builder()
-        .label(title)
-        .xalign(0.0)
-        .single_line_mode(true)
-        .ellipsize(pango::EllipsizeMode::End)
-        .width_chars(14)
-        .max_width_chars(14)
-        .build();
-    label.add_css_class("app-tab-title");
-    content.append(&icon);
-    content.append(&label);
-    shell.append(&content);
-    shell
+fn suppress_native_tab_drag_icon(source: &gtk::DragSource) {
+    let empty_icon = gdk::Paintable::new_empty(1, 1);
+    source.set_icon(Some(&empty_icon), 0, 0);
 }
 
 fn preview_index_for_pointer(slots: &[(f64, f64)], x: f64) -> usize {
@@ -2494,14 +2460,8 @@ impl TabStripController {
             .actions(gdk::DragAction::MOVE)
             .button(1)
             .build();
-        let shell_for_prepare = shell.clone();
-        let label_for_prepare = title_label.clone();
-        drag_source.connect_prepare(move |source, x, y| {
-            let title = label_for_prepare.text().to_string();
-            let is_active = shell_for_prepare.has_css_class("is-active");
-            let preview = build_tab_drag_preview(&title, is_active);
-            let paintable = gtk::WidgetPaintable::new(Some(&preview));
-            source.set_icon(Some(&paintable), x.round() as i32, y.round() as i32);
+        drag_source.connect_prepare(move |source, _, _| {
+            suppress_native_tab_drag_icon(source);
             Some(gdk::ContentProvider::for_value(&(tab_id as u32).to_value()))
         });
         let controller_for_begin = controller.clone();
