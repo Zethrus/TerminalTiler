@@ -743,7 +743,12 @@ fn validate_working_dir(path: &Path) -> Result<(), WorkingDirectoryValidationErr
 
 fn build_spawn_argv(shell: &str, command: Option<&str>) -> Vec<String> {
     match command.filter(|value| !value.trim().is_empty()) {
-        Some(command) => vec![shell.to_string(), "-lc".into(), command.to_string()],
+        Some(command) => vec![
+            shell.to_string(),
+            "-i".into(),
+            "-c".into(),
+            command.to_string(),
+        ],
         None => build_local_shell_argv(shell),
     }
 }
@@ -774,10 +779,10 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn builds_login_shell_argv_for_startup_commands() {
+    fn builds_interactive_shell_argv_for_startup_commands() {
         let argv = build_spawn_argv("/bin/bash", Some("cargo test"));
 
-        assert_eq!(argv, vec!["/bin/bash", "-lc", "cargo test"]);
+        assert_eq!(argv, vec!["/bin/bash", "-i", "-c", "cargo test"]);
     }
 
     #[test]
