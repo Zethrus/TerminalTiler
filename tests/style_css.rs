@@ -200,12 +200,14 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
 fn workspace_tab_context_menu_reuses_terminal_context_styles() {
     assert!(
         WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
+            && WINDOW_RS.contains("context_menu::action_button(\"Reattach\", None)")
             && WINDOW_RS.contains("context_menu::popover(&shell)")
+            && WINDOW_RS.contains("context_menu::popover(&header)")
             && CONTEXT_MENU_RS.contains("terminal-context-popover")
             && CONTEXT_MENU_RS.contains("terminal-context-menu")
             && CONTEXT_MENU_RS.contains("terminal-context-action")
             && CONTEXT_MENU_RS.contains("terminal-context-label"),
-        "workspace tab Detach should use the shared terminal-context menu styling hooks"
+        "workspace tab Detach and detached header Reattach should use the shared terminal-context menu styling hooks"
     );
 }
 

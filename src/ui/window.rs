@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::thread_local;
 
 use adw::prelude::*;
 use glib::value::ToValue;
@@ -35,6 +36,8 @@ type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, 
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
 type TabStripControllerHandle = Rc<RefCell<TabStripController>>;
+type WorkspaceLayoutTargetHandle = Rc<RefCell<Option<WorkspaceLayoutTarget>>>;
+type AttachWorkspaceTabHandle = Rc<dyn Fn(WorkspaceTab)>;
 
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
@@ -44,6 +47,10 @@ const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 
 static NEXT_LINUX_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
 static LINUX_SESSION_REGISTRY: OnceLock<Mutex<LinuxSessionRegistry>> = OnceLock::new();
+
+thread_local! {
+    static LINUX_MAIN_ATTACH_TARGETS: RefCell<Vec<LinuxMainAttachTarget>> = const { RefCell::new(Vec::new()) };
+}
 
 fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     let manager = adw::StyleManager::default();
@@ -133,6 +140,7 @@ struct WorkspaceState {
     assets: crate::model::assets::WorkspaceAssets,
     runtime: workspace_view::WorkspaceRuntime,
     terminal_zoom_steps: i32,
+    layout_target: WorkspaceLayoutTargetHandle,
 }
 
 #[derive(Clone)]
@@ -182,8 +190,22 @@ struct LinuxSessionRegistry {
 }
 
 struct DetachPayload {
+    origin_window_id: usize,
     tab: WorkspaceTab,
     saved_tab: SavedTab,
+}
+
+#[derive(Clone)]
+struct WorkspaceLayoutTarget {
+    tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
+    tab_id: usize,
+}
+
+#[derive(Clone)]
+struct LinuxMainAttachTarget {
+    window_id: usize,
+    window: glib::WeakRef<adw::ApplicationWindow>,
+    attach_workspace_tab: AttachWorkspaceTabHandle,
 }
 
 #[derive(Clone)]
@@ -221,6 +243,31 @@ pub fn present(
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
     tray_controller: TrayController,
+) {
+    present_with_initial_workspace(
+        app,
+        preference_store,
+        preset_store,
+        asset_store,
+        session_store,
+        saved_session,
+        startup_warning,
+        tray_controller,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn present_with_initial_workspace(
+    app: &adw::Application,
+    preference_store: PreferenceStore,
+    preset_store: PresetStore,
+    asset_store: AssetStore,
+    session_store: SessionStore,
+    saved_session: Option<SavedSession>,
+    startup_warning: Option<String>,
+    tray_controller: TrayController,
+    initial_workspace_tab: Option<WorkspaceTab>,
 ) {
     let preference_store = Rc::new(preference_store);
     let preset_store = Rc::new(preset_store);
@@ -421,6 +468,7 @@ pub fn present(
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let refresh_tab_strip_for_select = refresh_tab_strip.clone();
         let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
+            note_linux_main_attach_target_active(window_id);
             let (is_workspace, workspace_profile) = {
                 let tabs = tabs_for_sync.borrow();
                 let active = tabs
@@ -648,6 +696,7 @@ pub fn present(
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
                 let terminal_zoom_steps = 0;
+                let layout_target = make_workspace_layout_target(&tabs_for_workspace, tab_id);
                 let assets = asset_store
                     .load_assets_for_workspace_root(&workspace_root)
                     .assets;
@@ -659,15 +708,9 @@ pub fn present(
                     terminal_zoom_steps,
                     preference_store_for_workspace.load().max_reconnect_attempts,
                     {
-                        let tabs_for_workspace = tabs_for_workspace.clone();
+                        let layout_target = layout_target.clone();
                         Rc::new(move |next_layout| {
-                            let mut tabs = tabs_for_workspace.borrow_mut();
-                            let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-                                return;
-                            };
-                            if let TabContent::Workspace(workspace) = &mut tab.content {
-                                workspace.preset.layout = next_layout;
-                            }
+                            apply_workspace_layout_change(&layout_target, next_layout);
                         })
                     },
                 );
@@ -687,6 +730,7 @@ pub fn present(
                         assets: assets.clone(),
                         runtime: built_workspace.runtime.clone(),
                         terminal_zoom_steps,
+                        layout_target: layout_target.clone(),
                     }));
                     tab.workspace_root = Some(workspace_root.clone());
                     (tab.page_shell.clone(), previous_runtime)
@@ -860,7 +904,10 @@ pub fn present(
         let add_for_detach = add_workspace_tab.clone();
         let refresh_for_detach = refresh_tab_strip.clone();
         let preference_store_for_detach = preference_store.clone();
+        let preset_store_for_detach = preset_store.clone();
+        let asset_store_for_detach = asset_store.clone();
         let session_store_for_detach = session_store.clone();
+        let tray_controller_for_detach = tray_controller.clone();
         let toast_overlay_for_detach = toast_overlay.clone();
 
         *detach_tab.borrow_mut() = Some(Box::new(move |tab_id| {
@@ -890,7 +937,10 @@ pub fn present(
                 &app_for_detach,
                 payload,
                 &preference_store_for_detach,
+                &preset_store_for_detach,
+                &asset_store_for_detach,
                 &session_store_for_detach,
+                &tray_controller_for_detach,
             );
         }));
     }
@@ -1752,7 +1802,33 @@ pub fn present(
         open_command_palette.clone(),
     );
 
-    if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
+    let attach_workspace_tab = {
+        let tab_view_for_attach = tab_view.clone();
+        let tabs_for_attach = tabs.clone();
+        let next_tab_id_for_attach = next_tab_id.clone();
+        let active_for_attach = active_tab_id.clone();
+        let select_for_attach = select_tab.clone();
+        let refresh_for_attach = refresh_tab_strip.clone();
+        let session_store_for_attach = session_store.clone();
+        Rc::new(move |tab: WorkspaceTab| {
+            attach_workspace_tab_to_main_window(
+                window_id,
+                &tab_view_for_attach,
+                &tabs_for_attach,
+                &next_tab_id_for_attach,
+                &active_for_attach,
+                &select_for_attach,
+                refresh_for_attach.as_ref(),
+                &session_store_for_attach,
+                tab,
+            );
+        })
+    };
+    register_linux_main_attach_target(window_id, &window, attach_workspace_tab.clone());
+
+    if let Some(tab) = initial_workspace_tab {
+        attach_workspace_tab(tab);
+    } else if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
         add_tab();
     }
 
@@ -1855,6 +1931,7 @@ pub fn present(
         let tray_controller = tray_controller.clone();
         window.connect_close_request(move |window| {
             if force_quit_requested.replace(false) {
+                unregister_linux_main_attach_target(window_id);
                 return glib::Propagation::Proceed;
             }
 
@@ -1896,7 +1973,13 @@ pub fn present(
 
             tray_controller.set_window_hidden(false);
             let runtimes = workspace_runtimes(&tabs_for_save);
-            save_application_window_session_state(window_id, &tabs_for_save, active_for_save.get(), &session_store);
+            save_application_window_session_state(
+                window_id,
+                &tabs_for_save,
+                active_for_save.get(),
+                &session_store,
+            );
+            unregister_linux_main_attach_target(window_id);
 
             for runtime in runtimes {
                 runtime.terminate_all("closing application window");
@@ -1995,6 +2078,59 @@ fn tab_display_title(tab: &WorkspaceTab) -> String {
             TabContent::LaunchDeck => tab.default_title.clone(),
             TabContent::Workspace(workspace) => workspace.preset.name.clone(),
         })
+}
+
+fn make_workspace_layout_target(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    tab_id: usize,
+) -> WorkspaceLayoutTargetHandle {
+    Rc::new(RefCell::new(Some(WorkspaceLayoutTarget {
+        tabs: tabs.clone(),
+        tab_id,
+    })))
+}
+
+fn update_workspace_layout_target(
+    target: &WorkspaceLayoutTargetHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    tab_id: usize,
+) {
+    *target.borrow_mut() = Some(WorkspaceLayoutTarget {
+        tabs: tabs.clone(),
+        tab_id,
+    });
+}
+
+fn clear_workspace_layout_target(target: &WorkspaceLayoutTargetHandle) {
+    *target.borrow_mut() = None;
+}
+
+fn apply_workspace_layout_change(
+    target: &WorkspaceLayoutTargetHandle,
+    next_layout: crate::model::layout::LayoutNode,
+) {
+    let Some(target) = target.borrow().clone() else {
+        return;
+    };
+    let mut tabs = target.tabs.borrow_mut();
+    let Some(tab) = tabs.iter_mut().find(|tab| tab.id == target.tab_id) else {
+        return;
+    };
+    if let TabContent::Workspace(workspace) = &mut tab.content {
+        workspace.preset.layout = next_layout;
+    }
+}
+
+fn rebind_workspace_tab_layout(tab: &WorkspaceTab, tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) {
+    if let TabContent::Workspace(workspace) = &tab.content {
+        update_workspace_layout_target(&workspace.layout_target, tabs, tab.id);
+    }
+}
+
+fn clear_workspace_tab_layout_binding(tab: &WorkspaceTab) {
+    if let TabContent::Workspace(workspace) = &tab.content {
+        clear_workspace_layout_target(&workspace.layout_target);
+    }
 }
 
 fn move_item_to_position<T>(items: &mut Vec<T>, from_index: usize, position: usize) -> bool {
@@ -2559,6 +2695,121 @@ fn sync_tab_strip(
         .sync(controller, tabs, active_tab_id);
 }
 
+fn register_linux_main_attach_target(
+    window_id: usize,
+    window: &adw::ApplicationWindow,
+    attach_workspace_tab: AttachWorkspaceTabHandle,
+) {
+    let weak_window = window.downgrade();
+    LINUX_MAIN_ATTACH_TARGETS.with(|targets| {
+        let mut targets = targets.borrow_mut();
+        targets.retain(|target| target.window_id != window_id && target.window.upgrade().is_some());
+        targets.push(LinuxMainAttachTarget {
+            window_id,
+            window: weak_window,
+            attach_workspace_tab,
+        });
+    });
+}
+
+fn unregister_linux_main_attach_target(window_id: usize) {
+    LINUX_MAIN_ATTACH_TARGETS.with(|targets| {
+        targets
+            .borrow_mut()
+            .retain(|target| target.window_id != window_id && target.window.upgrade().is_some());
+    });
+}
+
+fn note_linux_main_attach_target_active(window_id: usize) {
+    LINUX_MAIN_ATTACH_TARGETS.with(|targets| {
+        let mut targets = targets.borrow_mut();
+        let Some(index) = targets
+            .iter()
+            .position(|target| target.window_id == window_id)
+        else {
+            targets.retain(|target| target.window.upgrade().is_some());
+            return;
+        };
+        let target = targets.remove(index);
+        targets.retain(|target| target.window.upgrade().is_some());
+        targets.push(target);
+    });
+}
+
+fn linux_main_attach_target(preferred_window_id: Option<usize>) -> Option<LinuxMainAttachTarget> {
+    LINUX_MAIN_ATTACH_TARGETS.with(|targets| {
+        let mut targets = targets.borrow_mut();
+        targets.retain(|target| target.window.upgrade().is_some());
+        if let Some(preferred_window_id) = preferred_window_id
+            && let Some(target) = targets
+                .iter()
+                .find(|target| target.window_id == preferred_window_id)
+                .cloned()
+        {
+            return Some(target);
+        }
+        targets.last().cloned()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_workspace_tab_to_main_window(
+    window_id: usize,
+    tab_view: &adw::TabView,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    next_tab_id: &Rc<Cell<usize>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    select_tab: &SelectTabHandle,
+    refresh_tab_strip: &dyn Fn(),
+    session_store: &SessionStore,
+    mut tab: WorkspaceTab,
+) {
+    let page_shell = tab.page_shell.clone();
+    if let Some(parent) = page_shell.parent()
+        && let Ok(parent_box) = parent.downcast::<gtk::Box>()
+    {
+        parent_box.remove(&page_shell);
+    }
+
+    {
+        let tabs_ref = tabs.borrow();
+        if tab.id == 0 || tabs_ref.iter().any(|existing| existing.id == tab.id) {
+            tab.id = tabs_ref
+                .iter()
+                .map(|existing| existing.id)
+                .max()
+                .unwrap_or(0)
+                + 1;
+        }
+    }
+
+    let tab_id = tab.id;
+    if next_tab_id.get() <= tab_id {
+        next_tab_id.set(tab_id + 1);
+    }
+    rebind_workspace_tab_layout(&tab, tabs);
+    tabs.borrow_mut().push(tab);
+    tab_view.append(&page_shell);
+    {
+        let tabs = tabs.borrow();
+        if let Some(tab) = tabs.iter().find(|tab| tab.id == tab_id) {
+            sync_tab_page_metadata(tab_view, tab);
+        }
+    }
+    refresh_tab_strip();
+    if let Some(select) = select_tab.borrow().as_ref() {
+        select(tab_id);
+    } else {
+        active_tab_id.set(tab_id);
+    }
+    note_linux_main_attach_target_active(window_id);
+    save_application_window_session_state(window_id, tabs, active_tab_id.get(), session_store);
+    logging::info(format!(
+        "reattached workspace tab {} to window {}",
+        tab_id, window_id
+    ));
+}
+
 fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
     let page_shell = context
         .tabs
@@ -2677,6 +2928,7 @@ fn restore_saved_session(
         let preset = saved_tab.preset;
         let terminal_zoom_steps =
             clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
+        let layout_target = make_workspace_layout_target(&context.tabs, tab_id);
         let assets = context
             .asset_store
             .load_assets_for_workspace_root(&workspace_root)
@@ -2690,15 +2942,9 @@ fn restore_saved_session(
             terminal_zoom_steps,
             context.preference_store.load().max_reconnect_attempts,
             {
-                let tabs = context.tabs.clone();
+                let layout_target = layout_target.clone();
                 Rc::new(move |next_layout| {
-                    let mut tabs = tabs.borrow_mut();
-                    let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
-                        return;
-                    };
-                    if let TabContent::Workspace(workspace) = &mut tab.content {
-                        workspace.preset.layout = next_layout;
-                    }
+                    apply_workspace_layout_change(&layout_target, next_layout);
                 })
             },
         );
@@ -2715,6 +2961,7 @@ fn restore_saved_session(
                 assets: assets.clone(),
                 runtime: built_workspace.runtime.clone(),
                 terminal_zoom_steps,
+                layout_target: layout_target.clone(),
             })),
             workspace_root: Some(workspace_root.clone()),
         });
@@ -3387,10 +3634,15 @@ fn detach_workspace_tab(
         let detached_index = tabs_ref.iter().position(|tab| tab.id == tab_id)?;
         let saved_tab = saved_tab_for_workspace(&tabs_ref[detached_index])?;
         let tab = tabs_ref.remove(detached_index);
+        clear_workspace_tab_layout_binding(&tab);
         let next_active_id = next_active_index_after_detach(tabs_ref.len() + 1, detached_index)
             .and_then(|index| tabs_ref.get(index).map(|tab| tab.id));
         (
-            DetachPayload { tab, saved_tab },
+            DetachPayload {
+                origin_window_id,
+                tab,
+                saved_tab,
+            },
             next_active_id,
             tabs_ref.is_empty(),
         )
@@ -3428,10 +3680,14 @@ fn detach_workspace_tab(
 fn present_detached_workspace_window(
     app: &adw::Application,
     payload: DetachPayload,
-    _preference_store: &PreferenceStore,
+    preference_store: &PreferenceStore,
+    preset_store: &PresetStore,
+    asset_store: &AssetStore,
     session_store: &SessionStore,
+    tray_controller: &TrayController,
 ) {
     let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
+    let origin_window_id = payload.origin_window_id;
     let tab_id = payload.tab.id;
     let title = tab_display_title(&payload.tab);
     let runtime = match &payload.tab.content {
@@ -3458,6 +3714,13 @@ fn present_detached_workspace_window(
         &["flat", "titlebar-action-button"],
     );
     header.pack_end(&fullscreen_button);
+    let reattach_button = icons::labeled_button(
+        "Reattach",
+        icon_name::RESTORE,
+        &["flat", "titlebar-action-button"],
+    );
+    reattach_button.set_tooltip_text(Some("Reattach workspace to the main tab strip"));
+    header.pack_end(&reattach_button);
 
     let page_shell = payload.tab.page_shell.clone();
     let window_shell = gtk::Box::builder()
@@ -3484,6 +3747,12 @@ fn present_detached_workspace_window(
     );
 
     let detached_tabs = Rc::new(RefCell::new(vec![payload.tab]));
+    {
+        let tabs = detached_tabs.borrow();
+        if let Some(tab) = tabs.first() {
+            rebind_workspace_tab_layout(tab, &detached_tabs);
+        }
+    }
     save_application_window_session_state(window_id, &detached_tabs, tab_id, session_store);
 
     {
@@ -3496,10 +3765,89 @@ fn present_detached_workspace_window(
 
     {
         let session_store = session_store.clone();
+        let reattaching = Rc::new(Cell::new(false));
+        let reattaching_for_button = reattaching.clone();
+        let app_for_reattach = app.clone();
+        let window_for_reattach = window.clone();
+        let window_shell_for_reattach = window_shell.clone();
+        let tabs_for_reattach = detached_tabs.clone();
+        let preference_store_for_reattach = preference_store.clone();
+        let preset_store_for_reattach = preset_store.clone();
+        let asset_store_for_reattach = asset_store.clone();
+        let session_store_for_reattach = session_store.clone();
+        let tray_controller_for_reattach = tray_controller.clone();
+        let do_reattach = Rc::new(move || {
+            let tab = tabs_for_reattach.borrow_mut().pop();
+            let Some(tab) = tab else {
+                return;
+            };
+            remove_application_window_session_state(window_id, &session_store_for_reattach);
+            if tab.page_shell.parent().is_some() {
+                window_shell_for_reattach.remove(&tab.page_shell);
+            }
+            if let Some(target) = linux_main_attach_target(Some(origin_window_id)) {
+                let target_window = target.window.upgrade();
+                (target.attach_workspace_tab)(tab);
+                if let Some(target_window) = target_window {
+                    target_window.present();
+                }
+            } else {
+                present_with_initial_workspace(
+                    &app_for_reattach,
+                    preference_store_for_reattach.clone(),
+                    preset_store_for_reattach.clone(),
+                    asset_store_for_reattach.clone(),
+                    session_store_for_reattach.clone(),
+                    None,
+                    None,
+                    tray_controller_for_reattach.clone(),
+                    Some(tab),
+                );
+            }
+            reattaching_for_button.set(true);
+            window_for_reattach.close();
+        });
+
+        {
+            let do_reattach = do_reattach.clone();
+            reattach_button.connect_clicked(move |_| {
+                do_reattach();
+            });
+        }
+
+        let popover = context_menu::popover(&header);
+        let menu = context_menu::menu_box();
+        let menu_reattach_button = context_menu::action_button("Reattach", None);
+        {
+            let do_reattach = do_reattach.clone();
+            let popover = popover.clone();
+            menu_reattach_button.connect_clicked(move |_| {
+                popover.popdown();
+                do_reattach();
+            });
+        }
+        menu.append(&menu_reattach_button);
+        popover.set_child(Some(&menu));
+        let right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let popover = popover.clone();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        header.add_controller(right_click);
+
         let force_close = Rc::new(Cell::new(false));
         let force_close_for_confirm = force_close.clone();
         let runtime_for_close = runtime.clone();
         window.connect_close_request(move |window| {
+            if reattaching.get() {
+                return glib::Propagation::Proceed;
+            }
             if force_close.replace(false) {
                 remove_application_window_session_state(window_id, &session_store);
                 runtime_for_close.terminate_all("closing detached workspace window");

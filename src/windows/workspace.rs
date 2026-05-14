@@ -136,6 +136,7 @@ mod imp {
     const MENU_RECONNECT: usize = 5;
     const MENU_SHOW_TRANSCRIPT: usize = 6;
     const MENU_DETACH_TAB: usize = 11;
+    const MENU_REATTACH_TAB: usize = 12;
     const MENU_WEB_RELOAD: usize = 21;
     const MENU_WEB_OPEN_EXTERNAL: usize = 22;
     const MENU_WEB_COPY_URL: usize = 23;
@@ -180,6 +181,8 @@ mod imp {
 
     struct WorkspaceWindowState {
         window_id: usize,
+        window_kind: WorkspaceWindowKind,
+        hwnd: HWND,
         session_store: SessionStore,
         preference_store: PreferenceStore,
         tabs: Vec<SavedTab>,
@@ -224,7 +227,15 @@ mod imp {
     #[derive(Default)]
     struct WorkspaceSessionRegistry {
         windows: BTreeMap<usize, SavedSession>,
+        window_kinds: BTreeMap<usize, WorkspaceWindowKind>,
+        window_hwnds: BTreeMap<usize, isize>,
         active_window_id: Option<usize>,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum WorkspaceWindowKind {
+        Main,
+        Detached { origin_window_id: usize },
     }
 
     struct TabButtonState {
@@ -593,6 +604,15 @@ mod imp {
         active_tab_index: usize,
         runtime: &WindowsRuntime,
     ) -> Result<(), String> {
+        open_workspace_window_with_kind(tabs, active_tab_index, runtime, WorkspaceWindowKind::Main)
+    }
+
+    fn open_workspace_window_with_kind(
+        tabs: Vec<SavedTab>,
+        active_tab_index: usize,
+        runtime: &WindowsRuntime,
+        window_kind: WorkspaceWindowKind,
+    ) -> Result<(), String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle for workspace window".into());
@@ -610,6 +630,8 @@ mod imp {
             .unwrap_or_else(|| "TerminalTiler Workspace".to_string());
         let state = Box::new(WorkspaceWindowState {
             window_id: NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed),
+            window_kind,
+            hwnd: ptr::null_mut(),
             session_store: SessionStore::new(),
             preference_store: PreferenceStore::new(),
             tabs,
@@ -815,6 +837,7 @@ mod imp {
             }
             WM_CREATE => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    state.hwnd = hwnd;
                     create_controls(hwnd, state);
                 }
                 0
@@ -3037,6 +3060,14 @@ mod imp {
         registry
             .windows
             .insert(state.window_id, current_saved_session(state));
+        registry
+            .window_kinds
+            .insert(state.window_id, state.window_kind);
+        if !state.hwnd.is_null() {
+            registry
+                .window_hwnds
+                .insert(state.window_id, state.hwnd as isize);
+        }
         registry.active_window_id = Some(state.window_id);
         persist_workspace_registry(&registry, &state.session_store);
     }
@@ -3048,10 +3079,50 @@ mod imp {
             return;
         };
         registry.windows.remove(&window_id);
+        registry.window_kinds.remove(&window_id);
+        registry.window_hwnds.remove(&window_id);
         if registry.active_window_id == Some(window_id) {
             registry.active_window_id = registry.windows.keys().next_back().copied();
         }
         persist_workspace_registry(&registry, session_store);
+    }
+
+    fn registered_main_window_hwnd(preferred_window_id: Option<usize>) -> Option<HWND> {
+        let registry_lock = session_registry().lock();
+        let Ok(registry) = registry_lock else {
+            logging::error("workspace session registry lock poisoned while finding main target");
+            return None;
+        };
+
+        let main_hwnd_for_id = |window_id: usize| -> Option<HWND> {
+            if registry.window_kinds.get(&window_id) != Some(&WorkspaceWindowKind::Main) {
+                return None;
+            }
+            registry
+                .window_hwnds
+                .get(&window_id)
+                .copied()
+                .map(|hwnd| hwnd as HWND)
+                .filter(|hwnd| !hwnd.is_null())
+        };
+
+        if let Some(preferred_window_id) = preferred_window_id
+            && let Some(hwnd) = main_hwnd_for_id(preferred_window_id)
+        {
+            return Some(hwnd);
+        }
+
+        if let Some(active_window_id) = registry.active_window_id
+            && let Some(hwnd) = main_hwnd_for_id(active_window_id)
+        {
+            return Some(hwnd);
+        }
+
+        registry
+            .windows
+            .keys()
+            .rev()
+            .find_map(|window_id| main_hwnd_for_id(*window_id))
     }
 
     fn rebuild_tab_buttons(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -3617,7 +3688,19 @@ mod imp {
             return;
         }
         unsafe {
-            AppendMenuW(menu, MF_STRING, MENU_DETACH_TAB, wide("Detach").as_ptr());
+            match state.window_kind {
+                WorkspaceWindowKind::Main => {
+                    AppendMenuW(menu, MF_STRING, MENU_DETACH_TAB, wide("Detach").as_ptr());
+                }
+                WorkspaceWindowKind::Detached { .. } => {
+                    AppendMenuW(
+                        menu,
+                        MF_STRING,
+                        MENU_REATTACH_TAB,
+                        wide("Reattach").as_ptr(),
+                    );
+                }
+            }
         }
         let command = unsafe {
             TrackPopupMenu(
@@ -3636,6 +3719,8 @@ mod imp {
 
         if command as usize == MENU_DETACH_TAB {
             detach_active_tab(hwnd, state);
+        } else if command as usize == MENU_REATTACH_TAB {
+            reattach_active_tab(hwnd, state);
         }
     }
 
@@ -3659,8 +3744,15 @@ mod imp {
             title
         ));
 
-        match open_saved_workspaces(&detached_session, &state.runtime) {
-            Ok(_) => {
+        match open_workspace_window_with_kind(
+            detached_session.tabs.clone(),
+            detached_session.active_tab_index,
+            &state.runtime,
+            WorkspaceWindowKind::Detached {
+                origin_window_id: state.window_id,
+            },
+        ) {
+            Ok(()) => {
                 logging::info(format!(
                     "detached Windows workspace tab '{}' by relaunching from saved config",
                     title
@@ -3690,6 +3782,82 @@ mod imp {
                 }
             }
         }
+    }
+
+    fn reattach_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let WorkspaceWindowKind::Detached { origin_window_id } = state.window_kind else {
+            return;
+        };
+        if state.tabs.is_empty() {
+            return;
+        }
+
+        let saved_tab = active_tab(state).clone();
+        let title = saved_tab
+            .custom_title
+            .clone()
+            .unwrap_or_else(|| saved_tab.preset.name.clone());
+        logging::info(format!(
+            "reattaching Windows workspace tab '{}' via saved-session fallback",
+            title
+        ));
+
+        match attach_saved_tab_to_main_window(saved_tab, Some(origin_window_id), &state.runtime) {
+            Ok(()) => {
+                logging::info(format!("reattached Windows workspace tab '{}'", title));
+                remove_active_tab_after_reattach(hwnd, state);
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "failed to reattach Windows workspace tab '{}': {}",
+                    title, error
+                ));
+                unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&format!("Could not reattach workspace: {error}")).as_ptr(),
+                        wide("Reattach Failed").as_ptr(),
+                        MB_OK,
+                    );
+                }
+            }
+        }
+    }
+
+    fn attach_saved_tab_to_main_window(
+        saved_tab: SavedTab,
+        preferred_window_id: Option<usize>,
+        runtime: &WindowsRuntime,
+    ) -> Result<(), String> {
+        if let Some(target_hwnd) = registered_main_window_hwnd(preferred_window_id)
+            && let Some(target_state) = unsafe { window_state_mut(target_hwnd) }
+        {
+            target_state.tabs.push(saved_tab);
+            target_state.active_tab_index = target_state.tabs.len().saturating_sub(1);
+            rebuild_active_tab_content(target_hwnd, target_state);
+            return Ok(());
+        }
+
+        open_workspace_window_with_kind(vec![saved_tab], 0, runtime, WorkspaceWindowKind::Main)
+    }
+
+    fn remove_active_tab_after_reattach(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.tabs.is_empty() {
+            return;
+        }
+        let removed_index = state.active_tab_index;
+        state.tabs.remove(removed_index);
+        if state.tabs.is_empty() {
+            remove_workspace_session_state(state.window_id, &state.session_store);
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+            }
+            return;
+        }
+
+        state.active_tab_index =
+            next_active_index_after_detach(state.tabs.len() + 1, removed_index).unwrap_or(0);
+        rebuild_active_tab_content(hwnd, state);
     }
 
     fn remove_active_tab_after_detach(hwnd: HWND, state: &mut WorkspaceWindowState) {
