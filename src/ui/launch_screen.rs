@@ -100,7 +100,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             .map(|template| template.tile_count)
             .unwrap_or(1),
     )));
-    let edit_preset_button_handle: Rc<RefCell<Option<gtk::Button>>> = Rc::new(RefCell::new(None));
     let suggestion_cards: Rc<RefCell<Vec<gtk::Widget>>> = Rc::new(RefCell::new(Vec::new()));
 
     let root = gtk::Box::builder()
@@ -426,7 +425,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     layout_panel.append(&build_section_header(
         "Step 3",
         "Choose a layout",
-        "Start from a template or load a saved preset, then tune the tiles below.",
+        "Choose a template, project suggestion, or saved preset. Saving and launching happen on the final step.",
     ));
     layout_panel.append(&summary.root);
 
@@ -572,7 +571,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             let chosen_density = chosen_density.clone();
             let theme_strip = theme_strip.clone();
             let density_strip = density_strip.clone();
-            let edit_preset_button_handle = edit_preset_button_handle.clone();
             let density_preview_callback = density_preview_callback.clone();
             let assets = assets.clone();
             let label = template.label;
@@ -593,10 +591,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 *active_layout.borrow_mut() = generate_layout(tile_count);
                 tile_editor.tile_count.set_value(tile_count as f64);
                 refresh_tile_editor(&tile_editor, &active_layout, &assets);
-
-                if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
-                    button.set_visible(false);
-                }
 
                 for (i, btn) in template_buttons.borrow().iter().enumerate() {
                     if i == idx {
@@ -629,7 +623,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         presets_section.append(&build_section_header(
             "Saved presets",
             "Reuse a preset",
-            "Load an existing setup or save the one you just configured.",
+            "Load an existing setup. You can save or update presets on the final step.",
         ));
 
         let presets_scroll = gtk::ScrolledWindow::builder()
@@ -663,7 +657,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     let chosen_density = chosen_density.clone();
                     let theme_strip = theme_strip.clone();
                     let density_strip = density_strip.clone();
-                    let edit_preset_button_handle = edit_preset_button_handle.clone();
                     let density_preview_callback = density_preview_callback.clone();
                     let assets = assets.clone();
 
@@ -690,15 +683,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                         tile_editor.tile_count.set_value(p.tile_count() as f64);
                         refresh_tile_editor(&tile_editor, &active_layout, &assets);
 
-                        if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
-                            button.set_visible(true);
-                            button.set_label(if is_builtin_preset_id(&p.id) {
-                                "Save Copy"
-                            } else {
-                                "Update Preset"
-                            });
-                        }
-
                         for btn in template_buttons.borrow().iter() {
                             btn.remove_css_class("is-selected");
                         }
@@ -714,174 +698,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             preset_buttons.borrow_mut().push(card.clone());
             presets_row.append(&card);
         }
-
-        let preset_actions = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(10)
-            .halign(gtk::Align::Fill)
-            .css_classes(["preset-actions"])
-            .build();
-        presets_section.append(&preset_actions);
-
-        let save_preset_button = gtk::Button::builder()
-            .label("Save as Preset")
-            .css_classes(["pill-button", "secondary-button", "new-preset-button"])
-            .valign(gtk::Align::Center)
-            .build();
-        {
-            let selected = selected.clone();
-            let templates_ref = builtin_templates();
-            let presets = presets.clone();
-            let preset_store = preset_store.clone();
-            let on_presets_changed = on_presets_changed.clone();
-            let session_name_entry = session_name_entry.clone();
-            let path_entry = path_entry.clone();
-            let chosen_theme = chosen_theme.clone();
-            let chosen_density = chosen_density.clone();
-            let active_layout = active_layout.clone();
-
-            save_preset_button.connect_clicked(move |button| {
-                let selected = selected.clone();
-                let templates_ref_inner = builtin_templates();
-                let presets = presets.clone();
-                let preset_store = preset_store.clone();
-                let on_presets_changed = on_presets_changed.clone();
-                let session_name = session_name_entry.text().to_string();
-                let theme = chosen_theme.get();
-                let density = chosen_density.get();
-                let layout = active_layout.borrow().clone();
-                let workspace_root = preset_workspace_root(&path_entry);
-
-                let default_name = if session_name.trim().is_empty() {
-                    match selected.get() {
-                        Selection::Template(idx) => templates_ref
-                            .get(idx)
-                            .map(|t| t.label.to_string())
-                            .unwrap_or_else(|| "New Preset".into()),
-                        Selection::Preset(idx) => presets
-                            .get(idx)
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| "New Preset".into()),
-                    }
-                } else {
-                    session_name.trim().to_string()
-                };
-
-                let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-
-                prompt_preset_name(window.as_ref(), &default_name, move |name| {
-                    let mut preset = build_launch_preset(LaunchPresetDraft {
-                        selected: &selected,
-                        templates: &templates_ref_inner,
-                        presets: &presets,
-                        layout: &layout,
-                        session_name: &session_name,
-                        workspace_root: workspace_root.clone(),
-                        theme,
-                        density,
-                    });
-                    preset.id = unique_preset_id(&name);
-                    preset.name = name;
-
-                    if let Err(err) = preset_store.upsert_preset(preset) {
-                        logging::error(format!("Failed to save preset: {}", err));
-                    } else {
-                        on_presets_changed();
-                    }
-                });
-            });
-        }
-        preset_actions.append(&save_preset_button);
-
-        let edit_preset_button = gtk::Button::builder()
-            .label("Update Preset")
-            .css_classes(["pill-button", "secondary-button"])
-            .visible(false)
-            .build();
-        {
-            let selected = selected.clone();
-            let templates_ref = builtin_templates();
-            let presets = presets.clone();
-            let preset_store = preset_store.clone();
-            let on_presets_changed = on_presets_changed.clone();
-            let session_name_entry = session_name_entry.clone();
-            let path_entry = path_entry.clone();
-            let chosen_theme = chosen_theme.clone();
-            let chosen_density = chosen_density.clone();
-            let active_layout = active_layout.clone();
-
-            edit_preset_button.connect_clicked(move |button| {
-                let Selection::Preset(index) = selected.get() else {
-                    return;
-                };
-
-                let Some(existing) = presets.get(index) else {
-                    return;
-                };
-
-                let layout = active_layout.borrow().clone();
-                let session_name = session_name_entry.text().to_string();
-                let theme = chosen_theme.get();
-                let density = chosen_density.get();
-                let workspace_root = preset_workspace_root(&path_entry);
-
-                if is_builtin_preset_id(&existing.id) {
-                    let default_name = if session_name.trim().is_empty() {
-                        format!("{} Copy", existing.name)
-                    } else {
-                        session_name.trim().to_string()
-                    };
-
-                    let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-                    let selected = selected.clone();
-                    let templates_ref_inner = builtin_templates();
-                    let presets = presets.clone();
-                    let preset_store = preset_store.clone();
-                    let on_presets_changed = on_presets_changed.clone();
-
-                    prompt_preset_name(window.as_ref(), &default_name, move |name| {
-                        let mut preset = build_launch_preset(LaunchPresetDraft {
-                            selected: &selected,
-                            templates: &templates_ref_inner,
-                            presets: &presets,
-                            layout: &layout,
-                            session_name: &session_name,
-                            workspace_root: workspace_root.clone(),
-                            theme,
-                            density,
-                        });
-                        preset.id = unique_preset_id(&name);
-                        preset.name = name;
-
-                        if let Err(err) = preset_store.upsert_preset(preset) {
-                            logging::error(format!("Failed to save preset copy: {}", err));
-                        } else {
-                            on_presets_changed();
-                        }
-                    });
-                } else {
-                    let mut preset = build_launch_preset(LaunchPresetDraft {
-                        selected: &selected,
-                        templates: &templates_ref,
-                        presets: &presets,
-                        layout: &layout,
-                        session_name: &session_name,
-                        workspace_root,
-                        theme,
-                        density,
-                    });
-                    preset.id = existing.id.clone();
-
-                    if let Err(err) = preset_store.upsert_preset(preset) {
-                        logging::error(format!("Failed to update preset: {}", err));
-                    } else {
-                        on_presets_changed();
-                    }
-                }
-            });
-        }
-        *edit_preset_button_handle.borrow_mut() = Some(edit_preset_button.clone());
-        preset_actions.append(&edit_preset_button);
     }
 
     wizard_steps.add_named(&tile_editor.root, Some("tiles"));
@@ -919,6 +735,48 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     let spacer = gtk::Box::builder().hexpand(true).build();
     action_bar.append(&spacer);
 
+    let preset_action_button = gtk::Button::builder()
+        .label("Save as Preset")
+        .css_classes([
+            "pill-button",
+            "secondary-button",
+            "new-preset-button",
+            "final-preset-action-button",
+        ])
+        .visible(false)
+        .build();
+    {
+        let selected = selected.clone();
+        let templates_ref = builtin_templates();
+        let presets = presets.clone();
+        let preset_store = preset_store.clone();
+        let on_presets_changed = on_presets_changed.clone();
+        let session_name_entry = session_name_entry.clone();
+        let path_entry = path_entry.clone();
+        let chosen_theme = chosen_theme.clone();
+        let chosen_density = chosen_density.clone();
+        let active_layout = active_layout.clone();
+
+        preset_action_button.connect_clicked(move |button| {
+            let session_name = session_name_entry.text().to_string();
+            let layout = active_layout.borrow().clone();
+            handle_final_preset_action(FinalPresetAction {
+                button,
+                selected: &selected,
+                templates: &templates_ref,
+                presets: &presets,
+                preset_store: &preset_store,
+                on_presets_changed: &on_presets_changed,
+                layout: &layout,
+                session_name: &session_name,
+                workspace_root: preset_workspace_root(&path_entry),
+                theme: chosen_theme.get(),
+                density: chosen_density.get(),
+            });
+        });
+    }
+    action_bar.append(&preset_action_button);
+
     let configure_button = gtk::Button::with_label("Next");
     configure_button.add_css_class("pill-button");
     configure_button.add_css_class("primary-cta-button");
@@ -931,6 +789,9 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let wizard_step_index = wizard_step_index.clone();
         let previous_button = previous_button.clone();
         let configure_button = configure_button.clone();
+        let preset_action_button = preset_action_button.clone();
+        let selected = selected.clone();
+        let presets = presets.clone();
         move || {
             let index = wizard_step_index
                 .get()
@@ -938,6 +799,9 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             wizard_step_index.set(index);
             wizard_steps.set_visible_child_name(wizard_step_names[index]);
             previous_button.set_sensitive(index > 0);
+            let is_final_step = index + 1 == wizard_step_names.len();
+            preset_action_button.set_visible(is_final_step);
+            preset_action_button.set_label(final_preset_action_label(&selected, &presets));
             configure_button.set_label(if index + 1 == wizard_step_names.len() {
                 "Launch Workspace"
             } else {
@@ -1031,7 +895,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let chosen_density = chosen_density.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
-        let edit_preset_button_handle = edit_preset_button_handle.clone();
         let density_preview_callback = density_preview_callback.clone();
         let assets = assets.clone();
         let mode_stack = mode_stack.clone();
@@ -1054,9 +917,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             sync_density_strip_active(&density_strip, default_density);
             refresh_tile_editor(&tile_editor, &active_layout, &assets);
 
-            if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
-                button.set_visible(false);
-            }
             for (index, btn) in template_buttons.borrow().iter().enumerate() {
                 if index == 0 {
                     btn.add_css_class("is-selected");
@@ -1089,7 +949,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let chosen_density = chosen_density.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
-        let edit_preset_button_handle = edit_preset_button_handle.clone();
         let density_preview_callback = density_preview_callback.clone();
         let assets = assets.clone();
         let mode_stack = mode_stack.clone();
@@ -1117,15 +976,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             *active_layout.borrow_mut() = p.layout.clone();
             tile_editor.tile_count.set_value(p.tile_count() as f64);
             refresh_tile_editor(&tile_editor, &active_layout, &assets);
-
-            if let Some(button) = edit_preset_button_handle.borrow().as_ref() {
-                button.set_visible(true);
-                button.set_label(if is_builtin_preset_id(&p.id) {
-                    "Save Copy"
-                } else {
-                    "Update Preset"
-                });
-            }
 
             for btn in template_buttons.borrow().iter() {
                 btn.remove_css_class("is-selected");
@@ -1260,7 +1110,7 @@ fn build_wizard_stepper() -> WizardStepper {
         .build();
 
     let mut steps = Vec::new();
-    for (index, label) in ["Setup", "Appearance", "Layout", "Tiles"]
+    for (index, label) in ["Setup", "Appearance", "Layout", "Review"]
         .iter()
         .enumerate()
     {
@@ -1812,8 +1662,8 @@ fn build_tile_editor_panel() -> TileEditorPanel {
 
     root.append(&build_section_header(
         "Step 4",
-        "Tile setup",
-        "Set how many tiles to open, then choose whether each one starts a terminal or a web view.",
+        "Review & launch",
+        "Finalize tile behavior, then save or update the preset before launching if you want to reuse it.",
     ));
 
     let count_row = gtk::Box::builder()
@@ -2092,6 +1942,158 @@ fn build_launch_preset(draft: LaunchPresetDraft<'_>) -> WorkspacePreset {
             preset
         }
     }
+}
+
+struct FinalPresetAction<'a> {
+    button: &'a gtk::Button,
+    selected: &'a Rc<Cell<Selection>>,
+    templates: &'a [LayoutTemplate],
+    presets: &'a [WorkspacePreset],
+    preset_store: &'a Rc<PresetStore>,
+    on_presets_changed: &'a Rc<dyn Fn()>,
+    layout: &'a LayoutNode,
+    session_name: &'a str,
+    workspace_root: Option<PathBuf>,
+    theme: ThemeMode,
+    density: ApplicationDensity,
+}
+
+fn final_preset_action_label(
+    selected: &Rc<Cell<Selection>>,
+    presets: &[WorkspacePreset],
+) -> &'static str {
+    match selected.get() {
+        Selection::Template(_) => "Save as Preset",
+        Selection::Preset(index) => presets
+            .get(index)
+            .map(|preset| {
+                if is_builtin_preset_id(&preset.id) {
+                    "Save Copy"
+                } else {
+                    "Update Preset"
+                }
+            })
+            .unwrap_or("Save as Preset"),
+    }
+}
+
+fn handle_final_preset_action(action: FinalPresetAction<'_>) {
+    match action.selected.get() {
+        Selection::Template(_) => {
+            let preset = build_action_preset(&action);
+            let default_name = default_new_preset_name(
+                action.selected,
+                action.templates,
+                action.presets,
+                action.session_name,
+            );
+            prompt_save_preset(
+                action.button,
+                default_name,
+                preset,
+                "Failed to save preset",
+                action.preset_store,
+                action.on_presets_changed,
+            );
+        }
+        Selection::Preset(index) => {
+            let Some(existing) = action.presets.get(index) else {
+                return;
+            };
+
+            let mut preset = build_action_preset(&action);
+            if is_builtin_preset_id(&existing.id) {
+                let default_name = default_copy_preset_name(existing, action.session_name);
+                prompt_save_preset(
+                    action.button,
+                    default_name,
+                    preset,
+                    "Failed to save preset copy",
+                    action.preset_store,
+                    action.on_presets_changed,
+                );
+            } else {
+                preset.id = existing.id.clone();
+                if let Err(err) = action.preset_store.upsert_preset(preset) {
+                    logging::error(format!("Failed to update preset: {}", err));
+                } else {
+                    (action.on_presets_changed)();
+                }
+            }
+        }
+    }
+}
+
+fn build_action_preset(action: &FinalPresetAction<'_>) -> WorkspacePreset {
+    build_launch_preset(LaunchPresetDraft {
+        selected: action.selected,
+        templates: action.templates,
+        presets: action.presets,
+        layout: action.layout,
+        session_name: action.session_name,
+        workspace_root: action.workspace_root.clone(),
+        theme: action.theme,
+        density: action.density,
+    })
+}
+
+fn default_new_preset_name(
+    selected: &Rc<Cell<Selection>>,
+    templates: &[LayoutTemplate],
+    presets: &[WorkspacePreset],
+    session_name: &str,
+) -> String {
+    let trimmed = session_name.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+
+    match selected.get() {
+        Selection::Template(index) => templates
+            .get(index)
+            .map(|template| template.label.to_string())
+            .unwrap_or_else(|| "New Preset".into()),
+        Selection::Preset(index) => presets
+            .get(index)
+            .map(|preset| preset.name.clone())
+            .unwrap_or_else(|| "New Preset".into()),
+    }
+}
+
+fn default_copy_preset_name(existing: &WorkspacePreset, session_name: &str) -> String {
+    let trimmed = session_name.trim();
+    if trimmed.is_empty() {
+        format!("{} Copy", existing.name)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn prompt_save_preset(
+    button: &gtk::Button,
+    default_name: String,
+    base_preset: WorkspacePreset,
+    error_context: &'static str,
+    preset_store: &Rc<PresetStore>,
+    on_presets_changed: &Rc<dyn Fn()>,
+) {
+    let window = button
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok());
+    let preset_store = preset_store.clone();
+    let on_presets_changed = on_presets_changed.clone();
+
+    prompt_preset_name(window.as_ref(), &default_name, move |name| {
+        let mut preset = base_preset.clone();
+        preset.id = unique_preset_id(&name);
+        preset.name = name;
+
+        if let Err(err) = preset_store.upsert_preset(preset) {
+            logging::error(format!("{}: {}", error_context, err));
+        } else {
+            on_presets_changed();
+        }
+    });
 }
 
 fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {
@@ -2726,8 +2728,8 @@ where
 {
     let dialog = adw::MessageDialog::builder()
         .modal(true)
-        .heading("Save as Preset")
-        .body("Enter a name for the new preset.")
+        .heading("Save Workspace Preset")
+        .body("Enter the name to show on the Workspaces dashboard.")
         .build();
 
     if let Some(win) = window {
