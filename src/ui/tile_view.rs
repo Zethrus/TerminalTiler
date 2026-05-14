@@ -18,6 +18,11 @@ use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::header_actions::build_header_icon_button;
 
+const HEADER_BADGE_MAX_CHARS: i32 = 12;
+const HEADER_GROUP_MAX_CHARS: i32 = 16;
+const HEADER_STATUS_MAX_CHARS: i32 = 28;
+const HEADER_TITLE_MAX_CHARS: i32 = 28;
+
 pub struct TileView {
     pub widget: gtk::Widget,
     pub session: TerminalSession,
@@ -54,14 +59,18 @@ pub fn build(
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
+        .hexpand(true)
+        .vexpand(true)
         .css_classes(["terminal-card", tile.accent_class.as_str()])
         .build();
+    make_shrinkable(&shell);
 
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .css_classes(["terminal-header"])
         .build();
+    make_shrinkable(&header);
 
     let left = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -69,6 +78,7 @@ pub fn build(
         .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
+    make_shrinkable(&left);
     left.set_tooltip_text(Some("Drag this header to swap terminal positions"));
 
     let badge = gtk::Label::builder()
@@ -81,28 +91,54 @@ pub fn build(
         .halign(gtk::Align::Start)
         .css_classes(["tile-title"])
         .build();
+    configure_dynamic_header_label(
+        &badge,
+        &tile.agent_label,
+        HEADER_BADGE_MAX_CHARS,
+        gtk::pango::EllipsizeMode::End,
+    );
+    configure_dynamic_header_label(
+        &title,
+        &tile.title,
+        HEADER_TITLE_MAX_CHARS,
+        gtk::pango::EllipsizeMode::End,
+    );
+    title.set_hexpand(true);
 
     left.append(&badge);
     left.append(&title);
     if !tile.pane_groups.is_empty() {
-        left.append(
-            &gtk::Label::builder()
-                .label(tile.pane_groups.join(", "))
-                .halign(gtk::Align::Start)
-                .tooltip_text(format!("Pane groups: {}", tile.pane_groups.join(", ")))
-                .css_classes(["status-chip", "muted-chip"])
-                .build(),
+        let pane_groups = tile.pane_groups.join(", ");
+        let pane_group_label = gtk::Label::builder()
+            .label(&pane_groups)
+            .halign(gtk::Align::Start)
+            .tooltip_text(format!("Pane groups: {pane_groups}"))
+            .css_classes(["status-chip", "muted-chip"])
+            .build();
+        configure_dynamic_header_label(
+            &pane_group_label,
+            &pane_groups,
+            HEADER_GROUP_MAX_CHARS,
+            gtk::pango::EllipsizeMode::End,
         );
+        pane_group_label.set_tooltip_text(Some(&format!("Pane groups: {pane_groups}")));
+        left.append(&pane_group_label);
     }
 
+    let initial_status_line = initial_status_snapshot(tile, workspace_root, assets)
+        .to_line()
+        .trim()
+        .to_string();
     let status = gtk::Label::builder()
-        .label(
-            initial_status_snapshot(tile, workspace_root, assets)
-                .to_line()
-                .trim(),
-        )
+        .label(&initial_status_line)
         .css_classes(["status-chip"])
         .build();
+    configure_dynamic_header_label(
+        &status,
+        &initial_status_line,
+        HEADER_STATUS_MAX_CHARS,
+        gtk::pango::EllipsizeMode::Start,
+    );
 
     let recovery_button = build_header_icon_button("system-run-symbolic", "Recover pane");
     recovery_button.add_css_class("tile-recovery-action");
@@ -150,9 +186,11 @@ pub fn build(
         .vexpand(true)
         .css_classes(["terminal-frame"])
         .build();
+    make_shrinkable(&terminal_frame);
 
     let terminal = session.widget();
     terminal.add_css_class("terminal-surface");
+    make_shrinkable(&terminal);
 
     let recovery_popover = build_terminal_recovery_popover(&terminal, &session);
     let show_recovery_prompt: Rc<dyn Fn()> = {
@@ -214,6 +252,7 @@ pub fn build(
                 && !new_title.is_empty()
             {
                 title_label.set_text(&new_title);
+                title_label.set_tooltip_text(Some(&new_title));
             }
         });
     }
@@ -236,9 +275,13 @@ pub fn build(
             );
             let disconnected = session_for_update.needs_recovery_prompt();
             if disconnected {
-                status.set_text(&disconnected_status_line(&snapshot));
+                let status_line = disconnected_status_line(&snapshot);
+                status.set_text(&status_line);
+                status.set_tooltip_text(Some(&status_line));
             } else {
-                status.set_text(&snapshot.to_line());
+                let status_line = snapshot.to_line();
+                status.set_text(&status_line);
+                status.set_tooltip_text(Some(&status_line));
             }
             sync_terminal_recovery_state(&shell, &status, &recovery_button, disconnected);
             sync_status_severity(
@@ -333,6 +376,23 @@ pub fn build(
         tile: tile.clone(),
         close_button,
     }
+}
+
+fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
+    widget.set_size_request(0, 0);
+    widget.set_overflow(gtk::Overflow::Hidden);
+}
+
+fn configure_dynamic_header_label(
+    label: &gtk::Label,
+    full_text: &str,
+    max_width_chars: i32,
+    ellipsize: gtk::pango::EllipsizeMode,
+) {
+    label.set_ellipsize(ellipsize);
+    label.set_max_width_chars(max_width_chars);
+    label.set_single_line_mode(true);
+    label.set_tooltip_text(Some(full_text));
 }
 
 fn install_dropped_file_target(

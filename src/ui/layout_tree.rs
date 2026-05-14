@@ -30,6 +30,7 @@ fn build_with_path(
                 .hexpand(true)
                 .vexpand(true)
                 .build();
+            make_shrinkable(&slot);
 
             LayoutShell {
                 widget: slot.clone().upcast(),
@@ -48,9 +49,12 @@ fn build_with_path(
                     crate::model::layout::SplitAxis::Vertical => gtk::Orientation::Vertical,
                 })
                 .wide_handle(true)
+                .resize_start_child(true)
+                .resize_end_child(true)
                 .shrink_start_child(true)
                 .shrink_end_child(true)
                 .build();
+            make_shrinkable(&paned);
 
             let mut first_path = split_path.to_vec();
             first_path.push(false);
@@ -107,4 +111,9 @@ fn build_with_path(
             }
         }
     }
+}
+
+fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
+    widget.set_size_request(0, 0);
+    widget.set_overflow(gtk::Overflow::Hidden);
 }

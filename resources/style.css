@@ -729,10 +729,6 @@ button.app-tab-add:hover {
     0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
-.terminal-frame {
-  padding: 8px;
-}
-
 .launch-shell {
   background: transparent;
 }
@@ -789,6 +785,21 @@ button.app-tab-add:hover {
     border-color 140ms ease,
     box-shadow 140ms ease,
     transform 140ms ease;
+}
+
+.terminal-card,
+.terminal-frame,
+.web-tile-frame,
+.terminal-surface,
+.split-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-frame,
+.web-tile-frame {
+  padding: 8px;
 }
 
 .config-panel,

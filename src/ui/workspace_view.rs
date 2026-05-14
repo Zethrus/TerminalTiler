@@ -814,6 +814,8 @@ impl WorkspaceRuntime {
         );
         layout_shell.widget.set_hexpand(true);
         layout_shell.widget.set_vexpand(true);
+        layout_shell.widget.set_size_request(0, 0);
+        layout_shell.widget.set_overflow(gtk::Overflow::Hidden);
         while let Some(child) = self.inner.layout_host.first_child() {
             self.inner.layout_host.remove(&child);
         }
@@ -969,6 +971,8 @@ pub fn build_with_layout_change_handler(
         .hexpand(true)
         .vexpand(true)
         .build();
+    layout_host.set_size_request(0, 0);
+    layout_host.set_overflow(gtk::Overflow::Hidden);
 
     let alert_store = AlertStore::default();
     let runtime = WorkspaceRuntime {

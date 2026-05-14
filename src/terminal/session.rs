@@ -129,6 +129,8 @@ impl TerminalSession {
         let terminal = vte4::Terminal::new();
         terminal.set_hexpand(true);
         terminal.set_vexpand(true);
+        terminal.set_size_request(0, 0);
+        terminal.set_overflow(gtk::Overflow::Hidden);
         terminal.set_scrollback_lines(20_000);
         terminal.set_mouse_autohide(true);
         terminal.set_clear_background(false);

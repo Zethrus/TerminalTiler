@@ -13,6 +13,10 @@ use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::ui::header_actions::build_header_icon_button;
 
+const HEADER_BADGE_MAX_CHARS: i32 = 4;
+const HEADER_STATUS_MAX_CHARS: i32 = 28;
+const HEADER_TITLE_MAX_CHARS: i32 = 28;
+
 type GetWebTileSettings = Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>;
 
 pub struct WebTileView {
@@ -51,14 +55,18 @@ pub fn build(
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
+        .hexpand(true)
+        .vexpand(true)
         .css_classes(["terminal-card", tile.accent_class.as_str()])
         .build();
+    make_shrinkable(&shell);
 
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .css_classes(["terminal-header"])
         .build();
+    make_shrinkable(&header);
 
     let left = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -66,6 +74,7 @@ pub fn build(
         .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
+    make_shrinkable(&left);
     left.set_tooltip_text(Some("Drag this header to swap tile positions"));
 
     let badge = gtk::Label::builder()
@@ -78,14 +87,34 @@ pub fn build(
         .halign(gtk::Align::Start)
         .css_classes(["tile-title"])
         .build();
+    configure_dynamic_header_label(
+        &badge,
+        "Web tile",
+        HEADER_BADGE_MAX_CHARS,
+        gtk::pango::EllipsizeMode::End,
+    );
+    configure_dynamic_header_label(
+        &title,
+        &tile.title,
+        HEADER_TITLE_MAX_CHARS,
+        gtk::pango::EllipsizeMode::End,
+    );
+    title.set_hexpand(true);
 
     left.append(&badge);
     left.append(&title);
 
+    let initial_domain = domain_from_url(&url);
     let status = gtk::Label::builder()
-        .label(domain_from_url(&url))
+        .label(&initial_domain)
         .css_classes(["status-chip"])
         .build();
+    configure_dynamic_header_label(
+        &status,
+        &url,
+        HEADER_STATUS_MAX_CHARS,
+        gtk::pango::EllipsizeMode::End,
+    );
 
     let settings_button = build_header_icon_button(
         "preferences-system-symbolic",
@@ -254,6 +283,7 @@ pub fn build(
                 let new_title = new_title.to_string();
                 if !new_title.is_empty() {
                     title_label.set_text(&new_title);
+                    title_label.set_tooltip_text(Some(&new_title));
                 }
             }
         });
@@ -268,7 +298,9 @@ pub fn build(
                 return;
             }
             if let Some(uri) = wv.uri() {
-                status.set_text(&domain_from_url(uri.as_str()));
+                let domain = domain_from_url(uri.as_str());
+                status.set_text(&domain);
+                status.set_tooltip_text(Some(uri.as_str()));
             }
         });
     }
@@ -343,8 +375,10 @@ pub fn build(
         .vexpand(true)
         .css_classes(["web-tile-frame"])
         .build();
+    make_shrinkable(&web_frame);
     web_view.set_hexpand(true);
     web_view.set_vexpand(true);
+    make_shrinkable(&web_view);
     web_frame.append(&web_view);
     shell.append(&web_frame);
 
@@ -422,6 +456,23 @@ pub fn build(
         shutdown_flag,
         close_button,
     }
+}
+
+fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
+    widget.set_size_request(0, 0);
+    widget.set_overflow(gtk::Overflow::Hidden);
+}
+
+fn configure_dynamic_header_label(
+    label: &gtk::Label,
+    full_text: &str,
+    max_width_chars: i32,
+    ellipsize: gtk::pango::EllipsizeMode,
+) {
+    label.set_ellipsize(ellipsize);
+    label.set_max_width_chars(max_width_chars);
+    label.set_single_line_mode(true);
+    label.set_tooltip_text(Some(full_text));
 }
 
 fn build_settings_label(label: &str) -> gtk::Label {
