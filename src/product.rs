@@ -11,12 +11,15 @@ pub const OPEN_CORE_STATEMENT: &str = "TerminalTiler Core is the public, MIT-lic
 pub const SETTINGS_DIALOG_TITLE: &str = "TerminalTiler Core Settings";
 pub const SETTINGS_SUMMARY_COPY: &str = "MIT-licensed core settings for local workspaces, launch defaults, tray behavior, and shortcuts.";
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 pub const WINDOWS_SHELL_TITLE: &str = "TerminalTiler Core for Windows";
 
+#[allow(dead_code)]
 pub fn display_name_with_version() -> String {
     format!("{PRODUCT_DISPLAY_NAME} v{PRODUCT_VERSION}")
 }
 
+#[allow(dead_code)]
 pub fn about_title() -> String {
     format!("About {PRODUCT_DISPLAY_NAME}")
 }

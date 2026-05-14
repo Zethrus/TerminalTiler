@@ -1,13 +1,14 @@
 use adw::prelude::*;
 use gtk::gio;
 
+use crate::extension::ProductInfo;
 use crate::logging;
 use crate::product;
 use crate::ui::icons::{self, name as icon_name};
 
-pub fn present(window: &adw::ApplicationWindow) {
+pub fn present(window: &adw::ApplicationWindow, product_info: &ProductInfo) {
     let dialog = adw::Dialog::new();
-    dialog.set_title(&product::about_title());
+    dialog.set_title(&format!("About {}", product_info.display_name));
     dialog.set_follows_content_size(false);
     dialog.set_content_width(560);
 
@@ -22,14 +23,18 @@ pub fn present(window: &adw::ApplicationWindow) {
 
     content.append(
         &gtk::Label::builder()
-            .label(product::PRODUCT_DISPLAY_NAME)
+            .label(&product_info.display_name)
             .halign(gtk::Align::Start)
             .css_classes(["section-title"])
             .build(),
     );
     content.append(
         &gtk::Label::builder()
-            .label(product::display_name_with_version())
+            .label(format!(
+                "{} v{}",
+                product_info.display_name,
+                product::PRODUCT_VERSION
+            ))
             .halign(gtk::Align::Start)
             .css_classes(["field-hint"])
             .build(),
@@ -56,6 +61,20 @@ pub fn present(window: &adw::ApplicationWindow) {
             .css_classes(["field-hint"])
             .build(),
     );
+    if let Some(extra_copy) = product_info
+        .about_extra_copy
+        .as_deref()
+        .filter(|copy| !copy.trim().is_empty())
+    {
+        content.append(
+            &gtk::Label::builder()
+                .label(extra_copy)
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["field-hint"])
+                .build(),
+        );
+    }
 
     let links = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)

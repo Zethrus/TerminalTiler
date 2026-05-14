@@ -5,7 +5,6 @@ use gtk::glib;
 use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
-use crate::product;
 use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
@@ -52,6 +51,9 @@ pub struct SettingsDialogInput {
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
     pub max_reconnect_attempts: u32,
+    pub product_display_name: String,
+    pub settings_title: String,
+    pub settings_summary: String,
 }
 
 #[derive(Clone)]
@@ -222,6 +224,9 @@ pub fn present(
         settings_dialog_width,
         settings_dialog_height,
         max_reconnect_attempts,
+        product_display_name,
+        settings_title,
+        settings_summary,
     } = input;
     let SettingsDialogActions {
         on_theme_changed,
@@ -240,7 +245,7 @@ pub fn present(
     let (default_width, default_height) =
         default_settings_dialog_size(window, settings_dialog_width, settings_dialog_height);
     let dialog = adw::Dialog::new();
-    dialog.set_title(product::SETTINGS_DIALOG_TITLE);
+    dialog.set_title(&settings_title);
     dialog.set_follows_content_size(false);
     dialog.set_content_width(default_width);
     dialog.set_content_height(default_height);
@@ -349,7 +354,11 @@ pub fn present(
     };
     sync_reset_button();
 
-    content.append(&build_settings_summary(&reset_button));
+    content.append(&build_settings_summary(
+        &reset_button,
+        &product_display_name,
+        &settings_summary,
+    ));
 
     let theme_callback = on_theme_changed;
     let density_callback = on_density_changed;
@@ -1526,7 +1535,11 @@ where
     shell.upcast()
 }
 
-fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
+fn build_settings_summary(
+    reset_button: &gtk::Button,
+    product_display_name: &str,
+    settings_summary: &str,
+) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(14)
@@ -1552,14 +1565,14 @@ fn build_settings_summary(reset_button: &gtk::Button) -> gtk::Widget {
         .build();
     body.append(
         &gtk::Label::builder()
-            .label(product::PRODUCT_DISPLAY_NAME)
+            .label(product_display_name)
             .halign(gtk::Align::Start)
             .css_classes(["section-title", "settings-title", "settings-summary-title"])
             .build(),
     );
     body.append(
         &gtk::Label::builder()
-            .label(product::SETTINGS_SUMMARY_COPY)
+            .label(settings_summary)
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["field-hint", "settings-copy", "settings-summary-copy"])

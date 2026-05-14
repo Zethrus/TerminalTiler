@@ -10,6 +10,7 @@ use adw::prelude::*;
 use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
+use crate::extension::RuntimeOptions;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
@@ -23,8 +24,8 @@ use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
-    about_dialog, assets_manager, command_palette, context_menu, dialog_smoke, launch_screen,
-    settings_dialog, workspace_view,
+    about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
+    launch_screen, settings_dialog, workspace_view,
 };
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -243,6 +244,7 @@ pub fn present(
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
     tray_controller: TrayController,
+    options: RuntimeOptions,
 ) {
     present_with_initial_workspace(
         app,
@@ -253,6 +255,7 @@ pub fn present(
         saved_session,
         startup_warning,
         tray_controller,
+        options,
         None,
     );
 }
@@ -267,6 +270,7 @@ fn present_with_initial_workspace(
     saved_session: Option<SavedSession>,
     startup_warning: Option<String>,
     tray_controller: TrayController,
+    options: RuntimeOptions,
     initial_workspace_tab: Option<WorkspaceTab>,
 ) {
     let preference_store = Rc::new(preference_store);
@@ -338,7 +342,7 @@ fn present_with_initial_workspace(
     let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title(product::PRODUCT_DISPLAY_NAME)
+        .title(&options.product.app_title)
         .default_width(1280)
         .default_height(680)
         .resizable(true)
@@ -369,6 +373,16 @@ fn present_with_initial_workspace(
         &["flat", "titlebar-action-button", "titlebar-icon-button"],
     );
     header.pack_end(&settings_button);
+
+    let companion_button = options.companion.as_ref().map(|_| {
+        let button = icons::labeled_button(
+            "Account / Sync",
+            icon_name::WEB,
+            &["flat", "titlebar-action-button"],
+        );
+        header.pack_end(&button);
+        button
+    });
 
     let assets_button = icons::icon_button(
         icon_name::ASSETS,
@@ -908,6 +922,7 @@ fn present_with_initial_workspace(
         let asset_store_for_detach = asset_store.clone();
         let session_store_for_detach = session_store.clone();
         let tray_controller_for_detach = tray_controller.clone();
+        let options_for_detach = options.clone();
         let toast_overlay_for_detach = toast_overlay.clone();
 
         *detach_tab.borrow_mut() = Some(Box::new(move |tab_id| {
@@ -941,6 +956,7 @@ fn present_with_initial_workspace(
                 &asset_store_for_detach,
                 &session_store_for_detach,
                 &tray_controller_for_detach,
+                options_for_detach.clone(),
             );
         }));
     }
@@ -1106,6 +1122,7 @@ fn present_with_initial_workspace(
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let sync_close_to_background_notice = sync_close_to_background_notice.clone();
         let tray_controller = tray_controller.clone();
+        let options_for_settings = options.clone();
 
         Rc::new(move || {
             let preferences = preference_store_for_settings.load();
@@ -1123,6 +1140,9 @@ fn present_with_initial_workspace(
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
                     max_reconnect_attempts: preferences.max_reconnect_attempts,
+                    product_display_name: options_for_settings.product.display_name.clone(),
+                    settings_title: options_for_settings.product.settings_title.clone(),
+                    settings_summary: options_for_settings.product.settings_summary.clone(),
                 },
                 settings_dialog::SettingsDialogActions {
                     on_theme_changed: Rc::new({
@@ -1578,6 +1598,19 @@ fn present_with_initial_workspace(
         assets_button.connect_clicked(move |_| open_assets_manager());
     }
 
+    let open_companion_dialog: Option<Rc<dyn Fn()>> = options.companion.as_ref().map(|companion| {
+        let window = window.clone();
+        let companion = companion.clone();
+        Rc::new(move || companion_dialog::present(&window, companion.clone())) as Rc<dyn Fn()>
+    });
+
+    if let (Some(button), Some(open_companion_dialog)) =
+        (companion_button.as_ref(), open_companion_dialog.as_ref())
+    {
+        let open_companion_dialog = open_companion_dialog.clone();
+        button.connect_clicked(move |_| open_companion_dialog());
+    }
+
     let open_command_palette: Rc<dyn Fn()> = {
         let window = window.clone();
         let tabs = tabs.clone();
@@ -1587,9 +1620,13 @@ fn present_with_initial_workspace(
         let request_tab_rename = request_tab_rename.clone();
         let open_settings_dialog = open_settings_dialog.clone();
         let open_assets_manager = open_assets_manager.clone();
+        let open_companion_dialog = open_companion_dialog.clone();
         let open_about_dialog: Rc<dyn Fn()> = {
             let window = window.clone();
-            Rc::new(move || about_dialog::present(&window))
+            Rc::new({
+                let options = options.clone();
+                move || about_dialog::present(&window, &options.product)
+            })
         };
         Rc::new(move || {
             let snapshot = tabs.borrow().clone();
@@ -1632,6 +1669,17 @@ fn present_with_initial_workspace(
                     }),
                 },
             ];
+
+            if let Some(open_companion_dialog) = open_companion_dialog.as_ref() {
+                actions.push(command_palette::PaletteAction {
+                    title: "Open Account / Sync".into(),
+                    subtitle: "Account, activation, device, and sync controls.".into(),
+                    on_activate: Rc::new({
+                        let open_companion_dialog = open_companion_dialog.clone();
+                        move || open_companion_dialog()
+                    }),
+                });
+            }
 
             for tab in &snapshot {
                 let tab_id = tab.id;
@@ -3685,6 +3733,7 @@ fn present_detached_workspace_window(
     asset_store: &AssetStore,
     session_store: &SessionStore,
     tray_controller: &TrayController,
+    options: RuntimeOptions,
 ) {
     let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let origin_window_id = payload.origin_window_id;
@@ -3780,6 +3829,7 @@ fn present_detached_workspace_window(
         let asset_store_for_reattach = asset_store.clone();
         let session_store_for_reattach = session_store.clone();
         let tray_controller_for_reattach = tray_controller.clone();
+        let options_for_reattach = options.clone();
         let do_reattach = Rc::new(move || {
             let tab = tabs_for_reattach.borrow_mut().pop();
             let Some(tab) = tab else {
@@ -3805,6 +3855,7 @@ fn present_detached_workspace_window(
                     None,
                     None,
                     tray_controller_for_reattach.clone(),
+                    options_for_reattach.clone(),
                     Some(tab),
                 );
             }

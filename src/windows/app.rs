@@ -24,19 +24,23 @@ mod imp {
         CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE, CBS_DROPDOWNLIST,
         CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
         DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL,
-        ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect,
-        GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW,
-        GetWindowTextW, HMENU, IDC_ARROW, IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR,
-        LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY,
-        LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MF_STRING, MSG, MessageBoxW,
-        PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW,
-        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
-        WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP, WM_NCCREATE,
-        WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_PASSWORD, ES_READONLY, GWLP_USERDATA,
+        GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW,
+        GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDI_APPLICATION, IDOK,
+        LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
+        LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
+        MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
+        SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
+        WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
+    use crate::extension::{
+        CompanionAction, CompanionActionInput, CompanionIntegration, CompanionPanelSnapshot,
+        ProductInfo, RuntimeOptions,
+    };
     use crate::logging;
     use crate::model::assets::{ProjectSuggestion, RestoreLaunchMode, WorkspaceAssets};
     use crate::model::layout::{
@@ -64,8 +68,7 @@ mod imp {
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
     const SETTINGS_WINDOW_CLASS: &str = "TerminalTilerWindowsSettings";
-    const WINDOW_TITLE: &str = product::WINDOWS_SHELL_TITLE;
-    const SETTINGS_WINDOW_TITLE: &str = product::SETTINGS_DIALOG_TITLE;
+    const COMPANION_PROMPT_CLASS: &str = "TerminalTilerWindowsCompanionPrompt";
     const ID_STATUS: isize = 1001;
     const ID_REFRESH: isize = 1002;
     const ID_LAUNCH: isize = 1003;
@@ -97,6 +100,11 @@ mod imp {
     const ID_LABEL_LAUNCH_DENSITY: isize = 1029;
     const ID_LAUNCH_DENSITY_COMBO: isize = 1030;
     const ID_EDIT_TILES: isize = 1031;
+    const ID_COMPANION: isize = 1032;
+    const ID_PROMPT_EDIT: isize = 1901;
+    const ID_PROMPT_OK: isize = 1902;
+    const ID_PROMPT_CANCEL: isize = 1903;
+    const ID_PROMPT_LABEL: isize = 1904;
     const ID_SETTINGS_THEME_LIST: isize = 2001;
     const ID_SETTINGS_DENSITY_LIST: isize = 2002;
     const ID_SETTINGS_CLOSE_BACKGROUND: isize = 2003;
@@ -164,10 +172,14 @@ mod imp {
     }
 
     pub fn run() -> ExitCode {
+        run_with_options(RuntimeOptions::default())
+    }
+
+    pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
         logging::init();
         logging::info("windows GUI shell startup");
 
-        match unsafe { run_gui() } {
+        match unsafe { run_gui(options) } {
             Ok(code) => code,
             Err(error) => {
                 logging::error(format!("windows GUI shell failed: {error}"));
@@ -178,6 +190,7 @@ mod imp {
     }
 
     struct AppWindowState {
+        runtime_options: RuntimeOptions,
         preference_store: PreferenceStore,
         preset_store: PresetStore,
         session_store: SessionStore,
@@ -220,12 +233,24 @@ mod imp {
         edit_tiles_button_hwnd: HWND,
         assets_button_hwnd: HWND,
         palette_button_hwnd: HWND,
+        companion_button_hwnd: HWND,
         launcher_editor_hwnd: HWND,
+    }
+
+    struct PromptWindowState {
+        done: bool,
+        submitted: bool,
+        prompt: String,
+        placeholder: String,
+        visible: bool,
+        edit_hwnd: HWND,
+        result: Option<String>,
     }
 
     struct SettingsWindowState {
         window_hwnd: HWND,
         parent_hwnd: HWND,
+        product_info: ProductInfo,
         preference_store: PreferenceStore,
         theme_list_hwnd: HWND,
         density_list_hwnd: HWND,
@@ -255,7 +280,7 @@ mod imp {
         CommandPalette,
     }
 
-    unsafe fn run_gui() -> Result<ExitCode, String> {
+    unsafe fn run_gui(options: RuntimeOptions) -> Result<ExitCode, String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle".into());
@@ -263,7 +288,9 @@ mod imp {
 
         register_window_classes(instance)?;
 
+        let window_title = options.product.app_title.clone();
         let state = Box::new(AppWindowState {
+            runtime_options: options,
             preference_store: PreferenceStore::new(),
             preset_store: PresetStore::new(),
             session_store: SessionStore::new(),
@@ -306,6 +333,7 @@ mod imp {
             edit_tiles_button_hwnd: ptr::null_mut(),
             assets_button_hwnd: ptr::null_mut(),
             palette_button_hwnd: ptr::null_mut(),
+            companion_button_hwnd: ptr::null_mut(),
             launcher_editor_hwnd: ptr::null_mut(),
         });
         let state_ptr = Box::into_raw(state);
@@ -314,7 +342,7 @@ mod imp {
             CreateWindowExW(
                 0,
                 wide(WINDOW_CLASS).as_ptr(),
-                wide(WINDOW_TITLE).as_ptr(),
+                wide(&window_title).as_ptr(),
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -354,7 +382,8 @@ mod imp {
 
     fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
         register_window_class(instance, WINDOW_CLASS, window_proc)?;
-        register_window_class(instance, SETTINGS_WINDOW_CLASS, settings_window_proc)
+        register_window_class(instance, SETTINGS_WINDOW_CLASS, settings_window_proc)?;
+        register_window_class(instance, COMPANION_PROMPT_CLASS, prompt_window_proc)
     }
 
     fn register_window_class(
@@ -501,6 +530,7 @@ mod imp {
                         ID_EDIT_TILES => open_launcher_editor(hwnd, state),
                         ID_ASSETS_MANAGER => open_assets_manager(hwnd, state),
                         ID_COMMAND_PALETTE => open_command_palette(hwnd, state),
+                        ID_COMPANION => show_companion_dialog(hwnd, state),
                         ID_SETTINGS => open_settings_dialog(hwnd, state),
                         ID_SAVE_PRESET => save_selected_preset_as_new(hwnd, state),
                         ID_UPDATE_PRESET => update_selected_preset(hwnd, state),
@@ -926,6 +956,16 @@ mod imp {
             0,
             ID_COMMAND_PALETTE,
         );
+        if state.runtime_options.companion.is_some() {
+            state.companion_button_hwnd = create_child_window(
+                hwnd,
+                "BUTTON",
+                "Account / Sync",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+                0,
+                ID_COMPANION,
+            );
+        }
         let _ = create_child_window(
             hwnd,
             "BUTTON",
@@ -974,6 +1014,7 @@ mod imp {
             unsafe { GetDlgItem(hwnd, ID_REFRESH as i32) },
             state.assets_button_hwnd,
             state.palette_button_hwnd,
+            state.companion_button_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS as i32) },
             unsafe { GetDlgItem(hwnd, ID_QUIT as i32) },
         ] {
@@ -1304,6 +1345,17 @@ mod imp {
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
+            if !state.companion_button_hwnd.is_null() {
+                SetWindowPos(
+                    state.companion_button_hwnd,
+                    ptr::null_mut(),
+                    width - MARGIN - 96 - 108 - 144,
+                    button_y,
+                    132,
+                    BUTTON_HEIGHT,
+                    SWP_NOZORDER,
+                );
+            }
             SetWindowPos(
                 GetDlgItem(hwnd, ID_SETTINGS as i32),
                 ptr::null_mut(),
@@ -1603,7 +1655,10 @@ mod imp {
 
     fn build_status_text(state: &AppWindowState, preferred_distribution: Option<&str>) -> String {
         let mut lines = Vec::new();
-        lines.push(format!("{} Windows shell", product::PRODUCT_DISPLAY_NAME));
+        lines.push(format!(
+            "{} Windows shell",
+            state.runtime_options.product.display_name
+        ));
         lines.push(format!("License: {}", product::PRODUCT_LICENSE));
         lines.push(format!("Source: {}", product::PRODUCT_SOURCE_URL));
         lines.push(String::new());
@@ -2034,6 +2089,7 @@ mod imp {
         let settings_state = Box::new(SettingsWindowState {
             window_hwnd: ptr::null_mut(),
             parent_hwnd,
+            product_info: state.runtime_options.product.clone(),
             preference_store: state.preference_store.clone(),
             theme_list_hwnd: ptr::null_mut(),
             density_list_hwnd: ptr::null_mut(),
@@ -2059,7 +2115,7 @@ mod imp {
             CreateWindowExW(
                 0,
                 wide(SETTINGS_WINDOW_CLASS).as_ptr(),
-                wide(SETTINGS_WINDOW_TITLE).as_ptr(),
+                wide(&state.runtime_options.product.settings_title).as_ptr(),
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -2088,7 +2144,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            product::PRODUCT_DISPLAY_NAME,
+            state.product_info.display_name.as_str(),
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_SUMMARY_TITLE,
@@ -2096,7 +2152,7 @@ mod imp {
         let _ = create_child_window(
             hwnd,
             "STATIC",
-            product::SETTINGS_SUMMARY_COPY,
+            state.product_info.settings_summary.as_str(),
             WS_CHILD | WS_VISIBLE,
             0,
             ID_SETTINGS_SUMMARY_COPY,
@@ -3531,7 +3587,7 @@ mod imp {
     fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
         let mut actions = Vec::new();
         actions.push(command_palette::PaletteAction {
-            title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+            title: format!("About {}", state.runtime_options.product.display_name),
             subtitle: "Version, license, source, and open-core model.".into(),
             on_activate: Rc::new(move || show_about_dialog(hwnd)),
         });
@@ -3562,6 +3618,17 @@ mod imp {
                 }
             }),
         });
+        if state.runtime_options.companion.is_some() {
+            actions.push(command_palette::PaletteAction {
+                title: "Open Account / Sync".into(),
+                subtitle: "Account, activation, device, and sync controls.".into(),
+                on_activate: Rc::new(move || {
+                    if let Some(state) = unsafe { state_mut(hwnd) } {
+                        show_companion_dialog(hwnd, state);
+                    }
+                }),
+            });
+        }
         actions.push(command_palette::PaletteAction {
             title: "Edit Tiles".into(),
             subtitle: "Adjust tile titles, roles, connections, and startup commands.".into(),
@@ -3605,6 +3672,395 @@ mod imp {
             });
         }
         let _ = command_palette::present(hwnd, "Command Palette", actions);
+    }
+
+    fn show_companion_dialog(parent_hwnd: HWND, state: &mut AppWindowState) {
+        let Some(companion) = state.runtime_options.companion.clone() else {
+            return;
+        };
+        let snapshot = companion.snapshot();
+        let body = companion_snapshot_text(&snapshot);
+        unsafe {
+            MessageBoxW(
+                parent_hwnd,
+                wide(&body).as_ptr(),
+                wide(&snapshot.title).as_ptr(),
+                MB_OK,
+            );
+        }
+
+        if let Some(action) = preferred_followup_action(&snapshot) {
+            invoke_companion_action(parent_hwnd, companion, action);
+        }
+    }
+
+    fn companion_snapshot_text(snapshot: &CompanionPanelSnapshot) -> String {
+        let mut lines = vec![
+            format!("Status: {}", snapshot.status.label()),
+            snapshot.subtitle.clone(),
+            String::new(),
+        ];
+        append_companion_rows(&mut lines, "Account", &snapshot.account_rows);
+        append_companion_rows(&mut lines, "Sync", &snapshot.sync_rows);
+        append_companion_rows(&mut lines, "Devices and teams", &snapshot.device_rows);
+        if !snapshot.actions.is_empty() {
+            lines.push("Actions:".to_string());
+            for action in &snapshot.actions {
+                lines.push(format!(
+                    "- {}{}",
+                    action.label,
+                    action
+                        .detail
+                        .as_deref()
+                        .map(|d| format!(": {d}"))
+                        .unwrap_or_default()
+                ));
+            }
+            lines.push(String::new());
+            lines.push(
+                "Primary activation or refresh actions run after this dialog when applicable."
+                    .to_string(),
+            );
+        }
+        lines.join("\r\n")
+    }
+
+    fn append_companion_rows(
+        lines: &mut Vec<String>,
+        title: &str,
+        rows: &[crate::extension::CompanionRow],
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+        lines.push(format!("{title}:"));
+        for row in rows {
+            lines.push(format!("  {}: {}", row.label, row.value));
+            if let Some(detail) = &row.detail {
+                lines.push(format!("    {detail}"));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    fn preferred_followup_action(snapshot: &CompanionPanelSnapshot) -> Option<CompanionAction> {
+        snapshot
+            .actions
+            .iter()
+            .find(|action| action.input.is_some())
+            .or_else(|| {
+                snapshot
+                    .actions
+                    .iter()
+                    .find(|action| action.id == "refresh" || action.id == "sync_now")
+            })
+            .cloned()
+    }
+
+    fn invoke_companion_action(
+        parent_hwnd: HWND,
+        companion: std::sync::Arc<dyn CompanionIntegration>,
+        action: CompanionAction,
+    ) {
+        if let Some(url) = action.external_url.as_deref() {
+            unsafe {
+                MessageBoxW(
+                    parent_hwnd,
+                    wide(url).as_ptr(),
+                    wide(&action.label).as_ptr(),
+                    MB_OK,
+                );
+            }
+            return;
+        }
+        let input = if let Some(prompt) = action.input.as_ref() {
+            let Some(text) = prompt_text_input(
+                parent_hwnd,
+                &action.label,
+                &prompt.prompt,
+                prompt.placeholder.as_deref(),
+                !prompt.secret,
+            ) else {
+                return;
+            };
+            CompanionActionInput { text: Some(text) }
+        } else {
+            CompanionActionInput::default()
+        };
+        match companion.invoke(&action.id, input) {
+            Ok(result) => unsafe {
+                MessageBoxW(
+                    parent_hwnd,
+                    wide(&result.message).as_ptr(),
+                    wide(&action.label).as_ptr(),
+                    MB_OK,
+                );
+            },
+            Err(error) => unsafe {
+                MessageBoxW(
+                    parent_hwnd,
+                    wide(&error).as_ptr(),
+                    wide(&action.label).as_ptr(),
+                    MB_ICONWARNING | MB_OK,
+                );
+            },
+        }
+    }
+
+    fn prompt_text_input(
+        parent_hwnd: HWND,
+        title: &str,
+        prompt: &str,
+        placeholder: Option<&str>,
+        visible: bool,
+    ) -> Option<String> {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        if instance.is_null() {
+            return None;
+        }
+        let state = Box::new(PromptWindowState {
+            done: false,
+            submitted: false,
+            prompt: prompt.to_string(),
+            placeholder: placeholder.unwrap_or("").to_string(),
+            visible,
+            edit_hwnd: ptr::null_mut(),
+            result: None,
+        });
+        let state_ptr = Box::into_raw(state);
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                wide(COMPANION_PROMPT_CLASS).as_ptr(),
+                wide(title).as_ptr(),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                560,
+                190,
+                parent_hwnd,
+                ptr::null_mut(),
+                instance,
+                state_ptr.cast(),
+            )
+        };
+        if hwnd.is_null() {
+            unsafe {
+                drop(Box::from_raw(state_ptr));
+            }
+            return None;
+        }
+        unsafe {
+            EnableWindow(parent_hwnd, 0);
+            ShowWindow(hwnd, SW_SHOW);
+            UpdateWindow(hwnd);
+        }
+        let mut message = unsafe { mem::zeroed::<MSG>() };
+        loop {
+            if unsafe { (*state_ptr).done } {
+                break;
+            }
+            let got = unsafe { GetMessageW(&mut message, ptr::null_mut(), 0, 0) };
+            if got <= 0 {
+                break;
+            }
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        unsafe {
+            EnableWindow(parent_hwnd, 1);
+            SetForegroundWindow(parent_hwnd);
+            let state = Box::from_raw(state_ptr);
+            if state.submitted {
+                state.result.filter(|value| !value.trim().is_empty())
+            } else {
+                None
+            }
+        }
+    }
+
+    unsafe extern "system" fn prompt_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        match message {
+            WM_NCCREATE => {
+                let create = lparam as *const CREATESTRUCTW;
+                if create.is_null() {
+                    return 0;
+                }
+                let state_ptr = unsafe { (*create).lpCreateParams as *mut PromptWindowState };
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
+                }
+                1
+            }
+            WM_CREATE => {
+                if let Some(state) = unsafe { prompt_state_mut(hwnd) } {
+                    create_prompt_controls(hwnd, state);
+                }
+                0
+            }
+            WM_SIZE => {
+                if let Some(state) = unsafe { prompt_state_mut(hwnd) } {
+                    layout_prompt_controls(hwnd, state);
+                }
+                0
+            }
+            WM_COMMAND => {
+                let command_id = (wparam & 0xffff) as isize;
+                if let Some(state) = unsafe { prompt_state_mut(hwnd) } {
+                    match command_id {
+                        ID_PROMPT_OK => {
+                            state.result =
+                                Some(read_window_text(state.edit_hwnd).trim().to_string());
+                            state.submitted = true;
+                            state.done = true;
+                            unsafe { DestroyWindow(hwnd) };
+                        }
+                        ID_PROMPT_CANCEL => {
+                            state.done = true;
+                            unsafe { DestroyWindow(hwnd) };
+                        }
+                        _ => {}
+                    }
+                }
+                0
+            }
+            WM_CLOSE => {
+                if let Some(state) = unsafe { prompt_state_mut(hwnd) } {
+                    state.done = true;
+                }
+                unsafe { DestroyWindow(hwnd) };
+                0
+            }
+            WM_DESTROY => {
+                if let Some(state) = unsafe { prompt_state_mut(hwnd) } {
+                    state.done = true;
+                }
+                0
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
+    }
+
+    fn create_prompt_controls(hwnd: HWND, state: &mut PromptWindowState) {
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            &state.prompt,
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_PROMPT_LABEL,
+        );
+        let edit_style = WS_CHILD
+            | WS_VISIBLE
+            | WS_TABSTOP
+            | WS_BORDER
+            | ES_LEFT as u32
+            | ES_AUTOHSCROLL as u32
+            | if state.visible { 0 } else { ES_PASSWORD as u32 };
+        state.edit_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &state.placeholder,
+            edit_style,
+            0,
+            ID_PROMPT_EDIT,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "OK",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_PROMPT_OK,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Cancel",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_PROMPT_CANCEL,
+        );
+        let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        for control in [
+            unsafe { GetDlgItem(hwnd, ID_PROMPT_LABEL as i32) },
+            state.edit_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_PROMPT_OK as i32) },
+            unsafe { GetDlgItem(hwnd, ID_PROMPT_CANCEL as i32) },
+        ] {
+            if !control.is_null() {
+                unsafe {
+                    SendMessageW(control, WM_SETFONT, font as usize, 1);
+                }
+            }
+        }
+        layout_prompt_controls(hwnd, state);
+        unsafe {
+            SetFocus(state.edit_hwnd);
+        }
+    }
+
+    fn layout_prompt_controls(hwnd: HWND, state: &PromptWindowState) {
+        let mut rect = unsafe { mem::zeroed() };
+        unsafe {
+            GetClientRect(hwnd, &mut rect);
+        }
+        let width = rect.right - rect.left;
+        let content_width = width - (MARGIN * 2);
+        unsafe {
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_PROMPT_LABEL as i32),
+                ptr::null_mut(),
+                MARGIN,
+                MARGIN,
+                content_width,
+                44,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.edit_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                MARGIN + 50,
+                content_width,
+                FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_PROMPT_OK as i32),
+                ptr::null_mut(),
+                width - MARGIN - 196,
+                MARGIN + 90,
+                88,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_PROMPT_CANCEL as i32),
+                ptr::null_mut(),
+                width - MARGIN - 96,
+                MARGIN + 90,
+                96,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+        }
+    }
+
+    unsafe fn prompt_state_mut(hwnd: HWND) -> Option<&'static mut PromptWindowState> {
+        let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut PromptWindowState;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut *ptr })
+        }
     }
 
     fn show_about_dialog(parent_hwnd: HWND) {
@@ -4196,6 +4652,11 @@ mod imp {
 #[cfg(target_os = "windows")]
 pub fn run() -> ExitCode {
     imp::run()
+}
+
+#[cfg(target_os = "windows")]
+pub fn run_with_options(options: crate::extension::RuntimeOptions) -> ExitCode {
+    imp::run_with_options(options)
 }
 
 #[cfg(target_os = "windows")]

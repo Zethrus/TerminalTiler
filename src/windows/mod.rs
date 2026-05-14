@@ -14,3 +14,7 @@ pub mod wsl;
 pub fn run() -> std::process::ExitCode {
     app::run()
 }
+
+pub fn run_with_options(options: crate::extension::RuntimeOptions) -> std::process::ExitCode {
+    app::run_with_options(options)
+}

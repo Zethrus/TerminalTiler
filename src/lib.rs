@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 mod app;
 mod dropped_paths;
+pub mod extension;
 mod logging;
 mod model;
 pub mod open_core;
@@ -28,10 +29,20 @@ pub fn run() -> adw::glib::ExitCode {
     app::run()
 }
 
+#[cfg(target_os = "linux")]
+pub fn run_with_options(options: extension::RuntimeOptions) -> adw::glib::ExitCode {
+    app::run_with_options(options)
+}
+
 /// Public entrypoint for launching the TerminalTiler application.
 #[cfg(target_os = "windows")]
 pub fn run() -> std::process::ExitCode {
     windows::run()
+}
+
+#[cfg(target_os = "windows")]
+pub fn run_with_options(options: extension::RuntimeOptions) -> std::process::ExitCode {
+    windows::run_with_options(options)
 }
 
 /// Public entrypoint for launching the TerminalTiler application.

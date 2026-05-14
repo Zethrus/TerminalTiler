@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::extension::RuntimeOptions;
 use crate::logging;
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::PreferenceStore;
@@ -15,6 +16,10 @@ use crate::ui::window;
 pub const APP_ID: &str = "dev.zethrus.terminaltiler";
 
 pub fn run() -> adw::glib::ExitCode {
+    run_with_options(RuntimeOptions::default())
+}
+
+pub fn run_with_options(options: RuntimeOptions) -> adw::glib::ExitCode {
     logging::init();
     logging::info("application startup");
     crate::platform::configure_webkit_process_environment();
@@ -22,7 +27,8 @@ pub fn run() -> adw::glib::ExitCode {
     let (tray_tx, tray_rx) = mpsc::channel();
     let tray_rx = Rc::new(RefCell::new(Some(tray_rx)));
     let tray_controller = tray::TrayController::start(tray_tx);
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    let app_id = options.product.app_id.as_deref().unwrap_or(APP_ID);
+    let app = adw::Application::builder().application_id(app_id).build();
 
     {
         let tray_rx = tray_rx.clone();
@@ -36,9 +42,10 @@ pub fn run() -> adw::glib::ExitCode {
     }
     {
         let tray_controller = tray_controller.clone();
+        let options = options.clone();
         app.connect_activate(move |app| {
             logging::info("application activated");
-            let _ = ensure_main_window(app, &tray_controller);
+            let _ = ensure_main_window(app, &tray_controller, &options);
         });
     }
     {
@@ -74,10 +81,12 @@ fn handle_tray_command(
 ) {
     match command {
         tray::TrayCommand::Show => {
-            let _ = ensure_main_window(app, tray_controller);
+            let options = RuntimeOptions::default();
+            let _ = ensure_main_window(app, tray_controller, &options);
         }
         tray::TrayCommand::OpenSettings => {
-            if let Some(window) = ensure_main_window(app, tray_controller)
+            let options = RuntimeOptions::default();
+            if let Some(window) = ensure_main_window(app, tray_controller, &options)
                 && let Err(error) =
                     gtk::prelude::WidgetExt::activate_action(&window, "win.open-settings", None)
             {
@@ -109,6 +118,7 @@ fn handle_tray_command(
 fn ensure_main_window(
     app: &adw::Application,
     tray_controller: &tray::TrayController,
+    options: &RuntimeOptions,
 ) -> Option<adw::ApplicationWindow> {
     if let Some(window) = primary_window(app) {
         restore_window(&window);
@@ -132,6 +142,7 @@ fn ensure_main_window(
         session_outcome.session,
         session_outcome.warning,
         tray_controller.clone(),
+        options.clone(),
     );
 
     let window = primary_window(app);
