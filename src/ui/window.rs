@@ -3829,6 +3829,7 @@ fn present_detached_workspace_window(
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
+    window_shell.append(&header);
     window_shell.append(&page_shell);
 
     let window = adw::ApplicationWindow::builder()
@@ -3839,7 +3840,6 @@ fn present_detached_workspace_window(
         .resizable(true)
         .content(&window_shell)
         .build();
-    window.set_titlebar(Some(&header));
     window.add_css_class("window-shell");
     apply_shell_profile(&header, &window, &preset);
     runtime.apply_appearance(
@@ -4007,6 +4007,10 @@ fn present_detached_workspace_window(
     }
 
     window.present();
+    logging::info(format!(
+        "presented detached workspace window {} for tab {}",
+        window_id, tab_id
+    ));
 }
 
 fn finalize_detached_workspace_close(

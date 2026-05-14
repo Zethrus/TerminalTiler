@@ -203,12 +203,21 @@ fn workspace_tab_context_menu_reuses_terminal_context_styles() {
             && WINDOW_RS.contains("context_menu::action_button(\"Reattach\", None)")
             && WINDOW_RS.contains("context_menu::popover(&shell)")
             && WINDOW_RS.contains("context_menu::popover(&title_shell)")
-            && WINDOW_RS.contains("window.set_titlebar(Some(&header))")
+            && WINDOW_RS.matches("window_shell.append(&header)").count() >= 2
             && CONTEXT_MENU_RS.contains("terminal-context-popover")
             && CONTEXT_MENU_RS.contains("terminal-context-menu")
             && CONTEXT_MENU_RS.contains("terminal-context-action")
             && CONTEXT_MENU_RS.contains("terminal-context-label"),
         "workspace tab Detach and detached header Reattach should use the shared terminal-context menu styling hooks"
+    );
+}
+
+#[test]
+fn detached_workspace_window_keeps_header_in_adw_content() {
+    assert!(
+        !WINDOW_RS.contains("window.set_titlebar(Some(&header))")
+            && WINDOW_RS.contains("presented detached workspace window"),
+        "detached AdwApplicationWindow should keep its header inside content instead of using unsupported gtk_window_set_titlebar"
     );
 }
 
