@@ -3,6 +3,7 @@ mod app;
 mod dropped_paths;
 mod logging;
 mod model;
+pub mod open_core;
 mod platform;
 mod product;
 mod services;
