@@ -3,6 +3,7 @@ use gtk::gio;
 
 use crate::logging;
 use crate::product;
+use crate::ui::icons::{self, name as icon_name};
 
 pub fn present(window: &adw::ApplicationWindow) {
     let dialog = adw::Dialog::new();
@@ -66,9 +67,11 @@ pub fn present(window: &adw::ApplicationWindow) {
     links.append(&link_button("Issues", product::PRODUCT_ISSUES_URL));
     content.append(&links);
 
-    let close_button = gtk::Button::with_label("Close");
-    close_button.add_css_class("pill-button");
-    close_button.add_css_class("suggested-action");
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &["pill-button", "suggested-action"],
+    );
     close_button.set_halign(gtk::Align::End);
     content.append(&close_button);
 
@@ -86,9 +89,7 @@ pub fn present(window: &adw::ApplicationWindow) {
 }
 
 fn link_button(label: &str, uri: &'static str) -> gtk::Button {
-    let button = gtk::Button::with_label(label);
-    button.add_css_class("pill-button");
-    button.add_css_class("flat");
+    let button = icons::labeled_button(label, icon_name::WEB, &["pill-button", "flat"]);
     button.set_tooltip_text(Some(uri));
     button.connect_clicked(move |_| {
         if let Err(error) =

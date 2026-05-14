@@ -66,6 +66,22 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button:active
   border-color: rgba(240, 179, 75, 0.32);
 }
 
+.button-icon-label-content {
+  min-height: 0;
+}
+
+.button-leading-icon {
+  opacity: 0.88;
+}
+
+button:hover .button-leading-icon {
+  opacity: 1;
+}
+
+button.destructive-button .button-leading-icon {
+  color: currentColor;
+}
+
 window.profile-comfortable headerbar.app-headerbar {
   min-height: 48px;
   padding: 5px 12px;

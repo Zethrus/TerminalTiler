@@ -20,6 +20,7 @@ use crate::services::layout_editor::{
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
+use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{layout_tree, tile_view, web_tile};
 
 const ACTIVE_TILE_CLASS: &str = "is-active-tile";
@@ -953,17 +954,12 @@ pub fn build_with_layout_change_handler(
         .hexpand(false)
         .css_classes(["workspace-url-entry"])
         .build();
-    let url_reload_button = gtk::Button::builder()
-        .label("Reload")
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let url_reload_button =
+        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
     let runbook_selector = gtk::ComboBoxText::new();
     runbook_selector.add_css_class("surface-select-control");
-    let runbook_button = gtk::Button::builder()
-        .label("Run")
-        .css_classes(["flat", "surface-button"])
-        .sensitive(false)
-        .build();
+    let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
+    runbook_button.set_sensitive(false);
     let layout_host = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -1022,10 +1018,8 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let add_web_tile_button = gtk::Button::builder()
-        .label("Add Web Tile")
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let add_web_tile_button =
+        icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
     {
         let runtime = runtime.clone();
         add_web_tile_button.connect_clicked(move |_| {
@@ -1054,10 +1048,8 @@ pub fn build_with_layout_change_handler(
         .width_chars(18)
         .css_classes(["workspace-broadcast-entry"])
         .build();
-    let broadcast_button = gtk::Button::builder()
-        .label("Send")
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let broadcast_button =
+        icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
 
     {
         let broadcast_target = broadcast_target.clone();
@@ -1129,14 +1121,13 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let alert_button = gtk::Button::builder()
-        .label("Alerts (0)")
-        .css_classes(["flat", "surface-button"])
-        .build();
-    let mark_all_read_button = gtk::Button::builder()
-        .label("Mark All Read")
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let alert_button =
+        icons::labeled_button("Alerts (0)", icon_name::ALERTS, &["flat", "surface-button"]);
+    let mark_all_read_button = icons::labeled_button(
+        "Mark All Read",
+        icon_name::APPLY,
+        &["flat", "surface-button"],
+    );
     let alert_list = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
@@ -1222,10 +1213,11 @@ fn bind_alert_ui(
     let runtime = runtime.clone();
     let alert_store_for_refresh = alert_store.clone();
     let refresh = Rc::new(move || {
-        alert_button.set_label(&format!(
-            "Alerts ({})",
-            alert_store_for_refresh.unread_count()
-        ));
+        icons::set_button_icon_label(
+            &alert_button,
+            &format!("Alerts ({})", alert_store_for_refresh.unread_count()),
+            icon_name::ALERTS,
+        );
         while let Some(child) = alert_list.first_child() {
             alert_list.remove(&child);
         }
@@ -1259,10 +1251,8 @@ fn bind_alert_ui(
                 .spacing(6)
                 .build();
             if let Some(pane_id) = alert.pane_id.clone() {
-                let jump_button = gtk::Button::builder()
-                    .label("Jump")
-                    .css_classes(["flat", "surface-button"])
-                    .build();
+                let jump_button =
+                    icons::labeled_button("Jump", icon_name::OPEN, &["flat", "surface-button"]);
                 let runtime_for_jump = runtime.clone();
                 let alert_store = alert_store_for_refresh.clone();
                 let alert_id = alert.id;
@@ -1274,10 +1264,11 @@ fn bind_alert_ui(
                 actions.append(&jump_button);
 
                 if alert.allows_reconnect {
-                    let reconnect_button = gtk::Button::builder()
-                        .label("Reconnect")
-                        .css_classes(["flat", "surface-button"])
-                        .build();
+                    let reconnect_button = icons::labeled_button(
+                        "Reconnect",
+                        icon_name::RECOVER,
+                        &["flat", "surface-button"],
+                    );
                     let runtime_for_reconnect = runtime.clone();
                     let alert_store = alert_store_for_refresh.clone();
                     let alert_id = alert.id;
@@ -1289,11 +1280,12 @@ fn bind_alert_ui(
                     actions.append(&reconnect_button);
                 }
             }
-            let mark_read_button = gtk::Button::builder()
-                .label(if alert.unread { "Mark Read" } else { "Read" })
-                .css_classes(["flat", "surface-button"])
-                .sensitive(alert.unread)
-                .build();
+            let mark_read_button = icons::labeled_button(
+                if alert.unread { "Mark Read" } else { "Read" },
+                icon_name::APPLY,
+                &["flat", "surface-button"],
+            );
+            mark_read_button.set_sensitive(alert.unread);
             let alert_store = alert_store_for_refresh.clone();
             let alert_id = alert.id;
             mark_read_button.connect_clicked(move |_| {
@@ -1521,12 +1513,9 @@ fn present_runbook_dialog(
         .spacing(8)
         .halign(gtk::Align::End)
         .build();
-    let cancel_button = gtk::Button::with_label("Cancel");
-    cancel_button.add_css_class("pill-button");
-    cancel_button.add_css_class("flat");
-    let run_button = gtk::Button::with_label("Run");
-    run_button.add_css_class("pill-button");
-    run_button.add_css_class("suggested-action");
+    let cancel_button = icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
+    let run_button =
+        icons::labeled_button("Run", icon_name::RUN, &["pill-button", "suggested-action"]);
     action_row.append(&cancel_button);
     action_row.append(&run_button);
     area.append(&action_row);

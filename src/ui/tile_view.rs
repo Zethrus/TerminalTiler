@@ -17,6 +17,7 @@ use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::header_actions::build_header_icon_button;
+use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_drag::TileDragPayload;
 
 const HEADER_BADGE_MAX_CHARS: i32 = 12;
@@ -137,16 +138,16 @@ pub fn build(
         gtk::pango::EllipsizeMode::Start,
     );
 
-    let recovery_button = build_header_icon_button("system-run-symbolic", "Recover pane");
+    let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
     recovery_button.add_css_class("tile-recovery-action");
     recovery_button.set_visible(false);
     recovery_button.set_sensitive(false);
 
-    let snippet_button = build_header_icon_button("insert-text-symbolic", "Run CLI snippet");
+    let snippet_button = build_header_icon_button(icon_name::SNIPPET, "Run CLI snippet");
     snippet_button.add_css_class("tile-snippet-action");
 
     let close_button = build_header_icon_button(
-        "window-close-symbolic",
+        icon_name::CLOSE,
         if can_close {
             "Close tile"
         } else {
@@ -762,11 +763,8 @@ fn show_snippet_variable_form(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .build();
-    let back_button = gtk::Button::builder()
-        .label("Back")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let back_button = icons::labeled_button("Back", icon_name::BACK, &["flat", "surface-button"]);
+    back_button.set_focus_on_click(false);
     {
         let popover = popover.clone();
         let snippets = snippets.clone();
@@ -783,11 +781,8 @@ fn show_snippet_variable_form(
     }
     actions.append(&back_button);
 
-    let run_button = gtk::Button::builder()
-        .label("Run")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let run_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
+    run_button.set_focus_on_click(false);
     {
         let snippet = snippet.clone();
         let popover = popover.clone();
@@ -1157,11 +1152,12 @@ fn build_terminal_recovery_popover(
             .build(),
     );
 
-    let reconnect_button = gtk::Button::builder()
-        .label("Reconnect Session")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let reconnect_button = icons::labeled_button(
+        "Reconnect Session",
+        icon_name::RECOVER,
+        &["flat", "surface-button"],
+    );
+    reconnect_button.set_focus_on_click(false);
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1173,11 +1169,12 @@ fn build_terminal_recovery_popover(
     }
     shell.append(&reconnect_button);
 
-    let local_shell_button = gtk::Button::builder()
-        .label("Open Local Shell")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let local_shell_button = icons::labeled_button(
+        "Open Local Shell",
+        icon_name::TERMINAL,
+        &["flat", "surface-button"],
+    );
+    local_shell_button.set_focus_on_click(false);
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1307,9 +1304,7 @@ fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {
     text.buffer().set_text(transcript);
     scroller.set_child(Some(&text));
     area.append(&scroller);
-    let close_button = gtk::Button::with_label("Close");
-    close_button.add_css_class("pill-button");
-    close_button.add_css_class("flat");
+    let close_button = icons::labeled_button("Close", icon_name::CLOSE, &["pill-button", "flat"]);
     close_button.set_halign(gtk::Align::End);
     area.append(&close_button);
     dialog.set_child(Some(&area));

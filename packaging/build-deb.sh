@@ -23,7 +23,7 @@ fi
 echo "packaging Debian artifact version $PACKAGE_VERSION"
 
 rm -rf "$STAGE_ROOT"
-mkdir -p "$STAGE_ROOT/DEBIAN" "$APP_ROOT/bin" "$STAGE_ROOT/usr/bin" "$STAGE_ROOT/usr/share/applications" "$STAGE_ROOT/usr/share/icons/hicolor/scalable/apps" "$STAGE_ROOT/usr/share/metainfo"
+mkdir -p "$STAGE_ROOT/DEBIAN" "$APP_ROOT/bin" "$APP_ROOT/share/hover-icons" "$STAGE_ROOT/usr/bin" "$STAGE_ROOT/usr/share/applications" "$STAGE_ROOT/usr/share/icons/hicolor/scalable/apps" "$STAGE_ROOT/usr/share/metainfo"
 
 cp "$ROOT_DIR/packaging/deb/DEBIAN/control" "$STAGE_ROOT/DEBIAN/control"
 cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.desktop" "$STAGE_ROOT/usr/share/applications/dev.zethrus.terminaltiler.desktop"
@@ -32,6 +32,7 @@ cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.appdata.xml" "$STAGE_ROOT/usr/
 set_control_version "$STAGE_ROOT/DEBIAN/control"
 set_appdata_release "$STAGE_ROOT/usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
 cp "$TARGET_BIN" "$APP_ROOT/bin/terminaltiler-bin"
+cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_ROOT/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_ROOT/bin/terminaltiler"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$STAGE_ROOT/usr/bin/terminaltiler"
 sed -i "s#APP_ROOT=\"\$(cd \"\$(dirname \"\$0\")/..\" && pwd)\"#APP_ROOT=\"/opt/terminaltiler\"#" "$STAGE_ROOT/usr/bin/terminaltiler"

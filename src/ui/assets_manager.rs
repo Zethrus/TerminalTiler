@@ -20,6 +20,7 @@ use crate::services::assets_editor::{
 };
 use crate::storage::asset_store::AssetStore;
 use crate::ui::dialog_smoke;
+use crate::ui::icons::{self, name as icon_name};
 
 #[derive(Clone)]
 struct AssetsManagerState {
@@ -86,10 +87,11 @@ pub fn present(
     content.set_margin_end(16);
     root.append(&content);
 
-    let close_button = gtk::Button::with_label("Close");
-    close_button.add_css_class("pill-button");
-    close_button.add_css_class("ghost-link-button");
-    close_button.add_css_class("settings-close-button");
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &["pill-button", "ghost-link-button", "settings-close-button"],
+    );
     let footer = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .halign(gtk::Align::End)
@@ -130,15 +132,11 @@ pub fn present(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    let global_button = gtk::Button::builder()
-        .label("Global defaults")
-        .css_classes(["pill-button"])
-        .build();
-    let workspace_button = gtk::Button::builder()
-        .label("Workspace overrides")
-        .css_classes(["pill-button"])
-        .sensitive(workspace_root.is_some())
-        .build();
+    let global_button =
+        icons::labeled_button("Global defaults", icon_name::ASSETS, &["pill-button"]);
+    let workspace_button =
+        icons::labeled_button("Workspace overrides", icon_name::FOLDER, &["pill-button"]);
+    workspace_button.set_sensitive(workspace_root.is_some());
     scope_row.append(&global_button);
     scope_row.append(&workspace_button);
     header.append(&scope_row);
@@ -275,14 +273,8 @@ pub fn present(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
-    let reload_button = gtk::Button::builder()
-        .label("Reload")
-        .css_classes(["flat"])
-        .build();
-    let save_button = gtk::Button::builder()
-        .label("Save")
-        .css_classes(["suggested-action"])
-        .build();
+    let reload_button = icons::labeled_button("Reload", icon_name::REFRESH, &["flat"]);
+    let save_button = icons::labeled_button("Save", icon_name::SAVE, &["suggested-action"]);
     actions.append(&reload_button);
     actions.append(&save_button);
     content.append(&actions);
@@ -2277,10 +2269,8 @@ fn render_section_header<F>(
             .build(),
     );
     row.append(&copy);
-    let add_button = gtk::Button::builder()
-        .label(format!("New {}", section.title().trim_end_matches('s')))
-        .css_classes(["pill-button"])
-        .build();
+    let add_label = format!("New {}", section.title().trim_end_matches('s'));
+    let add_button = icons::labeled_button(&add_label, icon_name::ADD, &["pill-button"]);
     let state = state.clone();
     let dialog = dialog.clone();
     let refresh_pages = refresh_pages.clone();
@@ -2361,10 +2351,7 @@ where
     header.append(&source_badge(badge));
 
     if let Some(on_duplicate) = on_duplicate {
-        let button = gtk::Button::builder()
-            .label("Duplicate")
-            .css_classes(["flat"])
-            .build();
+        let button = icons::labeled_button("Duplicate", icon_name::COPY, &["flat"]);
         let state = state.clone();
         let dialog = dialog.clone();
         let refresh_pages = refresh_pages.clone();
@@ -2393,10 +2380,11 @@ where
         header.append(&button);
     }
 
-    let remove_button = gtk::Button::builder()
-        .label(remove_label)
-        .css_classes(["flat", "destructive-button"])
-        .build();
+    let remove_button = icons::labeled_button(
+        remove_label,
+        icon_name::DELETE,
+        &["flat", "destructive-button"],
+    );
     let state = state.clone();
     let dialog = dialog.clone();
     let refresh_token = refresh_token.clone();
@@ -2471,11 +2459,8 @@ fn append_override_button<F>(
 ) where
     F: Fn(&mut AssetsManagerState) + Clone + 'static,
 {
-    let button = gtk::Button::builder()
-        .label("Override in workspace")
-        .css_classes(["pill-button"])
-        .halign(gtk::Align::Start)
-        .build();
+    let button = icons::labeled_button("Override in workspace", icon_name::EDIT, &["pill-button"]);
+    button.set_halign(gtk::Align::Start);
     let state = state.clone();
     let dialog = dialog.clone();
     let refresh_pages = refresh_pages.clone();
@@ -2621,11 +2606,8 @@ fn append_output_helpers_editor(
     helpers: &[OutputHelperRule],
 ) {
     let section = nested_section("Output helpers");
-    let add = gtk::Button::builder()
-        .label("Add helper")
-        .css_classes(["flat"])
-        .halign(gtk::Align::Start)
-        .build();
+    let add = icons::labeled_button("Add helper", icon_name::ADD, &["flat"]);
+    add.set_halign(gtk::Align::Start);
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
@@ -2752,11 +2734,12 @@ fn append_output_helpers_editor(
         toggle_row.append(&toggle);
         helper_row.append(&toggle_row);
 
-        let remove_button = gtk::Button::builder()
-            .label("Remove helper")
-            .css_classes(["flat", "destructive-button"])
-            .halign(gtk::Align::Start)
-            .build();
+        let remove_button = icons::labeled_button(
+            "Remove helper",
+            icon_name::DELETE,
+            &["flat", "destructive-button"],
+        );
+        remove_button.set_halign(gtk::Align::Start);
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
@@ -2908,11 +2891,8 @@ fn append_runbook_variables_editor(
     variables: &[RunbookVariable],
 ) {
     let section = nested_section("Variables");
-    let add = gtk::Button::builder()
-        .label("Add variable")
-        .css_classes(["flat"])
-        .halign(gtk::Align::Start)
-        .build();
+    let add = icons::labeled_button("Add variable", icon_name::ADD, &["flat"]);
+    add.set_halign(gtk::Align::Start);
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
@@ -3025,11 +3005,12 @@ fn append_runbook_variables_editor(
         });
         toggle_row.append(&toggle);
         variable_row.append(&toggle_row);
-        let remove = gtk::Button::builder()
-            .label("Remove variable")
-            .css_classes(["flat", "destructive-button"])
-            .halign(gtk::Align::Start)
-            .build();
+        let remove = icons::labeled_button(
+            "Remove variable",
+            icon_name::DELETE,
+            &["flat", "destructive-button"],
+        );
+        remove.set_halign(gtk::Align::Start);
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
@@ -3069,11 +3050,8 @@ fn append_snippet_variables_editor(
     variables: &[SnippetVariable],
 ) {
     let section = nested_section("Variables");
-    let add = gtk::Button::builder()
-        .label("Add argument")
-        .css_classes(["flat"])
-        .halign(gtk::Align::Start)
-        .build();
+    let add = icons::labeled_button("Add argument", icon_name::ADD, &["flat"]);
+    add.set_halign(gtk::Align::Start);
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
@@ -3164,11 +3142,12 @@ fn append_snippet_variables_editor(
                     .default_value = value;
             },
         );
-        let remove = gtk::Button::builder()
-            .label("Remove argument")
-            .css_classes(["flat", "destructive-button"])
-            .halign(gtk::Align::Start)
-            .build();
+        let remove = icons::labeled_button(
+            "Remove argument",
+            icon_name::DELETE,
+            &["flat", "destructive-button"],
+        );
+        remove.set_halign(gtk::Align::Start);
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
@@ -3208,11 +3187,8 @@ fn append_runbook_steps_editor(
     steps: &[RunbookStep],
 ) {
     let section = nested_section("Steps");
-    let add = gtk::Button::builder()
-        .label("Add step")
-        .css_classes(["flat"])
-        .halign(gtk::Align::Start)
-        .build();
+    let add = icons::labeled_button("Add step", icon_name::ADD, &["flat"]);
+    add.set_halign(gtk::Align::Start);
     let state_add = state.clone();
     let refresh_status_add = refresh_status.clone();
     let refresh_pages_add = refresh_pages.clone();
@@ -3307,11 +3283,12 @@ fn append_runbook_steps_editor(
         });
         toggle_row.append(&toggle);
         step_row.append(&toggle_row);
-        let remove = gtk::Button::builder()
-            .label("Remove step")
-            .css_classes(["flat", "destructive-button"])
-            .halign(gtk::Align::Start)
-            .build();
+        let remove = icons::labeled_button(
+            "Remove step",
+            icon_name::DELETE,
+            &["flat", "destructive-button"],
+        );
+        remove.set_halign(gtk::Align::Start);
         let remove_state = state.clone();
         let remove_refresh_status = refresh_status.clone();
         let remove_refresh_pages = refresh_pages.clone();
@@ -3440,17 +3417,33 @@ fn make_nav_button(
     page_name: &'static str,
     title: &'static str,
 ) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .label(title)
-        .halign(gtk::Align::Fill)
-        .css_classes(["pill-button", "flat", "asset-nav-button"])
-        .build();
+    let button = icons::labeled_button(
+        title,
+        asset_nav_icon(page_name),
+        &["pill-button", "flat", "asset-nav-button"],
+    );
+    button.set_halign(gtk::Align::Fill);
+    icons::set_button_icon_label_start(&button, title, asset_nav_icon(page_name));
     let stack = stack.clone();
     button.connect_clicked(move |_| {
         stack.set_visible_child_name(page_name);
     });
     sidebar.append(&button);
     button
+}
+
+fn asset_nav_icon(page_name: &str) -> &'static str {
+    match page_name {
+        "overview" => icon_name::WORKSPACES,
+        "connections" => icon_name::BROADCAST,
+        "hosts" => icon_name::TERMINAL,
+        "groups" => icon_name::ASSETS,
+        "roles" => icon_name::SETTINGS,
+        "runbooks" => icon_name::RUN,
+        "snippets" => icon_name::SNIPPET,
+        "raw" => icon_name::EDIT,
+        _ => icon_name::ASSETS,
+    }
 }
 
 fn sync_nav_buttons(stack: &gtk::Stack, buttons: &[gtk::Button; 8]) {
@@ -3552,12 +3545,12 @@ where
         .spacing(8)
         .halign(gtk::Align::End)
         .build();
-    let stay_button = gtk::Button::with_label("Stay Here");
-    stay_button.add_css_class("pill-button");
-    stay_button.add_css_class("flat");
-    let discard_button = gtk::Button::with_label("Discard Invalid Text");
-    discard_button.add_css_class("pill-button");
-    discard_button.add_css_class("destructive-action");
+    let stay_button = icons::labeled_button("Stay Here", icon_name::BACK, &["pill-button", "flat"]);
+    let discard_button = icons::labeled_button(
+        "Discard Invalid Text",
+        icon_name::DELETE,
+        &["pill-button", "destructive-action"],
+    );
     actions.append(&stay_button);
     actions.append(&discard_button);
     content.append(&actions);
@@ -3609,12 +3602,13 @@ where
         .spacing(8)
         .halign(gtk::Align::End)
         .build();
-    let keep_button = gtk::Button::with_label("Keep Editing");
-    keep_button.add_css_class("pill-button");
-    keep_button.add_css_class("flat");
-    let discard_button = gtk::Button::with_label("Discard Changes");
-    discard_button.add_css_class("pill-button");
-    discard_button.add_css_class("destructive-action");
+    let keep_button =
+        icons::labeled_button("Keep Editing", icon_name::EDIT, &["pill-button", "flat"]);
+    let discard_button = icons::labeled_button(
+        "Discard Changes",
+        icon_name::DELETE,
+        &["pill-button", "destructive-action"],
+    );
     actions.append(&keep_button);
     actions.append(&discard_button);
     content.append(&actions);

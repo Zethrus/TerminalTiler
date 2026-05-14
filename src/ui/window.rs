@@ -18,6 +18,7 @@ use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
+use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, dialog_smoke, launch_screen, settings_dialog,
     workspace_view,
@@ -251,9 +252,11 @@ pub fn present(
             .xalign(0.0)
             .build(),
     );
-    let close_to_background_notice_button = gtk::Button::with_label("Open Settings");
-    close_to_background_notice_button.add_css_class("pill-button");
-    close_to_background_notice_button.add_css_class("suggested-action");
+    let close_to_background_notice_button = icons::labeled_button(
+        "Open Settings",
+        icon_name::SETTINGS,
+        &["pill-button", "suggested-action"],
+    );
     close_to_background_notice_button.set_valign(gtk::Align::Center);
     close_to_background_notice_row.append(&close_to_background_notice_button);
     close_to_background_notice.set_child(Some(&close_to_background_notice_row));
@@ -276,37 +279,35 @@ pub fn present(
         .build();
     window.add_css_class("window-shell");
 
-    let back_button = gtk::Button::with_label("Templates");
-    back_button.add_css_class("flat");
-    back_button.add_css_class("titlebar-action-button");
+    let back_button = icons::labeled_button(
+        "Templates",
+        icon_name::LAYOUT,
+        &["flat", "titlebar-action-button"],
+    );
     back_button.set_visible(false);
     header.pack_start(&back_button);
 
-    let fullscreen_button = gtk::Button::with_label("Fullscreen");
-    fullscreen_button.add_css_class("flat");
-    fullscreen_button.add_css_class("titlebar-action-button");
+    let fullscreen_button = icons::labeled_button(
+        "Fullscreen",
+        icon_name::FULLSCREEN,
+        &["flat", "titlebar-action-button"],
+    );
     fullscreen_button.set_tooltip_text(Some("Enter fullscreen"));
     fullscreen_button.set_visible(false);
     header.pack_end(&fullscreen_button);
 
-    let settings_button = gtk::Button::from_icon_name("preferences-system-symbolic");
-    if let Some(img) = settings_button.first_child() {
-        let _ = img.pango_context();
-    }
-    settings_button.add_css_class("flat");
-    settings_button.add_css_class("titlebar-action-button");
-    settings_button.add_css_class("titlebar-icon-button");
-    settings_button.set_tooltip_text(Some("Application settings"));
+    let settings_button = icons::icon_button(
+        icon_name::SETTINGS,
+        "Application settings",
+        &["flat", "titlebar-action-button", "titlebar-icon-button"],
+    );
     header.pack_end(&settings_button);
 
-    let assets_button = gtk::Button::from_icon_name("folder-saved-search-symbolic");
-    if let Some(img) = assets_button.first_child() {
-        let _ = img.pango_context();
-    }
-    assets_button.add_css_class("flat");
-    assets_button.add_css_class("titlebar-action-button");
-    assets_button.add_css_class("titlebar-icon-button");
-    assets_button.set_tooltip_text(Some("Assets manager"));
+    let assets_button = icons::icon_button(
+        icon_name::ASSETS,
+        "Assets manager",
+        &["flat", "titlebar-action-button", "titlebar-icon-button"],
+    );
     header.pack_end(&assets_button);
 
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
@@ -2638,9 +2639,11 @@ impl TitleChrome {
             .build();
         tabs_box.add_css_class("app-tab-strip");
 
-        let add_button = gtk::Button::with_label("+");
-        add_button.add_css_class("flat");
-        add_button.add_css_class("app-tab-add");
+        let add_button = icons::icon_button(
+            icon_name::ADD,
+            "New workspace tab",
+            &["flat", "app-tab-add"],
+        );
         root.append(&tabs_box);
         root.append(&add_button);
 
@@ -2686,12 +2689,12 @@ where
         .spacing(8)
         .halign(gtk::Align::End)
         .build();
-    let cancel_button = gtk::Button::with_label("Cancel");
-    cancel_button.add_css_class("pill-button");
-    cancel_button.add_css_class("flat");
-    let apply_button = gtk::Button::with_label("Apply");
-    apply_button.add_css_class("pill-button");
-    apply_button.add_css_class("suggested-action");
+    let cancel_button = icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
+    let apply_button = icons::labeled_button(
+        "Apply",
+        icon_name::APPLY,
+        &["pill-button", "suggested-action"],
+    );
     action_row.append(&cancel_button);
     action_row.append(&apply_button);
     content.append(&action_row);
@@ -3131,7 +3134,7 @@ fn sync_fullscreen_chrome(
     title_widget.set_visible(!is_fullscreen);
     fullscreen_button.set_visible(true);
     if is_fullscreen {
-        fullscreen_button.set_label("Exit Fullscreen");
+        icons::set_button_icon_label(fullscreen_button, "Exit Fullscreen", icon_name::RESTORE);
         fullscreen_button.set_tooltip_text(Some(&format!(
             "Exit fullscreen ({})",
             shortcut_display_label(
@@ -3141,7 +3144,7 @@ fn sync_fullscreen_chrome(
             )
         )));
     } else {
-        fullscreen_button.set_label("Fullscreen");
+        icons::set_button_icon_label(fullscreen_button, "Fullscreen", icon_name::FULLSCREEN);
         fullscreen_button.set_tooltip_text(Some(&format!(
             "Enter fullscreen ({})",
             shortcut_display_label(

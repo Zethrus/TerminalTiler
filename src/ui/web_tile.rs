@@ -12,6 +12,7 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::ui::header_actions::build_header_icon_button;
+use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_drag::TileDragPayload;
 
 const HEADER_BADGE_MAX_CHARS: i32 = 4;
@@ -115,10 +116,8 @@ pub fn build(
         gtk::pango::EllipsizeMode::End,
     );
 
-    let settings_button = build_header_icon_button(
-        "preferences-system-symbolic",
-        "Edit URL and refresh settings",
-    );
+    let settings_button =
+        build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
     let settings_popover = gtk::Popover::new();
     settings_popover.add_css_class("web-tile-settings-popover");
     settings_popover.set_autohide(true);
@@ -157,16 +156,12 @@ pub fn build(
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .build();
-    let reload_button = gtk::Button::builder()
-        .label("Reload")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
-    let apply_button = gtk::Button::builder()
-        .label("Apply")
-        .focus_on_click(false)
-        .css_classes(["flat", "surface-button"])
-        .build();
+    let reload_button =
+        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
+    reload_button.set_focus_on_click(false);
+    let apply_button =
+        icons::labeled_button("Apply", icon_name::APPLY, &["flat", "surface-button"]);
+    apply_button.set_focus_on_click(false);
     settings_actions.append(&reload_button);
     settings_actions.append(&apply_button);
     settings_box.append(&settings_actions);
@@ -241,7 +236,7 @@ pub fn build(
     }
 
     let close_button = build_header_icon_button(
-        "window-close-symbolic",
+        icon_name::CLOSE,
         if can_close {
             "Close tile"
         } else {

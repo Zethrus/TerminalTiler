@@ -2,6 +2,8 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
+use crate::ui::icons::{self, name as icon_name};
+
 #[derive(Clone)]
 pub struct PaletteAction {
     pub title: String,
@@ -27,6 +29,7 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
 
     let search = gtk::Entry::builder()
         .placeholder_text("Search commands")
+        .primary_icon_name(icon_name::SEARCH)
         .hexpand(true)
         .build();
     content.append(&search);
@@ -42,9 +45,7 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
     scroller.set_child(Some(&list));
     content.append(&scroller);
 
-    let close_button = gtk::Button::with_label("Close");
-    close_button.add_css_class("pill-button");
-    close_button.add_css_class("flat");
+    let close_button = icons::labeled_button("Close", icon_name::CLOSE, &["pill-button", "flat"]);
     close_button.set_halign(gtk::Align::End);
     content.append(&close_button);
     dialog.set_child(Some(&content));

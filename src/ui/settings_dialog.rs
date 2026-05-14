@@ -8,6 +8,7 @@ use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::product;
 use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_smoke;
+use crate::ui::icons::{self, name as icon_name};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsState {
@@ -82,14 +83,14 @@ fn sync_shortcut_capture_label(label: &gtk::Label, shortcut: &str) {
 
 fn set_recorder_idle(record_button: &gtk::Button, status: &gtk::Label) {
     record_button.remove_css_class("is-recording");
-    record_button.set_label("Record");
+    icons::set_button_icon_label(record_button, "Record", icon_name::RECORD);
     status.set_visible(false);
     status.set_label("");
 }
 
 fn set_recorder_recording(record_button: &gtk::Button, status: &gtk::Label) {
     record_button.add_css_class("is-recording");
-    record_button.set_label("Press keys...");
+    icons::set_button_icon_label(record_button, "Press keys...", icon_name::KEYBOARD);
     status.set_label("Listening for a shortcut. Press Esc to cancel.");
     status.set_visible(true);
 }
@@ -245,10 +246,11 @@ pub fn present(
     dialog.set_content_height(default_height);
     dialog_smoke::register_settings_dialog(&dialog);
     sync_dialog_chrome_classes(window, &dialog);
-    let close_button = gtk::Button::with_label("Close");
-    close_button.add_css_class("pill-button");
-    close_button.add_css_class("ghost-link-button");
-    close_button.add_css_class("settings-close-button");
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &["pill-button", "ghost-link-button", "settings-close-button"],
+    );
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -312,10 +314,11 @@ pub fn present(
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
     let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
     let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
-    let reset_button = gtk::Button::with_label("Reset Defaults");
-    reset_button.add_css_class("pill-button");
-    reset_button.add_css_class("secondary-button");
-    reset_button.add_css_class("settings-reset-button");
+    let reset_button = icons::labeled_button(
+        "Reset Defaults",
+        icon_name::RESET,
+        &["pill-button", "secondary-button", "settings-reset-button"],
+    );
     let sync_reset_button: Rc<dyn Fn()> = {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -645,10 +648,15 @@ pub fn present(
         &fullscreen_capture_label,
         current_fullscreen_shortcut.borrow().as_str(),
     );
-    let fullscreen_record_button = gtk::Button::with_label("Record");
-    fullscreen_record_button.add_css_class("pill-button");
-    fullscreen_record_button.add_css_class("secondary-button");
-    fullscreen_record_button.add_css_class("settings-shortcut-record-button");
+    let fullscreen_record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
     let fullscreen_control =
         build_shortcut_capture_control(&fullscreen_capture_label, &fullscreen_record_button);
     let fullscreen_recording = Rc::new(Cell::new(false));
@@ -748,10 +756,15 @@ pub fn present(
         &density_capture_label,
         current_density_shortcut.borrow().as_str(),
     );
-    let density_record_button = gtk::Button::with_label("Record");
-    density_record_button.add_css_class("pill-button");
-    density_record_button.add_css_class("secondary-button");
-    density_record_button.add_css_class("settings-shortcut-record-button");
+    let density_record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
     let density_control =
         build_shortcut_capture_control(&density_capture_label, &density_record_button);
     let density_recording = Rc::new(Cell::new(false));
@@ -851,10 +864,15 @@ pub fn present(
         &zoom_in_capture_label,
         current_zoom_in_shortcut.borrow().as_str(),
     );
-    let zoom_in_record_button = gtk::Button::with_label("Record");
-    zoom_in_record_button.add_css_class("pill-button");
-    zoom_in_record_button.add_css_class("secondary-button");
-    zoom_in_record_button.add_css_class("settings-shortcut-record-button");
+    let zoom_in_record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
     let zoom_in_control =
         build_shortcut_capture_control(&zoom_in_capture_label, &zoom_in_record_button);
     let zoom_in_recording = Rc::new(Cell::new(false));
@@ -954,10 +972,15 @@ pub fn present(
         &zoom_out_capture_label,
         current_zoom_out_shortcut.borrow().as_str(),
     );
-    let zoom_out_record_button = gtk::Button::with_label("Record");
-    zoom_out_record_button.add_css_class("pill-button");
-    zoom_out_record_button.add_css_class("secondary-button");
-    zoom_out_record_button.add_css_class("settings-shortcut-record-button");
+    let zoom_out_record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
     let zoom_out_control =
         build_shortcut_capture_control(&zoom_out_capture_label, &zoom_out_record_button);
     let zoom_out_recording = Rc::new(Cell::new(false));
@@ -1057,10 +1080,15 @@ pub fn present(
         &command_palette_capture_label,
         current_command_palette_shortcut.borrow().as_str(),
     );
-    let command_palette_record_button = gtk::Button::with_label("Record");
-    command_palette_record_button.add_css_class("pill-button");
-    command_palette_record_button.add_css_class("secondary-button");
-    command_palette_record_button.add_css_class("settings-shortcut-record-button");
+    let command_palette_record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
     let command_palette_control = build_shortcut_capture_control(
         &command_palette_capture_label,
         &command_palette_record_button,
@@ -1487,9 +1515,11 @@ where
     );
     shell.append(&text);
 
-    let button = gtk::Button::with_label(button_label);
-    button.add_css_class("pill-button");
-    button.add_css_class("secondary-button");
+    let button = icons::labeled_button(
+        button_label,
+        icon_name::RESET,
+        &["pill-button", "secondary-button"],
+    );
     button.connect_clicked(move |_| on_click());
     shell.append(&button);
 

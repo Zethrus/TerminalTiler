@@ -29,9 +29,10 @@ if ! command -v appimagetool >/dev/null 2>&1; then
 fi
 
 rm -rf "$APPDIR"
-mkdir -p "$APP_PREFIX/bin" "$APP_PREFIX/share/applications" "$APP_PREFIX/share/icons/hicolor/scalable/apps" "$APP_PREFIX/share/metainfo"
+mkdir -p "$APP_PREFIX/bin" "$APP_PREFIX/share/hover-icons" "$APP_PREFIX/share/applications" "$APP_PREFIX/share/icons/hicolor/scalable/apps" "$APP_PREFIX/share/metainfo"
 
 cp "$TARGET_BIN" "$APP_PREFIX/bin/terminaltiler-bin"
+cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_PREFIX/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_PREFIX/bin/terminaltiler"
 cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.desktop" "$APP_PREFIX/share/applications/dev.zethrus.terminaltiler.desktop"
 cp "$ROOT_DIR/resources/terminaltiler.svg" "$APP_PREFIX/share/icons/hicolor/scalable/apps/terminaltiler.svg"

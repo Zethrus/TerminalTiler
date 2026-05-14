@@ -22,6 +22,7 @@ use crate::services::tile_draft::{
     resolve_role,
 };
 use crate::storage::preset_store::PresetStore;
+use crate::ui::icons::{self, name as icon_name};
 
 #[derive(Clone, Copy, Debug)]
 enum Selection {
@@ -211,16 +212,17 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .build();
     path_row.append(&path_entry);
 
-    let browse_button = gtk::Button::builder()
-        .label("Browse")
-        .css_classes([
+    let browse_button = icons::labeled_button(
+        "Browse",
+        icon_name::FOLDER,
+        &[
             "pill-button",
             "secondary-button",
             "workspace-browse-button",
             "launch-browse-button",
-        ])
-        .valign(gtk::Align::Center)
-        .build();
+        ],
+    );
+    browse_button.set_valign(gtk::Align::Center);
     path_row.append(&browse_button);
     directory_panel.append(&path_row);
 
@@ -711,9 +713,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .build();
     wizard.append(&action_bar);
 
-    let dashboard_button = gtk::Button::with_label("Workspaces");
-    dashboard_button.add_css_class("pill-button");
-    dashboard_button.add_css_class("secondary-button");
+    let dashboard_button = icons::labeled_button(
+        "Workspaces",
+        icon_name::WORKSPACES,
+        &["pill-button", "secondary-button"],
+    );
     {
         let mode_stack = mode_stack.clone();
         dashboard_button.connect_clicked(move |_| {
@@ -722,30 +726,35 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     }
     action_bar.append(&dashboard_button);
 
-    let cancel_button = gtk::Button::with_label("Close Tab");
-    cancel_button.add_css_class("pill-button");
-    cancel_button.add_css_class("ghost-link-button");
+    let cancel_button = icons::labeled_button(
+        "Close Tab",
+        icon_name::CLOSE,
+        &["pill-button", "ghost-link-button"],
+    );
     cancel_button.connect_clicked(move |_| on_cancel());
     action_bar.append(&cancel_button);
 
-    let previous_button = gtk::Button::with_label("Back");
-    previous_button.add_css_class("pill-button");
-    previous_button.add_css_class("secondary-button");
+    let previous_button = icons::labeled_button(
+        "Back",
+        icon_name::BACK,
+        &["pill-button", "secondary-button"],
+    );
     action_bar.append(&previous_button);
 
     let spacer = gtk::Box::builder().hexpand(true).build();
     action_bar.append(&spacer);
 
-    let preset_action_button = gtk::Button::builder()
-        .label("Save as Preset")
-        .css_classes([
+    let preset_action_button = icons::labeled_button(
+        "Save as Preset",
+        icon_name::SAVE,
+        &[
             "pill-button",
             "secondary-button",
             "new-preset-button",
             "final-preset-action-button",
-        ])
-        .visible(false)
-        .build();
+        ],
+    );
+    preset_action_button.set_visible(false);
     {
         let selected = selected.clone();
         let templates_ref = builtin_templates();
@@ -778,9 +787,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     }
     action_bar.append(&preset_action_button);
 
-    let configure_button = gtk::Button::with_label("Next");
-    configure_button.add_css_class("pill-button");
-    configure_button.add_css_class("primary-cta-button");
+    let configure_button = icons::labeled_button(
+        "Next",
+        icon_name::NEXT,
+        &["pill-button", "primary-cta-button"],
+    );
     action_bar.append(&configure_button);
 
     let sync_wizard_navigation = Rc::new({
@@ -800,12 +811,20 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             previous_button.set_sensitive(index > 0);
             let is_final_step = index + 1 == wizard_step_names.len();
             preset_action_button.set_visible(is_final_step);
-            preset_action_button.set_label(final_preset_action_label(&selected, &presets));
-            configure_button.set_label(if index + 1 == wizard_step_names.len() {
-                "Launch Workspace"
+            icons::set_button_icon_label(
+                &preset_action_button,
+                final_preset_action_label(&selected, &presets),
+                icon_name::SAVE,
+            );
+            if index + 1 == wizard_step_names.len() {
+                icons::set_button_icon_label(
+                    &configure_button,
+                    "Launch Workspace",
+                    icon_name::LAUNCH,
+                );
             } else {
-                "Next"
-            });
+                icons::set_button_icon_label(&configure_button, "Next", icon_name::NEXT);
+            }
             for (step_index, label) in wizard_stepper.steps.iter().enumerate() {
                 label.remove_css_class("is-active");
                 label.remove_css_class("is-complete");
@@ -1137,17 +1156,23 @@ fn build_wizard_stepper() -> WizardStepper {
         .build();
 
     let mut steps = Vec::new();
-    for (index, label) in ["Setup", "Appearance", "Layout", "Review"]
-        .iter()
-        .enumerate()
+    for (index, (label, icon)) in [
+        ("Setup", icon_name::FOLDER),
+        ("Appearance", icon_name::THEME),
+        ("Layout", icon_name::LAYOUT),
+        ("Review", icon_name::APPLY),
+    ]
+    .iter()
+    .enumerate()
     {
-        let step = gtk::Button::builder()
-            .label(format!("{}  {}", index + 1, label))
-            .halign(gtk::Align::Fill)
-            .hexpand(true)
-            .css_classes(["wizard-step-chip"])
-            .tooltip_text(format!("Go to step {}: {}", index + 1, label))
-            .build();
+        let step = icons::labeled_button(
+            &format!("{}  {}", index + 1, label),
+            icon,
+            &["wizard-step-chip"],
+        );
+        step.set_halign(gtk::Align::Fill);
+        step.set_hexpand(true);
+        step.set_tooltip_text(Some(&format!("Go to step {}: {}", index + 1, label)));
         root.append(&step);
         steps.push(step);
     }
@@ -1198,10 +1223,15 @@ where
     copy.append(&meta);
     card.append(&copy);
 
-    let new_button = gtk::Button::with_label("New Workspace Layout");
-    new_button.add_css_class("pill-button");
-    new_button.add_css_class("primary-cta-button");
-    new_button.add_css_class("new-workspace-layout-button");
+    let new_button = icons::labeled_button(
+        "New Workspace Layout",
+        icon_name::LAYOUT,
+        &[
+            "pill-button",
+            "primary-cta-button",
+            "new-workspace-layout-button",
+        ],
+    );
     new_button.set_valign(gtk::Align::Center);
     new_button.connect_clicked(move |_| on_new_workspace());
     card.append(&new_button);
@@ -1291,24 +1321,33 @@ where
         .spacing(8)
         .halign(gtk::Align::Fill)
         .build();
-    let open_button = gtk::Button::with_label("Open");
-    open_button.add_css_class("pill-button");
-    open_button.add_css_class("primary-cta-button");
+    let open_button = icons::labeled_button(
+        "Open",
+        icon_name::OPEN,
+        &["pill-button", "primary-cta-button"],
+    );
     open_button.set_hexpand(true);
     open_button.connect_clicked(move |_| on_open(index));
     actions.append(&open_button);
 
-    let edit_button = gtk::Button::with_label("Edit");
-    edit_button.add_css_class("pill-button");
-    edit_button.add_css_class("secondary-button");
+    let edit_button = icons::labeled_button(
+        "Edit",
+        icon_name::EDIT,
+        &["pill-button", "secondary-button"],
+    );
     edit_button.set_hexpand(true);
     edit_button.connect_clicked(move |_| on_edit(index));
     actions.append(&edit_button);
 
-    let delete_button = gtk::Button::with_label("Delete");
-    delete_button.add_css_class("pill-button");
-    delete_button.add_css_class("destructive-button");
-    delete_button.add_css_class("saved-workspace-delete-button");
+    let delete_button = icons::labeled_button(
+        "Delete",
+        icon_name::DELETE,
+        &[
+            "pill-button",
+            "destructive-button",
+            "saved-workspace-delete-button",
+        ],
+    );
     delete_button.set_hexpand(true);
     delete_button.set_tooltip_text(Some("Delete saved workspace"));
     connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);

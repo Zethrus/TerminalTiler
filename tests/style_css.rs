@@ -1,9 +1,18 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
+const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
+const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
+const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
+const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
+const PACKAGE_APPIMAGE_SH: &str = include_str!("../packaging/build-appimage.sh");
+const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
+const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
+const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
+const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
     ".terminal-card.is-active-tile",
@@ -138,6 +147,52 @@ fn launch_deck_uses_terminaltiler_logo_asset() {
             && STYLE_CSS.contains(".launch-overview-icon.is-brand-logo"),
         "launch deck logo should have explicit brand-logo code and styling hooks"
     );
+}
+
+#[test]
+fn primary_actions_use_shared_symbolic_icon_helper() {
+    assert!(
+        ICONS_RS.contains("itsHover's animated catalog")
+            && ICONS_RS.contains("pub(crate) fn labeled_button")
+            && ICONS_RS.contains("pub(crate) fn icon_button")
+            && ICONS_RS.contains("resources/hover-icons"),
+        "action icons should stay centralized and mapped from the requested itsHover action vocabulary"
+    );
+    assert!(
+        std::path::Path::new("resources/hover-icons/terminal.svg").exists()
+            && std::path::Path::new("resources/hover-icons/layout-dashboard.svg").exists()
+            && std::path::Path::new("resources/hover-icons/save.svg").exists(),
+        "core itsHover SVG assets should be present for terminal, layout, and save actions"
+    );
+    assert!(
+        PACKAGE_DEB_SH.contains("resources/hover-icons/*.svg")
+            && PACKAGE_APPIMAGE_SH.contains("resources/hover-icons/*.svg"),
+        "Linux packages should include vendored itsHover action icons"
+    );
+    assert!(
+        STYLE_CSS.contains(".button-icon-label-content")
+            && STYLE_CSS.contains(".button-leading-icon"),
+        "shared labeled button icons should have CSS hooks for consistent polish"
+    );
+
+    for (surface, source) in [
+        ("about dialog", ABOUT_DIALOG_RS),
+        ("assets manager", ASSETS_MANAGER_RS),
+        ("command palette", COMMAND_PALETTE_RS),
+        ("launch screen", LAUNCH_SCREEN_RS),
+        ("settings dialog", SETTINGS_DIALOG_RS),
+        ("terminal tile", TILE_VIEW_RS),
+        ("web tile", WEB_TILE_RS),
+        ("window chrome", WINDOW_RS),
+        ("workspace toolbar", WORKSPACE_VIEW_RS),
+    ] {
+        assert!(
+            source.contains("icons::labeled_button")
+                || source.contains("icons::icon_button")
+                || source.contains("build_header_icon_button(icon_name::"),
+            "{surface} should use shared symbolic icon helpers for visible actions"
+        );
+    }
 }
 
 #[test]
