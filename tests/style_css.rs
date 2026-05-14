@@ -213,6 +213,21 @@ fn workspace_tab_context_menu_reuses_terminal_context_styles() {
 }
 
 #[test]
+fn workspace_tab_drag_stays_left_button_and_uses_title_drop_surface() {
+    assert!(
+        WINDOW_RS.contains("gtk::DragSource::builder()")
+            && WINDOW_RS.contains(".actions(gdk::DragAction::MOVE)")
+            && WINDOW_RS.contains(".button(1)")
+            && WINDOW_RS.contains("drop_target.connect_enter")
+            && WINDOW_RS.contains("translate_coordinates(&self.tabs_box")
+            && WINDOW_RS.contains("drop_surface.add_controller(drop_target)")
+            && WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
+            && WINDOW_RS.contains("let rename_click = gtk::GestureClick::builder()"),
+        "workspace tab drag should be left-button-only, update over the full title chrome, and preserve Detach/Rename handlers"
+    );
+}
+
+#[test]
 fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
     for (source_name, source) in [("terminal tile", TILE_VIEW_RS), ("web tile", WEB_TILE_RS)] {
         assert!(

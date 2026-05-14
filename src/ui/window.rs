@@ -427,6 +427,7 @@ fn present_with_initial_workspace(
     let force_quit_requested = Rc::new(Cell::new(false));
     let tab_strip_controller = create_tab_strip_controller(
         &title.tabs_box,
+        &title.root,
         select_tab.clone(),
         close_tab.clone(),
         request_tab_rename.clone(),
@@ -2489,8 +2490,10 @@ impl TabStripController {
         }
         shell.add_controller(right_click);
 
-        let drag_source = gtk::DragSource::new();
-        drag_source.set_actions(gdk::DragAction::MOVE);
+        let drag_source = gtk::DragSource::builder()
+            .actions(gdk::DragAction::MOVE)
+            .button(1)
+            .build();
         drag_source.connect_prepare(move |_, _, _| {
             Some(gdk::ContentProvider::for_value(&(tab_id as u32).to_value()))
         });
@@ -2627,6 +2630,14 @@ impl TabStripController {
         true
     }
 
+    fn update_preview_from_widget(&mut self, widget: &gtk::Widget, x: f64, y: f64) -> bool {
+        let strip_x = widget
+            .translate_coordinates(&self.tabs_box, x, y)
+            .map(|(strip_x, _)| strip_x)
+            .unwrap_or(x);
+        self.update_preview_for_x(strip_x)
+    }
+
     fn prepare_drop(&mut self, value: &glib::Value, x: f64) -> Result<Option<(usize, usize)>, ()> {
         let Ok(moved_id) = value.get::<u32>() else {
             return Err(());
@@ -2654,6 +2665,20 @@ impl TabStripController {
         }
     }
 
+    fn prepare_drop_from_widget(
+        &mut self,
+        value: &glib::Value,
+        widget: &gtk::Widget,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<(usize, usize)>, ()> {
+        let strip_x = widget
+            .translate_coordinates(&self.tabs_box, x, y)
+            .map(|(strip_x, _)| strip_x)
+            .unwrap_or(x);
+        self.prepare_drop(value, strip_x)
+    }
+
     fn cancel_drag(&mut self, tab_id: usize) {
         if self
             .drag_state
@@ -2679,8 +2704,10 @@ impl TabStripController {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_tab_strip_controller(
     tabs_box: &gtk::Box,
+    drop_surface: &gtk::Box,
     select_tab: SelectTabHandle,
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
@@ -2699,22 +2726,43 @@ fn create_tab_strip_controller(
 
     let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
     {
-        let controller_for_motion = controller.clone();
-        drop_target.connect_motion(move |_, x, _| {
-            if controller_for_motion.borrow().drag_state.is_none() {
+        let controller_for_enter = controller.clone();
+        drop_target.connect_enter(move |target, x, y| {
+            let Some(widget) = target.widget() else {
+                return gdk::DragAction::empty();
+            };
+            let mut controller = controller_for_enter.borrow_mut();
+            if controller.drag_state.is_none() {
                 return gdk::DragAction::empty();
             }
-            controller_for_motion.borrow_mut().update_preview_for_x(x);
+            controller.update_preview_from_widget(&widget, x, y);
+            gdk::DragAction::MOVE
+        });
+    }
+    {
+        let controller_for_motion = controller.clone();
+        drop_target.connect_motion(move |target, x, y| {
+            let Some(widget) = target.widget() else {
+                return gdk::DragAction::empty();
+            };
+            let mut controller = controller_for_motion.borrow_mut();
+            if controller.drag_state.is_none() {
+                return gdk::DragAction::empty();
+            }
+            controller.update_preview_from_widget(&widget, x, y);
             gdk::DragAction::MOVE
         });
     }
     {
         let controller_for_drop = controller.clone();
         let reorder_handle = reorder_tab.clone();
-        drop_target.connect_drop(move |_, value, x, _| {
+        drop_target.connect_drop(move |target, value, x, y| {
+            let Some(widget) = target.widget() else {
+                return false;
+            };
             let drop_result = {
                 let mut controller = controller_for_drop.borrow_mut();
-                controller.prepare_drop(value, x)
+                controller.prepare_drop_from_widget(value, &widget, x, y)
             };
             match drop_result {
                 Ok(Some((moved_id, preview_index))) => {
@@ -2728,7 +2776,7 @@ fn create_tab_strip_controller(
             }
         });
     }
-    tabs_box.add_controller(drop_target);
+    drop_surface.add_controller(drop_target);
 
     controller
 }
@@ -3725,6 +3773,7 @@ fn detach_workspace_tab(
     Some(payload)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn present_detached_workspace_window(
     app: &adw::Application,
     payload: DetachPayload,

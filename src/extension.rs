@@ -2,19 +2,10 @@ use std::sync::Arc;
 
 use crate::product;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RuntimeOptions {
     pub product: ProductInfo,
     pub companion: Option<Arc<dyn CompanionIntegration>>,
-}
-
-impl Default for RuntimeOptions {
-    fn default() -> Self {
-        Self {
-            product: ProductInfo::default(),
-            companion: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

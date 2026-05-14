@@ -594,10 +594,12 @@ window.window-shell .app-tab-shell.is-preview-slot {
   border: 1px dashed rgba(236, 154, 83, 0.52);
   background: rgba(236, 154, 83, 0.10);
   box-shadow: inset 0 0 0 1px rgba(236, 154, 83, 0.18);
+  transition: none;
 }
 
 window.window-shell .app-tab-shell.is-lifted-source {
   transform: none;
+  transition: none;
 }
 
 window.window-shell .app-tab-shell.is-preview-slot .app-tab-select,
