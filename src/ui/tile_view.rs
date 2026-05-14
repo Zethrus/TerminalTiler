@@ -16,6 +16,7 @@ use crate::services::launch_resolution::resolve_tile_launch;
 use crate::services::output_helpers::{helper_summary_text, scan_output};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
+use crate::ui::context_menu;
 use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_drag::TileDragPayload;
@@ -1000,24 +1001,10 @@ fn install_terminal_context_menu(
     session: &TerminalSession,
     show_recovery_prompt: Rc<dyn Fn()>,
 ) {
-    let popover = gtk::Popover::new();
-    popover.add_css_class("terminal-context-popover");
-    popover.set_autohide(true);
-    popover.set_has_arrow(true);
-    popover.set_position(gtk::PositionType::Bottom);
-    popover.set_parent(terminal);
+    let popover = context_menu::popover(terminal);
+    let menu = context_menu::menu_box();
 
-    let menu = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
-        .css_classes(["terminal-context-menu"])
-        .build();
-
-    let copy_button = build_terminal_context_button("Copy", Some("Ctrl+Shift+C"));
+    let copy_button = context_menu::action_button("Copy", Some("Ctrl+Shift+C"));
     copy_button.set_sensitive(session.has_selection());
     {
         let session = session.clone();
@@ -1035,7 +1022,7 @@ fn install_terminal_context_menu(
     }
     menu.append(&copy_button);
 
-    let paste_button = build_terminal_context_button("Paste", Some("Ctrl+Shift+V"));
+    let paste_button = context_menu::action_button("Paste", Some("Ctrl+Shift+V"));
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1051,7 +1038,7 @@ fn install_terminal_context_menu(
     }
     menu.append(&paste_button);
 
-    let reconnect_button = build_terminal_context_button("Reconnect", None);
+    let reconnect_button = context_menu::action_button("Reconnect", None);
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1063,7 +1050,7 @@ fn install_terminal_context_menu(
     }
     menu.append(&reconnect_button);
 
-    let local_shell_button = build_terminal_context_button("Open Local Shell", None);
+    let local_shell_button = context_menu::action_button("Open Local Shell", None);
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1075,7 +1062,7 @@ fn install_terminal_context_menu(
     }
     menu.append(&local_shell_button);
 
-    let transcript_button = build_terminal_context_button("Show Transcript", None);
+    let transcript_button = context_menu::action_button("Show Transcript", None);
     {
         let session = session.clone();
         let popover = popover.clone();
@@ -1105,13 +1092,7 @@ fn install_terminal_context_menu(
             paste_button
                 .set_sensitive(session.has_active_process() || session.needs_recovery_prompt());
             local_shell_button.set_sensitive(session.needs_recovery_prompt());
-            popover.set_pointing_to(Some(&gdk::Rectangle::new(
-                x.round() as i32,
-                y.round() as i32,
-                1,
-                1,
-            )));
-            popover.popup();
+            context_menu::popup_at(&popover, x, y);
         });
     }
     terminal.add_controller(right_click);
@@ -1233,40 +1214,6 @@ fn should_open_recovery_prompt_for_key(key: gdk::Key, state: gdk::ModifierType) 
 
 fn default_recovery_prompt_rect(terminal: &vte4::Terminal) -> gdk::Rectangle {
     gdk::Rectangle::new((terminal.allocated_width() / 2).max(1), 8, 1, 1)
-}
-
-fn build_terminal_context_button(label: &str, shortcut: Option<&str>) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .focus_on_click(false)
-        .css_classes(["flat", "terminal-context-action"])
-        .build();
-
-    let row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .hexpand(true)
-        .build();
-    row.append(
-        &gtk::Label::builder()
-            .label(label)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["terminal-context-label"])
-            .build(),
-    );
-
-    if let Some(shortcut) = shortcut {
-        row.append(
-            &gtk::Label::builder()
-                .label(shortcut)
-                .halign(gtk::Align::End)
-                .css_classes(["terminal-context-shortcut"])
-                .build(),
-        );
-    }
-
-    button.set_child(Some(&row));
-    button
 }
 
 fn present_transcript_dialog(terminal: &vte4::Terminal, transcript: &str) {

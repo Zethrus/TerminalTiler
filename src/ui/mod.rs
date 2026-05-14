@@ -1,6 +1,7 @@
 pub mod about_dialog;
 pub mod assets_manager;
 pub mod command_palette;
+pub(crate) mod context_menu;
 pub(crate) mod dialog_smoke;
 mod header_actions;
 pub(crate) mod icons;

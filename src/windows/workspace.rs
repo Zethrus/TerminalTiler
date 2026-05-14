@@ -135,6 +135,7 @@ mod imp {
     const MENU_COPY_LINK: usize = 4;
     const MENU_RECONNECT: usize = 5;
     const MENU_SHOW_TRANSCRIPT: usize = 6;
+    const MENU_DETACH_TAB: usize = 11;
     const MENU_WEB_RELOAD: usize = 21;
     const MENU_WEB_OPEN_EXTERNAL: usize = 22;
     const MENU_WEB_COPY_URL: usize = 23;
@@ -287,6 +288,13 @@ mod imp {
     struct PaneOutputEvent {
         pane_id: usize,
         text: String,
+    }
+
+    fn next_active_index_after_detach(tab_count: usize, detached_index: usize) -> Option<usize> {
+        if tab_count <= 1 || detached_index >= tab_count {
+            return None;
+        }
+        Some(detached_index.min(tab_count - 2))
     }
 
     struct WebViewStringEvent {
@@ -1353,6 +1361,24 @@ mod imp {
                     && let Some(state) = unsafe { window_state_mut(button.parent_hwnd) }
                 {
                     begin_tab_rename(button.parent_hwnd, state, button.index);
+                }
+                0
+            }
+            WM_RBUTTONUP => {
+                let Some((parent_hwnd, index)) = (unsafe { tab_button_state_mut(hwnd) })
+                    .map(|button| (button.parent_hwnd, button.index))
+                else {
+                    return 0;
+                };
+                if let Some(state) = unsafe { window_state_mut(parent_hwnd) } {
+                    if index != state.active_tab_index {
+                        switch_active_tab(parent_hwnd, state, index);
+                    }
+                    show_tab_context_menu(
+                        parent_hwnd,
+                        state,
+                        screen_point_from_lparam(hwnd, lparam),
+                    );
                 }
                 0
             }
@@ -3585,6 +3611,106 @@ mod imp {
         save_workspace_session_state(state);
     }
 
+    fn show_tab_context_menu(hwnd: HWND, state: &mut WorkspaceWindowState, point: POINT) {
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
+        }
+        unsafe {
+            AppendMenuW(menu, MF_STRING, MENU_DETACH_TAB, wide("Detach").as_ptr());
+        }
+        let command = unsafe {
+            TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                point.x,
+                point.y,
+                0,
+                hwnd,
+                ptr::null(),
+            )
+        };
+        unsafe {
+            DestroyMenu(menu);
+        }
+
+        if command as usize == MENU_DETACH_TAB {
+            detach_active_tab(hwnd, state);
+        }
+    }
+
+    fn detach_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.tabs.is_empty() {
+            return;
+        }
+
+        let saved_tab = active_tab(state).clone();
+        let title = saved_tab
+            .custom_title
+            .clone()
+            .unwrap_or_else(|| saved_tab.preset.name.clone());
+        let detached_session = SavedSession {
+            tabs: vec![saved_tab],
+            active_tab_index: 0,
+        };
+
+        logging::info(format!(
+            "detaching Windows workspace tab '{}' via saved-session fallback",
+            title
+        ));
+
+        match open_saved_workspaces(&detached_session, &state.runtime) {
+            Ok(_) => {
+                logging::info(format!(
+                    "detached Windows workspace tab '{}' by relaunching from saved config",
+                    title
+                ));
+                unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide("Detached workspace was relaunched from saved configuration because this platform path cannot safely transfer every live pane yet.").as_ptr(),
+                        wide("Workspace Detached").as_ptr(),
+                        MB_OK,
+                    );
+                }
+                remove_active_tab_after_detach(hwnd, state);
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "failed to detach Windows workspace tab '{}': {}",
+                    title, error
+                ));
+                unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&format!("Could not detach workspace: {error}")).as_ptr(),
+                        wide("Detach Failed").as_ptr(),
+                        MB_OK,
+                    );
+                }
+            }
+        }
+    }
+
+    fn remove_active_tab_after_detach(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.tabs.is_empty() {
+            return;
+        }
+        let removed_index = state.active_tab_index;
+        state.tabs.remove(removed_index);
+        if state.tabs.is_empty() {
+            remove_workspace_session_state(state.window_id, &state.session_store);
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+            }
+            return;
+        }
+
+        state.active_tab_index =
+            next_active_index_after_detach(state.tabs.len() + 1, removed_index).unwrap_or(0);
+        rebuild_active_tab_content(hwnd, state);
+    }
+
     fn close_active_tab(hwnd: HWND, state: &mut WorkspaceWindowState) {
         if state.tabs.is_empty() {
             return;
@@ -3594,16 +3720,16 @@ mod imp {
             .clone()
             .unwrap_or_else(|| active_tab(state).preset.name.clone());
         logging::info(format!("closing Windows workspace tab '{closing_title}'"));
-        state.tabs.remove(state.active_tab_index);
+        let removed_index = state.active_tab_index;
+        state.tabs.remove(removed_index);
         if state.tabs.is_empty() {
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
             }
             return;
         }
-        if state.active_tab_index >= state.tabs.len() {
-            state.active_tab_index = state.tabs.len() - 1;
-        }
+        state.active_tab_index =
+            next_active_index_after_detach(state.tabs.len() + 1, removed_index).unwrap_or(0);
         rebuild_active_tab_content(hwnd, state);
     }
 
@@ -5293,6 +5419,24 @@ mod imp {
             ApplicationDensity::Comfortable => "Density: Cozy",
             ApplicationDensity::Standard => "Density: Std",
             ApplicationDensity::Compact => "Density: Tight",
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::next_active_index_after_detach;
+
+        #[test]
+        fn detach_remap_keeps_order_by_selecting_nearest_remaining_tab() {
+            assert_eq!(next_active_index_after_detach(3, 0), Some(0));
+            assert_eq!(next_active_index_after_detach(3, 1), Some(1));
+            assert_eq!(next_active_index_after_detach(3, 2), Some(1));
+        }
+
+        #[test]
+        fn detach_remap_returns_none_for_single_or_invalid_tab() {
+            assert_eq!(next_active_index_after_detach(1, 0), None);
+            assert_eq!(next_active_index_after_detach(3, 3), None);
         }
     }
 }

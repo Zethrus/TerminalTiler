@@ -2,6 +2,7 @@ const STYLE_CSS: &str = include_str!("../resources/style.css");
 const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
+const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
@@ -193,6 +194,19 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
             "{surface} should use shared symbolic icon helpers for visible actions"
         );
     }
+}
+
+#[test]
+fn workspace_tab_context_menu_reuses_terminal_context_styles() {
+    assert!(
+        WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
+            && WINDOW_RS.contains("context_menu::popover(&shell)")
+            && CONTEXT_MENU_RS.contains("terminal-context-popover")
+            && CONTEXT_MENU_RS.contains("terminal-context-menu")
+            && CONTEXT_MENU_RS.contains("terminal-context-action")
+            && CONTEXT_MENU_RS.contains("terminal-context-label"),
+        "workspace tab Detach should use the shared terminal-context menu styling hooks"
+    );
 }
 
 #[test]

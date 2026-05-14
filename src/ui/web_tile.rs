@@ -11,6 +11,7 @@ use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
+use crate::ui::context_menu;
 use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_drag::TileDragPayload;
@@ -512,24 +513,10 @@ fn domain_from_url(url: &str) -> String {
 }
 
 fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {
-    let popover = gtk::Popover::new();
-    popover.add_css_class("terminal-context-popover");
-    popover.set_autohide(true);
-    popover.set_has_arrow(true);
-    popover.set_position(gtk::PositionType::Bottom);
-    popover.set_parent(parent);
+    let popover = context_menu::popover(parent);
+    let menu = context_menu::menu_box();
 
-    let menu = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
-        .css_classes(["terminal-context-menu"])
-        .build();
-
-    let reload_button = build_context_button("Reload", Some("F5"));
+    let reload_button = context_menu::action_button("Reload", Some("F5"));
     {
         let web_view = web_view.clone();
         let popover = popover.clone();
@@ -540,7 +527,7 @@ fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {
     }
     menu.append(&reload_button);
 
-    let copy_url_button = build_context_button("Copy URL", None);
+    let copy_url_button = context_menu::action_button("Copy URL", None);
     {
         let web_view = web_view.clone();
         let popover = popover.clone();
@@ -567,48 +554,8 @@ fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {
         right_click.connect_pressed(move |gesture, _, x, y| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
             parent.grab_focus();
-            popover.set_pointing_to(Some(&gdk::Rectangle::new(
-                x.round() as i32,
-                y.round() as i32,
-                1,
-                1,
-            )));
-            popover.popup();
+            context_menu::popup_at(&popover, x, y);
         });
     }
     parent.add_controller(right_click);
-}
-
-fn build_context_button(label: &str, shortcut: Option<&str>) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .focus_on_click(false)
-        .css_classes(["flat", "terminal-context-action"])
-        .build();
-
-    let row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .hexpand(true)
-        .build();
-    row.append(
-        &gtk::Label::builder()
-            .label(label)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["terminal-context-label"])
-            .build(),
-    );
-
-    if let Some(shortcut) = shortcut {
-        row.append(
-            &gtk::Label::builder()
-                .label(shortcut)
-                .halign(gtk::Align::End)
-                .css_classes(["terminal-context-shortcut"])
-                .build(),
-        );
-    }
-
-    button.set_child(Some(&row));
-    button
 }

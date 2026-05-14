@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use adw::prelude::*;
 use glib::value::ToValue;
@@ -20,12 +22,13 @@ use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
-    about_dialog, assets_manager, command_palette, dialog_smoke, launch_screen, settings_dialog,
-    workspace_view,
+    about_dialog, assets_manager, command_palette, context_menu, dialog_smoke, launch_screen,
+    settings_dialog, workspace_view,
 };
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
+type TabPredicateHandle = Rc<RefCell<Option<Box<dyn Fn(usize) -> bool>>>>;
 type RenameTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, Option<String>)>>>>;
 type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
@@ -38,6 +41,9 @@ const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
+
+static NEXT_LINUX_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
+static LINUX_SESSION_REGISTRY: OnceLock<Mutex<LinuxSessionRegistry>> = OnceLock::new();
 
 fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
     let manager = adw::StyleManager::default();
@@ -169,6 +175,17 @@ impl Clone for RestoreSessionContext {
     }
 }
 
+#[derive(Default)]
+struct LinuxSessionRegistry {
+    windows: BTreeMap<usize, SavedSession>,
+    active_window_id: Option<usize>,
+}
+
+struct DetachPayload {
+    tab: WorkspaceTab,
+    saved_tab: SavedTab,
+}
+
 #[derive(Clone)]
 struct TabStripItem {
     tab_id: usize,
@@ -190,6 +207,8 @@ struct TabStripController {
     select_tab: SelectTabHandle,
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
+    detach_tab: TabActionHandle,
+    can_detach_tab: TabPredicateHandle,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -269,6 +288,7 @@ pub fn present(
     window_shell.append(&close_to_background_notice);
     window_shell.append(&toast_overlay);
 
+    let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(product::PRODUCT_DISPLAY_NAME)
@@ -316,6 +336,8 @@ pub fn present(
     let select_tab: SelectTabHandle = Rc::new(RefCell::new(None));
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
+    let detach_tab: TabActionHandle = Rc::new(RefCell::new(None));
+    let can_detach_tab: TabPredicateHandle = Rc::new(RefCell::new(None));
     let apply_tab_rename: RenameTabHandle = Rc::new(RefCell::new(None));
     let reorder_tab: ReorderTabHandle = Rc::new(RefCell::new(None));
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
@@ -347,6 +369,8 @@ pub fn present(
         select_tab.clone(),
         close_tab.clone(),
         request_tab_rename.clone(),
+        detach_tab.clone(),
+        can_detach_tab.clone(),
         reorder_tab.clone(),
     );
     let refresh_tab_strip: Rc<dyn Fn()> = {
@@ -602,6 +626,18 @@ pub fn present(
     }
 
     {
+        let tabs_for_detach_check = tabs.clone();
+        *can_detach_tab.borrow_mut() = Some(Box::new(move |tab_id| {
+            tabs_for_detach_check
+                .borrow()
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .map(|tab| matches!(tab.content, TabContent::Workspace(_)))
+                .unwrap_or(false)
+        }));
+    }
+
+    {
         let tabs_for_workspace = tabs.clone();
         let tab_view_for_workspace = tab_view.clone();
         let select_for_workspace = select_tab.clone();
@@ -812,6 +848,50 @@ pub fn present(
             if let Some(page) = page {
                 tab_view_for_close.close_page(&page);
             }
+        }));
+    }
+
+    {
+        let app_for_detach = app.clone();
+        let tabs_for_detach = tabs.clone();
+        let active_for_detach = active_tab_id.clone();
+        let tab_view_for_detach = tab_view.clone();
+        let select_for_detach = select_tab.clone();
+        let add_for_detach = add_workspace_tab.clone();
+        let refresh_for_detach = refresh_tab_strip.clone();
+        let preference_store_for_detach = preference_store.clone();
+        let session_store_for_detach = session_store.clone();
+        let toast_overlay_for_detach = toast_overlay.clone();
+
+        *detach_tab.borrow_mut() = Some(Box::new(move |tab_id| {
+            if let Some(select) = select_for_detach.borrow().as_ref() {
+                select(tab_id);
+            }
+            let Some(payload) = detach_workspace_tab(
+                window_id,
+                &app_for_detach,
+                &tab_view_for_detach,
+                &tabs_for_detach,
+                &active_for_detach,
+                &select_for_detach,
+                &add_for_detach,
+                refresh_for_detach.as_ref(),
+                &preference_store_for_detach,
+                &session_store_for_detach,
+                tab_id,
+            ) else {
+                return;
+            };
+            show_toast(
+                &toast_overlay_for_detach,
+                "Workspace detached to a new window",
+            );
+            present_detached_workspace_window(
+                &app_for_detach,
+                payload,
+                &preference_store_for_detach,
+                &session_store_for_detach,
+            );
         }));
     }
 
@@ -1648,6 +1728,7 @@ pub fn present(
                     move || {
                         force_quit_requested.set(true);
                         force_quit_application(
+                            window_id,
                             &window,
                             &tabs,
                             active_tab_id.get(),
@@ -1802,6 +1883,7 @@ pub fn present(
                     move || {
                         force_quit_requested.set(true);
                         force_quit_application(
+                            window_id,
                             &window,
                             &tabs,
                             active_tab_id.get(),
@@ -1814,7 +1896,7 @@ pub fn present(
 
             tray_controller.set_window_hidden(false);
             let runtimes = workspace_runtimes(&tabs_for_save);
-            persist_application_session(&tabs_for_save, active_for_save.get(), &session_store);
+            save_application_window_session_state(window_id, &tabs_for_save, active_for_save.get(), &session_store);
 
             for runtime in runtimes {
                 runtime.terminate_all("closing application window");
@@ -2026,6 +2108,8 @@ impl TabStripController {
         select_tab: SelectTabHandle,
         close_tab: TabActionHandle,
         request_tab_rename: TabActionHandle,
+        detach_tab: TabActionHandle,
+        can_detach_tab: TabPredicateHandle,
     ) -> Self {
         Self {
             tabs_box,
@@ -2035,6 +2119,8 @@ impl TabStripController {
             select_tab,
             close_tab,
             request_tab_rename,
+            detach_tab,
+            can_detach_tab,
         }
     }
 
@@ -2177,6 +2263,47 @@ impl TabStripController {
             }
         });
         shell.add_controller(middle_close);
+
+        let popover = context_menu::popover(&shell);
+        let menu = context_menu::menu_box();
+        let detach_button = context_menu::action_button("Detach", None);
+        {
+            let detach_handle = self.detach_tab.clone();
+            let popover = popover.clone();
+            detach_button.connect_clicked(move |_| {
+                popover.popdown();
+                if let Some(detach) = detach_handle.borrow().as_ref() {
+                    detach(tab_id);
+                }
+            });
+        }
+        menu.append(&detach_button);
+        popover.set_child(Some(&menu));
+
+        let right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let select_handle = self.select_tab.clone();
+            let can_detach_handle = self.can_detach_tab.clone();
+            let popover = popover.clone();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                if let Some(select) = select_handle.borrow().as_ref() {
+                    select(tab_id);
+                }
+                let can_detach = can_detach_handle
+                    .borrow()
+                    .as_ref()
+                    .map(|can_detach| can_detach(tab_id))
+                    .unwrap_or(false);
+                if can_detach {
+                    context_menu::popup_at(&popover, x, y);
+                }
+            });
+        }
+        shell.add_controller(right_click);
 
         let drag_source = gtk::DragSource::new();
         drag_source.set_actions(gdk::DragAction::MOVE);
@@ -2373,6 +2500,8 @@ fn create_tab_strip_controller(
     select_tab: SelectTabHandle,
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
+    detach_tab: TabActionHandle,
+    can_detach_tab: TabPredicateHandle,
     reorder_tab: ReorderTabHandle,
 ) -> TabStripControllerHandle {
     let controller = Rc::new(RefCell::new(TabStripController::new(
@@ -2380,6 +2509,8 @@ fn create_tab_strip_controller(
         select_tab,
         close_tab,
         request_tab_rename,
+        detach_tab,
+        can_detach_tab,
     )));
 
     let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
@@ -3213,6 +3344,194 @@ fn workspace_runtimes(
         .collect()
 }
 
+fn saved_tab_for_workspace(tab: &WorkspaceTab) -> Option<SavedTab> {
+    let TabContent::Workspace(workspace) = &tab.content else {
+        return None;
+    };
+    tab.workspace_root.as_ref().map(|root| SavedTab {
+        preset: workspace.preset.clone(),
+        workspace_root: root.clone(),
+        custom_title: tab.custom_title.clone(),
+        terminal_zoom_steps: workspace.terminal_zoom_steps,
+    })
+}
+
+fn next_active_index_after_detach(tab_count: usize, detached_index: usize) -> Option<usize> {
+    if tab_count <= 1 || detached_index >= tab_count {
+        return None;
+    }
+    Some(detached_index.min(tab_count - 2))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn detach_workspace_tab(
+    origin_window_id: usize,
+    _app: &adw::Application,
+    tab_view: &adw::TabView,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    select_tab: &SelectTabHandle,
+    add_workspace_tab: &VoidHandle,
+    refresh_tab_strip: &dyn Fn(),
+    _preference_store: &PreferenceStore,
+    session_store: &SessionStore,
+    tab_id: usize,
+) -> Option<DetachPayload> {
+    let page = {
+        let tabs_ref = tabs.borrow();
+        tab_page_for_id(tab_view, &tabs_ref, tab_id)
+    }?;
+
+    let (payload, next_active_id, should_create_replacement) = {
+        let mut tabs_ref = tabs.borrow_mut();
+        let detached_index = tabs_ref.iter().position(|tab| tab.id == tab_id)?;
+        let saved_tab = saved_tab_for_workspace(&tabs_ref[detached_index])?;
+        let tab = tabs_ref.remove(detached_index);
+        let next_active_id = next_active_index_after_detach(tabs_ref.len() + 1, detached_index)
+            .and_then(|index| tabs_ref.get(index).map(|tab| tab.id));
+        (
+            DetachPayload { tab, saved_tab },
+            next_active_id,
+            tabs_ref.is_empty(),
+        )
+    };
+
+    tab_view.close_page(&page);
+    refresh_tab_strip();
+
+    if should_create_replacement {
+        active_tab_id.set(0);
+        if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
+            add_tab();
+        }
+    } else if let Some(next_active_id) = next_active_id
+        && let Some(select) = select_tab.borrow().as_ref()
+    {
+        select(next_active_id);
+    }
+
+    save_application_window_session_state(
+        origin_window_id,
+        tabs,
+        active_tab_id.get(),
+        session_store,
+    );
+    logging::info(format!(
+        "detached workspace tab {} preset='{}' root='{}'",
+        tab_id,
+        payload.saved_tab.preset.name,
+        payload.saved_tab.workspace_root.display()
+    ));
+    Some(payload)
+}
+
+fn present_detached_workspace_window(
+    app: &adw::Application,
+    payload: DetachPayload,
+    _preference_store: &PreferenceStore,
+    session_store: &SessionStore,
+) {
+    let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
+    let tab_id = payload.tab.id;
+    let title = tab_display_title(&payload.tab);
+    let runtime = match &payload.tab.content {
+        TabContent::Workspace(workspace) => workspace.runtime.clone(),
+        TabContent::LaunchDeck => return,
+    };
+    let preset = payload.saved_tab.preset.clone();
+
+    let header = adw::HeaderBar::builder()
+        .show_start_title_buttons(true)
+        .show_end_title_buttons(true)
+        .build();
+    header.add_css_class("app-headerbar");
+    header.set_title_widget(Some(
+        &gtk::Label::builder()
+            .label(&title)
+            .single_line_mode(true)
+            .ellipsize(pango::EllipsizeMode::End)
+            .build(),
+    ));
+    let fullscreen_button = icons::labeled_button(
+        "Fullscreen",
+        icon_name::FULLSCREEN,
+        &["flat", "titlebar-action-button"],
+    );
+    header.pack_end(&fullscreen_button);
+
+    let page_shell = payload.tab.page_shell.clone();
+    let window_shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .build();
+    window_shell.append(&header);
+    window_shell.append(&page_shell);
+
+    let window = adw::ApplicationWindow::builder()
+        .application(app)
+        .title(&title)
+        .default_width(1280)
+        .default_height(680)
+        .resizable(true)
+        .content(&window_shell)
+        .build();
+    window.add_css_class("window-shell");
+    apply_shell_profile(&header, &window, &preset);
+    runtime.apply_appearance(
+        window_uses_dark_theme(&window),
+        preset.density,
+        payload.saved_tab.terminal_zoom_steps,
+    );
+
+    let detached_tabs = Rc::new(RefCell::new(vec![payload.tab]));
+    save_application_window_session_state(window_id, &detached_tabs, tab_id, session_store);
+
+    {
+        let window = window.clone();
+        let tabs = detached_tabs.clone();
+        fullscreen_button.connect_clicked(move |_| {
+            toggle_workspace_fullscreen(&window, &tabs, tab_id);
+        });
+    }
+
+    {
+        let session_store = session_store.clone();
+        let force_close = Rc::new(Cell::new(false));
+        let force_close_for_confirm = force_close.clone();
+        let runtime_for_close = runtime.clone();
+        window.connect_close_request(move |window| {
+            if force_close.replace(false) {
+                remove_application_window_session_state(window_id, &session_store);
+                runtime_for_close.terminate_all("closing detached workspace window");
+                return glib::Propagation::Proceed;
+            }
+
+            if runtime_for_close.has_active_processes() {
+                let window = window.clone();
+                let window_for_confirm = window.clone();
+                let force_close = force_close_for_confirm.clone();
+                confirm_destructive_action(
+                    &window,
+                    "Close Detached Workspace?",
+                    "Running terminal sessions in this detached workspace will be terminated.",
+                    "Close",
+                    move || {
+                        force_close.set(true);
+                        window_for_confirm.close();
+                    },
+                );
+                return glib::Propagation::Stop;
+            }
+
+            remove_application_window_session_state(window_id, &session_store);
+            runtime_for_close.terminate_all("closing detached workspace window");
+            glib::Propagation::Proceed
+        });
+    }
+
+    window.present();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_tab_close(
     view: &adw::TabView,
@@ -3277,31 +3596,98 @@ fn has_active_workspace_processes(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> bool
     })
 }
 
-fn persist_application_session(
+fn linux_session_registry() -> &'static Mutex<LinuxSessionRegistry> {
+    LINUX_SESSION_REGISTRY.get_or_init(|| Mutex::new(LinuxSessionRegistry::default()))
+}
+
+fn persist_linux_session_registry(registry: &LinuxSessionRegistry, session_store: &SessionStore) {
+    if registry.windows.is_empty() {
+        session_store.clear();
+        return;
+    }
+
+    let active_window_id = registry
+        .active_window_id
+        .filter(|id| registry.windows.contains_key(id))
+        .or_else(|| registry.windows.keys().next().copied());
+    let mut tabs = Vec::new();
+    let mut active_tab_index = 0usize;
+    let mut current_offset = 0usize;
+
+    for (window_id, session) in &registry.windows {
+        if Some(*window_id) == active_window_id {
+            active_tab_index = current_offset
+                + session
+                    .active_tab_index
+                    .min(session.tabs.len().saturating_sub(1));
+        }
+        current_offset += session.tabs.len();
+        tabs.extend(session.tabs.clone());
+    }
+
+    session_store.save(&SavedSession {
+        tabs,
+        active_tab_index,
+    });
+}
+
+fn save_application_window_session_state(
+    window_id: usize,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     session_store: &SessionStore,
 ) {
+    let registry_lock = linux_session_registry().lock();
+    let Ok(mut registry) = registry_lock else {
+        logging::error("Linux session registry lock poisoned while saving");
+        return;
+    };
+
     if let Some(session) = collect_session(tabs, active_tab_id) {
         logging::info(format!(
-            "saving session with {} workspace tab(s)",
+            "saving window {} session with {} workspace tab(s)",
+            window_id,
             session.tabs.len()
         ));
-        session_store.save(&session);
+        registry.windows.insert(window_id, session);
+        registry.active_window_id = Some(window_id);
     } else {
-        logging::info("no workspace tabs to save, clearing session");
-        session_store.clear();
+        logging::info(format!(
+            "removing window {} from session registry because it has no workspace tabs",
+            window_id
+        ));
+        registry.windows.remove(&window_id);
+        if registry.active_window_id == Some(window_id) {
+            registry.active_window_id = registry.windows.keys().next().copied();
+        }
     }
+
+    persist_linux_session_registry(&registry, session_store);
+}
+
+fn remove_application_window_session_state(window_id: usize, session_store: &SessionStore) {
+    let registry_lock = linux_session_registry().lock();
+    let Ok(mut registry) = registry_lock else {
+        logging::error("Linux session registry lock poisoned while removing");
+        return;
+    };
+
+    registry.windows.remove(&window_id);
+    if registry.active_window_id == Some(window_id) {
+        registry.active_window_id = registry.windows.keys().next().copied();
+    }
+    persist_linux_session_registry(&registry, session_store);
 }
 
 fn force_quit_application(
+    window_id: usize,
     window: &adw::ApplicationWindow,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     session_store: &SessionStore,
 ) {
     logging::info("force quitting application window");
-    persist_application_session(tabs, active_tab_id, session_store);
+    save_application_window_session_state(window_id, tabs, active_tab_id, session_store);
     for runtime in workspace_runtimes(tabs) {
         runtime.terminate_all("force quitting application window");
     }
@@ -3448,7 +3834,8 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkspaceTab, move_item_to_position, move_tab_to_position, preview_index_for_pointer,
+        WorkspaceTab, move_item_to_position, move_tab_to_position, next_active_index_after_detach,
+        preview_index_for_pointer,
     };
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
@@ -3530,5 +3917,22 @@ mod tests {
         let slots = vec![(0.0, 100.0), (110.0, 100.0)];
 
         assert_eq!(preview_index_for_pointer(&slots, 190.0), 2);
+    }
+
+    #[test]
+    fn detach_next_active_selects_following_tab_when_available() {
+        assert_eq!(next_active_index_after_detach(3, 0), Some(0));
+        assert_eq!(next_active_index_after_detach(3, 1), Some(1));
+    }
+
+    #[test]
+    fn detach_next_active_selects_previous_for_last_tab() {
+        assert_eq!(next_active_index_after_detach(3, 2), Some(1));
+    }
+
+    #[test]
+    fn detach_next_active_is_none_for_only_or_unknown_tab() {
+        assert_eq!(next_active_index_after_detach(1, 0), None);
+        assert_eq!(next_active_index_after_detach(3, 3), None);
     }
 }
