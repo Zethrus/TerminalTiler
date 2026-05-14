@@ -41,7 +41,7 @@ struct TileEditorPanel {
 #[derive(Clone)]
 struct WizardStepper {
     root: gtk::Box,
-    steps: Vec<gtk::Label>,
+    steps: Vec<gtk::Button>,
 }
 
 pub struct LaunchScreenInput {
@@ -165,6 +165,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
     let wizard_steps = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::SlideLeftRight)
+        .transition_duration(180)
         .hhomogeneous(false)
         .vhomogeneous(false)
         .hexpand(true)
@@ -783,7 +784,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     action_bar.append(&configure_button);
 
     let sync_wizard_navigation = Rc::new({
-        let wizard_steps = wizard_steps.clone();
         let wizard_stepper = wizard_stepper.clone();
         let wizard_step_names = wizard_step_names.clone();
         let wizard_step_index = wizard_step_index.clone();
@@ -797,7 +797,6 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 .get()
                 .min(wizard_step_names.len().saturating_sub(1));
             wizard_step_index.set(index);
-            wizard_steps.set_visible_child_name(wizard_step_names[index]);
             previous_button.set_sensitive(index > 0);
             let is_final_step = index + 1 == wizard_step_names.len();
             preset_action_button.set_visible(is_final_step);
@@ -819,14 +818,45 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         }
     });
 
-    {
+    let go_to_wizard_step: Rc<dyn Fn(usize)> = Rc::new({
+        let wizard_steps = wizard_steps.clone();
+        let wizard_step_names = wizard_step_names.clone();
         let wizard_step_index = wizard_step_index.clone();
         let sync_wizard_navigation = sync_wizard_navigation.clone();
+        move |target_index| {
+            let last_index = wizard_step_names.len().saturating_sub(1);
+            let current_index = wizard_step_index.get().min(last_index);
+            let next_index = target_index.min(last_index);
+            let transition = if next_index > current_index {
+                gtk::StackTransitionType::SlideLeft
+            } else {
+                gtk::StackTransitionType::SlideRight
+            };
+
+            wizard_step_index.set(next_index);
+            if next_index == current_index {
+                sync_wizard_navigation();
+                return;
+            }
+            wizard_steps.set_visible_child_full(wizard_step_names[next_index], transition);
+            sync_wizard_navigation();
+        }
+    });
+
+    for (step_index, step_button) in wizard_stepper.steps.iter().enumerate() {
+        let go_to_wizard_step = go_to_wizard_step.clone();
+        step_button.connect_clicked(move |_| {
+            go_to_wizard_step(step_index);
+        });
+    }
+
+    {
+        let wizard_step_index = wizard_step_index.clone();
+        let go_to_wizard_step = go_to_wizard_step.clone();
         previous_button.connect_clicked(move |_| {
             let index = wizard_step_index.get();
             if index > 0 {
-                wizard_step_index.set(index - 1);
-                sync_wizard_navigation();
+                go_to_wizard_step(index - 1);
             }
         });
     }
@@ -843,13 +873,12 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let active_layout = active_layout.clone();
         let wizard_step_index = wizard_step_index.clone();
         let wizard_step_names = wizard_step_names.clone();
-        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        let go_to_wizard_step = go_to_wizard_step.clone();
 
         configure_button.connect_clicked(move |_| {
             let index = wizard_step_index.get();
             if index + 1 < wizard_step_names.len() {
-                wizard_step_index.set(index + 1);
-                sync_wizard_navigation();
+                go_to_wizard_step(index + 1);
                 return;
             }
 
@@ -880,7 +909,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         });
     }
 
-    sync_wizard_navigation();
+    go_to_wizard_step(0);
 
     let show_new_workspace_wizard: Rc<dyn Fn()> = Rc::new({
         let selected = selected.clone();
@@ -898,8 +927,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let density_preview_callback = density_preview_callback.clone();
         let assets = assets.clone();
         let mode_stack = mode_stack.clone();
-        let wizard_step_index = wizard_step_index.clone();
-        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        let go_to_wizard_step = go_to_wizard_step.clone();
         move || {
             selected.set(Selection::Template(0));
             if let Some(template) = templates.first() {
@@ -928,8 +956,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 btn.remove_css_class("is-selected");
             }
 
-            wizard_step_index.set(0);
-            sync_wizard_navigation();
+            go_to_wizard_step(0);
             mode_stack.set_visible_child_name("wizard");
         }
     });
@@ -952,8 +979,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let density_preview_callback = density_preview_callback.clone();
         let assets = assets.clone();
         let mode_stack = mode_stack.clone();
-        let wizard_step_index = wizard_step_index.clone();
-        let sync_wizard_navigation = sync_wizard_navigation.clone();
+        let go_to_wizard_step = go_to_wizard_step.clone();
         move |idx| {
             let Some(p) = presets.get(idx) else {
                 return;
@@ -988,8 +1014,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 }
             }
 
-            wizard_step_index.set(0);
-            sync_wizard_navigation();
+            go_to_wizard_step(0);
             mode_stack.set_visible_child_name("wizard");
         }
     });
@@ -1116,11 +1141,12 @@ fn build_wizard_stepper() -> WizardStepper {
         .iter()
         .enumerate()
     {
-        let step = gtk::Label::builder()
+        let step = gtk::Button::builder()
             .label(format!("{}  {}", index + 1, label))
-            .halign(gtk::Align::Center)
+            .halign(gtk::Align::Fill)
             .hexpand(true)
             .css_classes(["wizard-step-chip"])
+            .tooltip_text(format!("Go to step {}: {}", index + 1, label))
             .build();
         root.append(&step);
         steps.push(step);
