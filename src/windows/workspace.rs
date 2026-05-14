@@ -1,6 +1,6 @@
 #[cfg(target_os = "windows")]
 mod imp {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::ffi::c_void;
     use std::mem;
     use std::ptr;
@@ -92,7 +92,7 @@ mod imp {
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
     use crate::services::launch_resolution::resolve_tile_launch;
-    use crate::services::layout_editor::split_tile_with_kind;
+    use crate::services::layout_editor::{plan_tile_reconciliation, split_tile_with_kind};
     use crate::services::output_helpers::{helper_summary_text, scan_output};
     use crate::services::runbooks::resolve_runbook;
     use crate::storage::asset_store::AssetStore;
@@ -1875,6 +1875,9 @@ mod imp {
             if pane.tile.tile_kind == TileKind::WebView {
                 continue;
             }
+            if pane.session.is_some() {
+                continue;
+            }
             let resolved_launch =
                 match resolve_tile_launch(&pane.tile, &workspace_root, &asset_outcome.assets) {
                     Ok(resolved_launch) => resolved_launch,
@@ -2351,7 +2354,13 @@ mod imp {
         };
 
         active_tab_mut(state).preset.layout = next_layout;
-        rebuild_active_tab_content(hwnd, state);
+        reconcile_active_tab_panes(hwnd, state);
+        let new_web_pane_id = state
+            .panes
+            .iter()
+            .find(|pane| pane.tile.id == new_tile_id)
+            .map(|pane| pane.id);
+        set_focused_web_pane(state, new_web_pane_id);
         focus_pane(state, &new_tile_id);
         unsafe {
             SetFocus(state.url_hwnd);
@@ -2915,11 +2924,17 @@ mod imp {
                         format!("Registering WebView2 context menu handler failed: {error}")
                     })?;
             }
+            let output_bounds = client_bounds(output_hwnd).unwrap_or(Bounds {
+                left: 0,
+                top: 0,
+                right: 720,
+                bottom: 420,
+            });
             let _ = controller.SetBounds(WinRect {
                 left: 0,
                 top: 0,
-                right: 0,
-                bottom: 0,
+                right: output_bounds.width().max(120),
+                bottom: output_bounds.height().max(48),
             });
             logging::info(format!("web pane {pane_id} navigating to {initial_url}"));
             webview
@@ -3042,16 +3057,189 @@ mod imp {
     fn destroy_active_panes(state: &mut WorkspaceWindowState) {
         state.pane_drag = None;
         for pane in &state.panes {
-            unsafe {
-                if !pane.title_hwnd.is_null() {
-                    windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.title_hwnd);
-                }
-                if !pane.output_hwnd.is_null() {
-                    windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.output_hwnd);
-                }
-            }
+            destroy_pane_windows(pane);
         }
         state.panes.clear();
+    }
+
+    fn destroy_pane_windows(pane: &PaneState) {
+        unsafe {
+            if !pane.title_hwnd.is_null() {
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.title_hwnd);
+            }
+            if !pane.output_hwnd.is_null() {
+                windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(pane.output_hwnd);
+            }
+        }
+    }
+
+    fn create_pane_state(
+        hwnd: HWND,
+        tile: TileSpec,
+        font_points: i32,
+        line_height_scale: f64,
+        ui_font: HGDIOBJ,
+    ) -> Box<PaneState> {
+        let initial_web_uri = tile.url.clone();
+        let is_web_tile = tile.tile_kind == TileKind::WebView;
+        let mut pane = Box::new(PaneState {
+            id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
+            parent_hwnd: hwnd,
+            tile,
+            title_hwnd: ptr::null_mut(),
+            output_hwnd: ptr::null_mut(),
+            terminal: VtBuffer::new(80, 24),
+            webview_controller: None,
+            webview: None,
+            webview_uri: initial_web_uri,
+            webview_title: None,
+            auto_refresh_stop: None,
+            focused: false,
+            font: create_terminal_font(font_points),
+            cell_width: 9,
+            cell_height: 18,
+            baseline_offset: 1,
+            line_height_scale,
+            selection_anchor: None,
+            selection_focus: None,
+            selecting: false,
+            pressed_mouse_button: None,
+            header_press_origin: None,
+            transcript: TranscriptBuffer::default(),
+            last_helper_signature: String::new(),
+            reconnect_attempts: 0,
+            termination_requested: false,
+            session: None,
+            launch_runtime: None,
+        });
+        pane.title_hwnd = create_child_window(
+            hwnd,
+            PANE_HEADER_CLASS,
+            "",
+            WS_CHILD | WS_VISIBLE | SS_NOTIFY_STYLE,
+            0,
+            0,
+            (&mut *pane as *mut PaneState).cast(),
+        );
+        let pane_ptr: *mut PaneState = &mut *pane;
+        pane.output_hwnd = create_child_window(
+            hwnd,
+            PANE_CLASS,
+            "",
+            if is_web_tile {
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
+            } else {
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL
+            },
+            0,
+            0,
+            pane_ptr.cast(),
+        );
+        if !is_web_tile && !pane.output_hwnd.is_null() {
+            unsafe {
+                DragAcceptFiles(pane.output_hwnd, 1);
+            }
+        }
+        if !pane.title_hwnd.is_null() {
+            unsafe {
+                SendMessageW(pane.title_hwnd, WM_SETFONT, ui_font as usize, 1);
+            }
+        }
+        update_terminal_metrics(&mut pane);
+        if !is_web_tile {
+            update_pane_scrollbar(&pane);
+        }
+        pane
+    }
+
+    fn reconcile_active_tab_panes(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let ordered_specs = active_tab(state).preset.layout.tile_specs();
+        let reconciliation = plan_tile_reconciliation(
+            state.panes.iter().map(|pane| pane.tile.id.as_str()),
+            &ordered_specs,
+        );
+        logging::info(format!(
+            "reconciling workspace panes reused={:?} created={:?} removed={:?}",
+            reconciliation.ordered_existing_tile_ids,
+            reconciliation.created_tile_ids,
+            reconciliation.removed_tile_ids
+        ));
+
+        let font_points = effective_terminal_font_points(
+            active_tab(state).preset.density,
+            active_tab(state).terminal_zoom_steps,
+        );
+        let line_height_scale = active_tab(state)
+            .preset
+            .density
+            .terminal_line_height_scale();
+        let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+
+        let mut existing_panes = state
+            .panes
+            .drain(..)
+            .map(|pane| (pane.tile.id.clone(), pane))
+            .collect::<HashMap<_, _>>();
+        let mut next_panes = Vec::with_capacity(ordered_specs.len());
+
+        for spec in ordered_specs {
+            if let Some(mut pane) = existing_panes.remove(&spec.id) {
+                if pane.tile.tile_kind == spec.tile_kind {
+                    pane.tile = spec;
+                    if pane.tile.tile_kind == TileKind::WebView && pane.webview_uri.is_none() {
+                        pane.webview_uri = pane.tile.url.clone();
+                    }
+                    next_panes.push(pane);
+                    continue;
+                }
+
+                destroy_pane_windows(&pane);
+            }
+
+            next_panes.push(create_pane_state(
+                hwnd,
+                spec,
+                font_points,
+                line_height_scale,
+                ui_font,
+            ));
+        }
+
+        for (_, removed_pane) in existing_panes {
+            destroy_pane_windows(&removed_pane);
+        }
+
+        state.pane_drag = None;
+        state.panes = next_panes;
+        if let Some(focused_web_pane_id) = state.focused_web_pane_id
+            && pane_by_id(state, focused_web_pane_id).is_none()
+        {
+            state.focused_web_pane_id = None;
+        }
+
+        layout_controls(hwnd, state);
+
+        for pane_index in 0..state.panes.len() {
+            if state.panes[pane_index].tile.tile_kind != TileKind::WebView
+                || state.panes[pane_index].webview.is_some()
+            {
+                continue;
+            }
+            if let Err(error) = initialize_web_pane(state, pane_index) {
+                let pane = &mut state.panes[pane_index];
+                logging::error(format!(
+                    "failed to initialize web tile '{}': {error}",
+                    pane.tile.title
+                ));
+                pane.terminal.process(&format!(
+                    "Could not initialize embedded browser.\r\n\r\n{error}\r\n"
+                ));
+            }
+        }
+
+        layout_controls(hwnd, state);
+        spawn_pane_sessions(hwnd, state);
+        save_workspace_session_state(state);
     }
 
     fn rebuild_active_tab_content(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -3092,79 +3280,18 @@ mod imp {
             .density
             .terminal_line_height_scale();
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
-        state.panes = Vec::with_capacity(tile_specs.len());
-        for tile in tile_specs {
-            let initial_web_uri = tile.url.clone();
-            let is_web_tile = tile.tile_kind == TileKind::WebView;
-            let mut pane = Box::new(PaneState {
-                id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
-                parent_hwnd: hwnd,
-                tile,
-                title_hwnd: ptr::null_mut(),
-                output_hwnd: ptr::null_mut(),
-                terminal: VtBuffer::new(80, 24),
-                webview_controller: None,
-                webview: None,
-                webview_uri: initial_web_uri,
-                webview_title: None,
-                auto_refresh_stop: None,
-                focused: false,
-                font: create_terminal_font(font_points),
-                cell_width: 9,
-                cell_height: 18,
-                baseline_offset: 1,
-                line_height_scale,
-                selection_anchor: None,
-                selection_focus: None,
-                selecting: false,
-                pressed_mouse_button: None,
-                header_press_origin: None,
-                transcript: TranscriptBuffer::default(),
-                last_helper_signature: String::new(),
-                reconnect_attempts: 0,
-                termination_requested: false,
-                session: None,
-                launch_runtime: None,
-            });
-            pane.title_hwnd = create_child_window(
-                hwnd,
-                PANE_HEADER_CLASS,
-                "",
-                WS_CHILD | WS_VISIBLE | SS_NOTIFY_STYLE,
-                0,
-                0,
-                (&mut *pane as *mut PaneState).cast(),
-            );
-            let pane_ptr: *mut PaneState = &mut *pane;
-            pane.output_hwnd = create_child_window(
-                hwnd,
-                PANE_CLASS,
-                "",
-                if is_web_tile {
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER
-                } else {
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | WS_VSCROLL
-                },
-                0,
-                0,
-                pane_ptr.cast(),
-            );
-            if !is_web_tile && !pane.output_hwnd.is_null() {
-                unsafe {
-                    DragAcceptFiles(pane.output_hwnd, 1);
-                }
-            }
-            if !pane.title_hwnd.is_null() {
-                unsafe {
-                    SendMessageW(pane.title_hwnd, WM_SETFONT, ui_font as usize, 1);
-                }
-            }
-            update_terminal_metrics(&mut pane);
-            if !is_web_tile {
-                update_pane_scrollbar(&pane);
-            }
-            state.panes.push(pane);
-        }
+        state.panes = tile_specs
+            .into_iter()
+            .map(|tile| create_pane_state(hwnd, tile, font_points, line_height_scale, ui_font))
+            .collect();
+
+        state.focused_web_pane_id = first_web_pane_id(state);
+
+        rebuild_tab_buttons(hwnd, state);
+        update_tab_action_buttons(state);
+        refresh_broadcast_controls(state);
+        refresh_alert_button(state);
+        layout_controls(hwnd, state);
 
         for pane_index in 0..state.panes.len() {
             if state.panes[pane_index].tile.tile_kind != TileKind::WebView {
@@ -3183,12 +3310,6 @@ mod imp {
             }
         }
 
-        state.focused_web_pane_id = first_web_pane_id(state);
-
-        rebuild_tab_buttons(hwnd, state);
-        update_tab_action_buttons(state);
-        refresh_broadcast_controls(state);
-        refresh_alert_button(state);
         layout_controls(hwnd, state);
         spawn_pane_sessions(hwnd, state);
         save_workspace_session_state(state);

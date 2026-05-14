@@ -111,6 +111,20 @@ fn tile_widgets_and_panes_are_configured_as_shrinkable() {
 }
 
 #[test]
+fn web_tile_initial_navigation_waits_until_mapped() {
+    assert!(
+        WEB_TILE_RS.contains("fn defer_initial_navigation_until_mapped"),
+        "web tiles should centralize deferred initial navigation"
+    );
+    assert!(
+        WEB_TILE_RS.contains("web_view.connect_map")
+            && WEB_TILE_RS.contains("glib::idle_add_local_once")
+            && WEB_TILE_RS.contains("web_view.load_uri(&url)"),
+        "WebKit views should start initial navigation only after they are mapped into the rebuilt layout"
+    );
+}
+
+#[test]
 fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
     for (source_name, source) in [("terminal tile", TILE_VIEW_RS), ("web tile", WEB_TILE_RS)] {
         assert!(

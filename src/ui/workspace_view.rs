@@ -502,7 +502,7 @@ impl WorkspaceRuntime {
     }
 
     pub fn add_web_tile(&self) -> Option<String> {
-        let initial_url = normalize_web_url(self.inner.url_entry.text().as_str());
+        let initial_url = DEFAULT_WEB_URL.to_string();
         let target_tile_id = self.inner.focused_tile_id.borrow().clone().or_else(|| {
             self.inner
                 .tiles
@@ -549,6 +549,7 @@ impl WorkspaceRuntime {
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
         self.set_focused_tile(Some(new_tile_id.clone()), true);
+        self.focus_tile(&new_tile_id);
         (self.inner.on_layout_changed)(next_layout);
 
         Some(new_tile_id)

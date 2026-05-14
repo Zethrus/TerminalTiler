@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use uuid::Uuid;
 
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
@@ -44,6 +46,54 @@ pub fn close_tile(layout: &LayoutNode, target_tile_id: &str) -> Option<LayoutNod
         return None;
     }
     remove_tile(layout, target_tile_id)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct TileReconciliationPlan {
+    pub ordered_existing_tile_ids: Vec<String>,
+    pub created_tile_ids: Vec<String>,
+    pub removed_tile_ids: Vec<String>,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn plan_tile_reconciliation<'a, I>(
+    existing_tile_ids: I,
+    ordered_next_tiles: &[TileSpec],
+) -> TileReconciliationPlan
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let existing_tile_ids = existing_tile_ids
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    let next_tile_ids = ordered_next_tiles
+        .iter()
+        .map(|tile| tile.id.clone())
+        .collect::<HashSet<_>>();
+
+    let ordered_existing_tile_ids = ordered_next_tiles
+        .iter()
+        .filter(|tile| existing_tile_ids.contains(&tile.id))
+        .map(|tile| tile.id.clone())
+        .collect();
+    let created_tile_ids = ordered_next_tiles
+        .iter()
+        .filter(|tile| !existing_tile_ids.contains(&tile.id))
+        .map(|tile| tile.id.clone())
+        .collect();
+    let mut removed_tile_ids = existing_tile_ids
+        .into_iter()
+        .filter(|tile_id| !next_tile_ids.contains(tile_id))
+        .collect::<Vec<_>>();
+    removed_tile_ids.sort();
+
+    TileReconciliationPlan {
+        ordered_existing_tile_ids,
+        created_tile_ids,
+        removed_tile_ids,
+    }
 }
 
 #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -196,7 +246,9 @@ fn update_ratio_inner(layout: &LayoutNode, split_path: &[bool], ratio: f32) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::{close_tile, split_tile, split_tile_with_kind, update_split_ratio};
+    use super::{
+        close_tile, plan_tile_reconciliation, split_tile, split_tile_with_kind, update_split_ratio,
+    };
     use crate::model::layout::{
         DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, default_tile_spec,
     };
@@ -229,6 +281,26 @@ mod tests {
         assert_eq!(new_tile.tile_kind, TileKind::WebView);
         assert_eq!(new_tile.url.as_deref(), Some(DEFAULT_WEB_URL));
         assert_eq!(new_tile.startup_command, None);
+    }
+
+    #[test]
+    fn pane_reconciliation_plan_preserves_existing_ids_and_marks_inserted_web_tile() {
+        let layout = single_tile_layout();
+        let (next, new_tile_id) = split_tile_with_kind(
+            &layout,
+            "tile-1",
+            SplitAxis::Horizontal,
+            false,
+            TileKind::WebView,
+        )
+        .unwrap();
+        let ordered_specs = next.tile_specs();
+
+        let plan = plan_tile_reconciliation(["tile-1"].into_iter(), &ordered_specs);
+
+        assert_eq!(plan.ordered_existing_tile_ids, vec!["tile-1"]);
+        assert_eq!(plan.created_tile_ids, vec![new_tile_id]);
+        assert!(plan.removed_tile_ids.is_empty());
     }
 
     #[test]

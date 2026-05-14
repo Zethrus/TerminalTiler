@@ -50,8 +50,6 @@ pub fn build(
 
     let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
 
-    web_view.load_uri(&url);
-
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -381,6 +379,7 @@ pub fn build(
     make_shrinkable(&web_view);
     web_frame.append(&web_view);
     shell.append(&web_frame);
+    defer_initial_navigation_until_mapped(&web_view, &url, &tile.id);
 
     install_web_context_menu(&web_view, &shell);
 
@@ -461,6 +460,28 @@ pub fn build(
 fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
     widget.set_size_request(0, 0);
     widget.set_overflow(gtk::Overflow::Hidden);
+}
+
+fn defer_initial_navigation_until_mapped(web_view: &webkit6::WebView, url: &str, tile_id: &str) {
+    let did_start_navigation = Rc::new(Cell::new(false));
+    let url = url.to_string();
+    let tile_id = tile_id.to_string();
+    web_view.connect_map(move |web_view| {
+        if did_start_navigation.replace(true) {
+            return;
+        }
+
+        let web_view = web_view.clone();
+        let url = url.clone();
+        let tile_id = tile_id.clone();
+        glib::idle_add_local_once(move || {
+            logging::info(format!(
+                "web tile {} initial navigation after map to {}",
+                tile_id, url
+            ));
+            web_view.load_uri(&url);
+        });
+    });
 }
 
 fn configure_dynamic_header_label(

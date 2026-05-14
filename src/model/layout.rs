@@ -392,7 +392,15 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutNode, SplitAxis, WorkingDirectory, split, tile};
+    use super::{
+        DEFAULT_WEB_URL, LayoutNode, SplitAxis, WorkingDirectory, normalize_web_url, split, tile,
+    };
+
+    #[test]
+    fn empty_web_url_normalizes_to_default() {
+        assert_eq!(normalize_web_url(""), DEFAULT_WEB_URL);
+        assert_eq!(normalize_web_url("   "), DEFAULT_WEB_URL);
+    }
 
     #[test]
     fn collects_tile_specs_in_display_order() {
