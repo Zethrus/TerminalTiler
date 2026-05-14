@@ -2494,18 +2494,19 @@ impl TabStripController {
             .actions(gdk::DragAction::MOVE)
             .button(1)
             .build();
-        drag_source.connect_prepare(move |_, _, _| {
+        let shell_for_prepare = shell.clone();
+        let label_for_prepare = title_label.clone();
+        drag_source.connect_prepare(move |source, x, y| {
+            let title = label_for_prepare.text().to_string();
+            let is_active = shell_for_prepare.has_css_class("is-active");
+            let preview = build_tab_drag_preview(&title, is_active);
+            let paintable = gtk::WidgetPaintable::new(Some(&preview));
+            source.set_icon(Some(&paintable), x.round() as i32, y.round() as i32);
             Some(gdk::ContentProvider::for_value(&(tab_id as u32).to_value()))
         });
         let controller_for_begin = controller.clone();
-        let shell_for_begin = shell.clone();
-        let label_for_begin = title_label.clone();
-        drag_source.connect_drag_begin(move |_, drag| {
-            let title = label_for_begin.text().to_string();
-            let is_active = shell_for_begin.has_css_class("is-active");
-            controller_for_begin
-                .borrow_mut()
-                .begin_drag(tab_id, drag, &title, is_active);
+        drag_source.connect_drag_begin(move |_, _| {
+            controller_for_begin.borrow_mut().begin_drag(tab_id);
         });
         let controller_for_cancel = controller.clone();
         drag_source.connect_drag_cancel(move |_, _, _| {
@@ -2544,7 +2545,7 @@ impl TabStripController {
         }
     }
 
-    fn begin_drag(&mut self, tab_id: usize, drag: &gdk::Drag, title: &str, is_active: bool) {
+    fn begin_drag(&mut self, tab_id: usize) {
         if self.drag_state.is_some() {
             return;
         }
@@ -2555,10 +2556,6 @@ impl TabStripController {
         let Some(origin_index) = self.order.iter().position(|id| *id == tab_id) else {
             return;
         };
-
-        let icon = gtk::DragIcon::for_drag(drag);
-        let preview = build_tab_drag_preview(title, is_active);
-        icon.set_child(Some(&preview));
 
         item.shell.add_css_class("is-lifted-source");
         item.shell.add_css_class("is-preview-slot");

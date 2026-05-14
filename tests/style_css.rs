@@ -230,9 +230,12 @@ fn workspace_tab_drag_stays_left_button_and_uses_title_drop_surface() {
             && WINDOW_RS.contains("drop_target.connect_enter")
             && WINDOW_RS.contains("translate_coordinates(&self.tabs_box")
             && WINDOW_RS.contains("drop_surface.add_controller(drop_target)")
+            && WINDOW_RS.contains("gtk::WidgetPaintable::new(Some(&preview))")
+            && WINDOW_RS
+                .contains("source.set_icon(Some(&paintable), x.round() as i32, y.round() as i32)")
             && WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
             && WINDOW_RS.contains("let rename_click = gtk::GestureClick::builder()"),
-        "workspace tab drag should be left-button-only, update over the full title chrome, and preserve Detach/Rename handlers"
+        "workspace tab drag should be left-button-only, keep its preview hotspot under the cursor, update over the full title chrome, and preserve Detach/Rename handlers"
     );
 }
 
