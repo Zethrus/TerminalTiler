@@ -2347,11 +2347,12 @@ fn build_tile_editor_row(
     auto_refresh.set_value(tile.auto_refresh_seconds.unwrap_or_default() as f64);
     web_settings.append(&auto_refresh);
 
-    row.append(&build_launch_control_row(
+    let web_settings_row = build_launch_control_row(
         "Web settings",
         "Set the initial URL and optional auto-refresh interval for this browser tile.",
         &web_settings,
-    ));
+    );
+    row.append(&web_settings_row);
 
     let directory_hint = gtk::Label::builder()
         .label(tile_editor_hint(tile, assets))
@@ -2364,12 +2365,12 @@ fn build_tile_editor_row(
     let sync_visibility = Rc::new({
         let command_entry = command_entry.clone();
         let routing = routing.clone();
-        let web_settings = web_settings.clone();
+        let web_settings_row = web_settings_row.clone();
         move |tile_kind: TileKind| {
             let is_terminal = tile_kind == TileKind::Terminal;
             command_entry.set_visible(is_terminal);
             routing.set_visible(is_terminal);
-            web_settings.set_visible(!is_terminal);
+            web_settings_row.set_visible(!is_terminal);
         }
     });
     sync_visibility(tile.tile_kind);
