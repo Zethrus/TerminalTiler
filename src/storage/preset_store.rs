@@ -312,6 +312,35 @@ mod tests {
     }
 
     #[test]
+    fn deletes_custom_preset_and_preserves_other_presets() {
+        let dir = temp_dir("preset-delete-custom");
+        let path = dir.join("presets.toml");
+        let store = PresetStore::from_path(path);
+
+        store.ensure_seeded();
+        store
+            .upsert_preset(custom_preset("my-preset", "My Preset"))
+            .unwrap();
+        store
+            .upsert_preset(custom_preset("ops-preset", "Ops Preset"))
+            .unwrap();
+
+        store.delete_preset("my-preset").unwrap();
+
+        let preset_ids = store
+            .load_presets()
+            .into_iter()
+            .map(|preset| preset.id)
+            .collect::<Vec<_>>();
+
+        assert!(!preset_ids.iter().any(|id| id == "my-preset"));
+        assert!(preset_ids.iter().any(|id| id == "ops-preset"));
+        assert!(preset_ids.iter().any(|id| id == "solo-operator"));
+        assert!(preset_ids.iter().any(|id| id == "review-pair"));
+        assert!(preset_ids.iter().any(|id| id == "delivery-fleet"));
+    }
+
+    #[test]
     fn reset_builtin_presets_restores_factory_versions_and_preserves_user_presets() {
         let dir = temp_dir("preset-reset-builtin");
         let path = dir.join("presets.toml");

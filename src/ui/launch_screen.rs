@@ -1070,6 +1070,8 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 &build_saved_workspace_card(
                     preset,
                     index,
+                    &preset_store,
+                    &on_presets_changed,
                     {
                         let open_workspace_from_dashboard = open_workspace_from_dashboard.clone();
                         move |idx| open_workspace_from_dashboard(idx)
@@ -1208,6 +1210,8 @@ fn build_dashboard_empty_state() -> gtk::Widget {
 fn build_saved_workspace_card<FOpen, FEdit>(
     preset: &WorkspacePreset,
     index: usize,
+    preset_store: &Rc<PresetStore>,
+    on_presets_changed: &Rc<dyn Fn()>,
     on_open: FOpen,
     on_edit: FEdit,
 ) -> gtk::Widget
@@ -1274,6 +1278,16 @@ where
     edit_button.set_hexpand(true);
     edit_button.connect_clicked(move |_| on_edit(index));
     actions.append(&edit_button);
+
+    let delete_button = gtk::Button::with_label("Delete");
+    delete_button.add_css_class("pill-button");
+    delete_button.add_css_class("destructive-button");
+    delete_button.add_css_class("saved-workspace-delete-button");
+    delete_button.set_hexpand(true);
+    delete_button.set_tooltip_text(Some("Delete saved workspace"));
+    connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);
+    actions.append(&delete_button);
+
     card.append(&actions);
 
     card.upcast()
@@ -1598,59 +1612,81 @@ where
     delete_button.set_valign(gtk::Align::Start);
     delete_button.set_tooltip_text(Some("Delete preset"));
 
-    let preset_id = preset.id.clone();
-    let preset_name = preset.name.clone();
-    let preset_store = preset_store.clone();
-    let on_presets_changed = on_presets_changed.clone();
-    let is_builtin = is_builtin_preset_id(&preset.id);
-
-    delete_button.connect_clicked(move |button| {
-        let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-
-        let preset_id = preset_id.clone();
-        let preset_store = preset_store.clone();
-        let on_presets_changed = on_presets_changed.clone();
-
-        let dialog = adw::MessageDialog::builder()
-            .modal(true)
-            .heading("Delete Preset?")
-            .body(if is_builtin {
-                format!(
-                    "\"{}\" will be removed. You can restore the shipped presets from Settings later.",
-                    preset_name
-                )
-            } else {
-                format!("\"{}\" will be permanently removed.", preset_name)
-            })
-            .build();
-
-        if let Some(ref win) = window {
-            dialog.set_transient_for(Some(win));
-        }
-
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("delete", "Delete");
-        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
-
-        dialog.connect_response(None, move |dialog, response| {
-            if response == "delete" {
-                if let Err(err) = preset_store.delete_preset(&preset_id) {
-                    logging::error(format!("Failed to delete preset: {}", err));
-                } else {
-                    on_presets_changed();
-                }
-            }
-            dialog.close();
-        });
-
-        dialog.present();
-    });
+    connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);
 
     top_row.append(&delete_button);
 
     shell.upcast()
+}
+
+fn connect_delete_preset_button(
+    button: &gtk::Button,
+    preset: &WorkspacePreset,
+    preset_store: &Rc<PresetStore>,
+    on_presets_changed: &Rc<dyn Fn()>,
+) {
+    let preset_id = preset.id.clone();
+    let preset_name = preset.name.clone();
+    let is_builtin = is_builtin_preset_id(&preset.id);
+    let preset_store = preset_store.clone();
+    let on_presets_changed = on_presets_changed.clone();
+
+    button.connect_clicked(move |button| {
+        let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+        present_delete_preset_confirmation(
+            window.as_ref(),
+            preset_id.clone(),
+            preset_name.clone(),
+            is_builtin,
+            preset_store.clone(),
+            on_presets_changed.clone(),
+        );
+    });
+}
+
+fn present_delete_preset_confirmation(
+    window: Option<&gtk::Window>,
+    preset_id: String,
+    preset_name: String,
+    is_builtin: bool,
+    preset_store: Rc<PresetStore>,
+    on_presets_changed: Rc<dyn Fn()>,
+) {
+    let dialog = adw::MessageDialog::builder()
+        .modal(true)
+        .heading("Delete Preset?")
+        .body(if is_builtin {
+            format!(
+                "\"{}\" will be removed. You can restore the shipped presets from Settings later.",
+                preset_name
+            )
+        } else {
+            format!("\"{}\" will be permanently removed.", preset_name)
+        })
+        .build();
+
+    if let Some(win) = window {
+        dialog.set_transient_for(Some(win));
+    }
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "delete" {
+            if let Err(err) = preset_store.delete_preset(&preset_id) {
+                logging::error(format!("Failed to delete preset: {}", err));
+            } else {
+                on_presets_changed();
+            }
+        }
+        dialog.close();
+    });
+
+    dialog.present();
 }
 
 fn build_tile_editor_panel() -> TileEditorPanel {
