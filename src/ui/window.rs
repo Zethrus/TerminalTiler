@@ -3861,13 +3861,20 @@ fn present_detached_workspace_window(
         let force_close = Rc::new(Cell::new(false));
         let force_close_for_confirm = force_close.clone();
         let runtime_for_close = runtime.clone();
+        let tabs_for_close = detached_tabs.clone();
+        let window_shell_for_close = window_shell.clone();
         window.connect_close_request(move |window| {
             if reattaching.get() {
                 return glib::Propagation::Proceed;
             }
             if force_close.replace(false) {
-                remove_application_window_session_state(window_id, &session_store);
-                runtime_for_close.terminate_all("closing detached workspace window");
+                finalize_detached_workspace_close(
+                    window_id,
+                    &window_shell_for_close,
+                    &tabs_for_close,
+                    &runtime_for_close,
+                    &session_store,
+                );
                 return glib::Propagation::Proceed;
             }
 
@@ -3888,13 +3895,41 @@ fn present_detached_workspace_window(
                 return glib::Propagation::Stop;
             }
 
-            remove_application_window_session_state(window_id, &session_store);
-            runtime_for_close.terminate_all("closing detached workspace window");
+            finalize_detached_workspace_close(
+                window_id,
+                &window_shell_for_close,
+                &tabs_for_close,
+                &runtime_for_close,
+                &session_store,
+            );
             glib::Propagation::Proceed
         });
     }
 
     window.present();
+}
+
+fn finalize_detached_workspace_close(
+    window_id: usize,
+    window_shell: &gtk::Box,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    runtime: &workspace_view::WorkspaceRuntime,
+    session_store: &SessionStore,
+) {
+    remove_application_window_session_state(window_id, session_store);
+
+    let detached_tabs = tabs.borrow_mut().drain(..).collect::<Vec<_>>();
+    for tab in detached_tabs {
+        clear_workspace_tab_layout_binding(&tab);
+        if let Some(parent) = tab.page_shell.parent()
+            && let Ok(parent_box) = parent.downcast::<gtk::Box>()
+            && parent_box == *window_shell
+        {
+            parent_box.remove(&tab.page_shell);
+        }
+    }
+
+    runtime.terminate_all("closing detached workspace window");
 }
 
 #[allow(clippy::too_many_arguments)]
