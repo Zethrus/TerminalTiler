@@ -228,6 +228,8 @@ fn workspace_tab_drag_stays_left_button_and_uses_title_drop_surface() {
             && WINDOW_RS.contains(".actions(gdk::DragAction::MOVE)")
             && WINDOW_RS.contains(".button(1)")
             && WINDOW_RS.contains("drop_target.connect_enter")
+            && WINDOW_RS
+                .contains("drop_target.set_propagation_phase(gtk::PropagationPhase::Capture)")
             && WINDOW_RS.contains("translate_coordinates(&self.tabs_box")
             && WINDOW_RS.contains("drop_surface.add_controller(drop_target)")
             && WINDOW_RS.contains("fn suppress_native_tab_drag_icon")

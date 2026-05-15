@@ -2682,6 +2682,7 @@ fn create_tab_strip_controller(
     )));
 
     let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+    drop_target.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let controller_for_enter = controller.clone();
         drop_target.connect_enter(move |target, x, y| {
