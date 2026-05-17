@@ -63,6 +63,28 @@ pub fn read_framed_message(reader: &mut impl BufRead) -> io::Result<Option<Frame
     Ok(FramedMessage::decode(&line))
 }
 
+fn read_engine_event(reader: &mut impl BufRead) -> io::Result<Option<VoiceEngineEvent>> {
+    loop {
+        let Some(frame) = read_framed_message(reader)? else {
+            return Ok(None);
+        };
+        if is_engine_event_frame(&frame) {
+            return Ok(Some(event_from_frame(&frame)));
+        }
+        eprintln!(
+            "ignored non-protocol voice engine stdout line starting with {:?}",
+            frame.kind
+        );
+    }
+}
+
+fn is_engine_event_frame(frame: &FramedMessage) -> bool {
+    matches!(
+        frame.kind.as_str(),
+        "ready" | "partial" | "final" | "health" | "error"
+    )
+}
+
 pub fn frame_from_request(request: &VoiceEngineRequest) -> FramedMessage {
     match request {
         VoiceEngineRequest::Start { sample_rate_hz } => {
@@ -168,7 +190,7 @@ impl VoiceEngineProcess {
     }
 
     pub fn read_event(&mut self) -> io::Result<Option<VoiceEngineEvent>> {
-        Ok(read_framed_message(&mut self.stdout)?.map(|frame| event_from_frame(&frame)))
+        read_engine_event(&mut self.stdout)
     }
 
     pub fn shutdown(mut self) -> io::Result<()> {
@@ -278,6 +300,25 @@ mod tests {
         assert_eq!(
             frame_from_request(&VoiceEngineRequest::AudioPcm16(vec![1, -2, 0x1234])),
             FramedMessage::new("audio-pcm16-hex", "0100feff3412")
+        );
+    }
+
+    #[test]
+    fn engine_event_reader_ignores_third_party_stdout_noise() {
+        let mut reader = Cursor::new(
+            b"[NeMo I 2026-05-17 fake restore log]
+Downloading model shard 1/2
+health ok: model loaded
+"
+            .as_slice(),
+        );
+
+        assert_eq!(
+            read_engine_event(&mut reader).unwrap(),
+            Some(VoiceEngineEvent::Health {
+                ok: true,
+                detail: "ok: model loaded".into(),
+            })
         );
     }
 
