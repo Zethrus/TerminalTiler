@@ -14,9 +14,8 @@ use crate::model::assets::{
 use crate::model::layout::ReconnectPolicy;
 use crate::model::workspace_config::ConfigScope;
 use crate::services::assets_editor::{
-    AssetItemSource, AssetSection, AssetValidationIssue, connection_source,
-    effective_assets_for_scope, group_source, host_source, prune_blank_drafts, role_source,
-    runbook_source, snippet_source, validate_assets,
+    AssetItemSource, AssetSection, AssetSourceLookup, AssetValidationIssue,
+    effective_assets_for_scope, prune_blank_drafts, validate_assets,
 };
 use crate::storage::asset_store::AssetStore;
 use crate::ui::dialog_smoke;
@@ -810,6 +809,11 @@ fn render_connections_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let global_host_ids = effective
         .inventory_hosts
         .iter()
@@ -830,17 +834,8 @@ fn render_connections_page(
         .cloned()
         .enumerate()
     {
-        let badge = connection_source(
-            snapshot.scope,
-            &profile.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.connection(&profile.id);
+        let remove_label = remove_label_for_source(badge, None);
         let card = asset_card_shell(
             &profile.name,
             &profile.id,
@@ -861,8 +856,6 @@ fn render_connections_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.connection_profiles.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -1068,6 +1061,11 @@ fn render_hosts_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let current_ids = snapshot
         .current_assets
         .inventory_hosts
@@ -1083,17 +1081,8 @@ fn render_hosts_page(
         .cloned()
         .enumerate()
     {
-        let badge = host_source(
-            snapshot.scope,
-            &host.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.host(&host.id);
+        let remove_label = remove_label_for_source(badge, None);
         let card = asset_card_shell(
             &host.name,
             &host.id,
@@ -1114,8 +1103,6 @@ fn render_hosts_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.inventory_hosts.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -1389,6 +1376,11 @@ fn render_groups_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let current_ids = snapshot
         .current_assets
         .inventory_groups
@@ -1403,17 +1395,8 @@ fn render_groups_page(
         .cloned()
         .enumerate()
     {
-        let badge = group_source(
-            snapshot.scope,
-            &group.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.group(&group.id);
+        let remove_label = remove_label_for_source(badge, None);
         let card = asset_card_shell(
             &group.name,
             &group.id,
@@ -1434,8 +1417,6 @@ fn render_groups_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.inventory_groups.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -1550,6 +1531,11 @@ fn render_roles_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let current_ids = snapshot
         .current_assets
         .role_templates
@@ -1574,19 +1560,8 @@ fn render_roles_page(
         .cloned()
         .enumerate()
     {
-        let badge = role_source(
-            snapshot.scope,
-            &role.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else if badge == AssetItemSource::BuiltIn {
-            "Reset to built-in"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.role(&role.id);
+        let remove_label = remove_label_for_source(badge, Some("Reset to built-in"));
         let card = asset_card_shell(
             &role.name,
             &role.id,
@@ -1607,8 +1582,6 @@ fn render_roles_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.role_templates.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -1790,12 +1763,7 @@ fn render_roles_page(
             let readonly = readonly_card(
                 role.name.as_str(),
                 role.id.as_str(),
-                role_source(
-                    snapshot.scope,
-                    &role.id,
-                    &snapshot.current_assets,
-                    &snapshot.global_assets,
-                ),
+                source_lookup.role(&role.id),
                 "Inherited from built-in or global defaults. Override it here to tune behavior for this workspace.",
             );
             attach_readonly_role_details(&readonly, &role);
@@ -1848,6 +1816,11 @@ fn render_runbooks_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let current_ids = snapshot
         .current_assets
         .runbooks
@@ -1866,17 +1839,8 @@ fn render_runbooks_page(
         .collect::<Vec<_>>();
 
     for (index, runbook) in snapshot.current_assets.runbooks.iter().cloned().enumerate() {
-        let badge = runbook_source(
-            snapshot.scope,
-            &runbook.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.runbook(&runbook.id);
+        let remove_label = remove_label_for_source(badge, None);
         let card = asset_card_shell(
             &runbook.name,
             &runbook.id,
@@ -1897,8 +1861,6 @@ fn render_runbooks_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.runbooks.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -2079,6 +2041,11 @@ fn render_snippets_page(
         &snapshot.current_assets,
         &snapshot.global_assets,
     );
+    let source_lookup = AssetSourceLookup::new(
+        snapshot.scope,
+        &snapshot.current_assets,
+        &snapshot.global_assets,
+    );
     let current_ids = snapshot
         .current_assets
         .snippets
@@ -2087,17 +2054,8 @@ fn render_snippets_page(
         .collect::<Vec<_>>();
 
     for (index, snippet) in snapshot.current_assets.snippets.iter().cloned().enumerate() {
-        let badge = snippet_source(
-            snapshot.scope,
-            &snippet.id,
-            &snapshot.current_assets,
-            &snapshot.global_assets,
-        );
-        let remove_label = if badge == AssetItemSource::WorkspaceOverride {
-            "Remove override"
-        } else {
-            "Remove"
-        };
+        let badge = source_lookup.snippet(&snippet.id);
+        let remove_label = remove_label_for_source(badge, None);
         let card = asset_card_shell(
             &snippet.name,
             &snippet.id,
@@ -2118,8 +2076,6 @@ fn render_snippets_page(
                     cloned.id = String::new();
                     cloned.name = format!("{} copy", cloned.name);
                     snapshot.current_assets.snippets.push(cloned);
-                    snapshot.raw_toml = serialize_assets(&snapshot.current_assets);
-                    snapshot.raw_error = None;
                 }
             })),
             refresh_pages,
@@ -2412,6 +2368,17 @@ where
     header.append(&remove_button);
     card.append(&header);
     card
+}
+
+fn remove_label_for_source(
+    source: AssetItemSource,
+    builtin_label: Option<&'static str>,
+) -> &'static str {
+    match source {
+        AssetItemSource::WorkspaceOverride => "Remove override",
+        AssetItemSource::BuiltIn => builtin_label.unwrap_or("Remove"),
+        AssetItemSource::Global | AssetItemSource::Workspace => "Remove",
+    }
 }
 
 fn readonly_card(title: &str, id: &str, source: AssetItemSource, detail: &str) -> gtk::Box {

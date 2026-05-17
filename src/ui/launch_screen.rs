@@ -2542,7 +2542,7 @@ fn build_tile_editor_row(
         let assets = assets.clone();
         let directory_hint = directory_hint.clone();
         move || {
-            if let Some(tile) = layout_state.borrow().tile_specs().get(index) {
+            if let Some(tile) = layout_state.borrow().tile_spec_at(index) {
                 directory_hint.set_text(&tile_editor_hint(tile, &assets));
             }
         }
@@ -2775,12 +2775,8 @@ fn update_tile_spec<F>(layout_state: &Rc<RefCell<LayoutNode>>, index: usize, upd
 where
     F: FnOnce(&mut TileSpec),
 {
-    let current_layout = layout_state.borrow().clone();
-    let mut tile_specs = current_layout.tile_specs();
-
-    if let Some(tile) = tile_specs.get_mut(index) {
+    if let Some(tile) = layout_state.borrow_mut().tile_spec_mut_at(index) {
         update(tile);
-        *layout_state.borrow_mut() = current_layout.with_tile_specs(&tile_specs);
     }
 }
 

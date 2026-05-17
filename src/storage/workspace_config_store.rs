@@ -1,12 +1,12 @@
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::logging;
 use crate::model::workspace_config::WorkspaceConfig;
-use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::document::{
+    preserve_corrupt_warning, read_optional_string, write_toml_private,
+};
 
 const STORE_VERSION: u32 = 1;
 const WORKSPACE_CONFIG_DIR: &str = ".terminaltiler";
@@ -46,9 +46,9 @@ impl WorkspaceConfigStore {
 
     pub fn load_for_root(&self, workspace_root: &Path) -> WorkspaceConfigLoadOutcome {
         let path = self.path_for_root(workspace_root);
-        let raw = match fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let raw = match read_optional_string(&path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
                 return WorkspaceConfigLoadOutcome {
                     config: WorkspaceConfig::default(),
                     warning: None,
@@ -100,9 +100,7 @@ impl WorkspaceConfigStore {
             assets: config.assets.clone(),
             introspection: config.introspection.clone(),
         };
-        let serialized = toml::to_string_pretty(&document)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        atomic_write_private(&path, &serialized)
+        write_toml_private(&path, &document)
     }
 
     fn recover_invalid_workspace_config(
@@ -110,15 +108,7 @@ impl WorkspaceConfigStore {
         path: &Path,
         message: &str,
     ) -> WorkspaceConfigLoadOutcome {
-        let warning = match preserve_corrupt_file(path) {
-            Ok(Some(preserved)) => format!("{message} Recovery copy: {}.", preserved.display()),
-            Ok(None) => message.to_string(),
-            Err(error) => format!(
-                "{message} TerminalTiler could not preserve the original file: {}.",
-                error
-            ),
-        };
-        logging::error(&warning);
+        let warning = preserve_corrupt_warning(path, message);
         WorkspaceConfigLoadOutcome {
             config: WorkspaceConfig::default(),
             warning: Some(warning),
@@ -176,5 +166,34 @@ mod tests {
 
         assert!(loaded.exists);
         assert_eq!(loaded.config, config);
+    }
+
+    #[test]
+    fn moves_corrupt_workspace_config_aside_and_loads_defaults() {
+        let root = temp_root("workspace-config-corrupt");
+        let store = WorkspaceConfigStore::new();
+        let path = store.path_for_root(&root);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "version = [").unwrap();
+
+        let outcome = store.load_for_root(&root);
+
+        assert!(!outcome.exists);
+        assert_eq!(outcome.config, WorkspaceConfig::default());
+        assert!(outcome.warning.as_deref().is_some_and(|warning| {
+            warning.contains("corrupt workspace config") && warning.contains("Recovery copy:")
+        }));
+        assert!(!path.exists());
+        let preserved = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("workspace.toml.corrupt-")
+            })
+            .count();
+        assert_eq!(preserved, 1);
     }
 }

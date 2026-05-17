@@ -1,5 +1,3 @@
-use std::fs;
-use std::io;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
@@ -8,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
-use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::document::{read_optional_string, write_toml_private};
+use crate::storage::fs_utils::preserve_corrupt_file;
 
 const STORE_VERSION: u32 = 1;
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
@@ -205,9 +204,9 @@ impl PreferenceStore {
             return AppPreferences::default();
         };
 
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let raw = match read_optional_string(path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
                 return AppPreferences::default();
             }
             Err(error) => {
@@ -357,15 +356,7 @@ impl PreferenceStore {
             max_reconnect_attempts: preferences.max_reconnect_attempts,
         };
 
-        let serialized = match toml::to_string_pretty(&document) {
-            Ok(serialized) => serialized,
-            Err(error) => {
-                logging::error(format!("failed to serialize preferences: {}", error));
-                return;
-            }
-        };
-
-        if let Err(error) = atomic_write_private(path, &serialized) {
+        if let Err(error) = write_toml_private(path, &document) {
             logging::error(format!(
                 "failed to write preferences '{}': {}",
                 path.display(),

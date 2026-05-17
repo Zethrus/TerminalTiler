@@ -34,188 +34,15 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
     let workspace_config = WorkspaceConfigStore::new()
         .load_for_root(workspace_root)
         .config;
+    let scan = RootScan::new(workspace_root);
     let mut report = RepoIntrospectionReport::default();
     let mut tags = BTreeSet::new();
 
-    let cargo = workspace_root.join("Cargo.toml");
-    if cargo.exists() {
-        tags.insert("rust".to_string());
-        let services = detect_cargo_services(workspace_root, &cargo);
-        report.services.extend(services.clone());
-        report.suggestions.push(ProjectSuggestion {
-            id: "rust-delivery".into(),
-            title: if services.len() > 1 {
-                "Rust Workspace Delivery".into()
-            } else {
-                "Rust Delivery Workspace".into()
-            },
-            description: suggestion_description(
-                "Planner, build, and verification terminals tuned for Rust work.",
-                &services,
-            ),
-            role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
-            tile_count: 3,
-            startup_commands: vec![
-                Some("codex".into()),
-                Some("cargo check --workspace --all-targets".into()),
-                Some("cargo test --workspace".into()),
-            ],
-            tags: vec!["rust".into(), "delivery".into()],
-        });
-    }
-
-    let package_json = workspace_root.join("package.json");
-    if package_json.exists() {
-        let services = detect_node_services(workspace_root, &package_json);
-        if !services.is_empty() {
-            tags.insert("javascript".to_string());
-            if services.len() > 1 {
-                tags.insert("monorepo".to_string());
-            }
-            report.services.extend(services.clone());
-            let monorepo = workspace_root.join("pnpm-workspace.yaml").exists()
-                || workspace_root.join("turbo.json").exists()
-                || workspace_root.join("nx.json").exists()
-                || services.len() > 1;
-            report.suggestions.push(ProjectSuggestion {
-                id: "node-app".into(),
-                title: if monorepo {
-                    "JavaScript Monorepo Workspace".into()
-                } else {
-                    "Node Application Workspace".into()
-                },
-                description: suggestion_description(
-                    "Separate install, dev server, and test terminals for JavaScript projects.",
-                    &services,
-                ),
-                role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
-                tile_count: 3,
-                startup_commands: vec![
-                    Some("codex".into()),
-                    services
-                        .first()
-                        .and_then(|service| service.startup_command.clone())
-                        .or_else(|| detect_node_start_command(workspace_root)),
-                    services
-                        .first()
-                        .and_then(|service| service.test_command.clone())
-                        .or_else(|| detect_node_test_command(workspace_root)),
-                ],
-                tags: vec![
-                    "javascript".into(),
-                    if monorepo { "monorepo" } else { "web" }.into(),
-                ],
-            });
-        }
-    }
-
-    let pyproject = workspace_root.join("pyproject.toml");
-    if pyproject.exists() || workspace_root.join("requirements.txt").exists() {
-        tags.insert("python".to_string());
-        let services = detect_python_services(workspace_root, &pyproject);
-        report.services.extend(services.clone());
-        report.suggestions.push(ProjectSuggestion {
-            id: "python-app".into(),
-            title: "Python Application Workspace".into(),
-            description: suggestion_description(
-                "Planner, app shell, and test terminals for Python services.",
-                &services,
-            ),
-            role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
-            tile_count: 3,
-            startup_commands: vec![
-                Some("codex".into()),
-                services
-                    .first()
-                    .and_then(|service| service.startup_command.clone())
-                    .or_else(|| Some("python -m uvicorn app:app --reload".into())),
-                Some("python -m pytest".into()),
-            ],
-            tags: vec!["python".into(), "service".into()],
-        });
-    }
-
-    let go_mod = workspace_root.join("go.mod");
-    if go_mod.exists() {
-        tags.insert("go".to_string());
-        let services = detect_go_services(workspace_root, &go_mod);
-        report.services.extend(services.clone());
-        report.suggestions.push(ProjectSuggestion {
-            id: "go-service".into(),
-            title: "Go Service Workspace".into(),
-            description: suggestion_description(
-                "Planner, build, and test terminals for Go services.",
-                &services,
-            ),
-            role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
-            tile_count: 3,
-            startup_commands: vec![
-                Some("codex".into()),
-                Some("go test ./...".into()),
-                Some("go test ./...".into()),
-            ],
-            tags: vec!["go".into(), "service".into()],
-        });
-    }
-
-    let docker_compose = workspace_root.join("docker-compose.yml").exists()
-        || workspace_root.join("docker-compose.yaml").exists()
-        || workspace_root.join("compose.yml").exists()
-        || workspace_root.join("compose.yaml").exists();
-    let terraform = workspace_root.join(".terraform").exists()
-        || collect_dir_entries(workspace_root, |path| {
-            path.extension().is_some_and(|ext| ext == "tf")
-        });
-    let ansible = workspace_root.join("ansible.cfg").exists()
-        || workspace_root.join("playbook.yml").exists()
-        || workspace_root.join("playbook.yaml").exists()
-        || workspace_root.join("inventory").exists();
-    let helm = workspace_root.join("Chart.yaml").exists();
-    let kubernetes = collect_dir_entries(workspace_root, |path| {
-        path.extension()
-            .is_some_and(|ext| ext == "yaml" || ext == "yml")
-            && fs::read_to_string(path)
-                .map(|content| content.contains("apiVersion:") && content.contains("kind:"))
-                .unwrap_or(false)
-    });
-
-    if docker_compose || terraform || ansible || helm || kubernetes {
-        tags.insert("ops".to_string());
-        report.suggestions.push(ProjectSuggestion {
-            id: "ops-stack".into(),
-            title: if kubernetes || helm {
-                "Platform Operations Workspace".into()
-            } else {
-                "Infrastructure Workspace".into()
-            },
-            description: "One pane for control, one for plan or apply, and one for logs or checks."
-                .into(),
-            role_ids: vec!["planner".into(), "ops".into(), "reviewer".into()],
-            tile_count: 3,
-            startup_commands: vec![
-                Some("codex".into()),
-                Some(if terraform {
-                    "terraform plan".into()
-                } else if ansible {
-                    "ansible-playbook --check playbook.yml".into()
-                } else if helm {
-                    "helm list -A".into()
-                } else if kubernetes {
-                    "kubectl get pods -A".into()
-                } else {
-                    "docker compose ps".into()
-                }),
-                Some(if docker_compose {
-                    "docker compose logs -f".into()
-                } else if kubernetes {
-                    "kubectl get events -A --watch".into()
-                } else {
-                    "bash".into()
-                }),
-            ],
-            tags: vec!["ops".into(), "infra".into()],
-        });
-    }
+    detect_rust_workspace(&scan, &mut report, &mut tags);
+    detect_node_workspace(&scan, &mut report, &mut tags);
+    detect_python_workspace(&scan, &mut report, &mut tags);
+    detect_go_workspace(&scan, &mut report, &mut tags);
+    detect_ops_workspace(&scan, &mut report, &mut tags);
 
     report.tags = tags.into_iter().collect();
     report.suggestions = apply_overrides(
@@ -223,6 +50,261 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
         &workspace_config.introspection.suggestion_overrides,
     );
     report
+}
+
+struct RootScan<'a> {
+    root: &'a Path,
+    entries: Vec<PathBuf>,
+}
+
+impl<'a> RootScan<'a> {
+    fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            entries: fs::read_dir(root)
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.path())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|path| path.file_name().is_some_and(|file_name| file_name == name))
+    }
+
+    fn any_entry(&self, predicate: impl Fn(&Path) -> bool) -> bool {
+        self.entries.iter().any(|path| predicate(path))
+    }
+}
+
+fn detect_rust_workspace(
+    scan: &RootScan<'_>,
+    report: &mut RepoIntrospectionReport,
+    tags: &mut BTreeSet<String>,
+) {
+    if !scan.has("Cargo.toml") {
+        return;
+    }
+
+    tags.insert("rust".to_string());
+    let cargo = scan.path("Cargo.toml");
+    let services = detect_cargo_services(scan.root, &cargo);
+    report.services.extend(services.clone());
+    report.suggestions.push(ProjectSuggestion {
+        id: "rust-delivery".into(),
+        title: if services.len() > 1 {
+            "Rust Workspace Delivery".into()
+        } else {
+            "Rust Delivery Workspace".into()
+        },
+        description: suggestion_description(
+            "Planner, build, and verification terminals tuned for Rust work.",
+            &services,
+        ),
+        role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
+        tile_count: 3,
+        startup_commands: vec![
+            Some("codex".into()),
+            Some("cargo check --workspace --all-targets".into()),
+            Some("cargo test --workspace".into()),
+        ],
+        tags: vec!["rust".into(), "delivery".into()],
+    });
+}
+
+fn detect_node_workspace(
+    scan: &RootScan<'_>,
+    report: &mut RepoIntrospectionReport,
+    tags: &mut BTreeSet<String>,
+) {
+    if !scan.has("package.json") {
+        return;
+    }
+
+    let package_json = scan.path("package.json");
+    let services = detect_node_services(scan.root, &package_json);
+    if services.is_empty() {
+        return;
+    }
+
+    tags.insert("javascript".to_string());
+    if services.len() > 1 {
+        tags.insert("monorepo".to_string());
+    }
+    report.services.extend(services.clone());
+    let monorepo = scan.has("pnpm-workspace.yaml")
+        || scan.has("turbo.json")
+        || scan.has("nx.json")
+        || services.len() > 1;
+    report.suggestions.push(ProjectSuggestion {
+        id: "node-app".into(),
+        title: if monorepo {
+            "JavaScript Monorepo Workspace".into()
+        } else {
+            "Node Application Workspace".into()
+        },
+        description: suggestion_description(
+            "Separate install, dev server, and test terminals for JavaScript projects.",
+            &services,
+        ),
+        role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
+        tile_count: 3,
+        startup_commands: vec![
+            Some("codex".into()),
+            services
+                .first()
+                .and_then(|service| service.startup_command.clone())
+                .or_else(|| detect_node_start_command(scan.root)),
+            services
+                .first()
+                .and_then(|service| service.test_command.clone())
+                .or_else(|| detect_node_test_command(scan.root)),
+        ],
+        tags: vec![
+            "javascript".into(),
+            if monorepo { "monorepo" } else { "web" }.into(),
+        ],
+    });
+}
+
+fn detect_python_workspace(
+    scan: &RootScan<'_>,
+    report: &mut RepoIntrospectionReport,
+    tags: &mut BTreeSet<String>,
+) {
+    if !scan.has("pyproject.toml") && !scan.has("requirements.txt") {
+        return;
+    }
+
+    tags.insert("python".to_string());
+    let pyproject = scan.path("pyproject.toml");
+    let services = detect_python_services(scan.root, &pyproject);
+    report.services.extend(services.clone());
+    report.suggestions.push(ProjectSuggestion {
+        id: "python-app".into(),
+        title: "Python Application Workspace".into(),
+        description: suggestion_description(
+            "Planner, app shell, and test terminals for Python services.",
+            &services,
+        ),
+        role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
+        tile_count: 3,
+        startup_commands: vec![
+            Some("codex".into()),
+            services
+                .first()
+                .and_then(|service| service.startup_command.clone())
+                .or_else(|| Some("python -m uvicorn app:app --reload".into())),
+            Some("python -m pytest".into()),
+        ],
+        tags: vec!["python".into(), "service".into()],
+    });
+}
+
+fn detect_go_workspace(
+    scan: &RootScan<'_>,
+    report: &mut RepoIntrospectionReport,
+    tags: &mut BTreeSet<String>,
+) {
+    if !scan.has("go.mod") {
+        return;
+    }
+
+    tags.insert("go".to_string());
+    let go_mod = scan.path("go.mod");
+    let services = detect_go_services(scan.root, &go_mod);
+    report.services.extend(services.clone());
+    report.suggestions.push(ProjectSuggestion {
+        id: "go-service".into(),
+        title: "Go Service Workspace".into(),
+        description: suggestion_description(
+            "Planner, build, and test terminals for Go services.",
+            &services,
+        ),
+        role_ids: vec!["planner".into(), "implementer".into(), "reviewer".into()],
+        tile_count: 3,
+        startup_commands: vec![
+            Some("codex".into()),
+            Some("go test ./...".into()),
+            Some("go test ./...".into()),
+        ],
+        tags: vec!["go".into(), "service".into()],
+    });
+}
+
+fn detect_ops_workspace(
+    scan: &RootScan<'_>,
+    report: &mut RepoIntrospectionReport,
+    tags: &mut BTreeSet<String>,
+) {
+    let docker_compose = scan.has("docker-compose.yml")
+        || scan.has("docker-compose.yaml")
+        || scan.has("compose.yml")
+        || scan.has("compose.yaml");
+    let terraform = scan.has(".terraform")
+        || scan.any_entry(|path| path.extension().is_some_and(|ext| ext == "tf"));
+    let ansible = scan.has("ansible.cfg")
+        || scan.has("playbook.yml")
+        || scan.has("playbook.yaml")
+        || scan.has("inventory");
+    let helm = scan.has("Chart.yaml");
+    let kubernetes = scan.any_entry(|path| {
+        path.extension()
+            .is_some_and(|ext| ext == "yaml" || ext == "yml")
+            && fs::read_to_string(path)
+                .map(|content| content.contains("apiVersion:") && content.contains("kind:"))
+                .unwrap_or(false)
+    });
+
+    if !(docker_compose || terraform || ansible || helm || kubernetes) {
+        return;
+    }
+
+    tags.insert("ops".to_string());
+    report.suggestions.push(ProjectSuggestion {
+        id: "ops-stack".into(),
+        title: if kubernetes || helm {
+            "Platform Operations Workspace".into()
+        } else {
+            "Infrastructure Workspace".into()
+        },
+        description: "One pane for control, one for plan or apply, and one for logs or checks."
+            .into(),
+        role_ids: vec!["planner".into(), "ops".into(), "reviewer".into()],
+        tile_count: 3,
+        startup_commands: vec![
+            Some("codex".into()),
+            Some(if terraform {
+                "terraform plan".into()
+            } else if ansible {
+                "ansible-playbook --check playbook.yml".into()
+            } else if helm {
+                "helm list -A".into()
+            } else if kubernetes {
+                "kubectl get pods -A".into()
+            } else {
+                "docker compose ps".into()
+            }),
+            Some(if docker_compose {
+                "docker compose logs -f".into()
+            } else if kubernetes {
+                "kubectl get events -A --watch".into()
+            } else {
+                "bash".into()
+            }),
+        ],
+        tags: vec!["ops".into(), "infra".into()],
+    });
 }
 
 fn apply_overrides(
@@ -461,16 +543,6 @@ fn dedupe_services(services: Vec<DetectedService>) -> Vec<DetectedService> {
 
 fn sanitize_package_name(value: &str) -> String {
     value.replace('/', "-")
-}
-
-fn collect_dir_entries(root: &Path, predicate: impl Fn(&Path) -> bool) -> bool {
-    let Ok(entries) = fs::read_dir(root) else {
-        return false;
-    };
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .any(|path| predicate(&path))
 }
 
 #[cfg(test)]

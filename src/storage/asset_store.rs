@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::logging;
 use crate::model::assets::{WorkspaceAssets, builtin_role_templates};
 use crate::model::workspace_config::{ConfigScope, WorkspaceConfig};
-use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::document::{
+    preserve_corrupt_warning, read_optional_string, write_toml_private,
+};
 use crate::storage::workspace_config_store::WorkspaceConfigStore;
 
 const STORE_VERSION: u32 = 1;
@@ -100,9 +101,9 @@ impl AssetStore {
             };
         };
 
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let raw = match read_optional_string(path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
                 return AssetLoadOutcome {
                     assets: default_assets(),
                     warning: None,
@@ -205,9 +206,7 @@ impl AssetStore {
             runbooks: assets.runbooks.clone(),
             snippets: assets.snippets.clone(),
         };
-        let serialized = toml::to_string_pretty(&document)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        atomic_write_private(path, &serialized)
+        write_toml_private(path, &document)
     }
 
     fn recover_invalid_asset_document(
@@ -215,18 +214,20 @@ impl AssetStore {
         path: &std::path::Path,
         message: &str,
     ) -> AssetLoadOutcome {
-        let warning = match preserve_corrupt_file(path) {
-            Ok(Some(preserved)) => format!("{message} Recovery copy: {}.", preserved.display()),
-            Ok(None) => message.to_string(),
-            Err(error) => format!(
-                "{message} TerminalTiler could not preserve the original file: {}.",
-                error
-            ),
-        };
-        logging::error(&warning);
+        let warning = preserve_corrupt_warning(path, message);
         AssetLoadOutcome {
             assets: default_assets(),
             warning: Some(warning),
+        }
+    }
+}
+
+#[cfg(test)]
+impl AssetStore {
+    fn from_path(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            workspace_config_store: WorkspaceConfigStore::new(),
         }
     }
 }
@@ -310,4 +311,47 @@ where
         .collect::<Vec<_>>();
     merged.extend(workspace.iter().cloned());
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use uuid::Uuid;
+
+    use super::AssetStore;
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("terminaltiler-{prefix}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn moves_corrupt_asset_file_aside_and_loads_defaults() {
+        let dir = temp_dir("corrupt-assets");
+        let path = dir.join("workspace-assets.toml");
+        fs::write(&path, "not = [valid").unwrap();
+        let store = AssetStore::from_path(path.clone());
+
+        let outcome = store.load_assets_with_status();
+
+        assert!(!path.exists());
+        assert!(outcome.warning.as_deref().is_some_and(|warning| {
+            warning.contains("corrupt workspace assets file") && warning.contains("Recovery copy:")
+        }));
+        assert!(!outcome.assets.role_templates.is_empty());
+        let preserved = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("workspace-assets.toml.corrupt-")
+            })
+            .count();
+        assert_eq!(preserved, 1);
+    }
 }

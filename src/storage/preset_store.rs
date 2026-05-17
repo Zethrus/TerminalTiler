@@ -1,4 +1,3 @@
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -7,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::logging;
 use crate::model::preset::{WorkspacePreset, builtin_presets, is_builtin_preset_id};
-use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::document::{
+    preserve_corrupt_warning, read_optional_string, write_toml_private,
+};
 
 const STORE_VERSION: u32 = 1;
 
@@ -69,9 +70,9 @@ impl PresetStore {
             };
         };
 
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let raw = match read_optional_string(path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
                 return PresetLoadOutcome {
                     presets: builtin_presets(),
                     warning: None,
@@ -175,10 +176,7 @@ impl PresetStore {
             version: STORE_VERSION,
             presets: presets.to_vec(),
         };
-        let serialized = toml::to_string_pretty(&document)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-
-        atomic_write_private(path, &serialized)
+        write_toml_private(path, &document)
     }
 
     fn recover_invalid_preset_document(
@@ -186,15 +184,7 @@ impl PresetStore {
         path: &std::path::Path,
         message: &str,
     ) -> PresetLoadOutcome {
-        let warning = match preserve_corrupt_file(path) {
-            Ok(Some(preserved)) => format!("{message} Recovery copy: {}.", preserved.display()),
-            Ok(None) => message.to_string(),
-            Err(error) => format!(
-                "{message} TerminalTiler could not preserve the original file: {}.",
-                error
-            ),
-        };
-        logging::error(&warning);
+        let warning = preserve_corrupt_warning(path, message);
         PresetLoadOutcome {
             presets: builtin_presets(),
             warning: Some(warning),
@@ -289,6 +279,38 @@ mod tests {
             .find(|preset| preset.id == "legacy-preset")
             .expect("legacy preset should load");
         assert_eq!(legacy.workspace_root, None);
+    }
+
+    #[test]
+    fn moves_corrupt_preset_file_aside_and_loads_builtins() {
+        let dir = temp_dir("preset-corrupt");
+        let path = dir.join("presets.toml");
+        fs::write(&path, "version = [").unwrap();
+        let store = PresetStore::from_path(path.clone());
+
+        let outcome = store.load_presets_with_status();
+
+        assert!(!path.exists());
+        assert!(outcome.warning.as_deref().is_some_and(|warning| {
+            warning.contains("corrupt preset file") && warning.contains("Recovery copy:")
+        }));
+        assert!(
+            outcome
+                .presets
+                .iter()
+                .any(|preset| preset.id == "solo-operator")
+        );
+        let preserved = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("presets.toml.corrupt-")
+            })
+            .count();
+        assert_eq!(preserved, 1);
     }
 
     #[test]

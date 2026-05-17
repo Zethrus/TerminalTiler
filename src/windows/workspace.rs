@@ -70,17 +70,16 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BN_DBLCLK, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
-        GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-        GetWindowTextW, HMENU, IDC_ARROW, IDC_HAND, LoadCursorW, MB_OK, MF_GRAYED, MF_STRING,
-        MessageBoxW, PostMessageW, RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN,
-        SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS,
-        SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOZORDER, SendMessageW, SetCursor,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, TrackPopupMenu, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE,
-        WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP,
-        WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IDC_ARROW, IDC_HAND,
+        LoadCursorW, MB_OK, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW, RegisterClassW,
+        SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
+        SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED,
+        SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CHAR, WM_COMMAND,
+        WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
+        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::dropped_paths::{self, DroppedPathTarget};
@@ -101,6 +100,9 @@ mod imp {
     use crate::transcript::TranscriptBuffer;
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
+    };
+    use crate::windows::win32_helpers::{
+        create_child_window_ex as create_child_window, read_window_text, wide,
     };
     use crate::windows::wsl::{self, WindowsLaunchCommand, WindowsLaunchRuntime, WindowsRuntime};
     use crate::windows::{
@@ -4790,33 +4792,6 @@ mod imp {
         }
     }
 
-    fn create_child_window(
-        hwnd: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        ex_style: WINDOW_EX_STYLE,
-        control_id: isize,
-        lp_param: *mut c_void,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                ex_style,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                hwnd,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                lp_param,
-            )
-        }
-    }
-
     fn selection_contains(pane: &PaneState, row: usize, column: usize) -> bool {
         let (Some(anchor), Some(focus)) = (pane.selection_anchor, pane.selection_focus) else {
             return false;
@@ -5557,21 +5532,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    fn read_window_text(hwnd: HWND) -> String {
-        let length = unsafe { GetWindowTextLengthW(hwnd) };
-        if length <= 0 {
-            return String::new();
-        }
-
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-        String::from_utf16_lossy(&buffer[..copied as usize])
     }
 
     fn wide_mut(value: &str) -> Vec<u16> {

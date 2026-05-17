@@ -1,5 +1,4 @@
 use std::fs;
-use std::io;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
@@ -8,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::logging;
 use crate::model::preset::WorkspacePreset;
 use crate::platform::resolve_workspace_root;
-use crate::storage::fs_utils::{atomic_write_private, preserve_corrupt_file};
+use crate::storage::document::{
+    preserve_corrupt_warning, read_optional_string, write_toml_private,
+};
 
 const SESSION_VERSION: u32 = 1;
 
@@ -72,9 +73,9 @@ impl SessionStore {
             };
         };
 
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        let raw = match read_optional_string(path) {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
                 return SessionLoadOutcome {
                     session: None,
                     warning: None,
@@ -177,15 +178,7 @@ impl SessionStore {
             tabs: session.tabs.clone(),
         };
 
-        let serialized = match toml::to_string_pretty(&document) {
-            Ok(s) => s,
-            Err(error) => {
-                logging::info(format!("failed to serialize session: {}", error));
-                return;
-            }
-        };
-
-        if let Err(error) = atomic_write_private(path, &serialized) {
+        if let Err(error) = write_toml_private(path, &document) {
             logging::info(format!("failed to write session file: {}", error));
         }
     }
@@ -201,15 +194,7 @@ impl SessionStore {
         path: &std::path::Path,
         message: &str,
     ) -> SessionLoadOutcome {
-        let warning = match preserve_corrupt_file(path) {
-            Ok(Some(preserved)) => format!("{message} Recovery copy: {}.", preserved.display()),
-            Ok(None) => message.to_string(),
-            Err(error) => format!(
-                "{message} TerminalTiler could not preserve the original file: {}.",
-                error
-            ),
-        };
-        logging::error(&warning);
+        let warning = preserve_corrupt_warning(path, message);
         SessionLoadOutcome {
             session: None,
             warning: Some(warning),

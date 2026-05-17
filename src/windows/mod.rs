@@ -8,6 +8,7 @@ pub mod runbook_dialog;
 pub mod shortcut_capture;
 pub mod transcript_viewer;
 mod vt;
+mod win32_helpers;
 mod workspace;
 pub mod wsl;
 

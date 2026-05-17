@@ -4,20 +4,19 @@ mod imp {
     use std::ptr;
     use std::rc::Rc;
 
-    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE,
-        CBS_DROPDOWNLIST, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
-        DestroyWindow, EN_CHANGE, ES_AUTOHSCROLL, ES_LEFT, GWLP_USERDATA, GetClientRect,
-        GetDlgItem, GetParent, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU,
-        IDC_ARROW, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE,
-        LoadCursorW, RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE,
-        WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        CBS_DROPDOWNLIST, CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE,
+        ES_AUTOHSCROLL, ES_LEFT, GWLP_USERDATA, GetClientRect, GetDlgItem, GetParent,
+        GetWindowLongPtrW, HMENU, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
+        LBN_SELCHANGE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE,
+        WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW,
+        WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::model::assets::{TileConnectionTarget, WorkspaceAssets};
@@ -27,6 +26,9 @@ mod imp {
     };
     use crate::services::layout_editor::{close_tile, split_tile, split_tile_with_kind};
     use crate::services::tile_draft::apply_role_to_tile;
+    use crate::windows::win32_helpers::{
+        create_child_window, read_window_text, register_window_class, wide,
+    };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsLauncherEditor";
     const ID_TILE_LIST: isize = 1001;
@@ -100,7 +102,7 @@ mod imp {
             return Err("could not resolve module handle for launcher editor".into());
         }
 
-        register_window_class(instance)?;
+        register_window_class(instance, WINDOW_CLASS, Some(window_proc), "launcher editor")?;
         let state = Box::new(EditorWindowState {
             layout,
             assets,
@@ -929,8 +931,7 @@ mod imp {
     fn refresh_hint(state: &EditorWindowState) {
         let text = state
             .layout
-            .tile_specs()
-            .get(state.selected_tile_index)
+            .tile_spec_at(state.selected_tile_index)
             .map(|tile| tile_editor_hint(tile, &state.assets))
             .unwrap_or_else(|| "No tile selected.".into());
         unsafe {
@@ -942,10 +943,8 @@ mod imp {
     where
         F: FnOnce(&mut TileSpec),
     {
-        let mut tiles = state.layout.tile_specs();
-        if let Some(tile) = tiles.get_mut(state.selected_tile_index) {
+        if let Some(tile) = state.layout.tile_spec_mut_at(state.selected_tile_index) {
             update(tile);
-            state.layout = state.layout.with_tile_specs(&tiles);
             let next_layout = state.layout.clone();
             (state.on_layout_changed)(next_layout);
         }
@@ -958,8 +957,7 @@ mod imp {
     ) {
         let Some(tile_id) = state
             .layout
-            .tile_specs()
-            .get(state.selected_tile_index)
+            .tile_spec_at(state.selected_tile_index)
             .map(|tile| tile.id.clone())
         else {
             return;
@@ -980,8 +978,7 @@ mod imp {
     ) {
         let Some(tile_id) = state
             .layout
-            .tile_specs()
-            .get(state.selected_tile_index)
+            .tile_spec_at(state.selected_tile_index)
             .map(|tile| tile.id.clone())
         else {
             return;
@@ -1005,8 +1002,7 @@ mod imp {
     fn close_selected_tile(state: &mut EditorWindowState) {
         let Some(tile_id) = state
             .layout
-            .tile_specs()
-            .get(state.selected_tile_index)
+            .tile_spec_at(state.selected_tile_index)
             .map(|tile| tile.id.clone())
         else {
             return;
@@ -1194,31 +1190,6 @@ mod imp {
         }
     }
 
-    fn create_child_window(
-        parent: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        control_id: isize,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                0 as WINDOW_EX_STYLE,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                parent,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                ptr::null_mut(),
-            )
-        }
-    }
-
     fn create_combo_box(parent: HWND, control_id: isize) -> HWND {
         unsafe {
             CreateWindowExW(
@@ -1254,36 +1225,6 @@ mod imp {
         }
     }
 
-    fn read_window_text(hwnd: HWND) -> String {
-        let length = unsafe { GetWindowTextLengthW(hwnd) };
-        if length <= 0 {
-            return String::new();
-        }
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-        String::from_utf16_lossy(&buffer[..copied as usize])
-    }
-
-    fn register_window_class(instance: HINSTANCE) -> Result<(), String> {
-        let class_name = wide(WINDOW_CLASS);
-        let mut class = unsafe { mem::zeroed::<WNDCLASSW>() };
-        class.style = CS_HREDRAW | CS_VREDRAW;
-        class.lpfnWndProc = Some(window_proc);
-        class.hInstance = instance;
-        class.hCursor = unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) };
-        class.lpszClassName = class_name.as_ptr();
-        let atom = unsafe { RegisterClassW(&class) };
-        if atom == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(1410) {
-                return Err(format!(
-                    "RegisterClassW failed for launcher editor: {error}"
-                ));
-            }
-        }
-        Ok(())
-    }
-
     unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut EditorWindowState> {
         let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut EditorWindowState;
         if ptr.is_null() {
@@ -1291,10 +1232,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
 

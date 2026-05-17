@@ -59,6 +59,139 @@ pub enum AssetItemSource {
     WorkspaceOverride,
 }
 
+#[derive(Clone, Debug)]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+pub struct AssetSourceLookup {
+    scope: ConfigScope,
+    connections: SourceIds,
+    hosts: SourceIds,
+    groups: SourceIds,
+    roles: SourceIds,
+    runbooks: SourceIds,
+    snippets: SourceIds,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SourceIds {
+    current: HashSet<String>,
+    global: HashSet<String>,
+    builtin: HashSet<String>,
+}
+
+impl SourceIds {
+    fn source(&self, scope: ConfigScope, id: &str) -> AssetItemSource {
+        match scope {
+            ConfigScope::Global => {
+                if self.builtin.contains(id) {
+                    AssetItemSource::BuiltIn
+                } else {
+                    AssetItemSource::Global
+                }
+            }
+            ConfigScope::Workspace => {
+                if self.current.contains(id) {
+                    if self.global.contains(id) || self.builtin.contains(id) {
+                        AssetItemSource::WorkspaceOverride
+                    } else {
+                        AssetItemSource::Workspace
+                    }
+                } else if self.builtin.contains(id) {
+                    AssetItemSource::BuiltIn
+                } else {
+                    AssetItemSource::Global
+                }
+            }
+        }
+    }
+}
+
+impl AssetSourceLookup {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn new(
+        scope: ConfigScope,
+        current_assets: &WorkspaceAssets,
+        global_assets: &WorkspaceAssets,
+    ) -> Self {
+        let builtin_roles = builtin_role_templates()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<HashSet<_>>();
+        Self {
+            scope,
+            connections: SourceIds {
+                current: ids(current_assets
+                    .connection_profiles
+                    .iter()
+                    .map(|item| &item.id)),
+                global: ids(global_assets
+                    .connection_profiles
+                    .iter()
+                    .map(|item| &item.id)),
+                builtin: HashSet::new(),
+            },
+            hosts: SourceIds {
+                current: ids(current_assets.inventory_hosts.iter().map(|item| &item.id)),
+                global: ids(global_assets.inventory_hosts.iter().map(|item| &item.id)),
+                builtin: HashSet::new(),
+            },
+            groups: SourceIds {
+                current: ids(current_assets.inventory_groups.iter().map(|item| &item.id)),
+                global: ids(global_assets.inventory_groups.iter().map(|item| &item.id)),
+                builtin: HashSet::new(),
+            },
+            roles: SourceIds {
+                current: ids(current_assets.role_templates.iter().map(|item| &item.id)),
+                global: ids(global_assets.role_templates.iter().map(|item| &item.id)),
+                builtin: builtin_roles,
+            },
+            runbooks: SourceIds {
+                current: ids(current_assets.runbooks.iter().map(|item| &item.id)),
+                global: ids(global_assets.runbooks.iter().map(|item| &item.id)),
+                builtin: HashSet::new(),
+            },
+            snippets: SourceIds {
+                current: ids(current_assets.snippets.iter().map(|item| &item.id)),
+                global: ids(global_assets.snippets.iter().map(|item| &item.id)),
+                builtin: HashSet::new(),
+            },
+        }
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn connection(&self, id: &str) -> AssetItemSource {
+        self.connections.source(self.scope, id)
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn host(&self, id: &str) -> AssetItemSource {
+        self.hosts.source(self.scope, id)
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn group(&self, id: &str) -> AssetItemSource {
+        self.groups.source(self.scope, id)
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn role(&self, id: &str) -> AssetItemSource {
+        self.roles.source(self.scope, id)
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn runbook(&self, id: &str) -> AssetItemSource {
+        self.runbooks.source(self.scope, id)
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn snippet(&self, id: &str) -> AssetItemSource {
+        self.snippets.source(self.scope, id)
+    }
+}
+
+fn ids<'a>(values: impl Iterator<Item = &'a String>) -> HashSet<String> {
+    values.cloned().collect()
+}
+
 impl AssetItemSource {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn label(&self) -> &'static str {
@@ -150,185 +283,64 @@ pub fn prune_blank_drafts(mut assets: WorkspaceAssets) -> WorkspaceAssets {
     assets
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn connection_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .connection_profiles
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .connection_profiles
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &HashSet::new(),
-    )
+    AssetSourceLookup::new(scope, current_assets, global_assets).connection(id)
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn host_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .inventory_hosts
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .inventory_hosts
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &HashSet::new(),
-    )
+    AssetSourceLookup::new(scope, current_assets, global_assets).host(id)
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn group_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .inventory_groups
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .inventory_groups
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &HashSet::new(),
-    )
+    AssetSourceLookup::new(scope, current_assets, global_assets).group(id)
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn role_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    let builtins = builtin_role_templates()
-        .into_iter()
-        .map(|item| item.id)
-        .collect::<HashSet<_>>();
-    let builtin_refs = builtins.iter().map(String::as_str).collect::<HashSet<_>>();
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .role_templates
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .role_templates
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &builtin_refs,
-    )
+    AssetSourceLookup::new(scope, current_assets, global_assets).role(id)
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn runbook_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .runbooks
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .runbooks
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &HashSet::new(),
-    )
+    AssetSourceLookup::new(scope, current_assets, global_assets).runbook(id)
 }
 
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[allow(dead_code)]
 pub fn snippet_source(
     scope: ConfigScope,
     id: &str,
     current_assets: &WorkspaceAssets,
     global_assets: &WorkspaceAssets,
 ) -> AssetItemSource {
-    simple_source(
-        scope,
-        id,
-        &current_assets
-            .snippets
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &global_assets
-            .snippets
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<HashSet<_>>(),
-        &HashSet::new(),
-    )
-}
-
-#[cfg_attr(target_os = "windows", allow(dead_code))]
-fn simple_source(
-    scope: ConfigScope,
-    id: &str,
-    current_ids: &HashSet<&str>,
-    global_ids: &HashSet<&str>,
-    builtin_ids: &HashSet<&str>,
-) -> AssetItemSource {
-    match scope {
-        ConfigScope::Global => {
-            if builtin_ids.contains(id) {
-                AssetItemSource::BuiltIn
-            } else {
-                AssetItemSource::Global
-            }
-        }
-        ConfigScope::Workspace => {
-            if current_ids.contains(id) {
-                if global_ids.contains(id) || builtin_ids.contains(id) {
-                    AssetItemSource::WorkspaceOverride
-                } else {
-                    AssetItemSource::Workspace
-                }
-            } else if builtin_ids.contains(id) {
-                AssetItemSource::BuiltIn
-            } else {
-                AssetItemSource::Global
-            }
-        }
-    }
+    AssetSourceLookup::new(scope, current_assets, global_assets).snippet(id)
 }
 
 fn validate_connection_profiles(
@@ -931,12 +943,13 @@ fn require_field(
 #[cfg(test)]
 mod tests {
     use super::{
-        AssetItemSource, AssetSection, effective_assets_for_scope, prune_blank_drafts, role_source,
-        validate_assets,
+        AssetItemSource, AssetSection, AssetSourceLookup, effective_assets_for_scope,
+        prune_blank_drafts, role_source, validate_assets,
     };
     use crate::model::assets::{
         AgentRoleTemplate, ConnectionKind, ConnectionProfile, InventoryGroup, InventoryHost,
         Runbook, RunbookConfirmPolicy, RunbookStep, RunbookTarget, WorkspaceAssets,
+        builtin_role_templates,
     };
     use crate::model::layout::ReconnectPolicy;
     use crate::model::workspace_config::ConfigScope;
@@ -1098,6 +1111,91 @@ mod tests {
 
         let source = role_source(ConfigScope::Workspace, "ops", &workspace, &global);
         assert_eq!(source, AssetItemSource::WorkspaceOverride);
+    }
+
+    #[test]
+    fn asset_source_lookup_indexes_global_workspace_builtin_and_overrides() {
+        let builtin_role_id = builtin_role_templates().into_iter().next().unwrap().id;
+        let global = WorkspaceAssets {
+            connection_profiles: vec![ConnectionProfile {
+                id: "global-connection".into(),
+                name: "Global".into(),
+                kind: ConnectionKind::Ssh,
+                inventory_host_id: None,
+                tags: Vec::new(),
+                remote_working_directory: None,
+                shell_program: None,
+                startup_prefix: None,
+            }],
+            role_templates: vec![AgentRoleTemplate {
+                id: "shared-role".into(),
+                name: "Shared".into(),
+                description: String::new(),
+                accent_class: "accent-cyan".into(),
+                default_title: None,
+                default_agent_label: None,
+                default_startup_command: None,
+                default_connection_profile_id: None,
+                default_pane_groups: Vec::new(),
+                default_reconnect_policy: ReconnectPolicy::Manual,
+                default_output_helpers: Vec::new(),
+            }],
+            ..WorkspaceAssets::default()
+        };
+        let workspace = WorkspaceAssets {
+            connection_profiles: vec![
+                ConnectionProfile {
+                    id: "global-connection".into(),
+                    name: "Override".into(),
+                    kind: ConnectionKind::Ssh,
+                    inventory_host_id: None,
+                    tags: Vec::new(),
+                    remote_working_directory: None,
+                    shell_program: None,
+                    startup_prefix: None,
+                },
+                ConnectionProfile {
+                    id: "workspace-connection".into(),
+                    name: "Workspace".into(),
+                    kind: ConnectionKind::Local,
+                    inventory_host_id: None,
+                    tags: Vec::new(),
+                    remote_working_directory: None,
+                    shell_program: None,
+                    startup_prefix: None,
+                },
+            ],
+            role_templates: vec![AgentRoleTemplate {
+                id: builtin_role_id.clone(),
+                name: "Builtin override".into(),
+                description: String::new(),
+                accent_class: "accent-cyan".into(),
+                default_title: None,
+                default_agent_label: None,
+                default_startup_command: None,
+                default_connection_profile_id: None,
+                default_pane_groups: Vec::new(),
+                default_reconnect_policy: ReconnectPolicy::Manual,
+                default_output_helpers: Vec::new(),
+            }],
+            ..WorkspaceAssets::default()
+        };
+
+        let lookup = AssetSourceLookup::new(ConfigScope::Workspace, &workspace, &global);
+
+        assert_eq!(
+            lookup.connection("global-connection"),
+            AssetItemSource::WorkspaceOverride
+        );
+        assert_eq!(
+            lookup.connection("workspace-connection"),
+            AssetItemSource::Workspace
+        );
+        assert_eq!(
+            lookup.role(&builtin_role_id),
+            AssetItemSource::WorkspaceOverride
+        );
+        assert_eq!(lookup.role("shared-role"), AssetItemSource::Global);
     }
 
     #[test]

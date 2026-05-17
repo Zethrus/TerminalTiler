@@ -148,6 +148,44 @@ impl LayoutNode {
         tiles
     }
 
+    pub fn tile_spec_at(&self, index: usize) -> Option<&TileSpec> {
+        match self {
+            Self::Split { first, second, .. } => {
+                let first_count = first.tile_count();
+                if index < first_count {
+                    first.tile_spec_at(index)
+                } else {
+                    second.tile_spec_at(index - first_count)
+                }
+            }
+            Self::Tile(tile) => (index == 0).then_some(tile),
+        }
+    }
+
+    pub fn tile_spec_mut_at(&mut self, index: usize) -> Option<&mut TileSpec> {
+        match self {
+            Self::Split { first, second, .. } => {
+                let first_count = first.tile_count();
+                if index < first_count {
+                    first.tile_spec_mut_at(index)
+                } else {
+                    second.tile_spec_mut_at(index - first_count)
+                }
+            }
+            Self::Tile(tile) => (index == 0).then_some(tile),
+        }
+    }
+
+    pub fn tile_spec_mut_by_id(&mut self, id: &str) -> Option<&mut TileSpec> {
+        match self {
+            Self::Split { first, second, .. } => first
+                .tile_spec_mut_by_id(id)
+                .or_else(|| second.tile_spec_mut_by_id(id)),
+            Self::Tile(tile) if tile.id == id => Some(tile),
+            Self::Tile(_) => None,
+        }
+    }
+
     pub fn with_tile_specs(&self, tile_specs: &[TileSpec]) -> Self {
         let mut tiles = tile_specs.iter().cloned();
         let layout = self.replace_tile_specs(&mut tiles);
@@ -494,6 +532,54 @@ mod tests {
             }
             _ => panic!("expected split layout to remain a split"),
         }
+    }
+
+    #[test]
+    fn mutates_tile_specs_in_place_by_index_and_id() {
+        let mut layout = split(
+            SplitAxis::Horizontal,
+            0.5,
+            tile(
+                "left",
+                "Left",
+                "Codex",
+                "accent-cyan",
+                WorkingDirectory::WorkspaceRoot,
+                Some("codex"),
+            ),
+            split(
+                SplitAxis::Vertical,
+                0.5,
+                tile(
+                    "top-right",
+                    "Top Right",
+                    "Claude",
+                    "accent-amber",
+                    WorkingDirectory::WorkspaceRoot,
+                    Some("claude"),
+                ),
+                tile(
+                    "bottom-right",
+                    "Bottom Right",
+                    "Shell",
+                    "accent-rose",
+                    WorkingDirectory::WorkspaceRoot,
+                    None,
+                ),
+            ),
+        );
+
+        assert_eq!(layout.tile_spec_at(1).unwrap().id, "top-right");
+        assert!(layout.tile_spec_at(3).is_none());
+
+        layout.tile_spec_mut_at(2).unwrap().title = "Verifier".into();
+        layout.tile_spec_mut_by_id("left").unwrap().startup_command = Some("nu".into());
+
+        let specs = layout.tile_specs();
+        assert_eq!(specs[0].startup_command.as_deref(), Some("nu"));
+        assert_eq!(specs[1].title, "Top Right");
+        assert_eq!(specs[2].title, "Verifier");
+        assert!(layout.tile_spec_mut_by_id("missing").is_none());
     }
 
     #[test]

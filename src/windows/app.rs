@@ -25,16 +25,15 @@ mod imp {
         CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
         DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL,
         ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_PASSWORD, ES_READONLY, GWLP_USERDATA,
-        GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW,
-        GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDI_APPLICATION, IDOK,
-        LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
-        LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
-        MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW,
-        SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+        GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW,
+        IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
+        LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK,
+        MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE,
+        SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
         SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        TranslateMessage, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
-        WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP,
+        WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::extension::{
@@ -60,6 +59,9 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SessionStore};
+    use crate::windows::win32_helpers::{
+        create_child_window_with_ex_style as create_child_window, read_window_text, wide,
+    };
     use crate::windows::workspace;
     use crate::windows::wsl::{self, WindowsRuntime};
     use crate::windows::{
@@ -3332,32 +3334,6 @@ mod imp {
         sync_settings_reset_button_state(state);
     }
 
-    fn create_child_window(
-        hwnd: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        ex_style: WINDOW_EX_STYLE,
-        control_id: isize,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                ex_style,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                hwnd,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                ptr::null(),
-            )
-        }
-    }
-
     fn create_combo_box(hwnd: HWND, control_id: isize) -> HWND {
         unsafe {
             CreateWindowExW(
@@ -3393,10 +3369,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
     fn fill_wide_buffer(buffer: &mut [u16], value: &str) {
@@ -4563,17 +4535,6 @@ mod imp {
 
     fn unique_preset_id(name: &str) -> String {
         format!("{}-{}", slugify(name), uuid::Uuid::new_v4().simple())
-    }
-
-    fn read_window_text(hwnd: HWND) -> String {
-        let length = unsafe { GetWindowTextLengthW(hwnd) };
-        if length <= 0 {
-            return String::new();
-        }
-
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-        String::from_utf16_lossy(&buffer[..copied as usize])
     }
 
     fn selected_listbox_index(hwnd: HWND) -> usize {

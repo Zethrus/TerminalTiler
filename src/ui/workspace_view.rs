@@ -786,15 +786,14 @@ impl WorkspaceRuntime {
     where
         F: FnOnce(&mut crate::model::layout::TileSpec),
     {
-        let current_layout = self.inner.layout.borrow().clone();
-        let mut tile_specs = current_layout.tile_specs();
-        let Some(tile) = tile_specs.iter_mut().find(|tile| tile.id == tile_id) else {
-            return false;
+        let next_layout = {
+            let mut layout = self.inner.layout.borrow_mut();
+            let Some(tile) = layout.tile_spec_mut_by_id(tile_id) else {
+                return false;
+            };
+            update(tile);
+            layout.clone()
         };
-
-        update(tile);
-        let next_layout = current_layout.with_tile_specs(&tile_specs);
-        *self.inner.layout.borrow_mut() = next_layout.clone();
         (self.inner.on_layout_changed)(next_layout);
         true
     }

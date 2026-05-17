@@ -162,6 +162,141 @@ fn normalize_captured_shortcut(
     Some((shortcut, label))
 }
 
+#[derive(Clone)]
+struct ShortcutRecorderRow {
+    row: gtk::Widget,
+    status: gtk::Label,
+    capture_label: gtk::Label,
+    record_button: gtk::Button,
+    recording: Rc<Cell<bool>>,
+}
+
+impl ShortcutRecorderRow {
+    fn cancel_recording(&self) {
+        self.recording.set(false);
+        set_recorder_idle(&self.record_button, &self.status);
+    }
+
+    fn sync_label(&self, shortcut: &str) {
+        sync_shortcut_capture_label(&self.capture_label, shortcut);
+    }
+}
+
+fn build_shortcut_recorder_row(
+    label: &str,
+    note: &str,
+    examples: &[&str],
+    current_shortcut: Rc<RefCell<String>>,
+    callback: Rc<dyn Fn(String)>,
+    sync_reset_button: Rc<dyn Fn()>,
+) -> ShortcutRecorderRow {
+    let status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .css_classes([
+            "field-hint",
+            "settings-shortcut-note",
+            "settings-shortcut-status",
+        ])
+        .visible(false)
+        .build();
+    let capture_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "settings-shortcut-chip"])
+        .build();
+    sync_shortcut_capture_label(&capture_label, current_shortcut.borrow().as_str());
+    let record_button = icons::labeled_button(
+        "Record",
+        icon_name::RECORD,
+        &[
+            "pill-button",
+            "secondary-button",
+            "settings-shortcut-record-button",
+        ],
+    );
+    let control = build_shortcut_capture_control(&capture_label, &record_button);
+    let recording = Rc::new(Cell::new(false));
+
+    {
+        let current_shortcut = current_shortcut.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let status = status.clone();
+        let capture_label = capture_label.clone();
+        let record_button_for_handler = record_button.clone();
+        let recording = recording.clone();
+        let callback = callback.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
+            if !recording.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            let modifiers = state & gtk::accelerator_get_default_mod_mask();
+            if key == gdk::Key::Escape && modifiers.is_empty() {
+                recording.set(false);
+                set_recorder_idle(&record_button_for_handler, &status);
+                return glib::Propagation::Stop;
+            }
+
+            let Some((shortcut, label)) =
+                normalize_captured_shortcut(controller, key, keycode, state)
+            else {
+                status.set_label(
+                    "That key cannot be used alone. Try a function key or add modifiers.",
+                );
+                status.set_visible(true);
+                return glib::Propagation::Stop;
+            };
+
+            recording.set(false);
+            set_recorder_idle(&record_button_for_handler, &status);
+            capture_label.set_label(&label);
+            capture_label.set_tooltip_text(Some(&shortcut));
+            if current_shortcut.borrow().as_str() != shortcut {
+                current_shortcut.replace(shortcut.clone());
+                callback(shortcut);
+                sync_reset_button();
+            }
+            glib::Propagation::Stop
+        });
+        record_button.add_controller(key_controller);
+    }
+    {
+        let status = status.clone();
+        let record_button_for_handler = record_button.clone();
+        let recording = recording.clone();
+        record_button.connect_clicked(move |button| {
+            if recording.get() {
+                recording.set(false);
+                set_recorder_idle(&record_button_for_handler, &status);
+            } else {
+                recording.set(true);
+                set_recorder_recording(&record_button_for_handler, &status);
+                button.grab_focus();
+            }
+        });
+    }
+    {
+        let status = status.clone();
+        let record_button_for_handler = record_button.clone();
+        let recording = recording.clone();
+        record_button.connect_notify_local(Some("has-focus"), move |button, _| {
+            if recording.get() && !button.has_focus() {
+                recording.set(false);
+                set_recorder_idle(&record_button_for_handler, &status);
+            }
+        });
+    }
+
+    ShortcutRecorderRow {
+        row: build_shortcut_entry_row(label, note, &control, &status, examples),
+        status,
+        capture_label,
+        record_button,
+        recording,
+    }
+}
+
 fn sync_reset_button_state(reset_button: &gtk::Button, current: &SettingsState) {
     reset_button.set_sensitive(current != &SettingsState::defaults());
 }
@@ -639,547 +774,55 @@ pub fn present(
         "Apply immediately",
         "Choose default workspace shortcuts that fit your desktop environment. Click Record, then press the shortcut you want. Changes take effect in the current window immediately.",
     ));
-    let fullscreen_status = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .css_classes([
-            "field-hint",
-            "settings-shortcut-note",
-            "settings-shortcut-status",
-        ])
-        .visible(false)
-        .build();
-    let fullscreen_capture_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "settings-shortcut-chip"])
-        .build();
-    sync_shortcut_capture_label(
-        &fullscreen_capture_label,
-        current_fullscreen_shortcut.borrow().as_str(),
-    );
-    let fullscreen_record_button = icons::labeled_button(
-        "Record",
-        icon_name::RECORD,
-        &[
-            "pill-button",
-            "secondary-button",
-            "settings-shortcut-record-button",
-        ],
-    );
-    let fullscreen_control =
-        build_shortcut_capture_control(&fullscreen_capture_label, &fullscreen_record_button);
-    let fullscreen_recording = Rc::new(Cell::new(false));
-    {
-        let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
-        let sync_reset_button = sync_reset_button.clone();
-        let status = fullscreen_status.clone();
-        let capture_label = fullscreen_capture_label.clone();
-        let record_button = fullscreen_record_button.clone();
-        let recording = fullscreen_recording.clone();
-        let callback = fullscreen_shortcut_callback.clone();
-        let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
-            }
-
-            let modifiers = state & gtk::accelerator_get_default_mod_mask();
-            if key == gdk::Key::Escape && modifiers.is_empty() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-                return glib::Propagation::Stop;
-            }
-
-            let Some((shortcut, label)) =
-                normalize_captured_shortcut(controller, key, keycode, state)
-            else {
-                status.set_label(
-                    "That key cannot be used alone. Try a function key or add modifiers.",
-                );
-                status.set_visible(true);
-                return glib::Propagation::Stop;
-            };
-
-            recording.set(false);
-            set_recorder_idle(&record_button, &status);
-            capture_label.set_label(&label);
-            capture_label.set_tooltip_text(Some(&shortcut));
-            if current_fullscreen_shortcut.borrow().as_str() != shortcut {
-                current_fullscreen_shortcut.replace(shortcut.clone());
-                callback(shortcut);
-                sync_reset_button();
-            }
-            glib::Propagation::Stop
-        });
-        fullscreen_record_button.add_controller(key_controller);
-    }
-    {
-        let status = fullscreen_status.clone();
-        let record_button = fullscreen_record_button.clone();
-        let recording = fullscreen_recording.clone();
-        fullscreen_record_button.connect_clicked(move |button| {
-            if recording.get() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            } else {
-                recording.set(true);
-                set_recorder_recording(&record_button, &status);
-                button.grab_focus();
-            }
-        });
-    }
-    {
-        let status = fullscreen_status.clone();
-        let record_button = fullscreen_record_button.clone();
-        let recording = fullscreen_recording.clone();
-        fullscreen_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
-            if recording.get() && !button.has_focus() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            }
-        });
-    }
-    shortcuts_section.append(&build_shortcut_entry_row(
+    let fullscreen_recorder = build_shortcut_recorder_row(
         "Toggle workspace fullscreen",
         "Available only while a workspace tab is active.",
-        &fullscreen_control,
-        &fullscreen_status,
         &["F11", "<Shift>F11", "<Ctrl>F11"],
-    ));
-
-    let density_status = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .css_classes([
-            "field-hint",
-            "settings-shortcut-note",
-            "settings-shortcut-status",
-        ])
-        .visible(false)
-        .build();
-    let density_capture_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "settings-shortcut-chip"])
-        .build();
-    sync_shortcut_capture_label(
-        &density_capture_label,
-        current_density_shortcut.borrow().as_str(),
+        current_fullscreen_shortcut.clone(),
+        fullscreen_shortcut_callback.clone(),
+        sync_reset_button.clone(),
     );
-    let density_record_button = icons::labeled_button(
-        "Record",
-        icon_name::RECORD,
-        &[
-            "pill-button",
-            "secondary-button",
-            "settings-shortcut-record-button",
-        ],
-    );
-    let density_control =
-        build_shortcut_capture_control(&density_capture_label, &density_record_button);
-    let density_recording = Rc::new(Cell::new(false));
-    {
-        let current_density_shortcut = current_density_shortcut.clone();
-        let sync_reset_button = sync_reset_button.clone();
-        let status = density_status.clone();
-        let capture_label = density_capture_label.clone();
-        let record_button = density_record_button.clone();
-        let recording = density_recording.clone();
-        let callback = density_shortcut_callback.clone();
-        let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
-            }
+    shortcuts_section.append(&fullscreen_recorder.row);
 
-            let modifiers = state & gtk::accelerator_get_default_mod_mask();
-            if key == gdk::Key::Escape && modifiers.is_empty() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-                return glib::Propagation::Stop;
-            }
-
-            let Some((shortcut, label)) =
-                normalize_captured_shortcut(controller, key, keycode, state)
-            else {
-                status.set_label(
-                    "That key cannot be used alone. Try a function key or add modifiers.",
-                );
-                status.set_visible(true);
-                return glib::Propagation::Stop;
-            };
-
-            recording.set(false);
-            set_recorder_idle(&record_button, &status);
-            capture_label.set_label(&label);
-            capture_label.set_tooltip_text(Some(&shortcut));
-            if current_density_shortcut.borrow().as_str() != shortcut {
-                current_density_shortcut.replace(shortcut.clone());
-                callback(shortcut);
-                sync_reset_button();
-            }
-            glib::Propagation::Stop
-        });
-        density_record_button.add_controller(key_controller);
-    }
-    {
-        let status = density_status.clone();
-        let record_button = density_record_button.clone();
-        let recording = density_recording.clone();
-        density_record_button.connect_clicked(move |button| {
-            if recording.get() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            } else {
-                recording.set(true);
-                set_recorder_recording(&record_button, &status);
-                button.grab_focus();
-            }
-        });
-    }
-    {
-        let status = density_status.clone();
-        let record_button = density_record_button.clone();
-        let recording = density_recording.clone();
-        density_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
-            if recording.get() && !button.has_focus() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            }
-        });
-    }
-    shortcuts_section.append(&build_shortcut_entry_row(
+    let density_recorder = build_shortcut_recorder_row(
         "Cycle active workspace density",
         "Rotates only the current workspace without changing the saved app default.",
-        &density_control,
-        &density_status,
         &["<Ctrl><Shift>D", "<Shift>F8", "<Alt><Super>D"],
-    ));
-
-    let zoom_in_status = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .css_classes([
-            "field-hint",
-            "settings-shortcut-note",
-            "settings-shortcut-status",
-        ])
-        .visible(false)
-        .build();
-    let zoom_in_capture_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "settings-shortcut-chip"])
-        .build();
-    sync_shortcut_capture_label(
-        &zoom_in_capture_label,
-        current_zoom_in_shortcut.borrow().as_str(),
+        current_density_shortcut.clone(),
+        density_shortcut_callback.clone(),
+        sync_reset_button.clone(),
     );
-    let zoom_in_record_button = icons::labeled_button(
-        "Record",
-        icon_name::RECORD,
-        &[
-            "pill-button",
-            "secondary-button",
-            "settings-shortcut-record-button",
-        ],
-    );
-    let zoom_in_control =
-        build_shortcut_capture_control(&zoom_in_capture_label, &zoom_in_record_button);
-    let zoom_in_recording = Rc::new(Cell::new(false));
-    {
-        let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
-        let sync_reset_button = sync_reset_button.clone();
-        let status = zoom_in_status.clone();
-        let capture_label = zoom_in_capture_label.clone();
-        let record_button = zoom_in_record_button.clone();
-        let recording = zoom_in_recording.clone();
-        let callback = zoom_in_shortcut_callback.clone();
-        let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
-            }
+    shortcuts_section.append(&density_recorder.row);
 
-            let modifiers = state & gtk::accelerator_get_default_mod_mask();
-            if key == gdk::Key::Escape && modifiers.is_empty() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-                return glib::Propagation::Stop;
-            }
-
-            let Some((shortcut, label)) =
-                normalize_captured_shortcut(controller, key, keycode, state)
-            else {
-                status.set_label(
-                    "That key cannot be used alone. Try a function key or add modifiers.",
-                );
-                status.set_visible(true);
-                return glib::Propagation::Stop;
-            };
-
-            recording.set(false);
-            set_recorder_idle(&record_button, &status);
-            capture_label.set_label(&label);
-            capture_label.set_tooltip_text(Some(&shortcut));
-            if current_zoom_in_shortcut.borrow().as_str() != shortcut {
-                current_zoom_in_shortcut.replace(shortcut.clone());
-                callback(shortcut);
-                sync_reset_button();
-            }
-            glib::Propagation::Stop
-        });
-        zoom_in_record_button.add_controller(key_controller);
-    }
-    {
-        let status = zoom_in_status.clone();
-        let record_button = zoom_in_record_button.clone();
-        let recording = zoom_in_recording.clone();
-        zoom_in_record_button.connect_clicked(move |button| {
-            if recording.get() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            } else {
-                recording.set(true);
-                set_recorder_recording(&record_button, &status);
-                button.grab_focus();
-            }
-        });
-    }
-    {
-        let status = zoom_in_status.clone();
-        let record_button = zoom_in_record_button.clone();
-        let recording = zoom_in_recording.clone();
-        zoom_in_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
-            if recording.get() && !button.has_focus() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            }
-        });
-    }
-    shortcuts_section.append(&build_shortcut_entry_row(
+    let zoom_in_recorder = build_shortcut_recorder_row(
         "Zoom in terminal text",
         "Applies only to the active workspace and is restored with saved workspace sessions.",
-        &zoom_in_control,
-        &zoom_in_status,
         &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
-    ));
-
-    let zoom_out_status = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .css_classes([
-            "field-hint",
-            "settings-shortcut-note",
-            "settings-shortcut-status",
-        ])
-        .visible(false)
-        .build();
-    let zoom_out_capture_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "settings-shortcut-chip"])
-        .build();
-    sync_shortcut_capture_label(
-        &zoom_out_capture_label,
-        current_zoom_out_shortcut.borrow().as_str(),
+        current_zoom_in_shortcut.clone(),
+        zoom_in_shortcut_callback.clone(),
+        sync_reset_button.clone(),
     );
-    let zoom_out_record_button = icons::labeled_button(
-        "Record",
-        icon_name::RECORD,
-        &[
-            "pill-button",
-            "secondary-button",
-            "settings-shortcut-record-button",
-        ],
-    );
-    let zoom_out_control =
-        build_shortcut_capture_control(&zoom_out_capture_label, &zoom_out_record_button);
-    let zoom_out_recording = Rc::new(Cell::new(false));
-    {
-        let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
-        let sync_reset_button = sync_reset_button.clone();
-        let status = zoom_out_status.clone();
-        let capture_label = zoom_out_capture_label.clone();
-        let record_button = zoom_out_record_button.clone();
-        let recording = zoom_out_recording.clone();
-        let callback = zoom_out_shortcut_callback.clone();
-        let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
-            }
+    shortcuts_section.append(&zoom_in_recorder.row);
 
-            let modifiers = state & gtk::accelerator_get_default_mod_mask();
-            if key == gdk::Key::Escape && modifiers.is_empty() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-                return glib::Propagation::Stop;
-            }
-
-            let Some((shortcut, label)) =
-                normalize_captured_shortcut(controller, key, keycode, state)
-            else {
-                status.set_label(
-                    "That key cannot be used alone. Try a function key or add modifiers.",
-                );
-                status.set_visible(true);
-                return glib::Propagation::Stop;
-            };
-
-            recording.set(false);
-            set_recorder_idle(&record_button, &status);
-            capture_label.set_label(&label);
-            capture_label.set_tooltip_text(Some(&shortcut));
-            if current_zoom_out_shortcut.borrow().as_str() != shortcut {
-                current_zoom_out_shortcut.replace(shortcut.clone());
-                callback(shortcut);
-                sync_reset_button();
-            }
-            glib::Propagation::Stop
-        });
-        zoom_out_record_button.add_controller(key_controller);
-    }
-    {
-        let status = zoom_out_status.clone();
-        let record_button = zoom_out_record_button.clone();
-        let recording = zoom_out_recording.clone();
-        zoom_out_record_button.connect_clicked(move |button| {
-            if recording.get() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            } else {
-                recording.set(true);
-                set_recorder_recording(&record_button, &status);
-                button.grab_focus();
-            }
-        });
-    }
-    {
-        let status = zoom_out_status.clone();
-        let record_button = zoom_out_record_button.clone();
-        let recording = zoom_out_recording.clone();
-        zoom_out_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
-            if recording.get() && !button.has_focus() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            }
-        });
-    }
-    shortcuts_section.append(&build_shortcut_entry_row(
+    let zoom_out_recorder = build_shortcut_recorder_row(
         "Zoom out terminal text",
         "Applies only to the active workspace and is restored with saved workspace sessions.",
-        &zoom_out_control,
-        &zoom_out_status,
         &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
-    ));
-
-    let command_palette_status = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .css_classes([
-            "field-hint",
-            "settings-shortcut-note",
-            "settings-shortcut-status",
-        ])
-        .visible(false)
-        .build();
-    let command_palette_capture_label = gtk::Label::builder()
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "settings-shortcut-chip"])
-        .build();
-    sync_shortcut_capture_label(
-        &command_palette_capture_label,
-        current_command_palette_shortcut.borrow().as_str(),
+        current_zoom_out_shortcut.clone(),
+        zoom_out_shortcut_callback.clone(),
+        sync_reset_button.clone(),
     );
-    let command_palette_record_button = icons::labeled_button(
-        "Record",
-        icon_name::RECORD,
-        &[
-            "pill-button",
-            "secondary-button",
-            "settings-shortcut-record-button",
-        ],
-    );
-    let command_palette_control = build_shortcut_capture_control(
-        &command_palette_capture_label,
-        &command_palette_record_button,
-    );
-    let command_palette_recording = Rc::new(Cell::new(false));
-    {
-        let current_command_palette_shortcut = current_command_palette_shortcut.clone();
-        let sync_reset_button = sync_reset_button.clone();
-        let status = command_palette_status.clone();
-        let capture_label = command_palette_capture_label.clone();
-        let record_button = command_palette_record_button.clone();
-        let recording = command_palette_recording.clone();
-        let callback = command_palette_shortcut_callback.clone();
-        let key_controller = gtk::EventControllerKey::new();
-        key_controller.connect_key_pressed(move |controller, key, keycode, state| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
-            }
+    shortcuts_section.append(&zoom_out_recorder.row);
 
-            let modifiers = state & gtk::accelerator_get_default_mod_mask();
-            if key == gdk::Key::Escape && modifiers.is_empty() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-                return glib::Propagation::Stop;
-            }
-
-            let Some((shortcut, label)) =
-                normalize_captured_shortcut(controller, key, keycode, state)
-            else {
-                status.set_label(
-                    "That key cannot be used alone. Try a function key or add modifiers.",
-                );
-                status.set_visible(true);
-                return glib::Propagation::Stop;
-            };
-
-            recording.set(false);
-            set_recorder_idle(&record_button, &status);
-            capture_label.set_label(&label);
-            capture_label.set_tooltip_text(Some(&shortcut));
-            if current_command_palette_shortcut.borrow().as_str() != shortcut {
-                current_command_palette_shortcut.replace(shortcut.clone());
-                callback(shortcut);
-                sync_reset_button();
-            }
-            glib::Propagation::Stop
-        });
-        command_palette_record_button.add_controller(key_controller);
-    }
-    {
-        let status = command_palette_status.clone();
-        let record_button = command_palette_record_button.clone();
-        let recording = command_palette_recording.clone();
-        command_palette_record_button.connect_clicked(move |button| {
-            if recording.get() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            } else {
-                recording.set(true);
-                set_recorder_recording(&record_button, &status);
-                button.grab_focus();
-            }
-        });
-    }
-    {
-        let status = command_palette_status.clone();
-        let record_button = command_palette_record_button.clone();
-        let recording = command_palette_recording.clone();
-        command_palette_record_button.connect_notify_local(Some("has-focus"), move |button, _| {
-            if recording.get() && !button.has_focus() {
-                recording.set(false);
-                set_recorder_idle(&record_button, &status);
-            }
-        });
-    }
-    shortcuts_section.append(&build_shortcut_entry_row(
+    let command_palette_recorder = build_shortcut_recorder_row(
         "Open command palette",
         "Available in launch tabs and workspaces for fast navigation and actions.",
-        &command_palette_control,
-        &command_palette_status,
         &["<Ctrl><Shift>P", "<Ctrl>P", "<Super>P"],
-    ));
+        current_command_palette_shortcut.clone(),
+        command_palette_shortcut_callback.clone(),
+        sync_reset_button.clone(),
+    );
+    shortcuts_section.append(&command_palette_recorder.row);
 
     {
         let current_theme = current_theme.clone();
@@ -1195,26 +838,11 @@ pub fn present(
         let density_strip = density_strip.clone();
         let close_to_background_switch = close_to_background_switch.clone();
         let suppress_close_to_background_signal = suppress_close_to_background_signal.clone();
-        let fullscreen_capture_label = fullscreen_capture_label.clone();
-        let density_capture_label = density_capture_label.clone();
-        let zoom_in_capture_label = zoom_in_capture_label.clone();
-        let zoom_out_capture_label = zoom_out_capture_label.clone();
-        let command_palette_capture_label = command_palette_capture_label.clone();
-        let fullscreen_record_button = fullscreen_record_button.clone();
-        let density_record_button = density_record_button.clone();
-        let zoom_in_record_button = zoom_in_record_button.clone();
-        let zoom_out_record_button = zoom_out_record_button.clone();
-        let command_palette_record_button = command_palette_record_button.clone();
-        let fullscreen_status = fullscreen_status.clone();
-        let density_status = density_status.clone();
-        let zoom_in_status = zoom_in_status.clone();
-        let zoom_out_status = zoom_out_status.clone();
-        let command_palette_status = command_palette_status.clone();
-        let fullscreen_recording = fullscreen_recording.clone();
-        let density_recording = density_recording.clone();
-        let zoom_in_recording = zoom_in_recording.clone();
-        let zoom_out_recording = zoom_out_recording.clone();
-        let command_palette_recording = command_palette_recording.clone();
+        let fullscreen_recorder = fullscreen_recorder.clone();
+        let density_recorder = density_recorder.clone();
+        let zoom_in_recorder = zoom_in_recorder.clone();
+        let zoom_out_recorder = zoom_out_recorder.clone();
+        let command_palette_recorder = command_palette_recorder.clone();
         let reconnect_spin = reconnect_spin.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
@@ -1253,37 +881,17 @@ pub fn present(
             suppress_close_to_background_signal.set(true);
             close_to_background_switch.set_active(defaults.close_to_background);
             suppress_close_to_background_signal.set(false);
-            sync_shortcut_capture_label(
-                &fullscreen_capture_label,
-                &defaults.workspace_fullscreen_shortcut,
-            );
-            sync_shortcut_capture_label(
-                &density_capture_label,
-                &defaults.workspace_density_shortcut,
-            );
-            sync_shortcut_capture_label(
-                &zoom_in_capture_label,
-                &defaults.workspace_zoom_in_shortcut,
-            );
-            sync_shortcut_capture_label(
-                &zoom_out_capture_label,
-                &defaults.workspace_zoom_out_shortcut,
-            );
-            sync_shortcut_capture_label(
-                &command_palette_capture_label,
-                &defaults.command_palette_shortcut,
-            );
+            fullscreen_recorder.sync_label(&defaults.workspace_fullscreen_shortcut);
+            density_recorder.sync_label(&defaults.workspace_density_shortcut);
+            zoom_in_recorder.sync_label(&defaults.workspace_zoom_in_shortcut);
+            zoom_out_recorder.sync_label(&defaults.workspace_zoom_out_shortcut);
+            command_palette_recorder.sync_label(&defaults.command_palette_shortcut);
             reconnect_spin.set_value(defaults.max_reconnect_attempts as f64);
-            fullscreen_recording.set(false);
-            density_recording.set(false);
-            zoom_in_recording.set(false);
-            zoom_out_recording.set(false);
-            command_palette_recording.set(false);
-            set_recorder_idle(&fullscreen_record_button, &fullscreen_status);
-            set_recorder_idle(&density_record_button, &density_status);
-            set_recorder_idle(&zoom_in_record_button, &zoom_in_status);
-            set_recorder_idle(&zoom_out_record_button, &zoom_out_status);
-            set_recorder_idle(&command_palette_record_button, &command_palette_status);
+            fullscreen_recorder.cancel_recording();
+            density_recorder.cancel_recording();
+            zoom_in_recorder.cancel_recording();
+            zoom_out_recorder.cancel_recording();
+            command_palette_recorder.cancel_recording();
             sync_reset_button();
             reset_callback();
         });
