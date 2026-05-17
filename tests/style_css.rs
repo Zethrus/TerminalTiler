@@ -3,6 +3,7 @@ const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
+const DESIGN_MD: &str = include_str!("../DESIGN.md");
 const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
@@ -248,6 +249,79 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
 }
 
 #[test]
+fn launch_buttons_use_premium_role_contract() {
+    for role in [
+        "primary = warm cream CTA",
+        "secondary = dark glass support action",
+        "ghost = low-emphasis transparent action",
+        "destructive = red-accent risk",
+        "disabled = intentional muted state",
+        "Windows parity",
+    ] {
+        assert!(
+            STYLE_CSS.contains(role),
+            "GTK CSS should document the button role contract token: {role}"
+        );
+    }
+
+    for role in [
+        "primary-cta-button",
+        "secondary-button",
+        "ghost-link-button",
+        "destructive-button",
+        "surface-button",
+        "Disabled buttons",
+        "Windows parity",
+    ] {
+        assert!(
+            DESIGN_MD.contains(role),
+            "DESIGN.md should document button parity role: {role}"
+        );
+    }
+
+    assert!(
+        LAUNCH_SCREEN_RS
+            .contains("\"primary-cta-button\",\n            \"new-workspace-layout-button\"")
+            && LAUNCH_SCREEN_RS
+                .contains("\"primary-cta-button\",\n            \"compact-action-button\"")
+            && LAUNCH_SCREEN_RS.contains("\"ghost-link-button\"")
+            && LAUNCH_SCREEN_RS
+                .contains("\"secondary-button\",\n            \"compact-action-button\"")
+            && LAUNCH_SCREEN_RS
+                .contains("\"destructive-button\",\n            \"compact-icon-button\""),
+        "launch dashboard and wizard actions should use explicit primary, secondary, ghost, and destructive roles"
+    );
+
+    for selector in [
+        "button.pill-button",
+        "button.primary-cta-button",
+        "button.secondary-button",
+        "button.ghost-link-button",
+        "button.destructive-button",
+        "button.surface-button",
+        ".wizard-stepper",
+        ".wizard-step-chip.is-active",
+    ] {
+        assert_css_block_contains(
+            selector,
+            "background",
+            "button and stepper roles should override platform-default gray styling",
+        );
+    }
+
+    assert_css_block_contains(
+        "button.pill-button:disabled",
+        "color: rgba(255, 255, 255, 0.36)",
+        "dark disabled buttons should remain deliberately muted and legible",
+    );
+    assert_css_block_contains(
+        "window.theme-light button.pill-button",
+        "background",
+        "light-mode pill buttons should remain usable and not inherit dark glass",
+    );
+}
+
+#[test]
 fn workspace_tab_context_menu_reuses_terminal_context_styles() {
     assert!(
         WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
@@ -366,6 +440,18 @@ fn assert_css_declaration(selector: &str, property: &str, expected_value: &str, 
         found,
         "{selector} must set {property}: {expected_value}; {reason}"
     );
+}
+
+fn assert_css_block_contains(selector: &str, expected: &str, reason: &str) {
+    let found = css_blocks(STYLE_CSS).into_iter().any(|(selectors, body)| {
+        selectors
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| candidate == selector)
+            && body.contains(expected)
+    });
+
+    assert!(found, "{selector} must contain {expected:?}; {reason}");
 }
 
 fn declaration_value<'a>(body: &'a str, property: &str) -> Option<&'a str> {

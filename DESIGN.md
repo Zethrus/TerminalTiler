@@ -45,6 +45,15 @@
 - Variants and states: selected template/preset, disabled Back on first step, primary Next vs Launch on final step, built-in preset “Save Copy” state, invalid path state.
 - Token/component ownership: `resources/style.css` owns visual tokens/classes; `src/ui/launch_screen.rs` owns launch/wizard composition.
 
+### Button role contract
+- `primary-cta-button`: warm cream, highest-emphasis CTA for launch/open/create actions (`Launch Workspace`, `Open`, `New Workspace Layout`); compact enough for the footer but visually above every other action.
+- `secondary-button`: dark glass support action for reversible navigation and editing (`Back`, `Update Preset`, `Edit`, `Workspaces`) with subtle amber border/highlight.
+- `ghost-link-button`: low-emphasis transparent/dark action for exits such as `Close Tab`; readable without competing with the primary CTA.
+- `destructive-button`: compact dark red-accent risk action for delete/close icon buttons; destructive actions should remain explicit and tooltip-backed when icon-only.
+- `surface-button` / `surface-button-icon`: tile-editor and runtime surface controls; use the same dark glass token family at a smaller square/labeled size.
+- Disabled buttons: muted but intentional role states, never generic washed-out platform gray.
+- Windows parity: when the native Windows shell is styled, map owner-drawn/native buttons to these same roles, approximate dimensions, radii, colors, and emphasis order rather than default system gray.
+
 ## Accessibility
 - Target standard: practical keyboard and screen-reader friendly GTK controls.
 - Keyboard/focus behavior: buttons and fields remain native controls; wizard navigation must not require pointer-only interaction.
