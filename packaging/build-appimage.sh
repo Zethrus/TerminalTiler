@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
+. "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 
 APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppDir"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
@@ -13,6 +14,14 @@ LATEST_APPIMAGE="$(appimage_latest_path)"
 TEMP_APPIMAGE="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppImage"
 
 mkdir -p "$(dirname "$OUTPUT_APPIMAGE")" "$(dirname "$APPDIR")"
+
+if [[ "${SKIP_DEPENDENCY_CHECK:-0}" != "1" ]]; then
+  cargo_dependency_check=1
+  if [[ "${SKIP_CARGO_BUILD:-0}" == "1" ]]; then
+    cargo_dependency_check=0
+  fi
+  check_linux_packaging_dependencies "build-appimage.sh" "appimage" "$cargo_dependency_check"
+fi
 
 if [[ "${SKIP_CARGO_BUILD:-0}" != "1" ]]; then
   echo "building release binary"

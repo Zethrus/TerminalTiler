@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
+. "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 TARGET_BIN="$TARGET_DIR/release/terminaltiler"
@@ -12,6 +13,14 @@ STAGE_ROOT="$ROOT_DIR/packaging/.build/deb-root"
 APP_ROOT="$STAGE_ROOT/opt/terminaltiler"
 
 mkdir -p "$(dirname "$OUTPUT_DEB")"
+
+if [[ "${SKIP_DEPENDENCY_CHECK:-0}" != "1" ]]; then
+  cargo_dependency_check=1
+  if [[ "${SKIP_CARGO_BUILD:-0}" == "1" ]]; then
+    cargo_dependency_check=0
+  fi
+  check_linux_packaging_dependencies "build-deb.sh" "deb" "$cargo_dependency_check"
+fi
 
 if [[ "${SKIP_CARGO_BUILD:-0}" != "1" ]]; then
   echo "building release binary"
