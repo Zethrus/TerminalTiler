@@ -16,6 +16,7 @@ mod transcript;
 mod tray;
 #[cfg(target_os = "linux")]
 mod ui;
+pub mod voice;
 #[cfg(target_os = "windows")]
 mod windows;
 

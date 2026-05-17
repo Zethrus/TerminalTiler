@@ -8,6 +8,7 @@ sudo apt-get install -y \
   dbus-x11 \
   dpkg-dev \
   libadwaita-1-dev \
+  libasound2-dev \
   libgraphene-1.0-dev \
   libgtk-4-dev \
   libjavascriptcoregtk-6.0-dev \

@@ -16,7 +16,7 @@ mkdir -p "$(dirname "$OUTPUT_APPIMAGE")" "$(dirname "$APPDIR")"
 
 if [[ "${SKIP_CARGO_BUILD:-0}" != "1" ]]; then
   echo "building release binary"
-  cargo build --release --manifest-path "$ROOT_DIR/Cargo.toml"
+  cargo build --release --features voice-cpal --manifest-path "$ROOT_DIR/Cargo.toml"
 else
   echo "using existing release binary"
 fi

@@ -2,7 +2,7 @@
 mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, VK_ADD, VK_CONTROL, VK_ESCAPE, VK_F1, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_RWIN,
-        VK_SHIFT, VK_SUBTRACT,
+        VK_SHIFT, VK_SPACE, VK_SUBTRACT,
     };
 
     const VK_OEM_PLUS: u32 = 0xBB;
@@ -29,6 +29,17 @@ mod imp {
             && modifier_pressed(VK_SHIFT.into()) == spec.shift
             && modifier_pressed(VK_MENU.into()) == spec.alt
             && super_pressed() == spec.super_key
+    }
+
+    pub fn registration_parts(shortcut: &str) -> Option<(bool, bool, bool, bool, u32)> {
+        let spec = parse_shortcut(shortcut)?;
+        Some((
+            spec.ctrl,
+            spec.shift,
+            spec.alt,
+            spec.super_key,
+            spec.virtual_key,
+        ))
     }
 
     pub fn capture_shortcut_from_keydown(virtual_key: u32) -> Option<String> {
@@ -95,6 +106,7 @@ mod imp {
             "plus" => "+",
             "equal" => "=",
             "minus" => "-",
+            "space" => "Space",
             "KP_Add" => "Num +",
             "KP_Subtract" => "Num -",
             "KP_Multiply" => "Num *",
@@ -170,6 +182,7 @@ mod imp {
         match lower.as_str() {
             "plus" | "equal" => Some(VK_OEM_PLUS),
             "minus" => Some(VK_OEM_MINUS),
+            "space" => Some(u32::from(VK_SPACE)),
             "kp_add" => Some(u32::from(VK_ADD)),
             "kp_subtract" => Some(u32::from(VK_SUBTRACT)),
             "kp_multiply" => Some(u32::from(VK_MULTIPLY)),
@@ -185,6 +198,7 @@ mod imp {
             0x30..=0x39 | 0x41..=0x5A => Some(char::from_u32(virtual_key)?.to_string()),
             VK_OEM_PLUS => Some(if shift { "plus" } else { "equal" }.into()),
             VK_OEM_MINUS => Some("minus".into()),
+            key if key == u32::from(VK_SPACE) => Some("space".into()),
             key if key == u32::from(VK_ADD) => Some("KP_Add".into()),
             key if key == u32::from(VK_SUBTRACT) => Some("KP_Subtract".into()),
             key if key == u32::from(VK_MULTIPLY) => Some("KP_Multiply".into()),
@@ -206,6 +220,7 @@ mod imp {
             assert!(parse_shortcut("<Ctrl><Alt>KP_Multiply").is_some());
             assert!(parse_shortcut("<Alt><Super>D").is_some());
             assert!(parse_shortcut("<Ctrl>P").is_some());
+            assert!(parse_shortcut("<Ctrl><Shift>space").is_some());
         }
 
         #[test]
@@ -217,4 +232,4 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::{capture_shortcut_from_keydown, display_label, matches_keydown};
+pub use imp::{capture_shortcut_from_keydown, display_label, matches_keydown, registration_parts};

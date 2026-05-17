@@ -61,8 +61,10 @@ mod imp {
     };
     use windows_sys::Win32::UI::Controls::SetScrollInfo;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DELETE,
-        VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
+        GetCapture, GetKeyState, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+        RegisterHotKey, ReleaseCapture, SetCapture, SetFocus, UnregisterHotKey, VK_CONTROL,
+        VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT,
+        VK_SHIFT, VK_UP,
     };
     use windows_sys::Win32::UI::Shell::{
         DragAcceptFiles, DragFinish, DragQueryFileW, HDROP, ShellExecuteW,
@@ -71,15 +73,16 @@ mod imp {
         AppendMenuW, BN_DBLCLK, CREATESTRUCTW, CS_DBLCLKS, CS_HREDRAW, CS_VREDRAW, CreatePopupMenu,
         CreateWindowExW, DefWindowProcW, DestroyMenu, EN_CHANGE, GWL_STYLE, GWLP_USERDATA,
         GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IDC_ARROW, IDC_HAND,
-        LoadCursorW, MB_OK, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW, RegisterClassW,
-        SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
-        SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW, SWP_FRAMECHANGED,
-        SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-        ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CHAR, WM_COMMAND,
-        WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+        KillTimer, LoadCursorW, MB_OK, MF_GRAYED, MF_STRING, MessageBoxW, PostMessageW,
+        RegisterClassW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
+        SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE,
+        SW_SHOW, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor,
+        SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_CHAR, WM_COMMAND, WM_CREATE, WM_DESTROY,
+        WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
         WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_PAINT,
-        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_VSCROLL, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL,
+        WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::dropped_paths::{self, DroppedPathTarget};
@@ -98,6 +101,8 @@ mod imp {
     use crate::storage::preference_store::PreferenceStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::transcript::TranscriptBuffer;
+    use crate::voice::pack::{self, VoicePackHealth};
+    use crate::voice::{ParakeetTranscriber, VoiceActivationMode};
     use crate::windows::vt::{
         MouseTrackingMode, ShellIntegrationPhase, VtBuffer, VtColor, VtPosition, VtStyle,
     };
@@ -120,6 +125,9 @@ mod imp {
     const WM_WEBVIEW_URI_CHANGED: u32 = WM_APP + 4;
     const WM_WEBVIEW_TITLE_CHANGED: u32 = WM_APP + 5;
     const WM_WEBVIEW_AUTO_REFRESH: u32 = WM_APP + 6;
+    const WM_VOICE_TRANSCRIPTION_RESULT: u32 = WM_APP + 7;
+    const VOICE_GLOBAL_HOTKEY_ID: i32 = 42_060;
+    const VOICE_FLUSH_TIMER_ID: usize = 42_061;
     const HEADER_HEIGHT: i32 = 152;
     const OUTER_MARGIN: i32 = 12;
     const PANE_GAP: i32 = 8;
@@ -215,6 +223,7 @@ mod imp {
         runbook_hwnd: HWND,
         alerts_hwnd: HWND,
         command_palette_hwnd: HWND,
+        voice_hud_hwnd: HWND,
         tab_button_hwnds: Vec<HWND>,
         tab_drag: Option<TabDragState>,
         pane_drag: Option<PaneDragState>,
@@ -222,8 +231,17 @@ mod imp {
         saved_window_rect: RECT,
         saved_window_style: isize,
         focused_web_pane_id: Option<usize>,
+        voice_transcriber: Option<ParakeetTranscriber>,
+        voice_listening: bool,
+        voice_global_hotkey_registered: bool,
         webview_environment: Option<ICoreWebView2Environment>,
         panes: Vec<Box<PaneState>>,
+    }
+
+    enum VoiceWorkspaceEvent {
+        Final(String),
+        Partial(String),
+        Error(String),
     }
 
     #[derive(Default)]
@@ -664,6 +682,7 @@ mod imp {
             runbook_hwnd: ptr::null_mut(),
             alerts_hwnd: ptr::null_mut(),
             command_palette_hwnd: ptr::null_mut(),
+            voice_hud_hwnd: ptr::null_mut(),
             tab_button_hwnds: Vec::new(),
             tab_drag: None,
             pane_drag: None,
@@ -671,6 +690,9 @@ mod imp {
             saved_window_rect: unsafe { mem::zeroed() },
             saved_window_style: 0,
             focused_web_pane_id: None,
+            voice_transcriber: None,
+            voice_listening: false,
+            voice_global_hotkey_registered: false,
             webview_environment: None,
             panes: Vec::new(),
         });
@@ -841,12 +863,14 @@ mod imp {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     state.hwnd = hwnd;
                     create_controls(hwnd, state);
+                    sync_workspace_voice_global_hotkey(hwnd, state);
                 }
                 0
             }
             WM_SETFOCUS => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     save_workspace_session_state(state);
+                    sync_workspace_voice_global_hotkey(hwnd, state);
                 }
                 0
             }
@@ -860,6 +884,32 @@ mod imp {
                 if let Some(state) = unsafe { window_state_mut(hwnd) }
                     && handle_workspace_shortcuts(hwnd, state, wparam as u32)
                 {
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_KEYUP => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) }
+                    && handle_workspace_key_release(hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_HOTKEY => {
+                if wparam as i32 == VOICE_GLOBAL_HOTKEY_ID
+                    && let Some(state) = unsafe { window_state_mut(hwnd) }
+                {
+                    handle_workspace_voice_hotkey(hwnd, state);
+                    return 0;
+                }
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_TIMER => {
+                if wparam == VOICE_FLUSH_TIMER_ID
+                    && let Some(state) = unsafe { window_state_mut(hwnd) }
+                {
+                    flush_workspace_voice_capture(hwnd, state);
                     return 0;
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
@@ -928,6 +978,12 @@ mod imp {
                 }
                 0
             }
+            WM_VOICE_TRANSCRIPTION_RESULT => {
+                if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    handle_voice_transcription_result(state, lparam);
+                }
+                0
+            }
             WM_PANE_OUTPUT => {
                 let event_ptr = lparam as *mut PaneOutputEvent;
                 if !event_ptr.is_null() {
@@ -954,6 +1010,10 @@ mod imp {
             }
             WM_DESTROY => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                    unsafe {
+                        KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
+                    }
+                    unregister_workspace_voice_global_hotkey(hwnd, state);
                     remove_workspace_session_state(state.window_id, &state.session_store);
                 }
                 0
@@ -1223,6 +1283,22 @@ mod imp {
                 }
                 if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
                     handle_key_input(pane, wparam as u16);
+                }
+                0
+            }
+            WM_KEYUP => {
+                let parent_hwnd = if let Some(pane) = unsafe { pane_state_mut(hwnd) } {
+                    pane.parent_hwnd
+                } else {
+                    return 0;
+                };
+                if let Some(state) = unsafe { window_state_mut(parent_hwnd) }
+                    && handle_workspace_key_release(parent_hwnd, state, wparam as u32)
+                {
+                    return 0;
+                }
+                if is_web_pane {
+                    return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
                 }
                 0
             }
@@ -1597,6 +1673,15 @@ mod imp {
             ID_WORKSPACE_COMMAND_PALETTE,
             ptr::null_mut(),
         );
+        state.voice_hud_hwnd = create_child_window(
+            hwnd,
+            "STATIC",
+            "",
+            WS_CHILD | WS_BORDER,
+            0,
+            0,
+            ptr::null_mut(),
+        );
 
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
         for control in [
@@ -1619,6 +1704,7 @@ mod imp {
             state.runbook_hwnd,
             state.alerts_hwnd,
             state.command_palette_hwnd,
+            state.voice_hud_hwnd,
         ] {
             if !control.is_null() {
                 unsafe {
@@ -1908,7 +1994,51 @@ mod imp {
             }
         }
 
+        layout_workspace_voice_hud(state, bounds);
         sync_web_navigation_controls(state);
+    }
+
+    fn layout_workspace_voice_hud(state: &WorkspaceWindowState, bounds: Bounds) {
+        if state.voice_hud_hwnd.is_null() {
+            return;
+        }
+        let width = (bounds.width() - OUTER_MARGIN * 2).clamp(240, 360);
+        let height = 58;
+        unsafe {
+            SetWindowPos(
+                state.voice_hud_hwnd,
+                ptr::null_mut(),
+                bounds.right - OUTER_MARGIN - width,
+                OUTER_MARGIN + HEADER_HEIGHT + 12,
+                width,
+                height,
+                0,
+            );
+        }
+    }
+
+    fn show_workspace_voice_hud(state: &WorkspaceWindowState, title: &str, detail: &str) {
+        if state.voice_hud_hwnd.is_null() {
+            return;
+        }
+        let text = if detail.trim().is_empty() {
+            format!("● TerminalTiler Voice\r\n{title}")
+        } else {
+            format!("● TerminalTiler Voice — {title}\r\n{detail}")
+        };
+        unsafe {
+            SetWindowTextW(state.voice_hud_hwnd, wide(&text).as_ptr());
+            ShowWindow(state.voice_hud_hwnd, SW_SHOW);
+            SetWindowPos(
+                state.voice_hud_hwnd,
+                ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE,
+            );
+        }
     }
 
     fn spawn_pane_sessions(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -2061,6 +2191,18 @@ mod imp {
             }
         }
         sent
+    }
+
+    #[allow(dead_code)]
+    fn send_text_to_focused_terminal(state: &mut WorkspaceWindowState, text: &str) -> bool {
+        let focused_pane = state
+            .panes
+            .iter_mut()
+            .find(|pane| pane.focused && pane.tile.tile_kind == TileKind::Terminal);
+        let Some(pane) = focused_pane else {
+            return false;
+        };
+        send_text_to_pane(pane, text)
     }
 
     fn push_alert(state: &WorkspaceWindowState, input: AlertEventInput) {
@@ -2429,6 +2571,12 @@ mod imp {
         virtual_key: u32,
     ) -> bool {
         let preferences = state.preference_store.load();
+        if shortcut_capture::matches_keydown(&preferences.voice.hotkey, virtual_key) {
+            if preferences.voice.enabled {
+                handle_workspace_voice_hotkey(hwnd, state);
+            }
+            return true;
+        }
         if shortcut_capture::matches_keydown(&preferences.command_palette_shortcut, virtual_key) {
             open_workspace_command_palette(hwnd, state);
             return true;
@@ -2454,6 +2602,310 @@ mod imp {
             return true;
         }
         false
+    }
+
+    fn handle_workspace_key_release(
+        hwnd: HWND,
+        state: &mut WorkspaceWindowState,
+        virtual_key: u32,
+    ) -> bool {
+        let preferences = state.preference_store.load();
+        if !preferences.voice.enabled
+            || preferences.voice.activation_mode != VoiceActivationMode::PushToTalk
+            || !shortcut_capture::matches_keydown(&preferences.voice.hotkey, virtual_key)
+        {
+            return false;
+        }
+        stop_workspace_voice_capture(hwnd, state);
+        true
+    }
+
+    fn handle_workspace_voice_hotkey(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let preferences = state.preference_store.load();
+        match preferences.voice.activation_mode {
+            VoiceActivationMode::Toggle if state.voice_listening => {
+                stop_workspace_voice_capture(hwnd, state);
+            }
+            VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
+                if state.voice_listening {
+                    // RegisterHotKey only reports activation, not release. In
+                    // global best-effort mode a second activation flushes PTT.
+                    stop_workspace_voice_capture(hwnd, state);
+                } else {
+                    start_workspace_voice_capture(hwnd, state);
+                }
+            }
+        }
+    }
+
+    fn sync_workspace_voice_global_hotkey(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        let preferences = state.preference_store.load();
+        if !preferences.voice.enabled || !preferences.voice.prefer_global_hotkey {
+            unregister_workspace_voice_global_hotkey(hwnd, state);
+            return;
+        }
+
+        let Some((ctrl, shift, alt, super_key, virtual_key)) =
+            shortcut_capture::registration_parts(&preferences.voice.hotkey)
+        else {
+            unregister_workspace_voice_global_hotkey(hwnd, state);
+            return;
+        };
+
+        unregister_workspace_voice_global_hotkey(hwnd, state);
+        let mut modifiers = MOD_NOREPEAT;
+        if ctrl {
+            modifiers |= MOD_CONTROL;
+        }
+        if shift {
+            modifiers |= MOD_SHIFT;
+        }
+        if alt {
+            modifiers |= MOD_ALT;
+        }
+        if super_key {
+            modifiers |= MOD_WIN;
+        }
+
+        let registered =
+            unsafe { RegisterHotKey(hwnd, VOICE_GLOBAL_HOTKEY_ID, modifiers, virtual_key) } != 0;
+        state.voice_global_hotkey_registered = registered;
+        if registered {
+            logging::info(format!(
+                "registered Windows global voice hotkey {}",
+                preferences.voice.hotkey
+            ));
+        } else {
+            logging::error(format!(
+                "failed to register Windows global voice hotkey {}",
+                preferences.voice.hotkey
+            ));
+        }
+    }
+
+    fn unregister_workspace_voice_global_hotkey(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.voice_global_hotkey_registered {
+            unsafe {
+                UnregisterHotKey(hwnd, VOICE_GLOBAL_HOTKEY_ID);
+            }
+            state.voice_global_hotkey_registered = false;
+        }
+    }
+
+    fn start_workspace_voice_capture(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if state.voice_listening {
+            return;
+        }
+        if !focused_terminal_available(state) {
+            push_workspace_voice_alert(
+                state,
+                AlertSeverity::Warning,
+                "No focused terminal target",
+                "Focus a TerminalTiler terminal pane before dictating.",
+            );
+            return;
+        }
+
+        let preferences = state.preference_store.load();
+        let manifest = pack::builtin_parakeet_manifest();
+        let Some(root) = pack::default_voice_pack_dir() else {
+            push_workspace_voice_alert(
+                state,
+                AlertSeverity::Error,
+                "Voice pack error",
+                "Could not resolve application data directory.",
+            );
+            return;
+        };
+        let health = pack::health_check(&root, &manifest);
+        if !matches!(health, VoicePackHealth::Ready { .. }) {
+            push_workspace_voice_alert(
+                state,
+                AlertSeverity::Warning,
+                "Voice pack not installed",
+                "Install the NVIDIA Parakeet voice pack from Settings before dictating.",
+            );
+            return;
+        }
+
+        match ParakeetTranscriber::launch(&manifest, health, preferences.voice.engine_mode)
+            .and_then(|mut transcriber| {
+                transcriber.start_capture(preferences.voice.microphone_id.as_deref())?;
+                Ok(transcriber)
+            }) {
+            Ok(transcriber) => {
+                state.voice_transcriber = Some(transcriber);
+                state.voice_listening = true;
+                unsafe {
+                    SetTimer(hwnd, VOICE_FLUSH_TIMER_ID, 650, None);
+                }
+                push_workspace_voice_alert(
+                    state,
+                    AlertSeverity::Info,
+                    "Voice listening",
+                    "Speak now. Final transcript text will be inserted into the focused terminal.",
+                );
+            }
+            Err(error) => {
+                push_workspace_voice_alert(
+                    state,
+                    AlertSeverity::Error,
+                    "Voice capture failed",
+                    &format!("{error:?}"),
+                );
+                logging::error(format!("failed to start Windows voice capture: {error:?}"));
+            }
+        }
+
+        unsafe { SetFocus(hwnd) };
+    }
+
+    fn stop_workspace_voice_capture(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if !state.voice_listening {
+            return;
+        }
+        state.voice_listening = false;
+        unsafe {
+            KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
+        }
+        let Some(mut transcriber) = state.voice_transcriber.take() else {
+            return;
+        };
+        push_workspace_voice_alert(
+            state,
+            AlertSeverity::Info,
+            "Voice transcribing",
+            "NVIDIA Parakeet is finalizing the transcript.",
+        );
+        let hwnd_value = hwnd as isize;
+        thread::spawn(move || {
+            let partial_hwnd = hwnd_value;
+            let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
+                post_voice_workspace_event(partial_hwnd, VoiceWorkspaceEvent::Partial(partial));
+            });
+            let _ = transcriber.shutdown();
+            let event = match result {
+                Ok(text) => VoiceWorkspaceEvent::Final(text),
+                Err(error) => VoiceWorkspaceEvent::Error(format!("{error:?}")),
+            };
+            post_voice_workspace_event(hwnd_value, event);
+        });
+    }
+
+    fn flush_workspace_voice_capture(hwnd: HWND, state: &mut WorkspaceWindowState) {
+        if !state.voice_listening {
+            unsafe {
+                KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
+            }
+            return;
+        }
+        let Some(transcriber) = state.voice_transcriber.as_mut() else {
+            return;
+        };
+        match transcriber.flush_captured_audio() {
+            Ok(Some(partial)) => {
+                push_workspace_voice_alert(state, AlertSeverity::Info, "Voice partial", &partial);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                state.voice_listening = false;
+                unsafe {
+                    KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
+                }
+                if let Some(transcriber) = state.voice_transcriber.take() {
+                    let _ = transcriber.shutdown();
+                }
+                let message = format!("{error:?}");
+                logging::error(format!("Windows voice capture flush failed: {message}"));
+                push_workspace_voice_alert(
+                    state,
+                    AlertSeverity::Error,
+                    "Voice capture failed",
+                    &message,
+                );
+            }
+        }
+    }
+
+    fn post_voice_workspace_event(hwnd: isize, event: VoiceWorkspaceEvent) {
+        let event_ptr = Box::into_raw(Box::new(event));
+        let posted = unsafe {
+            PostMessageW(
+                hwnd as HWND,
+                WM_VOICE_TRANSCRIPTION_RESULT,
+                0,
+                event_ptr as LPARAM,
+            )
+        };
+        if posted == 0 {
+            unsafe {
+                drop(Box::from_raw(event_ptr));
+            }
+        }
+    }
+
+    fn handle_voice_transcription_result(state: &mut WorkspaceWindowState, lparam: LPARAM) {
+        if lparam == 0 {
+            return;
+        }
+        let event = unsafe { Box::from_raw(lparam as *mut VoiceWorkspaceEvent) };
+        match *event {
+            VoiceWorkspaceEvent::Final(text) => {
+                if text.trim().is_empty() {
+                    push_workspace_voice_alert(
+                        state,
+                        AlertSeverity::Info,
+                        "No speech detected",
+                        "NVIDIA Parakeet returned an empty transcript.",
+                    );
+                } else if send_text_to_focused_terminal(state, &text) {
+                    push_workspace_voice_alert(
+                        state,
+                        AlertSeverity::Info,
+                        "Voice text inserted",
+                        &text,
+                    );
+                } else {
+                    push_workspace_voice_alert(
+                        state,
+                        AlertSeverity::Warning,
+                        "Voice text not inserted",
+                        "No TerminalTiler terminal pane is focused anymore.",
+                    );
+                }
+            }
+            VoiceWorkspaceEvent::Partial(text) => {
+                push_workspace_voice_alert(state, AlertSeverity::Info, "Voice partial", &text);
+            }
+            VoiceWorkspaceEvent::Error(message) => {
+                logging::error(format!("Windows voice transcription failed: {message}"));
+                push_workspace_voice_alert(
+                    state,
+                    AlertSeverity::Error,
+                    "Voice transcription failed",
+                    &message,
+                );
+            }
+        }
+    }
+
+    fn focused_terminal_available(state: &WorkspaceWindowState) -> bool {
+        state
+            .panes
+            .iter()
+            .any(|pane| pane.focused && pane.tile.tile_kind == TileKind::Terminal)
+    }
+
+    fn push_workspace_voice_alert(
+        state: &WorkspaceWindowState,
+        severity: AlertSeverity,
+        title: &str,
+        detail: &str,
+    ) {
+        show_workspace_voice_hud(state, title, detail);
+        let mut alert = AlertEventInput::new(AlertSourceKind::Runbook, severity, title);
+        alert.detail = detail.to_string();
+        push_alert(state, alert);
     }
 
     fn reconnect_pane(

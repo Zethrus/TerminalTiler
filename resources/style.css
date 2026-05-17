@@ -3594,3 +3594,41 @@ window.theme-light .assets-manager-window .asset-nested-card {
   background: rgba(25, 35, 50, 0.04);
   border-color: rgba(25, 35, 50, 0.08);
 }
+
+.voice-hud {
+  min-width: 360px;
+  max-width: 760px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(83, 109, 254, 0.22), rgba(45, 212, 191, 0.13)),
+    rgba(9, 14, 24, 0.88);
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255, 255, 255, 0.10);
+}
+
+.voice-hud-status {
+  color: rgba(226, 244, 255, 0.96);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.voice-hud-transcript {
+  color: rgba(207, 250, 254, 0.86);
+}
+
+window.theme-light .voice-hud {
+  background:
+    linear-gradient(135deg, rgba(79, 70, 229, 0.14), rgba(13, 148, 136, 0.10)),
+    rgba(255, 255, 255, 0.92);
+  border-color: rgba(14, 116, 144, 0.18);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18), inset 0 1px rgba(255, 255, 255, 0.82);
+}
+
+window.theme-light .voice-hud-status {
+  color: rgba(15, 23, 42, 0.92);
+}
+
+window.theme-light .voice-hud-transcript {
+  color: rgba(17, 94, 89, 0.86);
+}

@@ -41,7 +41,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --features voice-cpal
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -89,7 +89,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --features voice-cpal
 
       - name: Check Windows target
         run: cargo check --target x86_64-pc-windows-msvc

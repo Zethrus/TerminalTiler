@@ -8,6 +8,7 @@ use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::document::{read_optional_string, write_toml_private};
 use crate::storage::fs_utils::preserve_corrupt_file;
+use crate::voice::VoicePreferences;
 
 const STORE_VERSION: u32 = 1;
 const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
@@ -35,6 +36,7 @@ pub struct AppPreferences {
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
     pub max_reconnect_attempts: u32,
+    pub voice: VoicePreferences,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +73,8 @@ struct PreferenceDocument {
     settings_dialog_height: i32,
     #[serde(default = "default_max_reconnect_attempts")]
     max_reconnect_attempts: u32,
+    #[serde(default)]
+    voice: VoicePreferences,
 }
 
 fn default_density() -> ApplicationDensity {
@@ -250,6 +254,7 @@ impl PreferenceStore {
                     document.settings_dialog_height,
                 ),
                 max_reconnect_attempts: document.max_reconnect_attempts,
+                voice: document.voice,
             },
             Ok(_) => {
                 self.recover_invalid_preferences(path, "invalid preferences version");
@@ -325,6 +330,13 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn save_voice_preferences(&self, voice: VoicePreferences) {
+        let mut preferences = self.load();
+        preferences.voice = voice;
+        self.save(&preferences);
+    }
+
     pub fn save_settings_dialog_size(&self, width: i32, height: i32) {
         let mut preferences = self.load();
         preferences.settings_dialog_width = normalize_settings_dialog_width(width);
@@ -354,6 +366,7 @@ impl PreferenceStore {
             settings_dialog_width: preferences.settings_dialog_width,
             settings_dialog_height: preferences.settings_dialog_height,
             max_reconnect_attempts: preferences.max_reconnect_attempts,
+            voice: preferences.voice.clone(),
         };
 
         if let Err(error) = write_toml_private(path, &document) {
@@ -398,6 +411,7 @@ impl Default for AppPreferences {
             settings_dialog_width: default_settings_dialog_width(),
             settings_dialog_height: default_settings_dialog_height(),
             max_reconnect_attempts: default_max_reconnect_attempts(),
+            voice: VoicePreferences::default(),
         }
     }
 }
@@ -414,6 +428,7 @@ mod tests {
     use super::{AppPreferences, PreferenceStore};
     use crate::model::assets::RestoreLaunchMode;
     use crate::model::preset::{ApplicationDensity, ThemeMode};
+    use crate::voice::VoicePreferences;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -441,6 +456,7 @@ mod tests {
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
         assert_eq!(store.load().max_reconnect_attempts, 5);
+        assert_eq!(store.load().voice, VoicePreferences::default());
     }
 
     #[test]
@@ -462,6 +478,10 @@ mod tests {
             settings_dialog_width: 640,
             settings_dialog_height: 540,
             max_reconnect_attempts: 7,
+            voice: VoicePreferences {
+                enabled: true,
+                ..VoicePreferences::default()
+            },
         });
 
         assert_eq!(
@@ -480,6 +500,10 @@ mod tests {
                 settings_dialog_width: 640,
                 settings_dialog_height: 540,
                 max_reconnect_attempts: 7,
+                voice: VoicePreferences {
+                    enabled: true,
+                    ..VoicePreferences::default()
+                },
             }
         );
     }
@@ -508,6 +532,7 @@ mod tests {
                 settings_dialog_width: 528,
                 settings_dialog_height: 760,
                 max_reconnect_attempts: 5,
+                voice: VoicePreferences::default(),
             }
         );
     }
@@ -635,5 +660,23 @@ mod tests {
 
         assert_eq!(store.load().settings_dialog_width, 200);
         assert_eq!(store.load().settings_dialog_height, 240);
+    }
+    #[test]
+    fn saves_voice_preferences_without_disturbing_other_settings() {
+        let dir = temp_dir("pref-voice");
+        let store = PreferenceStore::from_path(dir.join("preferences.toml"));
+        let voice = VoicePreferences {
+            enabled: true,
+            prefer_global_hotkey: true,
+            hotkey: "F9".into(),
+            ..VoicePreferences::default()
+        };
+
+        store.save_voice_preferences(voice.clone());
+
+        let loaded = store.load();
+        assert_eq!(loaded.voice, voice);
+        assert_eq!(loaded.default_density, ApplicationDensity::Compact);
+        assert_eq!(loaded.command_palette_shortcut, "<Ctrl><Shift>P");
     }
 }

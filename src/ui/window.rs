@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Mutex, OnceLock};
 use std::thread_local;
 
@@ -27,6 +28,11 @@ use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
     launch_screen, settings_dialog, workspace_view,
 };
+use crate::voice::audio::AudioCapture;
+use crate::voice::engine::{self, VoiceEngineEvent};
+use crate::voice::linux_global_hotkey::{LinuxGlobalHotkeyEvent, LinuxGlobalHotkeyHandle};
+use crate::voice::pack::{self, VoicePackHealth};
+use crate::voice::{ParakeetTranscriber, VoiceActivationMode, VoicePackStatus};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -36,6 +42,7 @@ type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
+type VoiceKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
 type TabStripControllerHandle = Rc<RefCell<TabStripController>>;
 type WorkspaceLayoutTargetHandle = Rc<RefCell<Option<WorkspaceLayoutTarget>>>;
 type AttachWorkspaceTabHandle = Rc<dyn Fn(WorkspaceTab)>;
@@ -142,6 +149,86 @@ struct WorkspaceState {
     runtime: workspace_view::WorkspaceRuntime,
     terminal_zoom_steps: i32,
     layout_target: WorkspaceLayoutTargetHandle,
+}
+
+#[derive(Clone)]
+struct VoiceHud {
+    revealer: gtk::Revealer,
+    status_label: gtk::Label,
+    transcript_label: gtk::Label,
+}
+
+impl VoiceHud {
+    fn new() -> Self {
+        let revealer = gtk::Revealer::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
+            .transition_type(gtk::RevealerTransitionType::SlideDown)
+            .reveal_child(false)
+            .can_target(false)
+            .build();
+        let shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .margin_top(18)
+            .css_classes(["voice-hud"])
+            .build();
+        let status_label = gtk::Label::builder()
+            .label("Voice ready")
+            .halign(gtk::Align::Start)
+            .css_classes(["voice-hud-status"])
+            .build();
+        let transcript_label = gtk::Label::builder()
+            .label("")
+            .halign(gtk::Align::Start)
+            .ellipsize(pango::EllipsizeMode::End)
+            .max_width_chars(72)
+            .css_classes(["voice-hud-transcript"])
+            .build();
+        shell.append(&status_label);
+        shell.append(&transcript_label);
+        revealer.set_child(Some(&shell));
+        Self {
+            revealer,
+            status_label,
+            transcript_label,
+        }
+    }
+
+    fn widget(&self) -> gtk::Widget {
+        self.revealer.clone().upcast()
+    }
+
+    fn show(&self, status: &str, transcript: Option<&str>) {
+        self.status_label.set_label(status);
+        self.transcript_label.set_label(transcript.unwrap_or(""));
+        self.transcript_label
+            .set_visible(transcript.is_some_and(|value| !value.trim().is_empty()));
+        self.revealer.set_reveal_child(true);
+    }
+
+    fn hide_later(&self) {
+        let revealer = self.revealer.clone();
+        glib::timeout_add_seconds_local_once(3, move || {
+            revealer.set_reveal_child(false);
+        });
+    }
+}
+
+#[derive(Debug)]
+enum VoiceUiEvent {
+    Final(String),
+    Partial(String),
+    Error(String),
+    HotkeyPressed,
+    HotkeyReleased,
+    Toast(String),
+}
+
+struct VoiceGlobalHotkeyRegistration {
+    shortcut: String,
+    #[allow(dead_code)]
+    handle: LinuxGlobalHotkeyHandle,
 }
 
 #[derive(Clone)]
@@ -290,8 +377,13 @@ fn present_with_initial_workspace(
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
 
+    let voice_hud = VoiceHud::new();
+    let workspace_overlay = gtk::Overlay::new();
+    workspace_overlay.set_child(Some(&tab_view));
+    workspace_overlay.add_overlay(&voice_hud.widget());
+
     let toast_overlay = adw::ToastOverlay::new();
-    toast_overlay.set_child(Some(&tab_view));
+    toast_overlay.set_child(Some(&workspace_overlay));
 
     let close_to_background_notice = gtk::Revealer::builder()
         .transition_type(gtk::RevealerTransitionType::SlideDown)
@@ -423,6 +515,11 @@ fn present_with_initial_workspace(
     let current_command_palette_shortcut = Rc::new(RefCell::new(
         current_shortcuts.command_palette_shortcut.clone(),
     ));
+    let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
+    let voice_transcriber = Rc::new(RefCell::new(None::<ParakeetTranscriber>));
+    let voice_listening = Rc::new(Cell::new(false));
+    let voice_global_hotkey = Rc::new(RefCell::new(None::<VoiceGlobalHotkeyRegistration>));
+    let (voice_event_tx, voice_event_rx) = mpsc::channel::<VoiceUiEvent>();
     let quit_requested = Rc::new(Cell::new(false));
     let force_quit_requested = Rc::new(Cell::new(false));
     let tab_strip_controller = create_tab_strip_controller(
@@ -465,6 +562,156 @@ fn present_with_initial_workspace(
         sync_close_to_background_notice();
         glib::timeout_add_seconds_local(1, move || {
             sync_close_to_background_notice();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    {
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        let voice_hud = voice_hud.clone();
+        let toast_overlay = toast_overlay.clone();
+        let preference_store = preference_store.clone();
+        let voice_transcriber = voice_transcriber.clone();
+        let voice_listening = voice_listening.clone();
+        let voice_event_tx_for_handler = voice_event_tx.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            while let Ok(event) = voice_event_rx.try_recv() {
+                match event {
+                    VoiceUiEvent::Final(text) => {
+                        if text.trim().is_empty() {
+                            voice_hud.show("No speech detected", None);
+                            voice_hud.hide_later();
+                            continue;
+                        }
+                        let inserted = active_workspace_runtime(&tabs, active_tab_id.get())
+                            .map(|runtime| runtime.send_text_to_focused_terminal(&text))
+                            .unwrap_or(false);
+                        if inserted {
+                            voice_hud.show("Voice inserted", Some(&text));
+                            voice_hud.hide_later();
+                        } else {
+                            voice_hud.show("No focused terminal target", Some(&text));
+                            show_toast(
+                                &toast_overlay,
+                                "Voice text was not inserted: no focused terminal pane",
+                            );
+                        }
+                    }
+                    VoiceUiEvent::Error(message) => {
+                        logging::error(format!("voice transcription failed: {message}"));
+                        voice_hud.show("Voice error", Some(&message));
+                        show_toast(&toast_overlay, "Voice transcription failed");
+                    }
+                    VoiceUiEvent::Partial(text) => {
+                        voice_hud.show("Voice partial", Some(&text));
+                    }
+                    VoiceUiEvent::HotkeyPressed => {
+                        let voice = preference_store.load().voice;
+                        if !voice.enabled {
+                            continue;
+                        }
+                        match voice.activation_mode {
+                            VoiceActivationMode::Toggle if voice_listening.get() => {
+                                stop_voice_capture(
+                                    &voice_transcriber,
+                                    &voice_listening,
+                                    &voice_hud,
+                                    &voice_event_tx_for_handler,
+                                );
+                            }
+                            VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
+                                if !voice_listening.get() {
+                                    start_voice_capture(
+                                        &preference_store,
+                                        &tabs,
+                                        active_tab_id.get(),
+                                        &voice_hud,
+                                        &toast_overlay,
+                                        &voice_transcriber,
+                                        &voice_listening,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    VoiceUiEvent::HotkeyReleased => {
+                        let voice = preference_store.load().voice;
+                        if voice.enabled && voice.activation_mode == VoiceActivationMode::PushToTalk
+                        {
+                            stop_voice_capture(
+                                &voice_transcriber,
+                                &voice_listening,
+                                &voice_hud,
+                                &voice_event_tx_for_handler,
+                            );
+                        }
+                    }
+                    VoiceUiEvent::Toast(message) => {
+                        show_toast(&toast_overlay, &message);
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    install_voice_hotkey_controller(
+        &window,
+        &voice_key_controller,
+        preference_store.clone(),
+        tabs.clone(),
+        active_tab_id.clone(),
+        voice_hud.clone(),
+        toast_overlay.clone(),
+        voice_transcriber.clone(),
+        voice_listening.clone(),
+        voice_event_tx.clone(),
+    );
+
+    {
+        let preference_store = preference_store.clone();
+        let voice_global_hotkey = voice_global_hotkey.clone();
+        let voice_event_tx = voice_event_tx.clone();
+        sync_linux_voice_global_hotkey(
+            &voice_global_hotkey,
+            &preference_store.load().voice,
+            &voice_event_tx,
+        );
+        glib::timeout_add_seconds_local(2, {
+            let preference_store = preference_store.clone();
+            let voice_global_hotkey = voice_global_hotkey.clone();
+            let voice_event_tx = voice_event_tx.clone();
+            move || {
+                sync_linux_voice_global_hotkey(
+                    &voice_global_hotkey,
+                    &preference_store.load().voice,
+                    &voice_event_tx,
+                );
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
+    {
+        let voice_transcriber = voice_transcriber.clone();
+        let voice_listening = voice_listening.clone();
+        let voice_event_tx = voice_event_tx.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(650), move || {
+            if !voice_listening.get() {
+                return glib::ControlFlow::Continue;
+            }
+            let event = voice_transcriber
+                .borrow_mut()
+                .as_mut()
+                .and_then(|transcriber| match transcriber.flush_captured_audio() {
+                    Ok(Some(partial)) => Some(VoiceUiEvent::Partial(partial)),
+                    Ok(None) => None,
+                    Err(error) => Some(VoiceUiEvent::Error(format!("{error:?}"))),
+                });
+            if let Some(event) = event {
+                let _ = voice_event_tx.send(event);
+            }
             glib::ControlFlow::Continue
         });
     }
@@ -1141,6 +1388,8 @@ fn present_with_initial_workspace(
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
                     max_reconnect_attempts: preferences.max_reconnect_attempts,
+                    voice: preferences.voice.clone(),
+                    microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
                     product_display_name: options_for_settings.product.display_name.clone(),
                     settings_title: options_for_settings.product.settings_title.clone(),
                     settings_summary: options_for_settings.product.settings_summary.clone(),
@@ -1411,6 +1660,309 @@ fn present_with_initial_workspace(
                                 "updated application settings max_reconnect_attempts={}",
                                 attempts
                             ));
+                        }
+                    }),
+                    on_voice_preferences_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        move |voice| {
+                            preference_store.save_voice_preferences(voice.clone());
+                            logging::info(format!(
+                                "updated application settings voice enabled={} mode={} engine={} global_hotkey={}",
+                                voice.enabled,
+                                voice.activation_mode.label(),
+                                voice.engine_mode.label(),
+                                voice.prefer_global_hotkey
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                if voice.enabled {
+                                    "Voice input settings updated"
+                                } else {
+                                    "Voice input disabled"
+                                },
+                            );
+                        }
+                    }),
+                    on_voice_pack_install_requested: Rc::new({
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let preference_store = preference_store_for_settings.as_ref().clone();
+                        let voice_event_tx = voice_event_tx.clone();
+                        move || {
+                            let Some(root) = pack::default_voice_pack_dir() else {
+                                show_toast(
+                                    &toast_overlay,
+                                    "Could not resolve application data directory",
+                                );
+                                return;
+                            };
+                            show_toast(&toast_overlay, "Installing NVIDIA Parakeet voice pack…");
+                            let mut preferences = preference_store.load();
+                            preferences.voice.pack_status =
+                                VoicePackStatus::Downloading { percent: 1 };
+                            preference_store.save(&preferences);
+                            let preference_store = preference_store.clone();
+                            let voice_event_tx = voice_event_tx.clone();
+                            std::thread::spawn(move || {
+                                match pack::install_builtin_parakeet_pack(&root) {
+                                    Ok(manifest) => {
+                                        let mut preferences = preference_store.load();
+                                        preferences.voice.pack_status =
+                                            VoicePackStatus::Downloading { percent: 40 };
+                                        preference_store.save(&preferences);
+                                        match pack::prepare_python_environment(&root, &manifest) {
+                                            Ok(_) => {
+                                                let engine_mode =
+                                                    preference_store.load().voice.engine_mode;
+                                                let mut preferences = preference_store.load();
+                                                preferences.voice.pack_status =
+                                                    VoicePackStatus::Downloading { percent: 80 };
+                                                preference_store.save(&preferences);
+                                                match pack::health_check(&root, &manifest) {
+                                                    health @ VoicePackHealth::Ready { .. } => {
+                                                        match engine::run_voice_engine_health_check(
+                                                            &manifest,
+                                                            health,
+                                                            engine_mode,
+                                                        ) {
+                                                            Ok(VoiceEngineEvent::Health {
+                                                                ok: true,
+                                                                detail,
+                                                            }) => {
+                                                                let mut preferences =
+                                                                    preference_store.load();
+                                                                preferences.voice.pack_status =
+                                                                    VoicePackStatus::Installed {
+                                                                        version: manifest
+                                                                            .version
+                                                                            .clone(),
+                                                                    };
+                                                                preference_store.save(&preferences);
+                                                                logging::info(format!(
+                                                                    "installed bundled NVIDIA Parakeet voice pack id={} version={} root={} health={}",
+                                                                    manifest.id,
+                                                                    manifest.version,
+                                                                    root.display(),
+                                                                    detail
+                                                                ));
+                                                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                                                    "NVIDIA Parakeet voice pack installed and verified".into(),
+                                                                ));
+                                                            }
+                                                            Ok(VoiceEngineEvent::Health {
+                                                                detail,
+                                                                ..
+                                                            })
+                                                            | Ok(VoiceEngineEvent::Error(detail)) =>
+                                                            {
+                                                                let mut preferences =
+                                                                    preference_store.load();
+                                                                preferences.voice.pack_status =
+                                                                    VoicePackStatus::Error {
+                                                                        message: detail.clone(),
+                                                                    };
+                                                                preference_store.save(&preferences);
+                                                                logging::error(format!(
+                                                                    "NVIDIA Parakeet voice pack installed but runtime health failed: {detail}"
+                                                                ));
+                                                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                                                    "Voice pack installed, but Parakeet verification failed".into(),
+                                                                ));
+                                                            }
+                                                            Ok(other) => {
+                                                                let mut preferences =
+                                                                    preference_store.load();
+                                                                preferences.voice.pack_status =
+                                                                    VoicePackStatus::Error {
+                                                                        message: format!(
+                                                                            "inconclusive health check: {other:?}"
+                                                                        ),
+                                                                    };
+                                                                preference_store.save(&preferences);
+                                                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                                                    "Voice pack installed, but health check was inconclusive".into(),
+                                                                ));
+                                                            }
+                                                            Err(error) => {
+                                                                let mut preferences =
+                                                                    preference_store.load();
+                                                                preferences.voice.pack_status =
+                                                                    VoicePackStatus::Error {
+                                                                        message: error.to_string(),
+                                                                    };
+                                                                preference_store.save(&preferences);
+                                                                logging::error(format!(
+                                                                    "failed to verify NVIDIA Parakeet voice pack: {error}"
+                                                                ));
+                                                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                                                    "Voice pack installed, but verification failed".into(),
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+                                                    VoicePackHealth::Missing
+                                                    | VoicePackHealth::Broken(_) => {
+                                                        let mut preferences =
+                                                            preference_store.load();
+                                                        preferences.voice.pack_status =
+                                                            VoicePackStatus::Error {
+                                                                message: "voice pack files are incomplete after install".into(),
+                                                            };
+                                                        preference_store.save(&preferences);
+                                                        let _ = voice_event_tx
+                                                            .send(VoiceUiEvent::Toast(
+                                                            "Voice pack installation is incomplete"
+                                                                .into(),
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                            Err(error) => {
+                                                let mut preferences = preference_store.load();
+                                                preferences.voice.pack_status =
+                                                    VoicePackStatus::Error {
+                                                        message: format!("{error:?}"),
+                                                    };
+                                                preference_store.save(&preferences);
+                                                logging::error(format!(
+                                                    "failed to prepare NVIDIA Parakeet Python environment: {error:?}"
+                                                ));
+                                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                                    "Voice pack installed, but Python dependencies failed".into(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let mut preferences = preference_store.load();
+                                        preferences.voice.pack_status = VoicePackStatus::Error {
+                                            message: format!("{error:?}"),
+                                        };
+                                        preference_store.save(&preferences);
+                                        logging::error(format!(
+                                            "failed to install bundled NVIDIA Parakeet voice pack: {error:?}"
+                                        ));
+                                        let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                            "Failed to install NVIDIA Parakeet voice pack".into(),
+                                        ));
+                                    }
+                                }
+                            });
+                        }
+                    }),
+                    on_voice_pack_delete_requested: Rc::new({
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let preference_store = preference_store_for_settings.as_ref().clone();
+                        let voice_event_tx = voice_event_tx.clone();
+                        move || {
+                            let manifest = pack::builtin_parakeet_manifest();
+                            let Some(root) = pack::default_voice_pack_dir() else {
+                                show_toast(
+                                    &toast_overlay,
+                                    "Could not resolve application data directory",
+                                );
+                                return;
+                            };
+                            show_toast(&toast_overlay, "Deleting NVIDIA Parakeet voice pack…");
+                            let preference_store = preference_store.clone();
+                            let voice_event_tx = voice_event_tx.clone();
+                            std::thread::spawn(move || match pack::delete_pack(&root, &manifest) {
+                                Ok(_) => {
+                                    let mut preferences = preference_store.load();
+                                    preferences.voice.pack_status = VoicePackStatus::NotInstalled;
+                                    preference_store.save(&preferences);
+                                    logging::info(format!(
+                                        "deleted NVIDIA Parakeet voice pack id={} version={} root={}",
+                                        manifest.id,
+                                        manifest.version,
+                                        root.display()
+                                    ));
+                                    let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                        "NVIDIA Parakeet voice pack deleted".into(),
+                                    ));
+                                }
+                                Err(error) => {
+                                    logging::error(format!(
+                                        "failed to delete NVIDIA Parakeet voice pack: {error:?}"
+                                    ));
+                                    let _ = voice_event_tx.send(VoiceUiEvent::Toast(
+                                        "Failed to delete NVIDIA Parakeet voice pack".into(),
+                                    ));
+                                }
+                            });
+                        }
+                    }),
+                    on_voice_pack_health_check_requested: Rc::new({
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let preference_store = preference_store_for_settings.as_ref().clone();
+                        let voice_event_tx = voice_event_tx.clone();
+                        move || {
+                            let manifest = pack::builtin_parakeet_manifest();
+                            let Some(root) = pack::default_voice_pack_dir() else {
+                                show_toast(
+                                    &toast_overlay,
+                                    "Could not resolve application data directory",
+                                );
+                                return;
+                            };
+                            show_toast(&toast_overlay, "Checking NVIDIA Parakeet runtime…");
+                            let preference_store = preference_store.clone();
+                            let voice_event_tx = voice_event_tx.clone();
+                            std::thread::spawn(move || {
+                                let toast = match pack::health_check(&root, &manifest) {
+                                    health @ VoicePackHealth::Ready { .. } => {
+                                        let engine_mode = preference_store.load().voice.engine_mode;
+                                        match engine::run_voice_engine_health_check(
+                                            &manifest,
+                                            health,
+                                            engine_mode,
+                                        ) {
+                                            Ok(VoiceEngineEvent::Health { ok, detail }) if ok => {
+                                                logging::info(format!(
+                                                    "NVIDIA Parakeet runtime health check passed id={} version={} root={} detail={}",
+                                                    manifest.id,
+                                                    manifest.version,
+                                                    root.display(),
+                                                    detail
+                                                ));
+                                                "NVIDIA Parakeet runtime is healthy".to_string()
+                                            }
+                                            Ok(VoiceEngineEvent::Health { detail, .. })
+                                            | Ok(VoiceEngineEvent::Error(detail)) => {
+                                                logging::error(format!(
+                                                    "NVIDIA Parakeet runtime health check failed: {detail}"
+                                                ));
+                                                "NVIDIA Parakeet runtime dependencies are missing"
+                                                    .to_string()
+                                            }
+                                            Ok(other) => {
+                                                logging::error(format!(
+                                                    "unexpected NVIDIA Parakeet health event: {other:?}"
+                                                ));
+                                                "NVIDIA Parakeet health check was inconclusive"
+                                                    .to_string()
+                                            }
+                                            Err(error) => {
+                                                logging::error(format!(
+                                                    "failed to run NVIDIA Parakeet runtime health check: {error}"
+                                                ));
+                                                "Failed to run NVIDIA Parakeet health check"
+                                                    .to_string()
+                                            }
+                                        }
+                                    }
+                                    VoicePackHealth::Missing => {
+                                        "NVIDIA Parakeet voice pack is not installed".to_string()
+                                    }
+                                    VoicePackHealth::Broken(message) => {
+                                        logging::error(format!(
+                                            "NVIDIA Parakeet voice pack health check failed: {message}"
+                                        ));
+                                        "NVIDIA Parakeet voice pack is incomplete".to_string()
+                                    }
+                                };
+                                let _ = voice_event_tx.send(VoiceUiEvent::Toast(toast));
+                            });
                         }
                     }),
                     on_reset_defaults: Rc::new({
@@ -3287,6 +3839,267 @@ fn adjust_active_workspace_zoom(
         workspace_name, terminal_zoom_steps
     ));
     Some(terminal_zoom_steps)
+}
+
+fn active_workspace_runtime(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+) -> Option<workspace_view::WorkspaceRuntime> {
+    tabs.borrow()
+        .iter()
+        .find(|tab| tab.id == active_tab_id)
+        .and_then(|tab| match &tab.content {
+            TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
+            TabContent::LaunchDeck => None,
+        })
+}
+
+fn sync_linux_voice_global_hotkey(
+    registration: &Rc<RefCell<Option<VoiceGlobalHotkeyRegistration>>>,
+    voice: &crate::voice::VoicePreferences,
+    voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
+) {
+    if !voice.enabled || !voice.prefer_global_hotkey {
+        registration.borrow_mut().take();
+        return;
+    }
+
+    if registration
+        .borrow()
+        .as_ref()
+        .is_some_and(|current| current.shortcut == voice.hotkey)
+    {
+        return;
+    }
+
+    registration.borrow_mut().take();
+    let (global_tx, global_rx) = mpsc::channel::<LinuxGlobalHotkeyEvent>();
+    match LinuxGlobalHotkeyHandle::start(voice.hotkey.clone(), global_tx) {
+        Ok(handle) => {
+            let shortcut = voice.hotkey.clone();
+            logging::info(format!(
+                "registered Linux X11 global voice hotkey {shortcut}"
+            ));
+            *registration.borrow_mut() = Some(VoiceGlobalHotkeyRegistration { shortcut, handle });
+            let ui_tx = voice_event_tx.clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = global_rx.recv() {
+                    let _ = ui_tx.send(match event {
+                        LinuxGlobalHotkeyEvent::Pressed => VoiceUiEvent::HotkeyPressed,
+                        LinuxGlobalHotkeyEvent::Released => VoiceUiEvent::HotkeyReleased,
+                    });
+                }
+            });
+        }
+        Err(error) => {
+            logging::error(format!(
+                "Linux global voice hotkey unavailable for '{}': {error}",
+                voice.hotkey
+            ));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_voice_hotkey_controller(
+    window: &adw::ApplicationWindow,
+    controller_handle: &VoiceKeyControllerHandle,
+    preference_store: Rc<PreferenceStore>,
+    tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: Rc<Cell<usize>>,
+    voice_hud: VoiceHud,
+    toast_overlay: adw::ToastOverlay,
+    voice_transcriber: Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_listening: Rc<Cell<bool>>,
+    voice_event_tx: mpsc::Sender<VoiceUiEvent>,
+) {
+    if let Some(existing) = controller_handle.borrow_mut().take() {
+        window.remove_controller(&existing);
+    }
+
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    {
+        let preference_store = preference_store.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        let voice_hud = voice_hud.clone();
+        let toast_overlay = toast_overlay.clone();
+        let voice_transcriber = voice_transcriber.clone();
+        let voice_listening = voice_listening.clone();
+        let voice_event_tx = voice_event_tx.clone();
+        controller.connect_key_pressed(move |_, key, _, state| {
+            let preferences = preference_store.load();
+            let voice = preferences.voice.clone();
+            if !voice_key_event_matches(&voice.hotkey, key, state) {
+                return glib::Propagation::Proceed;
+            }
+
+            if !voice.enabled {
+                voice_hud.show("Voice disabled", None);
+                show_toast(&toast_overlay, "Enable voice input in Settings first");
+                return glib::Propagation::Stop;
+            }
+
+            match voice.activation_mode {
+                VoiceActivationMode::Toggle if voice_listening.get() => {
+                    stop_voice_capture(
+                        &voice_transcriber,
+                        &voice_listening,
+                        &voice_hud,
+                        &voice_event_tx,
+                    );
+                }
+                VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
+                    if !voice_listening.get() {
+                        start_voice_capture(
+                            &preference_store,
+                            &tabs,
+                            active_tab_id.get(),
+                            &voice_hud,
+                            &toast_overlay,
+                            &voice_transcriber,
+                            &voice_listening,
+                        );
+                    }
+                }
+            }
+
+            glib::Propagation::Stop
+        });
+    }
+
+    {
+        let preference_store = preference_store.clone();
+        let voice_hud = voice_hud.clone();
+        let voice_transcriber = voice_transcriber.clone();
+        let voice_listening = voice_listening.clone();
+        let voice_event_tx = voice_event_tx.clone();
+        controller.connect_key_released(move |_, key, _, state| {
+            let preferences = preference_store.load();
+            let voice = preferences.voice.clone();
+            if voice.activation_mode != VoiceActivationMode::PushToTalk
+                || !voice_key_event_matches(&voice.hotkey, key, state)
+            {
+                return;
+            }
+            stop_voice_capture(
+                &voice_transcriber,
+                &voice_listening,
+                &voice_hud,
+                &voice_event_tx,
+            );
+        });
+    }
+
+    window.add_controller(controller.clone());
+    *controller_handle.borrow_mut() = Some(controller);
+}
+
+fn start_voice_capture(
+    preference_store: &PreferenceStore,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+    voice_hud: &VoiceHud,
+    toast_overlay: &adw::ToastOverlay,
+    voice_transcriber: &Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_listening: &Rc<Cell<bool>>,
+) {
+    let preferences = preference_store.load();
+    let voice = preferences.voice.clone();
+    let Some(runtime) = active_workspace_runtime(tabs, active_tab_id) else {
+        voice_hud.show("No workspace target", None);
+        show_toast(
+            toast_overlay,
+            "Open a workspace and focus a terminal pane before dictating",
+        );
+        return;
+    };
+    if !runtime.focused_terminal_available() {
+        voice_hud.show("No focused terminal target", None);
+        show_toast(toast_overlay, "Focus a terminal pane before dictating");
+        return;
+    }
+
+    let manifest = pack::builtin_parakeet_manifest();
+    let Some(root) = pack::default_voice_pack_dir() else {
+        voice_hud.show(
+            "Voice pack error",
+            Some("Could not resolve app data directory"),
+        );
+        return;
+    };
+    let health = pack::health_check(&root, &manifest);
+    if !matches!(health, VoicePackHealth::Ready { .. }) {
+        voice_hud.show(
+            "Voice pack not installed",
+            Some("Install NVIDIA Parakeet from Settings"),
+        );
+        show_toast(
+            toast_overlay,
+            "Install the NVIDIA Parakeet voice pack in Settings first",
+        );
+        return;
+    }
+
+    match ParakeetTranscriber::launch(&manifest, health, voice.engine_mode).and_then(
+        |mut transcriber| {
+            transcriber.start_capture(voice.microphone_id.as_deref())?;
+            Ok(transcriber)
+        },
+    ) {
+        Ok(transcriber) => {
+            *voice_transcriber.borrow_mut() = Some(transcriber);
+            voice_listening.set(true);
+            voice_hud.show("Listening…", Some("Speak now"));
+        }
+        Err(error) => {
+            let message = format!("{error:?}");
+            logging::error(format!("failed to start voice capture: {message}"));
+            voice_hud.show("Voice capture failed", Some(&message));
+            show_toast(toast_overlay, "Voice capture failed");
+        }
+    }
+}
+
+fn stop_voice_capture(
+    voice_transcriber: &Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_listening: &Rc<Cell<bool>>,
+    voice_hud: &VoiceHud,
+    voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
+) {
+    if !voice_listening.replace(false) {
+        return;
+    }
+    let Some(mut transcriber) = voice_transcriber.borrow_mut().take() else {
+        return;
+    };
+    voice_hud.show("Transcribing with NVIDIA Parakeet…", None);
+    let tx = voice_event_tx.clone();
+    std::thread::spawn(move || {
+        let partial_tx = tx.clone();
+        let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
+            let _ = partial_tx.send(VoiceUiEvent::Partial(partial));
+        });
+        let _ = transcriber.shutdown();
+        match result {
+            Ok(text) => {
+                let _ = tx.send(VoiceUiEvent::Final(text));
+            }
+            Err(error) => {
+                let _ = tx.send(VoiceUiEvent::Error(format!("{error:?}")));
+            }
+        }
+    });
+}
+
+fn voice_key_event_matches(accelerator: &str, key: gdk::Key, state: gdk::ModifierType) -> bool {
+    let Some((expected_key, expected_modifiers)) = gtk::accelerator_parse(accelerator) else {
+        return false;
+    };
+    let event_modifiers = state & gtk::accelerator_get_default_mod_mask();
+    key == expected_key && event_modifiers == expected_modifiers
 }
 
 fn install_shortcut_controller<F>(

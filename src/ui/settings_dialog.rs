@@ -8,6 +8,8 @@ use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
+use crate::voice::audio::MicrophoneDevice;
+use crate::voice::{VoiceActivationMode, VoiceEngineMode, VoicePreferences};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsState {
@@ -20,6 +22,7 @@ struct SettingsState {
     zoom_out_shortcut: String,
     command_palette_shortcut: String,
     max_reconnect_attempts: u32,
+    voice: VoicePreferences,
 }
 
 impl SettingsState {
@@ -35,6 +38,7 @@ impl SettingsState {
             zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
             command_palette_shortcut: defaults.command_palette_shortcut,
             max_reconnect_attempts: defaults.max_reconnect_attempts,
+            voice: defaults.voice,
         }
     }
 }
@@ -51,6 +55,8 @@ pub struct SettingsDialogInput {
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
     pub max_reconnect_attempts: u32,
+    pub voice: VoicePreferences,
+    pub microphone_devices: Vec<MicrophoneDevice>,
     pub product_display_name: String,
     pub settings_title: String,
     pub settings_summary: String,
@@ -67,6 +73,10 @@ pub struct SettingsDialogActions {
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_command_palette_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_max_reconnect_attempts_changed: Rc<dyn Fn(u32)>,
+    pub on_voice_preferences_changed: Rc<dyn Fn(VoicePreferences)>,
+    pub on_voice_pack_install_requested: Rc<dyn Fn()>,
+    pub on_voice_pack_delete_requested: Rc<dyn Fn()>,
+    pub on_voice_pack_health_check_requested: Rc<dyn Fn()>,
     pub on_reset_defaults: Rc<dyn Fn()>,
     pub on_reset_builtin_presets: Rc<dyn Fn()>,
     pub on_size_changed: Rc<dyn Fn(i32, i32)>,
@@ -359,6 +369,8 @@ pub fn present(
         settings_dialog_width,
         settings_dialog_height,
         max_reconnect_attempts,
+        voice,
+        microphone_devices,
         product_display_name,
         settings_title,
         settings_summary,
@@ -373,6 +385,10 @@ pub fn present(
         on_zoom_out_shortcut_changed,
         on_command_palette_shortcut_changed,
         on_max_reconnect_attempts_changed,
+        on_voice_preferences_changed,
+        on_voice_pack_install_requested,
+        on_voice_pack_delete_requested,
+        on_voice_pack_health_check_requested,
         on_reset_defaults,
         on_reset_builtin_presets,
         on_size_changed,
@@ -454,6 +470,7 @@ pub fn present(
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
     let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
     let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
+    let current_voice = Rc::new(RefCell::new(voice));
     let reset_button = icons::labeled_button(
         "Reset Defaults",
         icon_name::RESET,
@@ -469,6 +486,7 @@ pub fn present(
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
+        let current_voice = current_voice.clone();
         let reset_button = reset_button.clone();
         Rc::new(move || {
             sync_reset_button_state(
@@ -483,6 +501,7 @@ pub fn present(
                     zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
                     command_palette_shortcut: current_command_palette_shortcut.borrow().clone(),
                     max_reconnect_attempts: current_max_reconnect_attempts.get(),
+                    voice: current_voice.borrow().clone(),
                 },
             );
         })
@@ -762,6 +781,313 @@ pub fn present(
     reconnect_row.append(&reconnect_spin);
     connection_section.append(&reconnect_row);
 
+    let voice_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "settings-section"])
+        .build();
+    content.append(&voice_section);
+
+    voice_section.append(&build_section_header(
+        "Voice Input",
+        "Local pack",
+        "Dictate into the focused terminal pane. TerminalTiler inserts finalized transcript chunks only; partial text stays in the voice status HUD. Global hotkeys are best-effort and may be unavailable on Wayland.",
+    ));
+
+    let voice_callback = on_voice_preferences_changed.clone();
+    let voice_enabled_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+    let voice_enabled_text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    voice_enabled_text.append(
+        &gtk::Label::builder()
+            .label("Enable voice-to-text")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    voice_enabled_text.append(
+        &gtk::Label::builder()
+            .label("Runs locally through a settings-installed voice pack. No cloud transcription is used.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    voice_enabled_row.append(&voice_enabled_text);
+    let voice_enabled_switch = gtk::Switch::builder()
+        .valign(gtk::Align::Center)
+        .active(current_voice.borrow().enabled)
+        .build();
+    voice_enabled_switch.add_css_class("settings-toggle-switch");
+    let suppress_voice_enabled_signal = Rc::new(Cell::new(false));
+    {
+        let current_voice = current_voice.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = voice_callback.clone();
+        let suppress_signal = suppress_voice_enabled_signal.clone();
+        voice_enabled_switch.connect_active_notify(move |switch| {
+            if suppress_signal.get() {
+                return;
+            }
+            let mut next = current_voice.borrow().clone();
+            if next.enabled == switch.is_active() {
+                return;
+            }
+            next.enabled = switch.is_active();
+            current_voice.replace(next.clone());
+            callback(next);
+            sync_reset_button();
+        });
+    }
+    voice_enabled_row.append(&voice_enabled_switch);
+    voice_section.append(&voice_enabled_row);
+
+    let microphone_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+    let microphone_text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    microphone_text.append(
+        &gtk::Label::builder()
+            .label("Microphone")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    microphone_text.append(
+        &gtk::Label::builder()
+            .label("Choose the input device used for voice capture. If unavailable, TerminalTiler falls back to the system default.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    microphone_row.append(&microphone_text);
+    let microphone_combo = gtk::ComboBoxText::new();
+    microphone_combo.append(Some(""), "System default");
+    for microphone in &microphone_devices {
+        microphone_combo.append(Some(&microphone.id), &microphone.name);
+    }
+    microphone_combo.set_active_id(current_voice.borrow().microphone_id.as_deref().or(Some("")));
+    microphone_combo.add_css_class("surface-select-control");
+    {
+        let current_voice = current_voice.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = voice_callback.clone();
+        microphone_combo.connect_changed(move |combo| {
+            let selected = combo
+                .active_id()
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let microphone_id = if selected.trim().is_empty() {
+                None
+            } else {
+                Some(selected)
+            };
+            let mut next = current_voice.borrow().clone();
+            if next.microphone_id == microphone_id {
+                return;
+            }
+            next.microphone_id = microphone_id;
+            current_voice.replace(next.clone());
+            callback(next);
+            sync_reset_button();
+        });
+    }
+    microphone_row.append(&microphone_combo);
+    voice_section.append(&microphone_row);
+
+    let voice_activation_strip = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .css_classes(["control-strip", "settings-choice-strip"])
+        .build();
+    for (mode, label) in [
+        (VoiceActivationMode::PushToTalk, "Push to Talk"),
+        (VoiceActivationMode::Toggle, "Toggle"),
+    ] {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("flat");
+        if mode == current_voice.borrow().activation_mode {
+            button.add_css_class("is-active");
+        }
+        let current_voice = current_voice.clone();
+        let strip = voice_activation_strip.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = voice_callback.clone();
+        button.connect_clicked(move |_| {
+            let mut next = current_voice.borrow().clone();
+            if next.activation_mode == mode {
+                return;
+            }
+            next.activation_mode = mode;
+            current_voice.replace(next.clone());
+            sync_voice_activation_strip_active(&strip, mode);
+            callback(next);
+            sync_reset_button();
+        });
+        voice_activation_strip.append(&button);
+    }
+    voice_section.append(&voice_activation_strip);
+
+    let voice_hotkey = Rc::new(RefCell::new(current_voice.borrow().hotkey.clone()));
+    let voice_hotkey_recorder = build_shortcut_recorder_row(
+        "Voice hotkey",
+        "Push-to-talk starts on key down and flushes on key up. Toggle mode starts and stops on repeated presses.",
+        &["<Ctrl><Shift>space", "<Alt>space", "F9"],
+        voice_hotkey.clone(),
+        Rc::new({
+            let current_voice = current_voice.clone();
+            let callback = voice_callback.clone();
+            move |shortcut| {
+                let mut next = current_voice.borrow().clone();
+                next.hotkey = shortcut;
+                current_voice.replace(next.clone());
+                callback(next);
+            }
+        }),
+        sync_reset_button.clone(),
+    );
+    voice_section.append(&voice_hotkey_recorder.row);
+
+    let voice_engine_strip = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .css_classes(["control-strip", "settings-choice-strip"])
+        .build();
+    for (mode, label) in [
+        (VoiceEngineMode::Auto, "Auto"),
+        (VoiceEngineMode::Cuda, "CUDA"),
+        (VoiceEngineMode::Cpu, "CPU"),
+    ] {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("flat");
+        if mode == current_voice.borrow().engine_mode {
+            button.add_css_class("is-active");
+        }
+        let current_voice = current_voice.clone();
+        let strip = voice_engine_strip.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = voice_callback.clone();
+        button.connect_clicked(move |_| {
+            let mut next = current_voice.borrow().clone();
+            if next.engine_mode == mode {
+                return;
+            }
+            next.engine_mode = mode;
+            current_voice.replace(next.clone());
+            sync_voice_engine_strip_active(&strip, mode);
+            callback(next);
+            sync_reset_button();
+        });
+        voice_engine_strip.append(&button);
+    }
+    voice_section.append(&voice_engine_strip);
+
+    let voice_global_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+    let voice_global_text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    voice_global_text.append(
+        &gtk::Label::builder()
+            .label("Prefer global hotkey")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    voice_global_text.append(
+        &gtk::Label::builder()
+            .label("Windows uses the Win32 hotkey path when available. Linux keeps an app-scoped baseline; Wayland may reject globals.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    voice_global_row.append(&voice_global_text);
+    let voice_global_hotkey_switch = gtk::Switch::builder()
+        .valign(gtk::Align::Center)
+        .active(current_voice.borrow().prefer_global_hotkey)
+        .build();
+    voice_global_hotkey_switch.add_css_class("settings-toggle-switch");
+    let suppress_voice_global_signal = Rc::new(Cell::new(false));
+    {
+        let current_voice = current_voice.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = voice_callback.clone();
+        let suppress_signal = suppress_voice_global_signal.clone();
+        voice_global_hotkey_switch.connect_active_notify(move |switch| {
+            if suppress_signal.get() {
+                return;
+            }
+            let mut next = current_voice.borrow().clone();
+            if next.prefer_global_hotkey == switch.is_active() {
+                return;
+            }
+            next.prefer_global_hotkey = switch.is_active();
+            current_voice.replace(next.clone());
+            callback(next);
+            sync_reset_button();
+        });
+    }
+    voice_global_row.append(&voice_global_hotkey_switch);
+    voice_section.append(&voice_global_row);
+
+    let pack_status = current_voice.borrow().pack_status.summary();
+    voice_section.append(&build_settings_action_row(
+        "Voice pack",
+        &pack_status,
+        "Install / Reinstall",
+        {
+            let callback = on_voice_pack_install_requested.clone();
+            move || callback()
+        },
+    ));
+    voice_section.append(&build_settings_action_row(
+        "Voice pack diagnostics",
+        "Run a local health check for the downloaded helper and model files.",
+        "Health Check",
+        {
+            let callback = on_voice_pack_health_check_requested.clone();
+            move || callback()
+        },
+    ));
+    voice_section.append(&build_settings_action_row(
+        "Remove voice pack",
+        "Deletes downloaded voice runtime/model files from application data. Settings are kept.",
+        "Delete Pack",
+        {
+            let callback = on_voice_pack_delete_requested.clone();
+            move || callback()
+        },
+    ));
+
     let shortcuts_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
@@ -834,6 +1160,7 @@ pub fn present(
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
+        let current_voice = current_voice.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
         let close_to_background_switch = close_to_background_switch.clone();
@@ -844,6 +1171,15 @@ pub fn present(
         let zoom_out_recorder = zoom_out_recorder.clone();
         let command_palette_recorder = command_palette_recorder.clone();
         let reconnect_spin = reconnect_spin.clone();
+        let voice_enabled_switch = voice_enabled_switch.clone();
+        let microphone_combo = microphone_combo.clone();
+        let voice_global_hotkey_switch = voice_global_hotkey_switch.clone();
+        let suppress_voice_enabled_signal = suppress_voice_enabled_signal.clone();
+        let suppress_voice_global_signal = suppress_voice_global_signal.clone();
+        let voice_activation_strip = voice_activation_strip.clone();
+        let voice_engine_strip = voice_engine_strip.clone();
+        let voice_hotkey = voice_hotkey.clone();
+        let voice_hotkey_recorder = voice_hotkey_recorder.clone();
         let reset_button = reset_button.clone();
         let reset_button_for_signal = reset_button.clone();
         let reset_callback = reset_callback.clone();
@@ -862,7 +1198,8 @@ pub fn present(
                     != defaults.workspace_zoom_out_shortcut
                 || current_command_palette_shortcut.borrow().as_str()
                     != defaults.command_palette_shortcut
-                || current_max_reconnect_attempts.get() != defaults.max_reconnect_attempts;
+                || current_max_reconnect_attempts.get() != defaults.max_reconnect_attempts
+                || *current_voice.borrow() != defaults.voice;
             if !changed {
                 return;
             }
@@ -876,6 +1213,7 @@ pub fn present(
             current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
             current_command_palette_shortcut.replace(defaults.command_palette_shortcut.clone());
             current_max_reconnect_attempts.set(defaults.max_reconnect_attempts);
+            current_voice.replace(defaults.voice.clone());
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
             suppress_close_to_background_signal.set(true);
@@ -887,11 +1225,26 @@ pub fn present(
             zoom_out_recorder.sync_label(&defaults.workspace_zoom_out_shortcut);
             command_palette_recorder.sync_label(&defaults.command_palette_shortcut);
             reconnect_spin.set_value(defaults.max_reconnect_attempts as f64);
+            suppress_voice_enabled_signal.set(true);
+            voice_enabled_switch.set_active(defaults.voice.enabled);
+            suppress_voice_enabled_signal.set(false);
+            suppress_voice_global_signal.set(true);
+            voice_global_hotkey_switch.set_active(defaults.voice.prefer_global_hotkey);
+            suppress_voice_global_signal.set(false);
+            microphone_combo.set_active_id(defaults.voice.microphone_id.as_deref().or(Some("")));
+            sync_voice_activation_strip_active(
+                &voice_activation_strip,
+                defaults.voice.activation_mode,
+            );
+            sync_voice_engine_strip_active(&voice_engine_strip, defaults.voice.engine_mode);
+            voice_hotkey.replace(defaults.voice.hotkey.clone());
+            voice_hotkey_recorder.sync_label(&defaults.voice.hotkey);
             fullscreen_recorder.cancel_recording();
             density_recorder.cancel_recording();
             zoom_in_recorder.cancel_recording();
             zoom_out_recorder.cancel_recording();
             command_palette_recorder.cancel_recording();
+            voice_hotkey_recorder.cancel_recording();
             sync_reset_button();
             reset_callback();
         });
@@ -1232,6 +1585,34 @@ fn sync_density_strip_active(strip: &gtk::Box, active_density: ApplicationDensit
         widget.remove_css_class("is-active");
         if let Ok(button) = widget.clone().downcast::<gtk::Button>()
             && button.label().as_deref() == Some(active_density.label())
+        {
+            button.add_css_class("is-active");
+        }
+        child = next;
+    }
+}
+
+fn sync_voice_activation_strip_active(strip: &gtk::Box, active_mode: VoiceActivationMode) {
+    let mut child = strip.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.remove_css_class("is-active");
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+            && button.label().as_deref() == Some(active_mode.label())
+        {
+            button.add_css_class("is-active");
+        }
+        child = next;
+    }
+}
+
+fn sync_voice_engine_strip_active(strip: &gtk::Box, active_mode: VoiceEngineMode) {
+    let mut child = strip.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.remove_css_class("is-active");
+        if let Ok(button) = widget.clone().downcast::<gtk::Button>()
+            && button.label().as_deref() == Some(active_mode.label())
         {
             button.add_css_class("is-active");
         }

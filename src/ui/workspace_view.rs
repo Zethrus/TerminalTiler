@@ -165,6 +165,30 @@ impl WorkspaceRuntime {
         sent
     }
 
+    #[allow(dead_code)]
+    pub fn send_text_to_focused_terminal(&self, text: &str) -> bool {
+        let focused_tile_id = self.inner.focused_tile_id.borrow().clone();
+        let tiles = self.inner.tiles.borrow();
+        let focused_terminal = focused_tile_id
+            .as_deref()
+            .and_then(|tile_id| tiles.iter().find(|tile| tile.tile.id == tile_id))
+            .and_then(|tile| tile.session.as_ref());
+
+        if let Some(session) = focused_terminal {
+            session.send_text(text)
+        } else {
+            false
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn focused_terminal_available(&self) -> bool {
+        let focused_tile_id = self.inner.focused_tile_id.borrow().clone();
+        self.inner.tiles.borrow().iter().any(|tile| {
+            focused_tile_id.as_deref() == Some(tile.tile.id.as_str()) && tile.session.is_some()
+        })
+    }
+
     pub fn run_runbook(&self, resolved: &ResolvedRunbook) -> usize {
         let mut sent = 0usize;
         for command in &resolved.commands {

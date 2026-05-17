@@ -8,6 +8,7 @@ mod imp {
     use std::ptr;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::thread;
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
@@ -28,12 +29,12 @@ mod imp {
         GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW,
         IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
         LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK,
-        MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SW_HIDE,
-        SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        TranslateMessage, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP,
-        WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
+        SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
+        WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::extension::{
@@ -59,6 +60,10 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SessionStore};
+    use crate::voice::audio::AudioCapture;
+    use crate::voice::engine::{self, VoiceEngineEvent};
+    use crate::voice::pack::{self, VoicePackHealth};
+    use crate::voice::{VoiceActivationMode, VoiceEngineMode, VoicePackStatus};
     use crate::windows::win32_helpers::{
         create_child_window_with_ex_style as create_child_window, read_window_text, wide,
     };
@@ -151,6 +156,23 @@ mod imp {
     const ID_SETTINGS_META_AUTOSAVE: isize = 2043;
     const ID_SETTINGS_META_LIVE: isize = 2044;
     const ID_SETTINGS_RESET_BUILTIN_PRESETS: isize = 2045;
+    const ID_SETTINGS_LABEL_VOICE: isize = 2046;
+    const ID_SETTINGS_VOICE_ENABLED: isize = 2047;
+    const ID_SETTINGS_LABEL_VOICE_ACTIVATION: isize = 2048;
+    const ID_SETTINGS_VOICE_ACTIVATION: isize = 2049;
+    const ID_SETTINGS_LABEL_VOICE_MICROPHONE: isize = 2061;
+    const ID_SETTINGS_VOICE_MICROPHONE: isize = 2062;
+    const ID_SETTINGS_LABEL_VOICE_HOTKEY: isize = 2050;
+    const ID_SETTINGS_VOICE_HOTKEY: isize = 2051;
+    const ID_SETTINGS_VOICE_RECORD: isize = 2052;
+    const ID_SETTINGS_NOTE_VOICE_HOTKEY: isize = 2053;
+    const ID_SETTINGS_LABEL_VOICE_ENGINE: isize = 2054;
+    const ID_SETTINGS_VOICE_ENGINE: isize = 2055;
+    const ID_SETTINGS_VOICE_GLOBAL: isize = 2056;
+    const ID_SETTINGS_VOICE_PACK_STATUS: isize = 2057;
+    const ID_SETTINGS_VOICE_PACK_INSTALL: isize = 2058;
+    const ID_SETTINGS_VOICE_PACK_HEALTH: isize = 2059;
+    const ID_SETTINGS_VOICE_PACK_DELETE: isize = 2060;
     const BUTTON_HEIGHT: i32 = 32;
     const BUTTON_WIDTH: i32 = 160;
     const MARGIN: i32 = 16;
@@ -161,6 +183,7 @@ mod imp {
     const CHECKBOX_UNCHECKED: usize = 0;
     const CHECKBOX_CHECKED: usize = 1;
     const WM_TRAYICON: u32 = 0x8001;
+    const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 50;
     const TRAY_ICON_ID: u32 = 1;
     const TRAY_MENU_SHOW: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
@@ -264,6 +287,14 @@ mod imp {
         zoom_in_shortcut_hwnd: HWND,
         zoom_out_shortcut_hwnd: HWND,
         command_palette_shortcut_hwnd: HWND,
+        voice_enabled_hwnd: HWND,
+        voice_activation_hwnd: HWND,
+        voice_microphone_hwnd: HWND,
+        voice_microphone_ids: Vec<Option<String>>,
+        voice_hotkey_hwnd: HWND,
+        voice_engine_hwnd: HWND,
+        voice_global_hwnd: HWND,
+        voice_pack_status_hwnd: HWND,
         shortcut_status_hwnd: HWND,
         recording_shortcut: Option<ShortcutField>,
         current_fullscreen_shortcut: String,
@@ -271,6 +302,11 @@ mod imp {
         current_zoom_in_shortcut: String,
         current_zoom_out_shortcut: String,
         current_command_palette_shortcut: String,
+        current_voice_hotkey: String,
+    }
+
+    enum SettingsVoicePackEvent {
+        Status(String),
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,6 +316,7 @@ mod imp {
         ZoomIn,
         ZoomOut,
         CommandPalette,
+        VoiceHotkey,
     }
 
     unsafe fn run_gui(options: RuntimeOptions) -> Result<ExitCode, String> {
@@ -652,6 +689,46 @@ mod imp {
                                 true,
                             );
                         }
+                        ID_SETTINGS_VOICE_ENABLED if notification == BN_CLICKED => {
+                            apply_live_settings_change(
+                                state,
+                                "Voice input setting updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_VOICE_ACTIVATION if notification == CBN_SELCHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Voice activation mode updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_VOICE_MICROPHONE if notification == CBN_SELCHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Voice microphone preference updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_VOICE_ENGINE if notification == CBN_SELCHANGE => {
+                            apply_live_settings_change(
+                                state,
+                                "Voice engine preference updated.",
+                                false,
+                                true,
+                            );
+                        }
+                        ID_SETTINGS_VOICE_GLOBAL if notification == BN_CLICKED => {
+                            apply_live_settings_change(
+                                state,
+                                "Voice hotkey preference updated.",
+                                false,
+                                true,
+                            );
+                        }
                         ID_SETTINGS_RESET => reset_settings(hwnd, state),
                         ID_SETTINGS_RESET_BUILTIN_PRESETS => {
                             reset_builtin_presets_from_settings(hwnd, state)
@@ -675,6 +752,12 @@ mod imp {
                         ID_SETTINGS_COMMAND_PALETTE_RECORD => {
                             begin_shortcut_capture(hwnd, state, ShortcutField::CommandPalette)
                         }
+                        ID_SETTINGS_VOICE_RECORD => {
+                            begin_shortcut_capture(hwnd, state, ShortcutField::VoiceHotkey)
+                        }
+                        ID_SETTINGS_VOICE_PACK_INSTALL => install_voice_pack_from_settings(state),
+                        ID_SETTINGS_VOICE_PACK_HEALTH => check_voice_pack_from_settings(state),
+                        ID_SETTINGS_VOICE_PACK_DELETE => delete_voice_pack_from_settings(state),
                         ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT => {
                             show_shortcut_help(hwnd, ShortcutField::Fullscreen)
                         }
@@ -691,6 +774,21 @@ mod imp {
                             show_shortcut_help(hwnd, ShortcutField::CommandPalette)
                         }
                         _ => {}
+                    }
+                }
+                0
+            }
+            WM_SETTINGS_VOICE_PACK_EVENT => {
+                if lparam != 0 {
+                    let event = unsafe { Box::from_raw(lparam as *mut SettingsVoicePackEvent) };
+                    if let Some(state) = unsafe { settings_state_mut(hwnd) } {
+                        match *event {
+                            SettingsVoicePackEvent::Status(message) => {
+                                set_settings_status(state, &message);
+                                let preferences = state.preference_store.load();
+                                apply_preferences_to_settings_controls(state, &preferences);
+                            }
+                        }
                     }
                 }
                 0
@@ -2103,6 +2201,14 @@ mod imp {
             zoom_in_shortcut_hwnd: ptr::null_mut(),
             zoom_out_shortcut_hwnd: ptr::null_mut(),
             command_palette_shortcut_hwnd: ptr::null_mut(),
+            voice_enabled_hwnd: ptr::null_mut(),
+            voice_activation_hwnd: ptr::null_mut(),
+            voice_microphone_hwnd: ptr::null_mut(),
+            voice_microphone_ids: Vec::new(),
+            voice_hotkey_hwnd: ptr::null_mut(),
+            voice_engine_hwnd: ptr::null_mut(),
+            voice_global_hwnd: ptr::null_mut(),
+            voice_pack_status_hwnd: ptr::null_mut(),
             shortcut_status_hwnd: ptr::null_mut(),
             recording_shortcut: None,
             current_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
@@ -2110,6 +2216,7 @@ mod imp {
             current_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
             current_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
             current_command_palette_shortcut: preferences.command_palette_shortcut.clone(),
+            current_voice_hotkey: preferences.voice.hotkey.clone(),
         });
         let settings_state_ptr = Box::into_raw(settings_state);
 
@@ -2233,6 +2340,121 @@ mod imp {
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_LEFT as u32 | ES_AUTOHSCROLL as u32,
             0,
             ID_SETTINGS_WSL_DISTRO,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Voice input",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_VOICE,
+        );
+        state.voice_enabled_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Enable local NVIDIA Parakeet voice-to-text",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+            0,
+            ID_SETTINGS_VOICE_ENABLED,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Activation",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_VOICE_ACTIVATION,
+        );
+        state.voice_activation_hwnd = create_combo_box(hwnd, ID_SETTINGS_VOICE_ACTIVATION);
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Microphone",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_VOICE_MICROPHONE,
+        );
+        state.voice_microphone_hwnd = create_combo_box(hwnd, ID_SETTINGS_VOICE_MICROPHONE);
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Voice hotkey",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_VOICE_HOTKEY,
+        );
+        state.voice_hotkey_hwnd = create_child_window(
+            hwnd,
+            "EDIT",
+            &shortcut_capture::display_label(&preferences.voice.hotkey),
+            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_READONLY as u32,
+            0,
+            ID_SETTINGS_VOICE_HOTKEY,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Record",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_VOICE_RECORD,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Final transcript chunks are inserted into the focused TerminalTiler terminal only.",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_NOTE_VOICE_HOTKEY,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
+            "Engine",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_LABEL_VOICE_ENGINE,
+        );
+        state.voice_engine_hwnd = create_combo_box(hwnd, ID_SETTINGS_VOICE_ENGINE);
+        state.voice_global_hwnd = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Prefer Win32 global hotkey when available",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+            0,
+            ID_SETTINGS_VOICE_GLOBAL,
+        );
+        state.voice_pack_status_hwnd = create_child_window(
+            hwnd,
+            "STATIC",
+            &preferences.voice.pack_status.summary(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_VOICE_PACK_STATUS,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Install / Reinstall Pack",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_VOICE_PACK_INSTALL,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Health Check",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_VOICE_PACK_HEALTH,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Delete Pack",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_VOICE_PACK_DELETE,
         );
         let _ = create_child_window(
             hwnd,
@@ -2519,6 +2741,23 @@ mod imp {
             state.close_background_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_DISTRO as i32) },
             state.distro_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE as i32) },
+            state.voice_enabled_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_ACTIVATION as i32) },
+            state.voice_activation_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_MICROPHONE as i32) },
+            state.voice_microphone_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_HOTKEY as i32) },
+            state.voice_hotkey_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_RECORD as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_VOICE_HOTKEY as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_ENGINE as i32) },
+            state.voice_engine_hwnd,
+            state.voice_global_hwnd,
+            state.voice_pack_status_hwnd,
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_INSTALL as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_HEALTH as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_DELETE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_SHORTCUTS as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT as i32) },
             state.fullscreen_shortcut_hwnd,
@@ -2565,6 +2804,10 @@ mod imp {
             state.density_list_hwnd,
             &["Comfortable", "Standard", "Compact"],
         );
+        populate_combo_box_items(state.voice_activation_hwnd, &["Push to Talk", "Toggle"]);
+        populate_voice_microphones(state, preferences.voice.microphone_id.as_deref());
+        populate_combo_box_items(state.voice_engine_hwnd, &["Auto", "CUDA", "CPU"]);
+        populate_voice_microphones(state, preferences.voice.microphone_id.as_deref());
         apply_preferences_to_settings_controls(state, &preferences);
         layout_settings_controls(hwnd, state);
     }
@@ -2588,7 +2831,13 @@ mod imp {
         let checkbox_y = density_list_y + SETTINGS_LIST_HEIGHT + 12;
         let distro_label_y = checkbox_y + 28 + 12;
         let distro_edit_y = distro_label_y + LABEL_HEIGHT + 4;
-        let shortcuts_label_y = distro_edit_y + FIELD_HEIGHT + 12;
+        let voice_label_y = distro_edit_y + FIELD_HEIGHT + 12;
+        let voice_enabled_y = voice_label_y + LABEL_HEIGHT + 8;
+        let voice_controls_y = voice_enabled_y + 30;
+        let voice_microphone_y = voice_controls_y + FIELD_HEIGHT + 8;
+        let voice_hotkey_y = voice_microphone_y + FIELD_HEIGHT + 8;
+        let voice_pack_y = voice_hotkey_y + FIELD_HEIGHT + LABEL_HEIGHT + 10;
+        let shortcuts_label_y = voice_pack_y + BUTTON_HEIGHT + 12;
         let shortcut_row_height = FIELD_HEIGHT + LABEL_HEIGHT + 18;
         let shortcut_row_1_y = shortcuts_label_y + LABEL_HEIGHT + 8;
         let shortcut_row_2_y = shortcut_row_1_y + shortcut_row_height;
@@ -2612,6 +2861,10 @@ mod imp {
             .max(120);
         let shortcut_button_x = shortcut_edit_x + shortcut_edit_width + 8;
         let shortcut_help_x = shortcut_button_x + shortcut_button_width + 8;
+        let voice_column_width = ((content_width - 24) / 3).max(120);
+        let voice_activation_x = MARGIN + 92;
+        let voice_engine_x = voice_activation_x + voice_column_width + 12;
+        let voice_global_x = voice_engine_x + voice_column_width + 12;
 
         unsafe {
             SetWindowPos(
@@ -2711,6 +2964,137 @@ mod imp {
                 distro_edit_y,
                 content_width,
                 FIELD_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE as i32),
+                ptr::null_mut(),
+                MARGIN,
+                voice_label_y,
+                content_width,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_enabled_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                voice_enabled_y,
+                content_width,
+                24,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_ACTIVATION as i32),
+                ptr::null_mut(),
+                MARGIN,
+                voice_controls_y + 5,
+                84,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_activation_hwnd,
+                ptr::null_mut(),
+                voice_activation_x,
+                voice_controls_y,
+                voice_column_width,
+                140,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_ENGINE as i32),
+                ptr::null_mut(),
+                voice_engine_x - 64,
+                voice_controls_y + 5,
+                56,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_engine_hwnd,
+                ptr::null_mut(),
+                voice_engine_x,
+                voice_controls_y,
+                voice_column_width,
+                140,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_global_hwnd,
+                ptr::null_mut(),
+                voice_global_x,
+                voice_controls_y + 2,
+                (content_width - (voice_global_x - MARGIN)).max(160),
+                24,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_LABEL_VOICE_MICROPHONE as i32),
+                ptr::null_mut(),
+                MARGIN,
+                voice_microphone_y + 5,
+                84,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_microphone_hwnd,
+                ptr::null_mut(),
+                voice_activation_x,
+                voice_microphone_y,
+                (content_width - 92).max(180),
+                180,
+                SWP_NOZORDER,
+            );
+            layout_shortcut_row(
+                hwnd,
+                ID_SETTINGS_LABEL_VOICE_HOTKEY,
+                state.voice_hotkey_hwnd,
+                ID_SETTINGS_VOICE_RECORD,
+                voice_hotkey_y,
+                shortcut_label_width,
+                shortcut_edit_x,
+                shortcut_edit_width,
+                shortcut_button_x,
+                shortcut_help_x,
+                ID_SETTINGS_NOTE_VOICE_HOTKEY,
+                0,
+            );
+            SetWindowPos(
+                state.voice_pack_status_hwnd,
+                ptr::null_mut(),
+                MARGIN,
+                voice_pack_y + 7,
+                (content_width - (BUTTON_WIDTH * 3) - 36).max(180),
+                LABEL_HEIGHT + 6,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_INSTALL as i32),
+                ptr::null_mut(),
+                width - MARGIN - (BUTTON_WIDTH * 3) - 24,
+                voice_pack_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_HEALTH as i32),
+                ptr::null_mut(),
+                width - MARGIN - (BUTTON_WIDTH * 2) - 12,
+                voice_pack_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_DELETE as i32),
+                ptr::null_mut(),
+                width - MARGIN - BUTTON_WIDTH,
+                voice_pack_y,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
@@ -2900,15 +3284,17 @@ mod imp {
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
-            SetWindowPos(
-                GetDlgItem(hwnd, help_id as i32),
-                ptr::null_mut(),
-                help_x,
-                y - 2,
-                30,
-                BUTTON_HEIGHT,
-                SWP_NOZORDER,
-            );
+            if help_id != 0 {
+                SetWindowPos(
+                    GetDlgItem(hwnd, help_id as i32),
+                    ptr::null_mut(),
+                    help_x,
+                    y - 2,
+                    30,
+                    BUTTON_HEIGHT,
+                    SWP_NOZORDER,
+                );
+            }
             SetWindowPos(
                 GetDlgItem(hwnd, note_id as i32),
                 ptr::null_mut(),
@@ -3012,6 +3398,7 @@ mod imp {
             ShortcutField::ZoomIn => state.zoom_in_shortcut_hwnd,
             ShortcutField::ZoomOut => state.zoom_out_shortcut_hwnd,
             ShortcutField::CommandPalette => state.command_palette_shortcut_hwnd,
+            ShortcutField::VoiceHotkey => state.voice_hotkey_hwnd,
         }
     }
 
@@ -3022,6 +3409,7 @@ mod imp {
             ShortcutField::ZoomIn => &mut state.current_zoom_in_shortcut,
             ShortcutField::ZoomOut => &mut state.current_zoom_out_shortcut,
             ShortcutField::CommandPalette => &mut state.current_command_palette_shortcut,
+            ShortcutField::VoiceHotkey => &mut state.current_voice_hotkey,
         }
     }
 
@@ -3032,6 +3420,7 @@ mod imp {
             ShortcutField::ZoomIn => ID_SETTINGS_ZOOM_IN_RECORD,
             ShortcutField::ZoomOut => ID_SETTINGS_ZOOM_OUT_RECORD,
             ShortcutField::CommandPalette => ID_SETTINGS_COMMAND_PALETTE_RECORD,
+            ShortcutField::VoiceHotkey => ID_SETTINGS_VOICE_RECORD,
         }
     }
 
@@ -3042,6 +3431,7 @@ mod imp {
             ShortcutField::ZoomIn => "Zoom in terminal text",
             ShortcutField::ZoomOut => "Zoom out terminal text",
             ShortcutField::CommandPalette => "Open command palette",
+            ShortcutField::VoiceHotkey => "Voice hotkey",
         }
     }
 
@@ -3057,6 +3447,9 @@ mod imp {
             ShortcutField::CommandPalette => {
                 "Available in launch tabs and workspaces for fast navigation and actions."
             }
+            ShortcutField::VoiceHotkey => {
+                "Push-to-talk uses press/release. Toggle mode starts and stops on repeated presses."
+            }
         }
     }
 
@@ -3067,6 +3460,7 @@ mod imp {
             ShortcutField::ZoomIn => &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
             ShortcutField::ZoomOut => &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
             ShortcutField::CommandPalette => &["<Ctrl><Shift>P", "<Ctrl>P", "<Super>P"],
+            ShortcutField::VoiceHotkey => &["<Ctrl><Shift>space", "<Alt>space", "F9"],
         }
     }
 
@@ -3105,6 +3499,7 @@ mod imp {
             ShortcutField::ZoomIn,
             ShortcutField::ZoomOut,
             ShortcutField::CommandPalette,
+            ShortcutField::VoiceHotkey,
         ] {
             let label = if state.recording_shortcut == Some(field) {
                 "Press keys..."
@@ -3116,6 +3511,223 @@ mod imp {
                     GetDlgItem(hwnd, shortcut_record_button_id(field) as i32),
                     wide(label).as_ptr(),
                 );
+            }
+        }
+    }
+
+    fn set_voice_pack_status(state: &mut SettingsWindowState, status: VoicePackStatus) {
+        let mut preferences = settings_snapshot_from_controls(state);
+        preferences.voice.pack_status = status.clone();
+        state.preference_store.save(&preferences);
+        apply_preferences_to_settings_controls(state, &preferences);
+    }
+
+    fn install_voice_pack_from_settings(state: &mut SettingsWindowState) {
+        let Some(root) = pack::default_voice_pack_dir() else {
+            set_settings_status(state, "Could not resolve application data directory.");
+            return;
+        };
+        let engine_mode = settings_snapshot_from_controls(state).voice.engine_mode;
+        let preference_store = state.preference_store.clone();
+        let hwnd = state.window_hwnd as isize;
+        set_voice_pack_status(state, VoicePackStatus::Downloading { percent: 1 });
+        set_settings_status(
+            state,
+            "Installing NVIDIA Parakeet voice pack in the background…",
+        );
+
+        thread::spawn(move || {
+            let post = |message: &str| post_settings_voice_pack_event(hwnd, message);
+            let save_status = |status: VoicePackStatus| {
+                let mut preferences = preference_store.load();
+                preferences.voice.pack_status = status;
+                preference_store.save(&preferences);
+            };
+
+            match pack::install_builtin_parakeet_pack(&root) {
+                Ok(manifest) => {
+                    save_status(VoicePackStatus::Downloading { percent: 40 });
+                    post("Installing Python dependencies for NVIDIA Parakeet…");
+                    match pack::prepare_python_environment(&root, &manifest) {
+                        Ok(_) => {
+                            save_status(VoicePackStatus::Downloading { percent: 80 });
+                            post("Verifying NVIDIA Parakeet runtime and model cache…");
+                            match pack::health_check(&root, &manifest) {
+                                health @ VoicePackHealth::Ready { .. } => {
+                                    match engine::run_voice_engine_health_check(
+                                        &manifest,
+                                        health,
+                                        engine_mode,
+                                    ) {
+                                        Ok(VoiceEngineEvent::Health { ok: true, detail }) => {
+                                            save_status(VoicePackStatus::Installed {
+                                                version: manifest.version.clone(),
+                                            });
+                                            logging::info(format!(
+                                                "installed bundled NVIDIA Parakeet voice pack on Windows id={} version={} root={} health={}",
+                                                manifest.id,
+                                                manifest.version,
+                                                root.display(),
+                                                detail
+                                            ));
+                                            post(
+                                                "NVIDIA Parakeet voice pack installed and verified.",
+                                            );
+                                        }
+                                        Ok(VoiceEngineEvent::Health { detail, .. })
+                                        | Ok(VoiceEngineEvent::Error(detail)) => {
+                                            save_status(VoicePackStatus::Error {
+                                                message: detail.clone(),
+                                            });
+                                            logging::error(format!(
+                                                "NVIDIA Parakeet voice pack installed on Windows but runtime health failed: {detail}"
+                                            ));
+                                            post(
+                                                "Voice pack installed, but Parakeet verification failed.",
+                                            );
+                                        }
+                                        Ok(other) => {
+                                            save_status(VoicePackStatus::Error {
+                                                message: format!(
+                                                    "inconclusive health check: {other:?}"
+                                                ),
+                                            });
+                                            post(
+                                                "Voice pack installed, but health check was inconclusive.",
+                                            );
+                                        }
+                                        Err(error) => {
+                                            save_status(VoicePackStatus::Error {
+                                                message: error.to_string(),
+                                            });
+                                            logging::error(format!(
+                                                "failed to verify NVIDIA Parakeet voice pack on Windows: {error}"
+                                            ));
+                                            post("Voice pack installed, but verification failed.");
+                                        }
+                                    }
+                                }
+                                VoicePackHealth::Missing | VoicePackHealth::Broken(_) => {
+                                    save_status(VoicePackStatus::Error {
+                                        message: "voice pack files are incomplete after install"
+                                            .into(),
+                                    });
+                                    post("NVIDIA Parakeet voice pack is incomplete after install.");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            save_status(VoicePackStatus::Error {
+                                message: format!("{error:?}"),
+                            });
+                            logging::error(format!(
+                                "failed to prepare NVIDIA Parakeet Python environment on Windows: {error:?}"
+                            ));
+                            post("Voice pack installed, but Python dependencies failed.");
+                        }
+                    }
+                }
+                Err(error) => {
+                    save_status(VoicePackStatus::Error {
+                        message: format!("{error:?}"),
+                    });
+                    logging::error(format!(
+                        "failed to install bundled NVIDIA Parakeet voice pack on Windows: {error:?}"
+                    ));
+                    post("Failed to install NVIDIA Parakeet voice pack.");
+                }
+            }
+        });
+    }
+
+    fn post_settings_voice_pack_event(hwnd: isize, message: &str) {
+        let event = Box::into_raw(Box::new(SettingsVoicePackEvent::Status(message.into())));
+        let posted = unsafe {
+            PostMessageW(
+                hwnd as HWND,
+                WM_SETTINGS_VOICE_PACK_EVENT,
+                0,
+                event as LPARAM,
+            )
+        };
+        if posted == 0 {
+            unsafe {
+                drop(Box::from_raw(event));
+            }
+        }
+    }
+
+    fn check_voice_pack_from_settings(state: &mut SettingsWindowState) {
+        let manifest = pack::builtin_parakeet_manifest();
+        let Some(root) = pack::default_voice_pack_dir() else {
+            set_settings_status(state, "Could not resolve application data directory.");
+            return;
+        };
+        match pack::health_check(&root, &manifest) {
+            health @ VoicePackHealth::Ready { .. } => {
+                let engine_mode = settings_snapshot_from_controls(state).voice.engine_mode;
+                match engine::run_voice_engine_health_check(&manifest, health, engine_mode) {
+                    Ok(VoiceEngineEvent::Health { ok, detail }) if ok => {
+                        set_settings_status(
+                            state,
+                            &format!("NVIDIA Parakeet runtime is healthy: {detail}"),
+                        );
+                    }
+                    Ok(VoiceEngineEvent::Health { detail, .. })
+                    | Ok(VoiceEngineEvent::Error(detail)) => {
+                        set_settings_status(
+                            state,
+                            &format!("NVIDIA Parakeet runtime dependencies are missing: {detail}"),
+                        );
+                    }
+                    Ok(other) => {
+                        set_settings_status(
+                            state,
+                            &format!("NVIDIA Parakeet health check was inconclusive: {other:?}"),
+                        );
+                    }
+                    Err(error) => {
+                        set_settings_status(
+                            state,
+                            &format!("Failed to run NVIDIA Parakeet health check: {error}"),
+                        );
+                    }
+                }
+            }
+            VoicePackHealth::Missing => {
+                set_settings_status(state, "NVIDIA Parakeet voice pack is not installed.");
+            }
+            VoicePackHealth::Broken(message) => {
+                set_settings_status(
+                    state,
+                    &format!("NVIDIA Parakeet voice pack is incomplete: {message}"),
+                );
+            }
+        }
+    }
+
+    fn delete_voice_pack_from_settings(state: &mut SettingsWindowState) {
+        let manifest = pack::builtin_parakeet_manifest();
+        let Some(root) = pack::default_voice_pack_dir() else {
+            set_settings_status(state, "Could not resolve application data directory.");
+            return;
+        };
+        match pack::delete_pack(&root, &manifest) {
+            Ok(_) => {
+                set_voice_pack_status(state, VoicePackStatus::NotInstalled);
+                set_settings_status(state, "NVIDIA Parakeet voice pack deleted.");
+                logging::info(format!(
+                    "deleted NVIDIA Parakeet voice pack on Windows id={} version={} root={}",
+                    manifest.id,
+                    manifest.version,
+                    root.display()
+                ));
+            }
+            Err(error) => {
+                set_settings_status(state, "Failed to delete NVIDIA Parakeet voice pack.");
+                logging::error(format!(
+                    "failed to delete NVIDIA Parakeet voice pack on Windows: {error:?}"
+                ));
             }
         }
     }
@@ -3139,6 +3751,18 @@ mod imp {
         preferences.workspace_zoom_in_shortcut = state.current_zoom_in_shortcut.clone();
         preferences.workspace_zoom_out_shortcut = state.current_zoom_out_shortcut.clone();
         preferences.command_palette_shortcut = state.current_command_palette_shortcut.clone();
+        preferences.voice.enabled =
+            unsafe { SendMessageW(state.voice_enabled_hwnd, BM_GETCHECK, 0, 0) }
+                == CHECKBOX_CHECKED as isize;
+        preferences.voice.activation_mode =
+            voice_activation_from_index(selected_combo_index(state.voice_activation_hwnd));
+        preferences.voice.microphone_id = selected_voice_microphone_id(state);
+        preferences.voice.hotkey = state.current_voice_hotkey.clone();
+        preferences.voice.engine_mode =
+            voice_engine_from_index(selected_combo_index(state.voice_engine_hwnd));
+        preferences.voice.prefer_global_hotkey =
+            unsafe { SendMessageW(state.voice_global_hwnd, BM_GETCHECK, 0, 0) }
+                == CHECKBOX_CHECKED as isize;
         preferences
     }
 
@@ -3153,6 +3777,7 @@ mod imp {
             && preferences.workspace_zoom_in_shortcut == defaults.workspace_zoom_in_shortcut
             && preferences.workspace_zoom_out_shortcut == defaults.workspace_zoom_out_shortcut
             && preferences.command_palette_shortcut == defaults.command_palette_shortcut
+            && preferences.voice == defaults.voice
     }
 
     fn sync_settings_reset_button_state(state: &SettingsWindowState) {
@@ -3203,6 +3828,7 @@ mod imp {
         preferences.workspace_zoom_in_shortcut = defaults.workspace_zoom_in_shortcut;
         preferences.workspace_zoom_out_shortcut = defaults.workspace_zoom_out_shortcut;
         preferences.command_palette_shortcut = defaults.command_palette_shortcut;
+        preferences.voice = defaults.voice;
         state.preference_store.save(&preferences);
         apply_preferences_to_settings_controls(state, &preferences);
         refresh_settings_runtime_preview(state);
@@ -3263,6 +3889,7 @@ mod imp {
         state.current_zoom_in_shortcut = preferences.workspace_zoom_in_shortcut.clone();
         state.current_zoom_out_shortcut = preferences.workspace_zoom_out_shortcut.clone();
         state.current_command_palette_shortcut = preferences.command_palette_shortcut.clone();
+        state.current_voice_hotkey = preferences.voice.hotkey.clone();
         state.recording_shortcut = None;
         select_listbox_index(
             state.theme_list_hwnd,
@@ -3283,6 +3910,36 @@ mod imp {
                 },
                 0,
             );
+            SendMessageW(
+                state.voice_enabled_hwnd,
+                BM_SETCHECK,
+                if preferences.voice.enabled {
+                    CHECKBOX_CHECKED
+                } else {
+                    CHECKBOX_UNCHECKED
+                },
+                0,
+            );
+            SendMessageW(
+                state.voice_global_hwnd,
+                BM_SETCHECK,
+                if preferences.voice.prefer_global_hotkey {
+                    CHECKBOX_CHECKED
+                } else {
+                    CHECKBOX_UNCHECKED
+                },
+                0,
+            );
+            select_combo_index(
+                state.voice_activation_hwnd,
+                voice_activation_index(preferences.voice.activation_mode),
+            );
+            select_combo_index(
+                state.voice_engine_hwnd,
+                voice_engine_index(preferences.voice.engine_mode),
+            );
+            select_voice_microphone(state, preferences.voice.microphone_id.as_deref());
+            select_voice_microphone(state, preferences.voice.microphone_id.as_deref());
             SetWindowTextW(
                 state.distro_hwnd,
                 wide(
@@ -3327,6 +3984,14 @@ mod imp {
                     &preferences.command_palette_shortcut,
                 ))
                 .as_ptr(),
+            );
+            SetWindowTextW(
+                state.voice_hotkey_hwnd,
+                wide(&shortcut_capture::display_label(&preferences.voice.hotkey)).as_ptr(),
+            );
+            SetWindowTextW(
+                state.voice_pack_status_hwnd,
+                wide(&preferences.voice.pack_status.summary()).as_ptr(),
             );
         }
         set_settings_status(state, default_settings_status());
@@ -3401,6 +4066,88 @@ mod imp {
                 SendMessageW(hwnd, CB_ADDSTRING, 0, wide(item).as_ptr() as LPARAM);
             }
         }
+    }
+
+    fn populate_voice_microphones(state: &mut SettingsWindowState, selected_id: Option<&str>) {
+        state.voice_microphone_ids.clear();
+        unsafe {
+            SendMessageW(state.voice_microphone_hwnd, CB_RESETCONTENT, 0, 0);
+            SendMessageW(
+                state.voice_microphone_hwnd,
+                CB_ADDSTRING,
+                0,
+                wide("System default").as_ptr() as LPARAM,
+            );
+        }
+        state.voice_microphone_ids.push(None);
+
+        let mut selected_index = 0usize;
+        match AudioCapture::enumerate_microphones() {
+            Ok(devices) => {
+                for microphone in devices {
+                    let label = if microphone.is_default {
+                        format!("{} (default)", microphone.name)
+                    } else {
+                        microphone.name.clone()
+                    };
+                    unsafe {
+                        SendMessageW(
+                            state.voice_microphone_hwnd,
+                            CB_ADDSTRING,
+                            0,
+                            wide(&label).as_ptr() as LPARAM,
+                        );
+                    }
+                    state.voice_microphone_ids.push(Some(microphone.id.clone()));
+                    if selected_id == Some(microphone.id.as_str()) {
+                        selected_index = state.voice_microphone_ids.len() - 1;
+                    }
+                }
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "failed to enumerate Windows microphones: {error:?}"
+                ));
+            }
+        }
+
+        if let Some(selected_id) = selected_id.filter(|value| !value.trim().is_empty())
+            && selected_index == 0
+        {
+            let label = format!("Saved device: {selected_id}");
+            unsafe {
+                SendMessageW(
+                    state.voice_microphone_hwnd,
+                    CB_ADDSTRING,
+                    0,
+                    wide(&label).as_ptr() as LPARAM,
+                );
+            }
+            state
+                .voice_microphone_ids
+                .push(Some(selected_id.to_string()));
+            selected_index = state.voice_microphone_ids.len() - 1;
+        }
+
+        select_combo_index(state.voice_microphone_hwnd, selected_index);
+    }
+
+    fn select_voice_microphone(state: &SettingsWindowState, selected_id: Option<&str>) {
+        let selected_index = state
+            .voice_microphone_ids
+            .iter()
+            .position(|id| id.as_deref() == selected_id)
+            .unwrap_or(0);
+        select_combo_index(state.voice_microphone_hwnd, selected_index);
+    }
+
+    fn selected_voice_microphone_id(state: &SettingsWindowState) -> Option<String> {
+        state
+            .voice_microphone_ids
+            .get(selected_combo_index(state.voice_microphone_hwnd))
+            .cloned()
+            .flatten()
+            .filter(|value| !value.trim().is_empty())
     }
 
     fn populate_template_list(state: &AppWindowState) {
@@ -4592,6 +5339,36 @@ mod imp {
             0 => crate::model::preset::ApplicationDensity::Comfortable,
             1 => crate::model::preset::ApplicationDensity::Standard,
             _ => crate::model::preset::ApplicationDensity::Compact,
+        }
+    }
+
+    fn voice_activation_index(mode: VoiceActivationMode) -> usize {
+        match mode {
+            VoiceActivationMode::PushToTalk => 0,
+            VoiceActivationMode::Toggle => 1,
+        }
+    }
+
+    fn voice_activation_from_index(index: usize) -> VoiceActivationMode {
+        match index {
+            1 => VoiceActivationMode::Toggle,
+            _ => VoiceActivationMode::PushToTalk,
+        }
+    }
+
+    fn voice_engine_index(mode: VoiceEngineMode) -> usize {
+        match mode {
+            VoiceEngineMode::Auto => 0,
+            VoiceEngineMode::Cuda => 1,
+            VoiceEngineMode::Cpu => 2,
+        }
+    }
+
+    fn voice_engine_from_index(index: usize) -> VoiceEngineMode {
+        match index {
+            1 => VoiceEngineMode::Cuda,
+            2 => VoiceEngineMode::Cpu,
+            _ => VoiceEngineMode::Auto,
         }
     }
 

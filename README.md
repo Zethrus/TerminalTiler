@@ -61,13 +61,24 @@ sudo apt install -y \
   libgraphene-1.0-dev \
   libsoup-3.0-dev \
   libjavascriptcoregtk-6.0-dev \
-  libwebkitgtk-6.0-dev
+  libwebkitgtk-6.0-dev \
+  libasound2-dev
 
 # Download appimagetool (required for AppImage packaging; not available in apt)
 sudo wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
   -O /usr/local/bin/appimagetool \
   && sudo chmod +x /usr/local/bin/appimagetool
 ```
+
+
+## Local voice-to-text
+
+TerminalTiler includes local NVIDIA Parakeet voice-to-text support behind the
+optional `voice-cpal` feature. The app captures microphone audio locally, runs a
+settings-managed Parakeet helper/voice pack, and inserts finalized transcript
+chunks only into the focused TerminalTiler terminal pane. See
+[docs/voice-parakeet.md](docs/voice-parakeet.md) for setup, verification, and
+manual release checks.
 
 ## Development
 

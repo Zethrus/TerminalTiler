@@ -101,7 +101,7 @@ $WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
 
 if (-not $SkipCargoBuild) {
     Write-Host "==> building Windows release binary"
-    cargo build --release --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
+    cargo build --release --features voice-cpal --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
 } else {
     Write-Host "==> using existing Windows release binary"
 }
