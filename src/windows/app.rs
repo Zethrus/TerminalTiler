@@ -7,7 +7,8 @@ mod imp {
     use std::path::PathBuf;
     use std::ptr;
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::thread;
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -3568,22 +3569,38 @@ mod imp {
                 preferences.voice.pack_status = status;
                 preference_store.save(&preferences);
             };
+            let save_progress = |percent| {
+                save_voice_pack_download_progress(&preference_store, percent);
+            };
 
             match pack::install_builtin_parakeet_pack(&root) {
                 Ok(manifest) => {
-                    save_status(VoicePackStatus::Downloading { percent: 40 });
+                    save_progress(40);
                     post("Installing Python dependencies for NVIDIA Parakeet…");
-                    match pack::prepare_python_environment(&root, &manifest) {
+                    match pack::prepare_python_environment_with_progress(
+                        &root,
+                        &manifest,
+                        save_progress,
+                    ) {
                         Ok(_) => {
-                            save_status(VoicePackStatus::Downloading { percent: 80 });
+                            save_voice_pack_download_progress(&preference_store, 80);
                             post("Verifying NVIDIA Parakeet runtime and model cache…");
                             match pack::health_check(&root, &manifest) {
                                 health @ VoicePackHealth::Ready { .. } => {
-                                    match engine::run_voice_engine_health_check(
+                                    let (progress_stop, progress_thread) =
+                                        start_voice_pack_progress_heartbeat(
+                                            preference_store.clone(),
+                                            81,
+                                            96,
+                                        );
+                                    let health_event = engine::run_voice_engine_health_check(
                                         &manifest,
                                         health,
                                         engine_mode,
-                                    ) {
+                                    );
+                                    progress_stop.store(true, Ordering::Relaxed);
+                                    let _ = progress_thread.join();
+                                    match health_event {
                                         Ok(VoiceEngineEvent::Health { ok: true, detail }) => {
                                             save_status(VoicePackStatus::Installed {
                                                 version: manifest.version.clone(),
@@ -3663,6 +3680,45 @@ mod imp {
                 }
             }
         });
+    }
+
+    fn save_voice_pack_download_progress(preference_store: &PreferenceStore, percent: u8) {
+        let mut preferences = preference_store.load();
+        if matches!(
+            preferences.voice.pack_status,
+            VoicePackStatus::Installed { .. } | VoicePackStatus::Error { .. }
+        ) {
+            return;
+        }
+        preferences.voice.pack_status = VoicePackStatus::Downloading {
+            percent: percent.clamp(1, 99),
+        };
+        preference_store.save(&preferences);
+    }
+
+    fn start_voice_pack_progress_heartbeat(
+        preference_store: PreferenceStore,
+        start_percent: u8,
+        end_percent: u8,
+    ) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let handle = thread::spawn(move || {
+            let mut percent = start_percent.clamp(1, 99);
+            let end_percent = end_percent.clamp(percent, 99);
+            save_voice_pack_download_progress(&preference_store, percent);
+            while !worker_stop.load(Ordering::Relaxed) {
+                thread::sleep(std::time::Duration::from_secs(5));
+                if worker_stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                if percent < end_percent {
+                    percent += 1;
+                }
+                save_voice_pack_download_progress(&preference_store, percent);
+            }
+        });
+        (stop, handle)
     }
 
     fn post_settings_voice_pack_event(hwnd: isize, message: &str) {

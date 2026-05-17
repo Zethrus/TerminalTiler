@@ -2,9 +2,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread_local;
 
 use adw::prelude::*;
@@ -1710,25 +1710,42 @@ fn present_with_initial_workspace(
                             std::thread::spawn(move || {
                                 match pack::install_builtin_parakeet_pack(&root) {
                                     Ok(manifest) => {
-                                        let mut preferences = preference_store.load();
-                                        preferences.voice.pack_status =
-                                            VoicePackStatus::Downloading { percent: 40 };
-                                        preference_store.save(&preferences);
-                                        match pack::prepare_python_environment(&root, &manifest) {
+                                        save_voice_pack_download_progress(&preference_store, 40);
+                                        match pack::prepare_python_environment_with_progress(
+                                            &root,
+                                            &manifest,
+                                            |percent| {
+                                                save_voice_pack_download_progress(
+                                                    &preference_store,
+                                                    percent,
+                                                );
+                                            },
+                                        ) {
                                             Ok(_) => {
                                                 let engine_mode =
                                                     preference_store.load().voice.engine_mode;
-                                                let mut preferences = preference_store.load();
-                                                preferences.voice.pack_status =
-                                                    VoicePackStatus::Downloading { percent: 80 };
-                                                preference_store.save(&preferences);
+                                                save_voice_pack_download_progress(
+                                                    &preference_store,
+                                                    80,
+                                                );
                                                 match pack::health_check(&root, &manifest) {
                                                     health @ VoicePackHealth::Ready { .. } => {
-                                                        match engine::run_voice_engine_health_check(
-                                                            &manifest,
-                                                            health,
-                                                            engine_mode,
-                                                        ) {
+                                                        let (progress_stop, progress_thread) =
+                                                            start_voice_pack_progress_heartbeat(
+                                                                preference_store.clone(),
+                                                                81,
+                                                                96,
+                                                            );
+                                                        let health_event =
+                                                            engine::run_voice_engine_health_check(
+                                                                &manifest,
+                                                                health,
+                                                                engine_mode,
+                                                            );
+                                                        progress_stop
+                                                            .store(true, Ordering::Relaxed);
+                                                        let _ = progress_thread.join();
+                                                        match health_event {
                                                             Ok(VoiceEngineEvent::Health {
                                                                 ok: true,
                                                                 detail,
@@ -3999,6 +4016,45 @@ fn install_voice_hotkey_controller(
 
     window.add_controller(controller.clone());
     *controller_handle.borrow_mut() = Some(controller);
+}
+
+fn save_voice_pack_download_progress(preference_store: &PreferenceStore, percent: u8) {
+    let mut preferences = preference_store.load();
+    if matches!(
+        preferences.voice.pack_status,
+        VoicePackStatus::Installed { .. } | VoicePackStatus::Error { .. }
+    ) {
+        return;
+    }
+    preferences.voice.pack_status = VoicePackStatus::Downloading {
+        percent: percent.clamp(1, 99),
+    };
+    preference_store.save(&preferences);
+}
+
+fn start_voice_pack_progress_heartbeat(
+    preference_store: PreferenceStore,
+    start_percent: u8,
+    end_percent: u8,
+) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+    let handle = std::thread::spawn(move || {
+        let mut percent = start_percent.clamp(1, 99);
+        let end_percent = end_percent.clamp(percent, 99);
+        save_voice_pack_download_progress(&preference_store, percent);
+        while !worker_stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if worker_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if percent < end_percent {
+                percent += 1;
+            }
+            save_voice_pack_download_progress(&preference_store, percent);
+        }
+    });
+    (stop, handle)
 }
 
 fn start_voice_capture(

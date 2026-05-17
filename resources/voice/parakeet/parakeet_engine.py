@@ -25,11 +25,16 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v2"
+PROTOCOL_STDOUT = sys.stdout
+# NeMo, PyTorch, Hugging Face, and Xet may print progress/log lines to stdout
+# while loading or downloading the model. Keep stdout reserved for the framed
+# TerminalTiler protocol and send third-party chatter to stderr instead.
+sys.stdout = sys.stderr
 
 
 def emit(kind: str, payload: str = "") -> None:
     safe = payload.replace("\n", "\\n")
-    print(f"{kind} {safe}" if safe else kind, flush=True)
+    print(f"{kind} {safe}" if safe else kind, file=PROTOCOL_STDOUT, flush=True)
 
 
 def decode_payload(payload: str) -> str:

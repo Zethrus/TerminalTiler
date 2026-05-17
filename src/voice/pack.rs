@@ -2,6 +2,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -98,6 +100,17 @@ pub fn prepare_python_environment(
     root: &Path,
     manifest: &VoicePackManifest,
 ) -> Result<bool, VoicePackError> {
+    prepare_python_environment_with_progress(root, manifest, |_| {})
+}
+
+pub fn prepare_python_environment_with_progress<F>(
+    root: &Path,
+    manifest: &VoicePackManifest,
+    mut progress: F,
+) -> Result<bool, VoicePackError>
+where
+    F: FnMut(u8),
+{
     if manifest.python_requirements.is_empty() {
         return Ok(false);
     }
@@ -112,29 +125,38 @@ pub fn prepare_python_environment(
 
     let python = python_environment_executable(root, manifest);
     if !python.is_file() {
-        run_command(
+        run_command_with_progress(
             Command::new(system_python_command())
                 .arg("-m")
                 .arg("venv")
                 .arg(python_environment_dir(root, manifest)),
+            10,
+            20,
+            &mut progress,
         )?;
     }
 
-    run_command(
+    run_command_with_progress(
         Command::new(&python)
             .arg("-m")
             .arg("pip")
             .arg("install")
             .arg("--upgrade")
             .arg("pip"),
+        21,
+        34,
+        &mut progress,
     )?;
-    run_command(
+    run_command_with_progress(
         Command::new(&python)
             .arg("-m")
             .arg("pip")
             .arg("install")
             .arg("-r")
             .arg(requirements_path),
+        35,
+        78,
+        &mut progress,
     )?;
     Ok(true)
 }
@@ -195,16 +217,39 @@ pub fn health_check(root: &Path, manifest: &VoicePackManifest) -> VoicePackHealt
     }
 }
 
-fn run_command(command: &mut Command) -> Result<(), VoicePackError> {
+fn run_command_with_progress<F>(
+    command: &mut Command,
+    start_percent: u8,
+    end_percent: u8,
+    progress: &mut F,
+) -> Result<(), VoicePackError>
+where
+    F: FnMut(u8),
+{
     let rendered = format!("{command:?}");
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(VoicePackError::CommandFailed {
-            command: rendered,
-            status: status.to_string(),
-        })
+    let mut child = command.spawn()?;
+    let mut percent = start_percent.min(end_percent);
+    progress(percent);
+
+    let mut last_progress_tick = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if status.success() {
+                progress(end_percent);
+                return Ok(());
+            }
+            return Err(VoicePackError::CommandFailed {
+                command: rendered,
+                status: status.to_string(),
+            });
+        }
+
+        thread::sleep(Duration::from_millis(250));
+        if percent < end_percent && last_progress_tick.elapsed() >= Duration::from_secs(5) {
+            percent = percent.saturating_add(1).min(end_percent);
+            progress(percent);
+            last_progress_tick = Instant::now();
+        }
     }
 }
 
@@ -315,6 +360,21 @@ mod tests {
             verify_archive_checksum(b"abc", "deadbeef"),
             Err(VoicePackError::ChecksumMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn command_progress_reports_start_and_end() {
+        let mut seen = Vec::new();
+        run_command_with_progress(
+            Command::new(system_python_command()).arg("-c").arg("pass"),
+            10,
+            12,
+            &mut |percent| seen.push(percent),
+        )
+        .unwrap();
+
+        assert_eq!(seen.first(), Some(&10));
+        assert_eq!(seen.last(), Some(&12));
     }
 
     #[test]

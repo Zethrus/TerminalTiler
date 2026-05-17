@@ -443,6 +443,7 @@ class FakeModel:
 class ASRModel:
     @staticmethod
     def from_pretrained(model_name):
+        print("[NeMo I fake restore] loading checkpoint", flush=True)
         model = FakeModel()
         model.model_name = model_name
         return model
@@ -568,6 +569,7 @@ class FakeModel:
 class ASRModel:
     @staticmethod
     def from_pretrained(model_name):
+        print("[NeMo I fake restore] loading checkpoint", flush=True)
         model = FakeModel()
         model.model_name = model_name
         return model
