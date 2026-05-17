@@ -151,6 +151,30 @@ fn launch_deck_uses_terminaltiler_logo_asset() {
 }
 
 #[test]
+fn launch_deck_keeps_dashboard_polished_and_bounded() {
+    assert!(
+        LAUNCH_SCREEN_RS.contains("adw::Clamp::builder()")
+            && LAUNCH_SCREEN_RS.contains(".maximum_size(1320)")
+            && LAUNCH_SCREEN_RS.contains("launch-stage-clamp"),
+        "launch deck content should be clamped so saved workspace cards do not stretch across very wide windows"
+    );
+    assert!(
+        LAUNCH_SCREEN_RS.contains("compact-action-button")
+            && LAUNCH_SCREEN_RS.contains("compact-icon-button")
+            && LAUNCH_SCREEN_RS.contains("saved-workspace-actions")
+            && !LAUNCH_SCREEN_RS.contains("Delete\",\n        icon_name::DELETE"),
+        "saved workspace cards should use compact Open/Edit actions and an icon-only Delete action"
+    );
+    assert!(
+        STYLE_CSS.contains(".saved-workspace-card")
+            && STYLE_CSS.contains(".saved-workspace-tile-chip")
+            && STYLE_CSS.contains("button.pill-button.compact-action-button")
+            && STYLE_CSS.contains("button.pill-button.compact-icon-button"),
+        "saved workspace card polish should have dedicated maintainable CSS hooks"
+    );
+}
+
+#[test]
 fn primary_actions_use_shared_symbolic_icon_helper() {
     assert!(
         ICONS_RS.contains("itsHover's animated catalog")

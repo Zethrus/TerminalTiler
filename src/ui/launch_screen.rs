@@ -122,7 +122,15 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .valign(gtk::Align::Start)
         .css_classes(["launch-stage", "launch-config-stage"])
         .build();
-    root.append(&stage);
+    let stage_clamp = adw::Clamp::builder()
+        .maximum_size(1320)
+        .tightening_threshold(1180)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .child(&stage)
+        .css_classes(["launch-stage-clamp"])
+        .build();
+    root.append(&stage_clamp);
 
     let header = build_header(default_restore_mode);
     stage.append(&header);
@@ -1101,11 +1109,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
         let cards = gtk::FlowBox::builder()
             .selection_mode(gtk::SelectionMode::None)
-            .row_spacing(10)
-            .column_spacing(10)
+            .row_spacing(12)
+            .column_spacing(12)
             .min_children_per_line(1)
             .max_children_per_line(3)
-            .homogeneous(true)
+            .homogeneous(false)
             .hexpand(true)
             .css_classes(["saved-workspace-grid"])
             .build();
@@ -1186,18 +1194,25 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(18)
+        .spacing(16)
         .css_classes(["config-panel", "launch-dashboard-hero"])
         .build();
 
     let copy = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
+        .spacing(5)
         .hexpand(true)
         .build();
     copy.append(
         &gtk::Label::builder()
-            .label("Start from a saved workspace or create a new layout")
+            .label("Launch dashboard")
+            .halign(gtk::Align::Start)
+            .css_classes(["eyebrow", "launch-dashboard-kicker"])
+            .build(),
+    );
+    copy.append(
+        &gtk::Label::builder()
+            .label("Saved workspace quick launch")
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["hero-title", "launch-dashboard-title"])
@@ -1208,7 +1223,7 @@ where
             .label(if saved_count == 0 {
                 "No saved workspaces yet. Use the wizard to choose a folder, pick a layout, and configure tiles one step at a time."
             } else {
-                "Open a known workspace immediately, edit a saved setup, or launch the wizard for a fresh layout."
+                "Open a known workspace immediately, edit a saved setup, or start a fresh layout."
             })
             .halign(gtk::Align::Start)
             .wrap(true)
@@ -1232,6 +1247,7 @@ where
             "new-workspace-layout-button",
         ],
     );
+    new_button.set_halign(gtk::Align::End);
     new_button.set_valign(gtk::Align::Center);
     new_button.connect_clicked(move |_| on_new_workspace());
     card.append(&new_button);
@@ -1277,18 +1293,32 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
-        .hexpand(true)
+        .spacing(12)
+        .hexpand(false)
         .css_classes(["preset-card-compact", "saved-workspace-card"])
+        .build();
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
         .build();
 
     let name = gtk::Label::builder()
         .label(&preset.name)
         .halign(gtk::Align::Start)
+        .hexpand(true)
         .ellipsize(gtk::pango::EllipsizeMode::End)
         .css_classes(["card-title"])
         .build();
-    card.append(&name);
+    header.append(&name);
+
+    let tile_count = gtk::Label::builder()
+        .label(format!("{} tiles", preset.tile_count()))
+        .halign(gtk::Align::End)
+        .css_classes(["status-chip", "saved-workspace-tile-chip"])
+        .build();
+    header.append(&tile_count);
+    card.append(&header);
 
     let detail = gtk::Label::builder()
         .label(format!(
@@ -1298,6 +1328,8 @@ where
         ))
         .halign(gtk::Align::Start)
         .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .max_width_chars(48)
         .css_classes(["card-meta"])
         .build();
     card.append(&detail);
@@ -1312,44 +1344,53 @@ where
             .label(root_label)
             .halign(gtk::Align::Start)
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(42)
             .css_classes(["field-hint", "saved-workspace-root"])
             .build(),
     );
 
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .halign(gtk::Align::Fill)
+        .spacing(6)
+        .halign(gtk::Align::End)
+        .css_classes(["saved-workspace-actions"])
         .build();
     let open_button = icons::labeled_button(
         "Open",
         icon_name::OPEN,
-        &["pill-button", "primary-cta-button"],
+        &[
+            "pill-button",
+            "primary-cta-button",
+            "compact-action-button",
+            "saved-workspace-open-button",
+        ],
     );
-    open_button.set_hexpand(true);
     open_button.connect_clicked(move |_| on_open(index));
     actions.append(&open_button);
 
     let edit_button = icons::labeled_button(
         "Edit",
         icon_name::EDIT,
-        &["pill-button", "secondary-button"],
+        &[
+            "pill-button",
+            "secondary-button",
+            "compact-action-button",
+            "saved-workspace-edit-button",
+        ],
     );
-    edit_button.set_hexpand(true);
     edit_button.connect_clicked(move |_| on_edit(index));
     actions.append(&edit_button);
 
-    let delete_button = icons::labeled_button(
-        "Delete",
+    let delete_button = icons::icon_button(
         icon_name::DELETE,
+        "Delete saved workspace",
         &[
             "pill-button",
             "destructive-button",
+            "compact-icon-button",
             "saved-workspace-delete-button",
         ],
     );
-    delete_button.set_hexpand(true);
-    delete_button.set_tooltip_text(Some("Delete saved workspace"));
     connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);
     actions.append(&delete_button);
 
