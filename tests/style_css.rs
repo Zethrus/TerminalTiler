@@ -137,6 +137,17 @@ fn web_tile_initial_navigation_waits_until_mapped() {
 }
 
 #[test]
+fn voice_pack_install_uses_inline_progress_replacement() {
+    assert!(
+        SETTINGS_DIALOG_RS.contains("fn build_voice_pack_install_row")
+            && SETTINGS_DIALOG_RS.contains("gtk::ProgressBar::builder()")
+            && SETTINGS_DIALOG_RS.contains("set_visible_child_name(\"progress\")")
+            && SETTINGS_DIALOG_RS.contains("voice_pack_status_provider"),
+        "voice pack installation should replace the install button with a live progress bar while downloading"
+    );
+}
+
+#[test]
 fn launch_deck_uses_terminaltiler_logo_asset() {
     assert!(
         LAUNCH_SCREEN_RS.contains("resources/terminaltiler.svg")

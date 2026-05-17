@@ -15,6 +15,7 @@ mod imp {
         COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Controls::{PBM_SETPOS, PBM_SETRANGE32, PBS_SMOOTH};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
@@ -173,6 +174,7 @@ mod imp {
     const ID_SETTINGS_VOICE_PACK_INSTALL: isize = 2058;
     const ID_SETTINGS_VOICE_PACK_HEALTH: isize = 2059;
     const ID_SETTINGS_VOICE_PACK_DELETE: isize = 2060;
+    const ID_SETTINGS_VOICE_PACK_PROGRESS: isize = 2063;
     const BUTTON_HEIGHT: i32 = 32;
     const BUTTON_WIDTH: i32 = 160;
     const MARGIN: i32 = 16;
@@ -295,6 +297,7 @@ mod imp {
         voice_engine_hwnd: HWND,
         voice_global_hwnd: HWND,
         voice_pack_status_hwnd: HWND,
+        voice_pack_progress_hwnd: HWND,
         shortcut_status_hwnd: HWND,
         recording_shortcut: Option<ShortcutField>,
         current_fullscreen_shortcut: String,
@@ -2209,6 +2212,7 @@ mod imp {
             voice_engine_hwnd: ptr::null_mut(),
             voice_global_hwnd: ptr::null_mut(),
             voice_pack_status_hwnd: ptr::null_mut(),
+            voice_pack_progress_hwnd: ptr::null_mut(),
             shortcut_status_hwnd: ptr::null_mut(),
             recording_shortcut: None,
             current_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut.clone(),
@@ -2440,6 +2444,17 @@ mod imp {
             0,
             ID_SETTINGS_VOICE_PACK_INSTALL,
         );
+        state.voice_pack_progress_hwnd = create_child_window(
+            hwnd,
+            "msctls_progress32",
+            "",
+            WS_CHILD | PBS_SMOOTH as u32,
+            0,
+            ID_SETTINGS_VOICE_PACK_PROGRESS,
+        );
+        unsafe {
+            SendMessageW(state.voice_pack_progress_hwnd, PBM_SETRANGE32, 0, 100);
+        }
         let _ = create_child_window(
             hwnd,
             "BUTTON",
@@ -2756,6 +2771,7 @@ mod imp {
             state.voice_global_hwnd,
             state.voice_pack_status_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_INSTALL as i32) },
+            state.voice_pack_progress_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_HEALTH as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_VOICE_PACK_DELETE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_SHORTCUTS as i32) },
@@ -3077,6 +3093,15 @@ mod imp {
                 voice_pack_y,
                 BUTTON_WIDTH,
                 BUTTON_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                state.voice_pack_progress_hwnd,
+                ptr::null_mut(),
+                width - MARGIN - (BUTTON_WIDTH * 3) - 24,
+                voice_pack_y + 6,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT - 12,
                 SWP_NOZORDER,
             );
             SetWindowPos(
@@ -3994,9 +4019,38 @@ mod imp {
                 wide(&preferences.voice.pack_status.summary()).as_ptr(),
             );
         }
+        sync_voice_pack_progress_controls(state, &preferences.voice.pack_status);
         set_settings_status(state, default_settings_status());
         update_shortcut_record_button_labels(state.window_hwnd, state);
         sync_settings_reset_button_state(state);
+    }
+
+    fn sync_voice_pack_progress_controls(state: &SettingsWindowState, status: &VoicePackStatus) {
+        unsafe {
+            match status {
+                VoicePackStatus::Downloading { percent } => {
+                    let bounded_percent = (*percent).clamp(1, 99);
+                    SendMessageW(
+                        state.voice_pack_progress_hwnd,
+                        PBM_SETPOS,
+                        bounded_percent as WPARAM,
+                        0,
+                    );
+                    ShowWindow(
+                        GetDlgItem(state.window_hwnd, ID_SETTINGS_VOICE_PACK_INSTALL as i32),
+                        SW_HIDE,
+                    );
+                    ShowWindow(state.voice_pack_progress_hwnd, SW_SHOW);
+                }
+                _ => {
+                    ShowWindow(state.voice_pack_progress_hwnd, SW_HIDE);
+                    ShowWindow(
+                        GetDlgItem(state.window_hwnd, ID_SETTINGS_VOICE_PACK_INSTALL as i32),
+                        SW_SHOW,
+                    );
+                }
+            }
+        }
     }
 
     fn create_combo_box(hwnd: HWND, control_id: isize) -> HWND {

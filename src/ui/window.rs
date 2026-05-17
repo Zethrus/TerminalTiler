@@ -1684,6 +1684,10 @@ fn present_with_initial_workspace(
                             );
                         }
                     }),
+                    voice_pack_status_provider: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        move || preference_store.load().voice.pack_status
+                    }),
                     on_voice_pack_install_requested: Rc::new({
                         let toast_overlay = toast_overlay_for_settings.clone();
                         let preference_store = preference_store_for_settings.as_ref().clone();

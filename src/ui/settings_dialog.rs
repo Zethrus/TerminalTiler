@@ -9,7 +9,7 @@ use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
 use crate::voice::audio::MicrophoneDevice;
-use crate::voice::{VoiceActivationMode, VoiceEngineMode, VoicePreferences};
+use crate::voice::{VoiceActivationMode, VoiceEngineMode, VoicePackStatus, VoicePreferences};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SettingsState {
@@ -75,6 +75,7 @@ pub struct SettingsDialogActions {
     pub on_max_reconnect_attempts_changed: Rc<dyn Fn(u32)>,
     pub on_voice_preferences_changed: Rc<dyn Fn(VoicePreferences)>,
     pub on_voice_pack_install_requested: Rc<dyn Fn()>,
+    pub voice_pack_status_provider: Rc<dyn Fn() -> VoicePackStatus>,
     pub on_voice_pack_delete_requested: Rc<dyn Fn()>,
     pub on_voice_pack_health_check_requested: Rc<dyn Fn()>,
     pub on_reset_defaults: Rc<dyn Fn()>,
@@ -387,6 +388,7 @@ pub fn present(
         on_max_reconnect_attempts_changed,
         on_voice_preferences_changed,
         on_voice_pack_install_requested,
+        voice_pack_status_provider,
         on_voice_pack_delete_requested,
         on_voice_pack_health_check_requested,
         on_reset_defaults,
@@ -1059,11 +1061,9 @@ pub fn present(
     voice_global_row.append(&voice_global_hotkey_switch);
     voice_section.append(&voice_global_row);
 
-    let pack_status = current_voice.borrow().pack_status.summary();
-    voice_section.append(&build_settings_action_row(
-        "Voice pack",
-        &pack_status,
-        "Install / Reinstall",
+    voice_section.append(&build_voice_pack_install_row(
+        current_voice.borrow().pack_status.clone(),
+        voice_pack_status_provider.clone(),
         {
             let callback = on_voice_pack_install_requested.clone();
             move || callback()
@@ -1441,6 +1441,113 @@ fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
             .css_classes(["field-hint", "settings-copy", "settings-section-copy"])
             .build(),
     );
+
+    shell.upcast()
+}
+
+fn sync_voice_pack_install_row(
+    status: &VoicePackStatus,
+    status_label: &gtk::Label,
+    action_stack: &gtk::Stack,
+    progress_bar: &gtk::ProgressBar,
+) {
+    status_label.set_label(&status.summary());
+    match status {
+        VoicePackStatus::Downloading { percent } => {
+            let bounded_percent = (*percent).clamp(1, 99);
+            progress_bar.set_fraction(f64::from(bounded_percent) / 100.0);
+            progress_bar.set_text(Some(&format!("{bounded_percent}%")));
+            progress_bar.pulse();
+            action_stack.set_visible_child_name("progress");
+        }
+        _ => {
+            progress_bar.set_fraction(0.0);
+            progress_bar.set_text(None);
+            action_stack.set_visible_child_name("button");
+        }
+    }
+}
+
+fn build_voice_pack_install_row<F>(
+    initial_status: VoicePackStatus,
+    status_provider: Rc<dyn Fn() -> VoicePackStatus>,
+    on_click: F,
+) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+
+    let text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    text.append(
+        &gtk::Label::builder()
+            .label("Voice pack")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    let status_label = gtk::Label::builder()
+        .label(initial_status.summary())
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .css_classes(["field-hint", "settings-shortcut-note"])
+        .build();
+    text.append(&status_label);
+    shell.append(&text);
+
+    let button = icons::labeled_button(
+        "Install / Reinstall",
+        icon_name::EDIT,
+        &["pill-button", "secondary-button"],
+    );
+    button.connect_clicked(move |_| on_click());
+
+    let progress_bar = gtk::ProgressBar::builder()
+        .width_request(150)
+        .valign(gtk::Align::Center)
+        .show_text(true)
+        .css_classes(["voice-pack-progress"])
+        .build();
+    progress_bar.set_pulse_step(0.05);
+
+    let action_stack = gtk::Stack::builder()
+        .valign(gtk::Align::Center)
+        .hexpand(false)
+        .build();
+    action_stack.add_named(&button, Some("button"));
+    action_stack.add_named(&progress_bar, Some("progress"));
+    shell.append(&action_stack);
+
+    sync_voice_pack_install_row(&initial_status, &status_label, &action_stack, &progress_bar);
+
+    let status_label_weak = status_label.downgrade();
+    let action_stack_weak = action_stack.downgrade();
+    let progress_bar_weak = progress_bar.downgrade();
+    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+        let Some(status_label) = status_label_weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let Some(action_stack) = action_stack_weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let Some(progress_bar) = progress_bar_weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let status = status_provider();
+        sync_voice_pack_install_row(&status, &status_label, &action_stack, &progress_bar);
+        glib::ControlFlow::Continue
+    });
 
     shell.upcast()
 }

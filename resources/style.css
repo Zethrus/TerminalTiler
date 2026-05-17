@@ -2030,6 +2030,17 @@ button.tile-header-action:disabled {
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
+
+.voice-pack-progress {
+  min-width: 150px;
+  min-height: 18px;
+  border-radius: 999px;
+}
+
+.voice-pack-progress text {
+  font-weight: 700;
+}
+
 .settings-shortcut-card {
   padding: 14px;
   border-radius: 18px;
