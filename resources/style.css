@@ -1907,12 +1907,17 @@ button.tile-header-action:disabled {
 }
 
 .launch-dashboard-title {
-  font-size: 19px;
+  font-size: 21px;
 }
 
 .launch-dashboard-copy {
-  max-width: 680px;
+  max-width: 760px;
+  font-size: 13px;
   line-height: 1.45;
+}
+
+.launch-dashboard-count {
+  font-size: 11px;
 }
 
 button.new-workspace-layout-button {
@@ -1929,13 +1934,23 @@ button.new-workspace-layout-button {
     inset 0 1px rgba(255, 255, 255, 0.03);
 }
 
+.saved-workspaces-panel .section-title {
+  font-size: 18px;
+}
+
+.saved-workspaces-panel .section-header .field-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.68);
+}
+
 .saved-workspace-grid {
   margin-top: 4px;
 }
 
 .saved-workspace-card {
-  min-width: 300px;
-  padding: 13px;
+  min-width: 340px;
+  min-height: 132px;
+  padding: 15px;
   border-radius: 16px;
   background:
     linear-gradient(180deg, rgba(15, 15, 18, 0.98), rgba(8, 8, 11, 0.98)),
@@ -1952,35 +1967,51 @@ button.new-workspace-layout-button {
     radial-gradient(circle at top left, rgba(240, 179, 75, 0.045), transparent 42%);
 }
 
+.saved-workspace-card .card-title {
+  font-size: 14px;
+}
+
+.saved-workspace-card .card-meta {
+  font-size: 12px;
+  line-height: 1.48;
+  color: rgba(255, 255, 255, 0.66);
+}
+
 .saved-workspace-tile-chip {
-  padding: 3px 8px;
-  font-size: 9px;
+  padding: 4px 9px;
+  font-size: 10px;
   color: rgba(255, 255, 255, 0.68);
   background: rgba(255, 255, 255, 0.045);
   border-color: rgba(255, 255, 255, 0.065);
 }
 
+.saved-workspace-footer {
+  margin-top: 2px;
+  min-width: 0;
+}
+
 .saved-workspace-root {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.44);
+  min-width: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.58);
 }
 
 .saved-workspace-actions {
-  margin-top: 2px;
+  min-width: 0;
 }
 
 window.window-shell button.pill-button.compact-action-button {
-  min-height: 32px;
-  padding: 6px 12px;
-  font-size: 11px;
+  min-height: 34px;
+  padding: 7px 13px;
+  font-size: 12px;
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.05),
     0 5px 12px rgba(0, 0, 0, 0.12);
 }
 
 window.window-shell button.pill-button.compact-icon-button {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 34px;
+  min-height: 34px;
   padding: 0;
   border-radius: 999px;
 }
@@ -2402,6 +2433,11 @@ window.window-shell.theme-light .saved-workspace-tile-chip {
   background: rgba(25, 35, 50, 0.055);
   border-color: rgba(25, 35, 50, 0.075);
   color: rgba(25, 35, 50, 0.66);
+}
+
+window.window-shell.theme-light .saved-workspace-card .card-meta,
+window.window-shell.theme-light .saved-workspaces-panel .section-header .field-hint {
+  color: rgba(25, 35, 50, 0.78);
 }
 
 window.window-shell.theme-light .saved-workspace-root {

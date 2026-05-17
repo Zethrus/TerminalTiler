@@ -123,8 +123,8 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .css_classes(["launch-stage", "launch-config-stage"])
         .build();
     let stage_clamp = adw::Clamp::builder()
-        .maximum_size(1320)
-        .tightening_threshold(1180)
+        .maximum_size(1600)
+        .tightening_threshold(1440)
         .hexpand(true)
         .halign(gtk::Align::Fill)
         .child(&stage)
@@ -1112,8 +1112,8 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             .row_spacing(12)
             .column_spacing(12)
             .min_children_per_line(1)
-            .max_children_per_line(3)
-            .homogeneous(false)
+            .max_children_per_line(4)
+            .homogeneous(true)
             .hexpand(true)
             .css_classes(["saved-workspace-grid"])
             .build();
@@ -1339,20 +1339,28 @@ where
         .as_ref()
         .map(|root| root.display().to_string())
         .unwrap_or_else(|| "Uses current folder when opened".into());
-    card.append(
-        &gtk::Label::builder()
-            .label(root_label)
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::Middle)
-            .max_width_chars(42)
-            .css_classes(["field-hint", "saved-workspace-root"])
-            .build(),
-    );
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["saved-workspace-footer"])
+        .build();
+
+    let root = gtk::Label::builder()
+        .label(root_label)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Center)
+        .hexpand(true)
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+        .max_width_chars(36)
+        .css_classes(["field-hint", "saved-workspace-root"])
+        .build();
+    footer.append(&root);
 
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .halign(gtk::Align::End)
+        .valign(gtk::Align::Center)
         .css_classes(["saved-workspace-actions"])
         .build();
     let open_button = icons::labeled_button(
@@ -1394,7 +1402,8 @@ where
     connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);
     actions.append(&delete_button);
 
-    card.append(&actions);
+    footer.append(&actions);
+    card.append(&footer);
 
     card.upcast()
 }
