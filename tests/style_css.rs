@@ -151,6 +151,30 @@ fn launch_deck_uses_terminaltiler_logo_asset() {
 }
 
 #[test]
+fn launch_deck_header_stays_slim_and_readable() {
+    assert!(
+        LAUNCH_SCREEN_RS.contains(".width_request(36)")
+            && LAUNCH_SCREEN_RS.contains(".set_pixel_size(28)")
+            && LAUNCH_SCREEN_RS
+                .contains("Open saved workspaces or create guided terminal layouts."),
+        "launch deck header should use a slimmer logo and shorter readable subtitle"
+    );
+    assert!(
+        LAUNCH_SCREEN_RS.contains("build_launch_meta_chip(\"Core\")")
+            && LAUNCH_SCREEN_RS.contains("build_launch_meta_chip(\"Wizard\")")
+            && !LAUNCH_SCREEN_RS.contains("build_launch_meta_chip(\"Live preview\")"),
+        "launch deck header chips should stay concise and not dominate the slim command bar"
+    );
+    assert!(
+        STYLE_CSS.contains(".launch-overview {")
+            && STYLE_CSS.contains("padding: 10px 14px")
+            && STYLE_CSS.contains(".launch-overview-copy")
+            && STYLE_CSS.contains("line-height: 1.35"),
+        "launch deck header should have dedicated compact readable CSS"
+    );
+}
+
+#[test]
 fn launch_deck_keeps_dashboard_polished_and_bounded() {
     assert!(
         LAUNCH_SCREEN_RS.contains("adw::Clamp::builder()")

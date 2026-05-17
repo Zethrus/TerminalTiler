@@ -14,7 +14,6 @@ use crate::model::layout::{
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
-use crate::product;
 use crate::services::layout_editor::{close_tile, split_tile};
 use crate::services::project_suggestions::detect_project_suggestions;
 use crate::services::tile_draft::{
@@ -1411,15 +1410,15 @@ where
 fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(16)
+        .spacing(12)
         .halign(gtk::Align::Fill)
         .css_classes(["launch-header", "config-panel", "launch-overview"])
         .build();
 
     let icon = gtk::Box::builder()
-        .width_request(44)
-        .height_request(44)
-        .valign(gtk::Align::Start)
+        .width_request(36)
+        .height_request(36)
+        .valign(gtk::Align::Center)
         .css_classes(["launch-overview-icon"])
         .build();
     icon.add_css_class("is-brand-logo");
@@ -1442,9 +1441,7 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
     );
     body.append(
         &gtk::Label::builder()
-            .label(
-                "Open a saved workspace or create a new layout with a guided step-by-step wizard.",
-            )
+            .label("Open saved workspaces or create guided terminal layouts.")
             .halign(gtk::Align::Start)
             .wrap(true)
             .css_classes(["hero-body", "config-subtitle", "launch-overview-copy"])
@@ -1458,9 +1455,8 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
         .valign(gtk::Align::Center)
         .css_classes(["launch-overview-meta"])
         .build();
-    meta.append(&build_launch_meta_chip(product::PRODUCT_DISPLAY_NAME));
-    meta.append(&build_launch_meta_chip("Dashboard + wizard"));
-    meta.append(&build_launch_meta_chip("Live preview"));
+    meta.append(&build_launch_meta_chip("Core"));
+    meta.append(&build_launch_meta_chip("Wizard"));
     meta.append(&build_launch_meta_chip(default_restore_mode.label()));
     card.append(&meta);
 
@@ -1476,8 +1472,8 @@ fn build_terminaltiler_logo_image() -> gtk::Image {
     };
     launch_icon.set_valign(gtk::Align::Center);
     launch_icon.set_halign(gtk::Align::Center);
-    launch_icon.set_pixel_size(34);
-    launch_icon.set_size_request(34, 34);
+    launch_icon.set_pixel_size(28);
+    launch_icon.set_size_request(28, 28);
     launch_icon.add_css_class("launch-overview-logo-image");
     launch_icon
 }
