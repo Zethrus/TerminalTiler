@@ -46,13 +46,13 @@
 - Token/component ownership: `resources/style.css` owns visual tokens/classes; `src/ui/launch_screen.rs` owns launch/wizard composition.
 
 ### Button role contract
-- `primary-cta-button`: warm cream, highest-emphasis CTA for launch/open/create actions (`Launch Workspace`, `Open`, `New Workspace Layout`); compact enough for the footer but visually above every other action.
+- `primary-cta-button` / GTK `suggested-action`: warm cream, highest-emphasis CTA for launch/open/create actions (`Launch Workspace`, `Open`, `New Workspace Layout`); compact variants keep the same amber rim, dark text/icons, and dimensional shadow.
 - `secondary-button`: dark glass support action for reversible navigation and editing (`Back`, `Update Preset`, `Edit`, `Workspaces`) with subtle amber border/highlight.
-- `ghost-link-button`: low-emphasis transparent/dark action for exits such as `Close Tab`; readable without competing with the primary CTA.
-- `destructive-button`: compact dark red-accent risk action for delete/close icon buttons; destructive actions should remain explicit and tooltip-backed when icon-only.
+- `ghost-link-button` / `pill-button.flat`: low-emphasis transparent/dark action for exits such as `Close Tab`; readable without competing with the primary CTA.
+- `destructive-button` / GTK `destructive-action`: compact dark red-accent risk action for delete/close icon buttons; destructive actions should remain explicit and tooltip-backed when icon-only.
 - `surface-button` / `surface-button-icon`: tile-editor and runtime surface controls; use the same dark glass token family at a smaller square/labeled size.
-- Disabled buttons: muted but intentional role states, never generic washed-out platform gray.
-- Windows parity: when the native Windows shell is styled, map owner-drawn/native buttons to these same roles, approximate dimensions, radii, colors, and emphasis order rather than default system gray.
+- Focus and disabled states: keyboard focus uses a visible amber ring; disabled buttons are muted but intentional role states, never generic washed-out platform gray.
+- Windows parity: when the native Windows shell is styled, map controls to these same roles, approximate dimensions, radii, colors, focus affordance, and emphasis order rather than platform-default gray buttons.
 
 ## Accessibility
 - Target standard: practical keyboard and screen-reader friendly GTK controls.

@@ -1172,19 +1172,56 @@ fn build_wizard_stepper() -> WizardStepper {
     .iter()
     .enumerate()
     {
-        let step = icons::labeled_button(
-            &format!("{}  {}", index + 1, label),
-            icon,
-            &["wizard-step-chip"],
-        );
-        step.set_halign(gtk::Align::Fill);
-        step.set_hexpand(true);
-        step.set_tooltip_text(Some(&format!("Go to step {}: {}", index + 1, label)));
+        let step = build_wizard_step_button(index + 1, label, icon);
         root.append(&step);
         steps.push(step);
     }
 
     WizardStepper { root, steps }
+}
+
+fn build_wizard_step_button(index: usize, label: &str, icon_name: &str) -> gtk::Button {
+    let step = gtk::Button::builder()
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .tooltip_text(format!("Go to step {index}: {label}"))
+        .css_classes(["wizard-step-chip"])
+        .build();
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .css_classes(["wizard-step-chip-content"])
+        .build();
+
+    content.append(
+        &gtk::Label::builder()
+            .label(index.to_string())
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .css_classes(["wizard-step-index"])
+            .build(),
+    );
+
+    let icon = icons::image(icon_name);
+    icon.set_pixel_size(14);
+    icon.set_valign(gtk::Align::Center);
+    icon.add_css_class("wizard-step-icon");
+    content.append(&icon);
+
+    content.append(
+        &gtk::Label::builder()
+            .label(label)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
+            .css_classes(["wizard-step-label"])
+            .build(),
+    );
+
+    step.set_child(Some(&content));
+    step
 }
 
 fn build_dashboard_intro<F>(saved_count: usize, on_new_workspace: F) -> gtk::Widget

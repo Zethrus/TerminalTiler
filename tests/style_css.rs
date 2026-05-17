@@ -254,7 +254,9 @@ fn launch_buttons_use_premium_role_contract() {
         "primary = warm cream CTA",
         "secondary = dark glass support action",
         "ghost = low-emphasis transparent action",
+        "surface = compact utility control",
         "destructive = red-accent risk",
+        "focus = amber keyboard ring",
         "disabled = intentional muted state",
         "Windows parity",
     ] {
@@ -266,11 +268,13 @@ fn launch_buttons_use_premium_role_contract() {
 
     for role in [
         "primary-cta-button",
+        "suggested-action",
         "secondary-button",
         "ghost-link-button",
         "destructive-button",
+        "destructive-action",
         "surface-button",
-        "Disabled buttons",
+        "Focus and disabled states",
         "Windows parity",
     ] {
         assert!(
@@ -294,10 +298,13 @@ fn launch_buttons_use_premium_role_contract() {
 
     for selector in [
         "button.pill-button",
+        "button.pill-button.flat",
         "button.primary-cta-button",
+        "button.suggested-action",
         "button.secondary-button",
         "button.ghost-link-button",
         "button.destructive-button",
+        "button.destructive-action",
         "button.surface-button",
         ".wizard-stepper",
         ".wizard-step-chip.is-active",
@@ -315,9 +322,102 @@ fn launch_buttons_use_premium_role_contract() {
         "dark disabled buttons should remain deliberately muted and legible",
     );
     assert_css_block_contains(
+        "button.primary-cta-button:focus",
+        "outline-color: rgba(240, 179, 75, 0.58)",
+        "keyboard focus should use a visible premium amber ring",
+    );
+    assert_css_block_contains(
+        "button.suggested-action:disabled",
+        "background",
+        "native GTK suggested actions should share primary disabled styling",
+    );
+    assert_css_block_contains(
+        "button.ghost-link-button:active",
+        "background",
+        "ghost actions should have an explicit active state",
+    );
+    assert_css_block_contains(
+        "button.destructive-action:active",
+        "background",
+        "native GTK destructive actions should share explicit risk-state styling",
+    );
+    assert_css_block_contains(
+        "window.window-shell button.primary-cta-button.compact-action-button",
+        "0 10px 20px rgba(0, 0, 0, 0.26)",
+        "compact primary CTAs should keep dimensional premium shadow after compact sizing overrides",
+    );
+    assert_css_block_contains(
         "window.theme-light button.pill-button",
         "background",
         "light-mode pill buttons should remain usable and not inherit dark glass",
+    );
+
+    let global_flat_button_override = css_blocks(STYLE_CSS).into_iter().any(|(selectors, _)| {
+        selectors
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| candidate == "button.flat")
+    });
+    assert!(
+        !global_flat_button_override,
+        "premium polish should not restyle every flat row/list/context-menu button globally"
+    );
+}
+
+#[test]
+fn wizard_stepper_uses_dedicated_non_truncating_step_buttons() {
+    assert!(
+        LAUNCH_SCREEN_RS.contains("fn build_wizard_step_button")
+            && LAUNCH_SCREEN_RS.contains("\"wizard-step-chip-content\"")
+            && LAUNCH_SCREEN_RS.contains("\"wizard-step-index\"")
+            && LAUNCH_SCREEN_RS.contains("\"wizard-step-icon\"")
+            && LAUNCH_SCREEN_RS.contains("\"wizard-step-label\""),
+        "wizard steps should use a dedicated child layout instead of the generic ellipsizing labeled button"
+    );
+    assert!(
+        !LAUNCH_SCREEN_RS.contains("&format!(\"{}  {}\", index + 1, label)"),
+        "wizard steps should not combine number and title into the generic button label"
+    );
+
+    assert_css_block_contains(
+        ".wizard-step-chip-content",
+        "min-width: 0",
+        "wizard step content should be a dedicated layout that can shrink cleanly before clipping",
+    );
+
+    for selector in [
+        ".wizard-step-index",
+        ".wizard-step-label",
+        ".wizard-step-chip.is-active .wizard-step-index",
+        ".wizard-step-chip.is-complete .wizard-step-label",
+        "window.window-shell.theme-light .wizard-step-label",
+    ] {
+        assert_css_block_contains(
+            selector,
+            "color",
+            "dedicated wizard step children should have explicit premium styling hooks",
+        );
+    }
+    assert_css_block_contains(
+        ".wizard-step-icon",
+        "opacity: 0.70",
+        "wizard step icons should have their own visual treatment instead of inheriting generic button icon styles",
+    );
+
+    assert_css_block_contains(
+        ".wizard-step-chip",
+        "min-width: 118px",
+        "wizard step buttons should request enough width for full labels at normal wizard sizes",
+    );
+    assert_css_block_contains(
+        ".wizard-step-label",
+        "letter-spacing: 0.045em",
+        "wizard step labels should remain readable rather than cramped uppercase microcopy",
+    );
+    assert_css_block_contains(
+        "button.wizard-step-chip:focus",
+        "outline-color: rgba(240, 179, 75, 0.58)",
+        "wizard step keyboard focus should share the premium amber focus treatment",
     );
 }
 

@@ -112,7 +112,7 @@ fn set_button_icon_label_with_alignment(
     button.set_child(Some(&row));
 }
 
-fn image(icon_name: &str) -> gtk::Image {
+pub(crate) fn image(icon_name: &str) -> gtk::Image {
     if let Some(path) = hover_icon_path(icon_name)
         && path.exists()
     {
