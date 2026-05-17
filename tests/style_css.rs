@@ -148,6 +148,24 @@ fn voice_pack_install_uses_inline_progress_replacement() {
 }
 
 #[test]
+fn microphone_selector_stays_compact_and_premium() {
+    assert!(
+        SETTINGS_DIALOG_RS.contains("\"settings-microphone-row\"")
+            && SETTINGS_DIALOG_RS.contains("\"microphone-select-shell\"")
+            && SETTINGS_DIALOG_RS.contains("\"microphone-select-control\"")
+            && SETTINGS_DIALOG_RS.contains("microphone_combo.set_valign(gtk::Align::Center)")
+            && SETTINGS_DIALOG_RS.contains("microphone_combo.set_size_request(0, -1)"),
+        "microphone selection should use a dedicated compact control instead of stretching to the row height"
+    );
+    assert!(
+        STYLE_CSS.contains(".microphone-select-shell")
+            && STYLE_CSS.contains("combobox.surface-select-control button.combo")
+            && STYLE_CSS.contains("window.theme-light .microphone-select-shell"),
+        "microphone selector should have polished dark and light theme styling"
+    );
+}
+
+#[test]
 fn launch_deck_uses_terminaltiler_logo_asset() {
     assert!(
         LAUNCH_SCREEN_RS.contains("resources/terminaltiler.svg")

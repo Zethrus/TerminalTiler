@@ -855,34 +855,59 @@ pub fn present(
     voice_section.append(&voice_enabled_row);
 
     let microphone_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .css_classes(["settings-toggle-row", "settings-microphone-row"])
+        .build();
+    let microphone_header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
-        .css_classes(["settings-toggle-row"])
         .build();
     let microphone_text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
+        .spacing(3)
         .hexpand(true)
         .build();
-    microphone_text.append(
+    let microphone_title = gtk::Label::builder()
+        .label("Microphone")
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .css_classes(["settings-shortcut-title"])
+        .build();
+    microphone_text.append(&microphone_title);
+    let microphone_hint = gtk::Label::builder()
+        .label("Choose the input device used for voice capture. If unavailable, TerminalTiler falls back to the system default.")
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .css_classes(["field-hint", "settings-shortcut-note"])
+        .build();
+    microphone_text.append(&microphone_hint);
+    microphone_header.append(&microphone_text);
+    let microphone_count = microphone_devices.len();
+    let microphone_count_label = if microphone_count == 0 {
+        "System fallback".to_string()
+    } else if microphone_count == 1 {
+        "1 input".to_string()
+    } else {
+        format!("{microphone_count} inputs")
+    };
+    microphone_header.append(
         &gtk::Label::builder()
-            .label("Microphone")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .wrap(true)
-            .css_classes(["settings-shortcut-title"])
+            .label(&microphone_count_label)
+            .valign(gtk::Align::Start)
+            .css_classes(["settings-meta-chip", "microphone-status-chip"])
             .build(),
     );
-    microphone_text.append(
-        &gtk::Label::builder()
-            .label("Choose the input device used for voice capture. If unavailable, TerminalTiler falls back to the system default.")
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .wrap(true)
-            .css_classes(["field-hint", "settings-shortcut-note"])
-            .build(),
-    );
-    microphone_row.append(&microphone_text);
+    microphone_row.append(&microphone_header);
+
+    let microphone_selector = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .hexpand(true)
+        .css_classes(["microphone-select-shell"])
+        .build();
     let microphone_combo = gtk::ComboBoxText::new();
     microphone_combo.append(Some(""), "System default");
     for microphone in &microphone_devices {
@@ -890,6 +915,13 @@ pub fn present(
     }
     microphone_combo.set_active_id(current_voice.borrow().microphone_id.as_deref().or(Some("")));
     microphone_combo.add_css_class("surface-select-control");
+    microphone_combo.add_css_class("microphone-select-control");
+    microphone_combo.set_hexpand(true);
+    microphone_combo.set_valign(gtk::Align::Center);
+    microphone_combo.set_size_request(0, -1);
+    microphone_combo.set_tooltip_text(Some(
+        "Select the microphone TerminalTiler uses for local voice capture",
+    ));
     {
         let current_voice = current_voice.clone();
         let sync_reset_button = sync_reset_button.clone();
@@ -914,7 +946,8 @@ pub fn present(
             sync_reset_button();
         });
     }
-    microphone_row.append(&microphone_combo);
+    microphone_selector.append(&microphone_combo);
+    microphone_row.append(&microphone_selector);
     voice_section.append(&microphone_row);
 
     let voice_activation_strip = gtk::Box::builder()
