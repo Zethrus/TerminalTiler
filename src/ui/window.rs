@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread_local;
+use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use glib::value::ToValue;
@@ -32,7 +33,7 @@ use crate::voice::audio::AudioCapture;
 use crate::voice::engine::{self, VoiceEngineEvent};
 use crate::voice::linux_global_hotkey::{LinuxGlobalHotkeyEvent, LinuxGlobalHotkeyHandle};
 use crate::voice::pack::{self, VoicePackHealth};
-use crate::voice::{ParakeetTranscriber, VoiceActivationMode, VoicePackStatus};
+use crate::voice::{ParakeetTranscriber, VoiceActivationMode, VoiceEngineMode, VoicePackStatus};
 
 type SelectTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 type TabActionHandle = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
@@ -52,6 +53,7 @@ const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
+const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 static NEXT_LINUX_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
 static LINUX_SESSION_REGISTRY: OnceLock<Mutex<LinuxSessionRegistry>> = OnceLock::new();
@@ -219,10 +221,247 @@ impl VoiceHud {
 enum VoiceUiEvent {
     Final(String),
     Partial(String),
+    Status(String),
     Error(String),
     HotkeyPressed,
     HotkeyReleased,
     Toast(String),
+}
+
+enum VoiceTranscriberCommand {
+    Prepare {
+        manifest: pack::VoicePackManifest,
+        health: VoicePackHealth,
+        engine_mode: VoiceEngineMode,
+        ui_tx: mpsc::Sender<VoiceUiEvent>,
+    },
+    Start {
+        manifest: pack::VoicePackManifest,
+        health: VoicePackHealth,
+        engine_mode: VoiceEngineMode,
+        microphone_id: Option<String>,
+        ui_tx: mpsc::Sender<VoiceUiEvent>,
+    },
+    Flush {
+        ui_tx: mpsc::Sender<VoiceUiEvent>,
+    },
+    Stop {
+        ui_tx: mpsc::Sender<VoiceUiEvent>,
+    },
+    Reset,
+    Shutdown,
+}
+
+#[derive(Clone)]
+struct VoiceTranscriberHandle {
+    tx: mpsc::Sender<VoiceTranscriberCommand>,
+}
+
+impl VoiceTranscriberHandle {
+    fn start() -> Self {
+        let (tx, rx) = mpsc::channel::<VoiceTranscriberCommand>();
+        std::thread::spawn(move || run_voice_transcriber_worker(rx));
+        Self { tx }
+    }
+
+    fn prepare(
+        &self,
+        manifest: pack::VoicePackManifest,
+        health: VoicePackHealth,
+        engine_mode: VoiceEngineMode,
+        ui_tx: &mpsc::Sender<VoiceUiEvent>,
+    ) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Prepare {
+            manifest,
+            health,
+            engine_mode,
+            ui_tx: ui_tx.clone(),
+        });
+    }
+
+    fn start_capture(
+        &self,
+        manifest: pack::VoicePackManifest,
+        health: VoicePackHealth,
+        engine_mode: VoiceEngineMode,
+        microphone_id: Option<String>,
+        ui_tx: &mpsc::Sender<VoiceUiEvent>,
+    ) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Start {
+            manifest,
+            health,
+            engine_mode,
+            microphone_id,
+            ui_tx: ui_tx.clone(),
+        });
+    }
+
+    fn flush(&self, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Flush {
+            ui_tx: ui_tx.clone(),
+        });
+    }
+
+    fn stop(&self, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Stop {
+            ui_tx: ui_tx.clone(),
+        });
+    }
+
+    fn reset(&self) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Reset);
+    }
+
+    fn shutdown(&self) {
+        let _ = self.tx.send(VoiceTranscriberCommand::Shutdown);
+    }
+}
+
+fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
+    let mut transcriber = None::<ParakeetTranscriber>;
+    let mut current_engine_mode = None::<VoiceEngineMode>;
+    let mut first_partial_started_at = None::<Instant>;
+
+    for command in rx {
+        match command {
+            VoiceTranscriberCommand::Prepare {
+                manifest,
+                health,
+                engine_mode,
+                ui_tx,
+            } => {
+                if let Err(message) = ensure_voice_transcriber(
+                    &mut transcriber,
+                    &mut current_engine_mode,
+                    manifest,
+                    health,
+                    engine_mode,
+                    &ui_tx,
+                ) {
+                    let _ = ui_tx.send(VoiceUiEvent::Error(message));
+                }
+            }
+            VoiceTranscriberCommand::Start {
+                manifest,
+                health,
+                engine_mode,
+                microphone_id,
+                ui_tx,
+            } => {
+                first_partial_started_at = Some(Instant::now());
+                match ensure_voice_transcriber(
+                    &mut transcriber,
+                    &mut current_engine_mode,
+                    manifest,
+                    health,
+                    engine_mode,
+                    &ui_tx,
+                )
+                .and_then(|_| {
+                    transcriber
+                        .as_mut()
+                        .ok_or_else(|| "voice transcriber unavailable".to_string())?
+                        .start_capture(microphone_id.as_deref())
+                        .map_err(|error| format!("{error:?}"))
+                }) {
+                    Ok(()) => {
+                        let _ = ui_tx.send(VoiceUiEvent::Status("Listening…".into()));
+                    }
+                    Err(message) => {
+                        let _ = ui_tx.send(VoiceUiEvent::Error(message));
+                    }
+                }
+            }
+            VoiceTranscriberCommand::Flush { ui_tx } => {
+                let Some(transcriber) = transcriber.as_mut() else {
+                    continue;
+                };
+                match transcriber.flush_captured_audio() {
+                    Ok(Some(partial)) => {
+                        if let Some(started) = first_partial_started_at.take() {
+                            let elapsed_ms = started.elapsed().as_millis();
+                            let _ = ui_tx.send(VoiceUiEvent::Status(format!(
+                                "First partial in {elapsed_ms}ms"
+                            )));
+                        }
+                        let _ = ui_tx.send(VoiceUiEvent::Partial(partial));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
+                    }
+                }
+            }
+            VoiceTranscriberCommand::Stop { ui_tx } => {
+                first_partial_started_at = None;
+                let Some(transcriber) = transcriber.as_mut() else {
+                    continue;
+                };
+                let released_at = Instant::now();
+                let partial_tx = ui_tx.clone();
+                let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
+                    let _ = partial_tx.send(VoiceUiEvent::Partial(partial));
+                });
+                match result {
+                    Ok(text) => {
+                        let elapsed_ms = released_at.elapsed().as_millis();
+                        let _ = ui_tx.send(VoiceUiEvent::Status(format!(
+                            "Final after release in {elapsed_ms}ms"
+                        )));
+                        let _ = ui_tx.send(VoiceUiEvent::Final(text));
+                    }
+                    Err(error) => {
+                        let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
+                    }
+                }
+            }
+            VoiceTranscriberCommand::Reset => {
+                if let Some(transcriber) = transcriber.take() {
+                    let _ = transcriber.shutdown();
+                }
+                current_engine_mode = None;
+                first_partial_started_at = None;
+            }
+            VoiceTranscriberCommand::Shutdown => {
+                if let Some(transcriber) = transcriber.take() {
+                    let _ = transcriber.shutdown();
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn ensure_voice_transcriber(
+    transcriber: &mut Option<ParakeetTranscriber>,
+    current_engine_mode: &mut Option<VoiceEngineMode>,
+    manifest: pack::VoicePackManifest,
+    health: VoicePackHealth,
+    engine_mode: VoiceEngineMode,
+    ui_tx: &mpsc::Sender<VoiceUiEvent>,
+) -> Result<(), String> {
+    if transcriber.is_some() && *current_engine_mode == Some(engine_mode) {
+        return Ok(());
+    }
+    if let Some(transcriber) = transcriber.take() {
+        let _ = transcriber.shutdown();
+    }
+    let warm_started = Instant::now();
+    let _ = ui_tx.send(VoiceUiEvent::Status("Warming voice model…".into()));
+    let mut launched = ParakeetTranscriber::launch(&manifest, health, engine_mode)
+        .map_err(|error| format!("{error:?}"))?;
+    launched.warm_up().map_err(|error| format!("{error:?}"))?;
+    let capabilities = launched
+        .capabilities()
+        .map_err(|error| format!("{error:?}"))?;
+    let elapsed_ms = warm_started.elapsed().as_millis();
+    let _ = ui_tx.send(VoiceUiEvent::Status(format!(
+        "Voice model ready in {elapsed_ms}ms ({}, streaming={})",
+        capabilities.device, capabilities.streaming
+    )));
+    *transcriber = Some(launched);
+    *current_engine_mode = Some(engine_mode);
+    Ok(())
 }
 
 struct VoiceGlobalHotkeyRegistration {
@@ -516,7 +755,7 @@ fn present_with_initial_workspace(
         current_shortcuts.command_palette_shortcut.clone(),
     ));
     let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
-    let voice_transcriber = Rc::new(RefCell::new(None::<ParakeetTranscriber>));
+    let voice_transcriber = Rc::new(VoiceTranscriberHandle::start());
     let voice_listening = Rc::new(Cell::new(false));
     let voice_global_hotkey = Rc::new(RefCell::new(None::<VoiceGlobalHotkeyRegistration>));
     let (voice_event_tx, voice_event_rx) = mpsc::channel::<VoiceUiEvent>();
@@ -599,12 +838,16 @@ fn present_with_initial_workspace(
                         }
                     }
                     VoiceUiEvent::Error(message) => {
+                        voice_listening.set(false);
                         logging::error(format!("voice transcription failed: {message}"));
                         voice_hud.show("Voice error", Some(&message));
                         show_toast(&toast_overlay, "Voice transcription failed");
                     }
                     VoiceUiEvent::Partial(text) => {
                         voice_hud.show("Voice partial", Some(&text));
+                    }
+                    VoiceUiEvent::Status(message) => {
+                        voice_hud.show(&message, None);
                     }
                     VoiceUiEvent::HotkeyPressed => {
                         let voice = preference_store.load().voice;
@@ -630,6 +873,7 @@ fn present_with_initial_workspace(
                                         &toast_overlay,
                                         &voice_transcriber,
                                         &voice_listening,
+                                        &voice_event_tx_for_handler,
                                     );
                                 }
                             }
@@ -697,21 +941,11 @@ fn present_with_initial_workspace(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_event_tx = voice_event_tx.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(650), move || {
+        glib::timeout_add_local(VOICE_AUDIO_FLUSH_INTERVAL, move || {
             if !voice_listening.get() {
                 return glib::ControlFlow::Continue;
             }
-            let event = voice_transcriber
-                .borrow_mut()
-                .as_mut()
-                .and_then(|transcriber| match transcriber.flush_captured_audio() {
-                    Ok(Some(partial)) => Some(VoiceUiEvent::Partial(partial)),
-                    Ok(None) => None,
-                    Err(error) => Some(VoiceUiEvent::Error(format!("{error:?}"))),
-                });
-            if let Some(event) = event {
-                let _ = voice_event_tx.send(event);
-            }
+            voice_transcriber.flush(&voice_event_tx);
             glib::ControlFlow::Continue
         });
     }
@@ -1371,6 +1605,8 @@ fn present_with_initial_workspace(
         let sync_close_to_background_notice = sync_close_to_background_notice.clone();
         let tray_controller = tray_controller.clone();
         let options_for_settings = options.clone();
+        let voice_transcriber_for_settings = voice_transcriber.clone();
+        let voice_event_tx_for_settings = voice_event_tx.clone();
 
         Rc::new(move || {
             let preferences = preference_store_for_settings.load();
@@ -1665,8 +1901,21 @@ fn present_with_initial_workspace(
                     on_voice_preferences_changed: Rc::new({
                         let preference_store = preference_store_for_settings.clone();
                         let toast_overlay = toast_overlay_for_settings.clone();
+                        let voice_transcriber = voice_transcriber_for_settings.clone();
+                        let voice_event_tx = voice_event_tx_for_settings.clone();
                         move |voice| {
+                            let previous_voice = preference_store.load().voice;
                             preference_store.save_voice_preferences(voice.clone());
+                            if !voice.enabled || previous_voice.engine_mode != voice.engine_mode {
+                                voice_transcriber.reset();
+                            }
+                            if voice.enabled {
+                                warm_voice_engine_if_ready(
+                                    &preference_store,
+                                    &voice_transcriber,
+                                    &voice_event_tx,
+                                );
+                            }
                             logging::info(format!(
                                 "updated application settings voice enabled={} mode={} engine={} global_hotkey={}",
                                 voice.enabled,
@@ -1691,8 +1940,10 @@ fn present_with_initial_workspace(
                     on_voice_pack_install_requested: Rc::new({
                         let toast_overlay = toast_overlay_for_settings.clone();
                         let preference_store = preference_store_for_settings.as_ref().clone();
-                        let voice_event_tx = voice_event_tx.clone();
+                        let voice_event_tx = voice_event_tx_for_settings.clone();
+                        let voice_transcriber = voice_transcriber_for_settings.clone();
                         move || {
+                            voice_transcriber.reset();
                             let Some(root) = pack::default_voice_pack_dir() else {
                                 show_toast(
                                     &toast_overlay,
@@ -1874,8 +2125,10 @@ fn present_with_initial_workspace(
                     on_voice_pack_delete_requested: Rc::new({
                         let toast_overlay = toast_overlay_for_settings.clone();
                         let preference_store = preference_store_for_settings.as_ref().clone();
-                        let voice_event_tx = voice_event_tx.clone();
+                        let voice_event_tx = voice_event_tx_for_settings.clone();
+                        let voice_transcriber = voice_transcriber_for_settings.clone();
                         move || {
+                            voice_transcriber.reset();
                             let manifest = pack::builtin_parakeet_manifest();
                             let Some(root) = pack::default_voice_pack_dir() else {
                                 show_toast(
@@ -1916,7 +2169,7 @@ fn present_with_initial_workspace(
                     on_voice_pack_health_check_requested: Rc::new({
                         let toast_overlay = toast_overlay_for_settings.clone();
                         let preference_store = preference_store_for_settings.as_ref().clone();
-                        let voice_event_tx = voice_event_tx.clone();
+                        let voice_event_tx = voice_event_tx_for_settings.clone();
                         move || {
                             let manifest = pack::builtin_parakeet_manifest();
                             let Some(root) = pack::default_voice_pack_dir() else {
@@ -2551,8 +2804,10 @@ fn present_with_initial_workspace(
         let quit_requested = quit_requested.clone();
         let force_quit_requested = force_quit_requested.clone();
         let tray_controller = tray_controller.clone();
+        let voice_transcriber = voice_transcriber.clone();
         window.connect_close_request(move |window| {
             if force_quit_requested.replace(false) {
+                voice_transcriber.shutdown();
                 unregister_linux_main_attach_target(window_id);
                 return glib::Propagation::Proceed;
             }
@@ -2594,6 +2849,7 @@ fn present_with_initial_workspace(
             }
 
             tray_controller.set_window_hidden(false);
+            voice_transcriber.shutdown();
             let runtimes = workspace_runtimes(&tabs_for_save);
             save_application_window_session_state(
                 window_id,
@@ -2611,6 +2867,8 @@ fn present_with_initial_workspace(
     }
 
     window.present();
+
+    warm_voice_engine_if_ready(&preference_store, &voice_transcriber, &voice_event_tx);
 
     if dialog_smoke::is_enabled() {
         dialog_smoke::start(&window);
@@ -3930,7 +4188,7 @@ fn install_voice_hotkey_controller(
     active_tab_id: Rc<Cell<usize>>,
     voice_hud: VoiceHud,
     toast_overlay: adw::ToastOverlay,
-    voice_transcriber: Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_transcriber: Rc<VoiceTranscriberHandle>,
     voice_listening: Rc<Cell<bool>>,
     voice_event_tx: mpsc::Sender<VoiceUiEvent>,
 ) {
@@ -3982,6 +4240,7 @@ fn install_voice_hotkey_controller(
                             &toast_overlay,
                             &voice_transcriber,
                             &voice_listening,
+                            &voice_event_tx,
                         );
                     }
                 }
@@ -4057,14 +4316,35 @@ fn start_voice_pack_progress_heartbeat(
     (stop, handle)
 }
 
+fn warm_voice_engine_if_ready(
+    preference_store: &PreferenceStore,
+    voice_transcriber: &VoiceTranscriberHandle,
+    voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
+) {
+    let voice = preference_store.load().voice;
+    if !voice.enabled {
+        return;
+    }
+    let manifest = pack::builtin_parakeet_manifest();
+    let Some(root) = pack::default_voice_pack_dir() else {
+        return;
+    };
+    let health = pack::health_check(&root, &manifest);
+    if matches!(health, VoicePackHealth::Ready { .. }) {
+        voice_transcriber.prepare(manifest, health, voice.engine_mode, voice_event_tx);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn start_voice_capture(
     preference_store: &PreferenceStore,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     voice_hud: &VoiceHud,
     toast_overlay: &adw::ToastOverlay,
-    voice_transcriber: &Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
+    voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
     let preferences = preference_store.load();
     let voice = preferences.voice.clone();
@@ -4103,28 +4383,22 @@ fn start_voice_capture(
         return;
     }
 
-    match ParakeetTranscriber::launch(&manifest, health, voice.engine_mode).and_then(
-        |mut transcriber| {
-            transcriber.start_capture(voice.microphone_id.as_deref())?;
-            Ok(transcriber)
-        },
-    ) {
-        Ok(transcriber) => {
-            *voice_transcriber.borrow_mut() = Some(transcriber);
-            voice_listening.set(true);
-            voice_hud.show("Listening…", Some("Speak now"));
-        }
-        Err(error) => {
-            let message = format!("{error:?}");
-            logging::error(format!("failed to start voice capture: {message}"));
-            voice_hud.show("Voice capture failed", Some(&message));
-            show_toast(toast_overlay, "Voice capture failed");
-        }
-    }
+    voice_listening.set(true);
+    voice_hud.show(
+        "Warming voice model…",
+        Some("Speak after the listening cue"),
+    );
+    voice_transcriber.start_capture(
+        manifest,
+        health,
+        voice.engine_mode,
+        voice.microphone_id,
+        voice_event_tx,
+    );
 }
 
 fn stop_voice_capture(
-    voice_transcriber: &Rc<RefCell<Option<ParakeetTranscriber>>>,
+    voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
     voice_hud: &VoiceHud,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
@@ -4132,26 +4406,8 @@ fn stop_voice_capture(
     if !voice_listening.replace(false) {
         return;
     }
-    let Some(mut transcriber) = voice_transcriber.borrow_mut().take() else {
-        return;
-    };
-    voice_hud.show("Transcribing with NVIDIA Parakeet…", None);
-    let tx = voice_event_tx.clone();
-    std::thread::spawn(move || {
-        let partial_tx = tx.clone();
-        let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
-            let _ = partial_tx.send(VoiceUiEvent::Partial(partial));
-        });
-        let _ = transcriber.shutdown();
-        match result {
-            Ok(text) => {
-                let _ = tx.send(VoiceUiEvent::Final(text));
-            }
-            Err(error) => {
-                let _ = tx.send(VoiceUiEvent::Error(format!("{error:?}")));
-            }
-        }
-    });
+    voice_hud.show("Finalizing voice text…", None);
+    voice_transcriber.stop(voice_event_tx);
 }
 
 fn voice_key_event_matches(accelerator: &str, key: gdk::Key, state: gdk::ModifierType) -> bool {
@@ -5169,8 +5425,8 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkspaceTab, move_item_to_position, move_tab_to_position, next_active_index_after_detach,
-        preview_index_for_pointer,
+        VOICE_AUDIO_FLUSH_INTERVAL, WorkspaceTab, move_item_to_position, move_tab_to_position,
+        next_active_index_after_detach, preview_index_for_pointer,
     };
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
@@ -5224,6 +5480,11 @@ mod tests {
         let moved = move_tab_to_position(&mut tabs, 99, 0);
 
         assert!(!moved);
+    }
+
+    #[test]
+    fn voice_audio_flush_cadence_targets_low_latency_chunks() {
+        assert_eq!(VOICE_AUDIO_FLUSH_INTERVAL.as_millis(), 250);
     }
 
     #[test]

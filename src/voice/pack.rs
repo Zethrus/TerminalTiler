@@ -18,6 +18,8 @@ pub struct VoicePackManifest {
     pub archive_sha256: String,
     #[serde(default = "default_parakeet_model_name")]
     pub model_name: String,
+    #[serde(default = "default_parakeet_streaming_model_name")]
+    pub streaming_model_name: String,
     #[serde(default)]
     pub python_requirements: Vec<String>,
 }
@@ -53,6 +55,10 @@ const BUILTIN_PARAKEET_ENGINE: &str =
 
 pub fn default_parakeet_model_name() -> String {
     "nvidia/parakeet-tdt-0.6b-v2".into()
+}
+
+pub fn default_parakeet_streaming_model_name() -> String {
+    "nvidia/parakeet-ctc-0.6b".into()
 }
 
 pub fn builtin_parakeet_manifest() -> VoicePackManifest {
@@ -388,6 +394,7 @@ mod tests {
             archive_url: "https://example.invalid/fake.tar.zst".into(),
             archive_sha256: "00".into(),
             model_name: default_parakeet_model_name(),
+            streaming_model_name: default_parakeet_streaming_model_name(),
             python_requirements: Vec::new(),
         };
         assert_eq!(health_check(&root, &manifest), VoicePackHealth::Missing);

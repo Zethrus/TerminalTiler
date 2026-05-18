@@ -1,7 +1,9 @@
 use std::io;
 
 use crate::voice::audio::{AudioCapture, AudioCaptureError};
-use crate::voice::engine::{VoiceEngineEvent, VoiceEngineProcess, VoiceEngineRequest};
+use crate::voice::engine::{
+    VoiceEngineCapabilities, VoiceEngineEvent, VoiceEngineProcess, VoiceEngineRequest,
+};
 use crate::voice::pack::{VoicePackHealth, VoicePackManifest};
 use crate::voice::preferences::VoiceEngineMode;
 
@@ -44,6 +46,41 @@ impl ParakeetTranscriber {
             engine,
             capture: None,
         })
+    }
+
+    pub fn warm_up(&mut self) -> Result<(), ParakeetTranscriberError> {
+        self.engine
+            .send(&VoiceEngineRequest::Health)
+            .map_err(ParakeetTranscriberError::from)?;
+        loop {
+            match self.engine.read_event()? {
+                Some(VoiceEngineEvent::Health { ok: true, .. }) => return Ok(()),
+                Some(VoiceEngineEvent::Health { detail, .. }) => {
+                    return Err(ParakeetTranscriberError::Engine(detail));
+                }
+                Some(VoiceEngineEvent::Error(message)) => {
+                    return Err(ParakeetTranscriberError::Engine(message));
+                }
+                Some(_) => continue,
+                None => return Err(ParakeetTranscriberError::EngineExited),
+            }
+        }
+    }
+
+    pub fn capabilities(&mut self) -> Result<VoiceEngineCapabilities, ParakeetTranscriberError> {
+        self.engine
+            .send(&VoiceEngineRequest::Capabilities)
+            .map_err(ParakeetTranscriberError::from)?;
+        loop {
+            match self.engine.read_event()? {
+                Some(VoiceEngineEvent::Capabilities(capabilities)) => return Ok(capabilities),
+                Some(VoiceEngineEvent::Error(message)) => {
+                    return Err(ParakeetTranscriberError::Engine(message));
+                }
+                Some(_) => continue,
+                None => return Err(ParakeetTranscriberError::EngineExited),
+            }
+        }
     }
 
     pub fn start_capture(
@@ -160,6 +197,10 @@ impl ParakeetTranscriber {
         self.engine.shutdown()?;
         Ok(())
     }
+
+    pub fn engine_process_id(&self) -> u32 {
+        self.engine.process_id()
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +258,27 @@ mod tests {
             ParakeetTranscriber::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
 
         assert_eq!(transcriber.flush_captured_audio().unwrap(), None);
+        transcriber.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reuses_resident_helper_between_consecutive_dictations() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-transcriber-resident-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
+        let health = crate::voice::pack::health_check(&root, &manifest);
+        let mut transcriber =
+            ParakeetTranscriber::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
+        let process_id = transcriber.engine_process_id();
+
+        assert_eq!(transcriber.transcribe_pcm16(Vec::new()).unwrap(), "");
+        assert_eq!(transcriber.engine_process_id(), process_id);
+        assert_eq!(transcriber.transcribe_pcm16(Vec::new()).unwrap(), "");
+        assert_eq!(transcriber.engine_process_id(), process_id);
+
         transcriber.shutdown().unwrap();
         let _ = std::fs::remove_dir_all(root);
     }

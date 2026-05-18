@@ -5,4 +5,5 @@ model_path = "hf-cache/nvidia/parakeet-tdt-0.6b-v2"
 archive_url = "builtin://terminaltiler/nvidia-parakeet-tdt-0.6b-v2-nemo"
 archive_sha256 = "builtin"
 model_name = "nvidia/parakeet-tdt-0.6b-v2"
+streaming_model_name = "nvidia/parakeet-ctc-0.6b"
 python_requirements = ["torch>=2.6.0", "nemo_toolkit[asr]>=2.7,<2.8"]
