@@ -3584,7 +3584,7 @@ mod imp {
                     ) {
                         Ok(_) => {
                             save_voice_pack_download_progress(&preference_store, 80);
-                            post("Verifying NVIDIA Parakeet runtime and model cache…");
+                            post("Verifying NVIDIA Parakeet runtime dependencies…");
                             match pack::health_check(&root, &manifest) {
                                 health @ VoicePackHealth::Ready { .. } => {
                                     let (progress_stop, progress_thread) =
@@ -3613,7 +3613,7 @@ mod imp {
                                                 detail
                                             ));
                                             post(
-                                                "NVIDIA Parakeet voice pack installed and verified.",
+                                                "NVIDIA Parakeet voice pack installed; model will warm on first use.",
                                             );
                                         }
                                         Ok(VoiceEngineEvent::Health { detail, .. })

@@ -2018,7 +2018,7 @@ fn present_with_initial_workspace(
                                                                     detail
                                                                 ));
                                                                 let _ = voice_event_tx.send(VoiceUiEvent::Toast(
-                                                                    "NVIDIA Parakeet voice pack installed and verified".into(),
+                                                                    "NVIDIA Parakeet voice pack installed; model will warm on first use".into(),
                                                                 ));
                                                             }
                                                             Ok(VoiceEngineEvent::Health {
@@ -4323,6 +4323,9 @@ fn warm_voice_engine_if_ready(
 ) {
     let voice = preference_store.load().voice;
     if !voice.enabled {
+        return;
+    }
+    if !matches!(voice.pack_status, VoicePackStatus::Installed { .. }) {
         return;
     }
     let manifest = pack::builtin_parakeet_manifest();

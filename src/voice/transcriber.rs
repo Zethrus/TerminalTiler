@@ -50,6 +50,28 @@ impl ParakeetTranscriber {
 
     pub fn warm_up(&mut self) -> Result<(), ParakeetTranscriberError> {
         self.engine
+            .send(&VoiceEngineRequest::Warm)
+            .map_err(ParakeetTranscriberError::from)?;
+        loop {
+            match self.engine.read_event()? {
+                Some(VoiceEngineEvent::Health { ok: true, .. }) => return Ok(()),
+                Some(VoiceEngineEvent::Health { detail, .. }) => {
+                    return Err(ParakeetTranscriberError::Engine(detail));
+                }
+                Some(VoiceEngineEvent::Error(message)) => {
+                    if message.trim() == "unknown command: warm" {
+                        return self.warm_up_legacy_health();
+                    }
+                    return Err(ParakeetTranscriberError::Engine(message));
+                }
+                Some(_) => continue,
+                None => return Err(ParakeetTranscriberError::EngineExited),
+            }
+        }
+    }
+
+    fn warm_up_legacy_health(&mut self) -> Result<(), ParakeetTranscriberError> {
+        self.engine
             .send(&VoiceEngineRequest::Health)
             .map_err(ParakeetTranscriberError::from)?;
         loop {
@@ -75,6 +97,9 @@ impl ParakeetTranscriber {
             match self.engine.read_event()? {
                 Some(VoiceEngineEvent::Capabilities(capabilities)) => return Ok(capabilities),
                 Some(VoiceEngineEvent::Error(message)) => {
+                    if message.trim() == "unknown command: capabilities" {
+                        return Ok(VoiceEngineCapabilities::legacy_warm());
+                    }
                     return Err(ParakeetTranscriberError::Engine(message));
                 }
                 Some(_) => continue,
@@ -278,6 +303,66 @@ mod tests {
         assert_eq!(transcriber.engine_process_id(), process_id);
         assert_eq!(transcriber.transcribe_pcm16(Vec::new()).unwrap(), "");
         assert_eq!(transcriber.engine_process_id(), process_id);
+
+        transcriber.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_helpers_without_capabilities_are_treated_as_warm_offline_helpers() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-transcriber-legacy-capabilities-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let pack_root = root.join("legacy").join("1");
+        std::fs::create_dir_all(pack_root.join("model")).unwrap();
+        let engine_path = pack_root.join("legacy_engine.py");
+        std::fs::write(
+            &engine_path,
+            r#"#!/usr/bin/env python3
+import sys
+def emit(kind, payload=""):
+    print(f"{kind} {payload}" if payload else kind, flush=True)
+emit("ready", "legacy-helper")
+for raw in sys.stdin:
+    kind = raw.strip().split(" ", 1)[0]
+    if kind == "health":
+        emit("health", "ok: legacy model loaded")
+    elif kind == "warm":
+        emit("error", "unknown command: warm")
+    elif kind == "capabilities":
+        emit("error", "unknown command: capabilities")
+    elif kind == "shutdown":
+        emit("ready", "shutdown")
+        raise SystemExit(0)
+    else:
+        emit("error", f"unexpected command: {kind}")
+"#,
+        )
+        .unwrap();
+        let manifest = VoicePackManifest {
+            id: "legacy".into(),
+            version: "1".into(),
+            engine_executable: "legacy_engine.py".into(),
+            model_path: "model".into(),
+            archive_url: "builtin://legacy".into(),
+            archive_sha256: "builtin".into(),
+            model_name: "legacy/offline".into(),
+            streaming_model_name: "legacy/streaming".into(),
+            python_requirements: Vec::new(),
+        };
+        let health = VoicePackHealth::Ready {
+            engine_path,
+            model_path: pack_root.join("model"),
+        };
+        let mut transcriber =
+            ParakeetTranscriber::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
+
+        transcriber.warm_up().unwrap();
+        assert_eq!(
+            transcriber.capabilities().unwrap(),
+            VoiceEngineCapabilities::legacy_warm()
+        );
 
         transcriber.shutdown().unwrap();
         let _ = std::fs::remove_dir_all(root);

@@ -5,6 +5,7 @@ Line protocol on stdin/stdout:
   start <sample_rate_hz>
   audio-pcm16-hex <little-endian signed PCM16 bytes as hex>
   stop
+  warm
   health
   shutdown
 
@@ -103,6 +104,38 @@ class ParakeetEngine:
                 cuda_device = torch.cuda.get_device_name(0)
             except Exception:
                 cuda_device = "available"
+
+        emit(
+            "health",
+            "ok: "
+            f"NeMo available, dependencies ready, streaming={self.streaming_available()}, "
+            f"warm={self.warm()}, device={device}, cuda_device={cuda_device}, "
+            f"model={self.active_model_name()}, cache={self.model_cache}, "
+            f"python={sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}, "
+            f"torch={getattr(torch, '__version__', 'unknown')}, "
+            f"nemo={getattr(nemo, '__version__', 'unknown')}",
+        )
+
+    def warm_up(self) -> None:
+        try:
+            import torch  # type: ignore
+            import nemo  # type: ignore
+        except Exception as exc:  # pragma: no cover - depends on user pack
+            emit("health", f"error: {exc}")
+            return
+
+        cuda = bool(torch.cuda.is_available())
+        if self.engine_mode == "cuda" and not cuda:
+            emit("health", "error: CUDA requested but torch.cuda.is_available() is false")
+            return
+
+        device = self._device_name(torch, cuda)
+        cuda_device = "none"
+        if cuda:
+            try:
+                cuda_device = torch.cuda.get_device_name(0)
+            except Exception:
+                cuda_device = "available"
         try:
             model = self._load_preferred_model()
         except Exception as exc:  # pragma: no cover - depends on user pack/model cache
@@ -176,6 +209,15 @@ class ParakeetEngine:
 
     def warm(self) -> bool:
         return self._streaming_model is not None or self._offline_model is not None
+
+    def active_model_name(self) -> str:
+        if self.streaming_available():
+            return self.streaming_model_name
+        if self._offline_model is not None:
+            return self.offline_model_name
+        if self._streaming_error is not None:
+            return self.offline_model_name
+        return self.streaming_model_name if self.profile != "offline" else self.offline_model_name
 
     def _load_preferred_model(self) -> str:
         if self.profile != "offline":
@@ -361,6 +403,8 @@ def main() -> int:
         payload = decode_payload(payload)
         if kind == "health":
             engine.health()
+        elif kind == "warm":
+            engine.warm_up()
         elif kind == "start":
             try:
                 sample_rate = int(payload.strip() or "16000")

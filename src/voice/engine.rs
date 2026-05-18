@@ -12,6 +12,7 @@ pub enum VoiceEngineRequest {
     AudioPcm16(Vec<i16>),
     Stop,
     Capabilities,
+    Warm,
     Health,
     Shutdown,
 }
@@ -32,6 +33,17 @@ pub struct VoiceEngineCapabilities {
     pub model_id: String,
     pub device: String,
     pub warm: bool,
+}
+
+impl VoiceEngineCapabilities {
+    pub fn legacy_warm() -> Self {
+        Self {
+            streaming: false,
+            model_id: "legacy-helper".into(),
+            device: "unknown".into(),
+            warm: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +117,7 @@ pub fn frame_from_request(request: &VoiceEngineRequest) -> FramedMessage {
         }
         VoiceEngineRequest::Stop => FramedMessage::new("stop", ""),
         VoiceEngineRequest::Capabilities => FramedMessage::new("capabilities", ""),
+        VoiceEngineRequest::Warm => FramedMessage::new("warm", ""),
         VoiceEngineRequest::Health => FramedMessage::new("health", ""),
         VoiceEngineRequest::Shutdown => FramedMessage::new("shutdown", ""),
     }
@@ -337,6 +350,10 @@ mod tests {
         assert_eq!(
             frame_from_request(&VoiceEngineRequest::AudioPcm16(vec![1, -2, 0x1234])),
             FramedMessage::new("audio-pcm16-hex", "0100feff3412")
+        );
+        assert_eq!(
+            frame_from_request(&VoiceEngineRequest::Warm),
+            FramedMessage::new("warm", "")
         );
     }
 
@@ -888,13 +905,120 @@ class models:
     }
 
     #[test]
-    fn bundled_python_helper_reports_fake_runtime_health_diagnostics() {
+    fn bundled_python_helper_reports_fake_runtime_health_without_loading_model() {
         use std::process::Stdio;
 
         let root = std::env::temp_dir().join(format!(
             "terminaltiler-fake-health-{}",
             uuid::Uuid::new_v4()
         ));
+        let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
+        let pack_root = crate::voice::pack::pack_root(&root, &manifest);
+        let fake_modules = root.join("fake-python-modules");
+        std::fs::create_dir_all(fake_modules.join("nemo/collections")).unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/__init__.py"),
+            "__version__ = \"2.7.fake\"\n",
+        )
+        .unwrap();
+        std::fs::write(fake_modules.join("nemo/collections/__init__.py"), "").unwrap();
+        std::fs::write(
+            fake_modules.join("torch.py"),
+            r#"
+__version__ = "2.12.fake"
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+class nn:
+    class Linear:
+        pass
+class quantization:
+    @staticmethod
+    def quantize_dynamic(model, layers, dtype=None, inplace=False):
+        assert inplace is True
+        model.quantized = True
+        return model
+qint8 = object()
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/collections/asr.py"),
+            r#"
+class FakeModel:
+    def to(self, device):
+        self.device = device
+        return self
+    def eval(self):
+        self.evaluated = True
+class ASRModel:
+    @staticmethod
+    def from_pretrained(model_name):
+        raise AssertionError("health must not load the model")
+class models:
+    ASRModel = ASRModel
+"#,
+        )
+        .unwrap();
+
+        let mut command = Command::new(python_command());
+        command
+            .arg(pack_root.join(&manifest.engine_executable))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("PYTHONPATH", &fake_modules)
+            .env("TERMINALTILER_PARAKEET_MODEL", &manifest.model_name)
+            .env(
+                "TERMINALTILER_VOICE_MODEL_PATH",
+                pack_root.join(&manifest.model_path),
+            )
+            .env("TERMINALTILER_VOICE_ENGINE_MODE", "cpu");
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut stdout = BufReader::new(stdout);
+
+        assert_eq!(
+            read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame)),
+            Some(VoiceEngineEvent::Ready)
+        );
+        frame_from_request(&VoiceEngineRequest::Health)
+            .encode(&mut stdin)
+            .unwrap();
+        stdin.flush().unwrap();
+
+        let event = read_framed_message(&mut stdout)
+            .unwrap()
+            .map(|frame| event_from_frame(&frame))
+            .expect("helper should emit health");
+        let VoiceEngineEvent::Health { ok, detail } = event else {
+            panic!("unexpected helper event: {event:?}");
+        };
+        assert!(ok);
+        assert!(detail.contains("dependencies ready"));
+        assert!(detail.contains("streaming=False") || detail.contains("streaming=false"));
+        assert!(detail.contains("warm=False") || detail.contains("warm=false"));
+        assert!(detail.contains("device=cpu"));
+        assert!(detail.contains("torch=2.12.fake"));
+        assert!(detail.contains("nemo=2.7.fake"));
+        assert!(detail.contains("nvidia/parakeet-ctc"));
+        frame_from_request(&VoiceEngineRequest::Shutdown)
+            .encode(&mut stdin)
+            .unwrap();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_python_helper_warm_loads_fake_runtime_model() {
+        use std::process::Stdio;
+
+        let root =
+            std::env::temp_dir().join(format!("terminaltiler-fake-warm-{}", uuid::Uuid::new_v4()));
         let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
         let pack_root = crate::voice::pack::pack_root(&root, &manifest);
         let fake_modules = root.join("fake-python-modules");
@@ -972,25 +1096,34 @@ class models:
                 .map(|frame| event_from_frame(&frame)),
             Some(VoiceEngineEvent::Ready)
         );
-        frame_from_request(&VoiceEngineRequest::Health)
+        frame_from_request(&VoiceEngineRequest::Warm)
             .encode(&mut stdin)
             .unwrap();
         stdin.flush().unwrap();
 
-        let event = read_framed_message(&mut stdout)
-            .unwrap()
-            .map(|frame| event_from_frame(&frame))
-            .expect("helper should emit health");
+        let mut saw_model_load_partial = false;
+        let event = loop {
+            let event = read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame))
+                .expect("helper should emit warm health");
+            match event {
+                VoiceEngineEvent::Partial(text) => {
+                    saw_model_load_partial |= text.contains("CPU quantization unavailable");
+                }
+                VoiceEngineEvent::Health { .. } => break event,
+                other => panic!("unexpected helper event: {other:?}"),
+            }
+        };
         let VoiceEngineEvent::Health { ok, detail } = event else {
             panic!("unexpected helper event: {event:?}");
         };
         assert!(ok);
+        assert!(detail.contains("model loaded"));
         assert!(detail.contains("streaming=True") || detail.contains("streaming=true"));
-        assert!(detail.contains("device=cpu"));
         assert!(detail.contains("quantized=True"));
-        assert!(detail.contains("torch=2.12.fake"));
-        assert!(detail.contains("nemo=2.7.fake"));
         assert!(detail.contains("nvidia/parakeet-ctc"));
+        assert!(!saw_model_load_partial);
         frame_from_request(&VoiceEngineRequest::Shutdown)
             .encode(&mut stdin)
             .unwrap();
