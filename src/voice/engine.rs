@@ -1014,6 +1014,80 @@ class models:
     }
 
     #[test]
+    fn bundled_python_helper_start_is_ready_without_model_warm() {
+        use std::process::Stdio;
+
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-fake-start-before-warm-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
+        let pack_root = crate::voice::pack::pack_root(&root, &manifest);
+        let fake_modules = root.join("fake-python-modules");
+        std::fs::create_dir_all(fake_modules.join("nemo/collections")).unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/__init__.py"),
+            "__version__ = \"2.7.fake\"\n",
+        )
+        .unwrap();
+        std::fs::write(fake_modules.join("nemo/collections/__init__.py"), "").unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/collections/asr.py"),
+            r#"
+class ASRModel:
+    @staticmethod
+    def from_pretrained(model_name):
+        raise AssertionError("start must not load the model")
+class models:
+    ASRModel = ASRModel
+"#,
+        )
+        .unwrap();
+
+        let mut command = Command::new(python_command());
+        command
+            .arg(pack_root.join(&manifest.engine_executable))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("PYTHONPATH", &fake_modules)
+            .env("TERMINALTILER_PARAKEET_MODEL", &manifest.model_name)
+            .env(
+                "TERMINALTILER_VOICE_MODEL_PATH",
+                pack_root.join(&manifest.model_path),
+            )
+            .env("TERMINALTILER_VOICE_ENGINE_MODE", "cpu");
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut stdout = BufReader::new(stdout);
+
+        assert_eq!(
+            read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame)),
+            Some(VoiceEngineEvent::Ready)
+        );
+        frame_from_request(&VoiceEngineRequest::Start {
+            sample_rate_hz: 16_000,
+        })
+        .encode(&mut stdin)
+        .unwrap();
+        stdin.flush().unwrap();
+        assert_eq!(
+            read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame)),
+            Some(VoiceEngineEvent::Ready)
+        );
+        frame_from_request(&VoiceEngineRequest::Shutdown)
+            .encode(&mut stdin)
+            .unwrap();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn bundled_python_helper_warm_loads_fake_runtime_model() {
         use std::process::Stdio;
 

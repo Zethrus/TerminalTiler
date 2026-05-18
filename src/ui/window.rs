@@ -320,6 +320,7 @@ impl VoiceTranscriberHandle {
 fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
     let mut transcriber = None::<ParakeetTranscriber>;
     let mut current_engine_mode = None::<VoiceEngineMode>;
+    let mut model_warmed = false;
     let mut first_partial_started_at = None::<Instant>;
 
     for command in rx {
@@ -330,13 +331,13 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 engine_mode,
                 ui_tx,
             } => {
-                if let Err(message) = ensure_voice_transcriber(
+                if let Err(message) = ensure_voice_helper(
                     &mut transcriber,
                     &mut current_engine_mode,
+                    &mut model_warmed,
                     manifest,
                     health,
                     engine_mode,
-                    &ui_tx,
                 ) {
                     let _ = ui_tx.send(VoiceUiEvent::Error(message));
                 }
@@ -348,14 +349,13 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 microphone_id,
                 ui_tx,
             } => {
-                first_partial_started_at = Some(Instant::now());
-                match ensure_voice_transcriber(
+                match ensure_voice_helper(
                     &mut transcriber,
                     &mut current_engine_mode,
+                    &mut model_warmed,
                     manifest,
                     health,
                     engine_mode,
-                    &ui_tx,
                 )
                 .and_then(|_| {
                     transcriber
@@ -365,7 +365,25 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                         .map_err(|error| format!("{error:?}"))
                 }) {
                     Ok(()) => {
-                        let _ = ui_tx.send(VoiceUiEvent::Status("Listening…".into()));
+                        first_partial_started_at = Some(Instant::now());
+                        let _ = ui_tx.send(VoiceUiEvent::Status(if model_warmed {
+                            "Listening…".into()
+                        } else {
+                            "Listening… voice model is still warming".into()
+                        }));
+                        if !model_warmed {
+                            match warm_voice_model(transcriber.as_mut(), &ui_tx) {
+                                Ok(()) => model_warmed = true,
+                                Err(message) => {
+                                    if let Some(transcriber) = transcriber.take() {
+                                        let _ = transcriber.shutdown();
+                                    }
+                                    current_engine_mode = None;
+                                    first_partial_started_at = None;
+                                    let _ = ui_tx.send(VoiceUiEvent::Error(message));
+                                }
+                            }
+                        }
                     }
                     Err(message) => {
                         let _ = ui_tx.send(VoiceUiEvent::Error(message));
@@ -420,6 +438,7 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                     let _ = transcriber.shutdown();
                 }
                 current_engine_mode = None;
+                model_warmed = false;
                 first_partial_started_at = None;
             }
             VoiceTranscriberCommand::Shutdown => {
@@ -432,13 +451,13 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
     }
 }
 
-fn ensure_voice_transcriber(
+fn ensure_voice_helper(
     transcriber: &mut Option<ParakeetTranscriber>,
     current_engine_mode: &mut Option<VoiceEngineMode>,
+    model_warmed: &mut bool,
     manifest: pack::VoicePackManifest,
     health: VoicePackHealth,
     engine_mode: VoiceEngineMode,
-    ui_tx: &mpsc::Sender<VoiceUiEvent>,
 ) -> Result<(), String> {
     if transcriber.is_some() && *current_engine_mode == Some(engine_mode) {
         return Ok(());
@@ -446,12 +465,26 @@ fn ensure_voice_transcriber(
     if let Some(transcriber) = transcriber.take() {
         let _ = transcriber.shutdown();
     }
-    let warm_started = Instant::now();
-    let _ = ui_tx.send(VoiceUiEvent::Status("Warming voice model…".into()));
-    let mut launched = ParakeetTranscriber::launch(&manifest, health, engine_mode)
+    *model_warmed = false;
+    let launched = ParakeetTranscriber::launch(&manifest, health, engine_mode)
         .map_err(|error| format!("{error:?}"))?;
-    launched.warm_up().map_err(|error| format!("{error:?}"))?;
-    let capabilities = launched
+    *transcriber = Some(launched);
+    *current_engine_mode = Some(engine_mode);
+    Ok(())
+}
+
+fn warm_voice_model(
+    transcriber: Option<&mut ParakeetTranscriber>,
+    ui_tx: &mpsc::Sender<VoiceUiEvent>,
+) -> Result<(), String> {
+    let Some(transcriber) = transcriber else {
+        return Err("voice transcriber unavailable".into());
+    };
+    let warm_started = Instant::now();
+    transcriber
+        .warm_up()
+        .map_err(|error| format!("{error:?}"))?;
+    let capabilities = transcriber
         .capabilities()
         .map_err(|error| format!("{error:?}"))?;
     let elapsed_ms = warm_started.elapsed().as_millis();
@@ -459,8 +492,6 @@ fn ensure_voice_transcriber(
         "Voice model ready in {elapsed_ms}ms ({}, streaming={})",
         capabilities.device, capabilities.streaming
     )));
-    *transcriber = Some(launched);
-    *current_engine_mode = Some(engine_mode);
     Ok(())
 }
 
@@ -4387,10 +4418,7 @@ fn start_voice_capture(
     }
 
     voice_listening.set(true);
-    voice_hud.show(
-        "Warming voice model…",
-        Some("Speak after the listening cue"),
-    );
+    voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
     voice_transcriber.start_capture(
         manifest,
         health,
