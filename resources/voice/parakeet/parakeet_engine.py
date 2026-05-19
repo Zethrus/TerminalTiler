@@ -4,6 +4,7 @@
 Line protocol on stdin/stdout:
   start <sample_rate_hz>
   audio-pcm16-hex <little-endian signed PCM16 bytes as hex>
+  audio-final-pcm16-hex <final buffered PCM16 bytes without partial inference>
   stop
   warm
   health
@@ -177,11 +178,11 @@ class ParakeetEngine:
         self._last_partial_at = 0.0
         emit("ready", f"sample_rate_hz={sample_rate_hz}")
 
-    def append_pcm16_hex(self, payload: str) -> None:
+    def append_pcm16_hex(self, payload: str, emit_partial: bool = True) -> None:
         try:
             chunk = bytes.fromhex(payload.strip())
             self.capture.pcm.extend(chunk)
-            if chunk:
+            if emit_partial and chunk:
                 self._emit_streaming_partial()
         except ValueError as exc:
             emit("error", f"invalid pcm16 hex payload: {exc}")
@@ -308,15 +309,14 @@ class ParakeetEngine:
 
     def _final_transcript(self, pcm: bytes, sample_rate_hz: int) -> str:
         if self.profile != "offline":
-            try:
-                model = self._load_streaming_model()
-                text = self._transcribe_pcm_array(model, pcm, sample_rate_hz)
-                if text:
-                    self.latest_partial = text
+            if self.latest_partial.strip():
                 return self.latest_partial.strip()
-            except Exception as exc:
-                self._streaming_error = str(exc)
-                emit("partial", f"Streaming ASR finalization unavailable; using offline TDT: {exc}")
+            if self._streaming_error is None:
+                return ""
+            emit(
+                "partial",
+                f"Streaming ASR unavailable; using offline TDT: {self._streaming_error}",
+            )
         emit("partial", "Transcribing with NVIDIA Parakeet TDT offline fallback…")
         return self._transcribe_pcm_wav(pcm, sample_rate_hz)
 
@@ -414,6 +414,8 @@ def main() -> int:
             engine.start(sample_rate)
         elif kind == "audio-pcm16-hex":
             engine.append_pcm16_hex(payload)
+        elif kind == "audio-final-pcm16-hex":
+            engine.append_pcm16_hex(payload, emit_partial=False)
         elif kind == "stop":
             engine.stop()
         elif kind == "capabilities":

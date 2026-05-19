@@ -10,6 +10,7 @@ use crate::voice::preferences::VoiceEngineMode;
 pub enum VoiceEngineRequest {
     Start { sample_rate_hz: u32 },
     AudioPcm16(Vec<i16>),
+    FinalAudioPcm16(Vec<i16>),
     Stop,
     Capabilities,
     Warm,
@@ -114,6 +115,9 @@ pub fn frame_from_request(request: &VoiceEngineRequest) -> FramedMessage {
         }
         VoiceEngineRequest::AudioPcm16(samples) => {
             FramedMessage::new("audio-pcm16-hex", pcm16_samples_to_hex(samples))
+        }
+        VoiceEngineRequest::FinalAudioPcm16(samples) => {
+            FramedMessage::new("audio-final-pcm16-hex", pcm16_samples_to_hex(samples))
         }
         VoiceEngineRequest::Stop => FramedMessage::new("stop", ""),
         VoiceEngineRequest::Capabilities => FramedMessage::new("capabilities", ""),
@@ -350,6 +354,10 @@ mod tests {
         assert_eq!(
             frame_from_request(&VoiceEngineRequest::AudioPcm16(vec![1, -2, 0x1234])),
             FramedMessage::new("audio-pcm16-hex", "0100feff3412")
+        );
+        assert_eq!(
+            frame_from_request(&VoiceEngineRequest::FinalAudioPcm16(vec![1, -2, 0x1234])),
+            FramedMessage::new("audio-final-pcm16-hex", "0100feff3412")
         );
         assert_eq!(
             frame_from_request(&VoiceEngineRequest::Warm),
@@ -771,6 +779,24 @@ class models:
             }
         }
         assert_eq!(partials, vec!["cargo", "cargo test"]);
+        frame_from_request(&VoiceEngineRequest::FinalAudioPcm16(vec![0; 160]))
+            .encode(&mut stdin)
+            .unwrap();
+        frame_from_request(&VoiceEngineRequest::Stop)
+            .encode(&mut stdin)
+            .unwrap();
+        stdin.flush().unwrap();
+        let final_text = loop {
+            match read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame))
+            {
+                Some(VoiceEngineEvent::Partial(_)) | Some(VoiceEngineEvent::Ready) => continue,
+                Some(VoiceEngineEvent::Final(text)) => break text,
+                other => panic!("unexpected helper event: {other:?}"),
+            }
+        };
+        assert_eq!(final_text, "cargo test");
         frame_from_request(&VoiceEngineRequest::Shutdown)
             .encode(&mut stdin)
             .unwrap();

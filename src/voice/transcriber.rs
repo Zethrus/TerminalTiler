@@ -176,7 +176,7 @@ impl ParakeetTranscriber {
             .map_err(ParakeetTranscriberError::from)?;
         if !samples.is_empty() {
             self.engine
-                .send(&VoiceEngineRequest::AudioPcm16(samples))
+                .send(&VoiceEngineRequest::FinalAudioPcm16(samples))
                 .map_err(ParakeetTranscriberError::from)?;
         }
         self.read_final(on_partial)
@@ -189,7 +189,7 @@ impl ParakeetTranscriber {
     ) -> Result<String, ParakeetTranscriberError> {
         if !samples.is_empty() {
             self.engine
-                .send(&VoiceEngineRequest::AudioPcm16(samples))
+                .send(&VoiceEngineRequest::FinalAudioPcm16(samples))
                 .map_err(ParakeetTranscriberError::from)?;
         }
         self.read_final(on_partial)
