@@ -219,6 +219,8 @@ impl VoiceHud {
 
 #[derive(Debug)]
 enum VoiceUiEvent {
+    ListeningStarted,
+    ListeningCancelled(String),
     Final(String),
     Partial(String),
     Status(String),
@@ -358,6 +360,17 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                     engine_mode,
                 )
                 .and_then(|_| {
+                    if !model_warmed {
+                        let _ = ui_tx.send(VoiceUiEvent::Status(
+                            "Warming voice model… first use can take a while".into(),
+                        ));
+                        warm_voice_model(transcriber.as_mut(), &ui_tx)?;
+                        model_warmed = true;
+                        let _ = ui_tx.send(VoiceUiEvent::ListeningCancelled(
+                            "Voice model ready. Press the voice hotkey again to dictate.".into(),
+                        ));
+                        return Ok(());
+                    }
                     transcriber
                         .as_mut()
                         .ok_or_else(|| "voice transcriber unavailable".to_string())?
@@ -365,24 +378,10 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                         .map_err(|error| format!("{error:?}"))
                 }) {
                     Ok(()) => {
-                        first_partial_started_at = Some(Instant::now());
-                        let _ = ui_tx.send(VoiceUiEvent::Status(if model_warmed {
-                            "Listening…".into()
-                        } else {
-                            "Listening… voice model is still warming".into()
-                        }));
-                        if !model_warmed {
-                            match warm_voice_model(transcriber.as_mut(), &ui_tx) {
-                                Ok(()) => model_warmed = true,
-                                Err(message) => {
-                                    if let Some(transcriber) = transcriber.take() {
-                                        let _ = transcriber.shutdown();
-                                    }
-                                    current_engine_mode = None;
-                                    first_partial_started_at = None;
-                                    let _ = ui_tx.send(VoiceUiEvent::Error(message));
-                                }
-                            }
+                        if model_warmed {
+                            first_partial_started_at = Some(Instant::now());
+                            let _ = ui_tx.send(VoiceUiEvent::ListeningStarted);
+                            let _ = ui_tx.send(VoiceUiEvent::Status("Listening…".into()));
                         }
                     }
                     Err(message) => {
@@ -788,6 +787,7 @@ fn present_with_initial_workspace(
     let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
     let voice_transcriber = Rc::new(VoiceTranscriberHandle::start());
     let voice_listening = Rc::new(Cell::new(false));
+    let voice_starting = Rc::new(Cell::new(false));
     let voice_global_hotkey = Rc::new(RefCell::new(None::<VoiceGlobalHotkeyRegistration>));
     let (voice_event_tx, voice_event_rx) = mpsc::channel::<VoiceUiEvent>();
     let quit_requested = Rc::new(Cell::new(false));
@@ -844,11 +844,23 @@ fn present_with_initial_workspace(
         let preference_store = preference_store.clone();
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
+        let voice_starting = voice_starting.clone();
         let voice_event_tx_for_handler = voice_event_tx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
             while let Ok(event) = voice_event_rx.try_recv() {
                 match event {
+                    VoiceUiEvent::ListeningStarted => {
+                        voice_starting.set(false);
+                        voice_listening.set(true);
+                    }
+                    VoiceUiEvent::ListeningCancelled(message) => {
+                        voice_starting.set(false);
+                        voice_listening.set(false);
+                        voice_hud.show(&message, None);
+                    }
                     VoiceUiEvent::Final(text) => {
+                        voice_starting.set(false);
+                        voice_listening.set(false);
                         if text.trim().is_empty() {
                             voice_hud.show("No speech detected", None);
                             voice_hud.hide_later();
@@ -869,6 +881,7 @@ fn present_with_initial_workspace(
                         }
                     }
                     VoiceUiEvent::Error(message) => {
+                        voice_starting.set(false);
                         voice_listening.set(false);
                         logging::error(format!("voice transcription failed: {message}"));
                         voice_hud.show("Voice error", Some(&message));
@@ -895,7 +908,7 @@ fn present_with_initial_workspace(
                                 );
                             }
                             VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
-                                if !voice_listening.get() {
+                                if !voice_listening.get() && !voice_starting.get() {
                                     start_voice_capture(
                                         &preference_store,
                                         &tabs,
@@ -904,6 +917,7 @@ fn present_with_initial_workspace(
                                         &toast_overlay,
                                         &voice_transcriber,
                                         &voice_listening,
+                                        &voice_starting,
                                         &voice_event_tx_for_handler,
                                     );
                                 }
@@ -912,7 +926,15 @@ fn present_with_initial_workspace(
                     }
                     VoiceUiEvent::HotkeyReleased => {
                         let voice = preference_store.load().voice;
-                        if voice.enabled && voice.activation_mode == VoiceActivationMode::PushToTalk
+                        if voice.enabled
+                            && voice.activation_mode == VoiceActivationMode::PushToTalk
+                            && voice_starting.replace(false)
+                            && !voice_listening.get()
+                        {
+                            voice_transcriber.reset();
+                            voice_hud.show("Voice capture cancelled", None);
+                        } else if voice.enabled
+                            && voice.activation_mode == VoiceActivationMode::PushToTalk
                         {
                             stop_voice_capture(
                                 &voice_transcriber,
@@ -941,6 +963,7 @@ fn present_with_initial_workspace(
         toast_overlay.clone(),
         voice_transcriber.clone(),
         voice_listening.clone(),
+        voice_starting.clone(),
         voice_event_tx.clone(),
     );
 
@@ -4221,6 +4244,7 @@ fn install_voice_hotkey_controller(
     toast_overlay: adw::ToastOverlay,
     voice_transcriber: Rc<VoiceTranscriberHandle>,
     voice_listening: Rc<Cell<bool>>,
+    voice_starting: Rc<Cell<bool>>,
     voice_event_tx: mpsc::Sender<VoiceUiEvent>,
 ) {
     if let Some(existing) = controller_handle.borrow_mut().take() {
@@ -4238,6 +4262,7 @@ fn install_voice_hotkey_controller(
         let toast_overlay = toast_overlay.clone();
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
+        let voice_starting = voice_starting.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_pressed(move |_, key, _, state| {
             let preferences = preference_store.load();
@@ -4262,7 +4287,7 @@ fn install_voice_hotkey_controller(
                     );
                 }
                 VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
-                    if !voice_listening.get() {
+                    if !voice_listening.get() && !voice_starting.get() {
                         start_voice_capture(
                             &preference_store,
                             &tabs,
@@ -4271,6 +4296,7 @@ fn install_voice_hotkey_controller(
                             &toast_overlay,
                             &voice_transcriber,
                             &voice_listening,
+                            &voice_starting,
                             &voice_event_tx,
                         );
                     }
@@ -4286,6 +4312,7 @@ fn install_voice_hotkey_controller(
         let voice_hud = voice_hud.clone();
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
+        let voice_starting = voice_starting.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_released(move |_, key, _, state| {
             let preferences = preference_store.load();
@@ -4295,12 +4322,17 @@ fn install_voice_hotkey_controller(
             {
                 return;
             }
-            stop_voice_capture(
-                &voice_transcriber,
-                &voice_listening,
-                &voice_hud,
-                &voice_event_tx,
-            );
+            if voice_starting.replace(false) && !voice_listening.get() {
+                voice_transcriber.reset();
+                voice_hud.show("Voice capture cancelled", None);
+            } else {
+                stop_voice_capture(
+                    &voice_transcriber,
+                    &voice_listening,
+                    &voice_hud,
+                    &voice_event_tx,
+                );
+            }
         });
     }
 
@@ -4378,6 +4410,7 @@ fn start_voice_capture(
     toast_overlay: &adw::ToastOverlay,
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
+    voice_starting: &Rc<Cell<bool>>,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
     let preferences = preference_store.load();
@@ -4417,7 +4450,8 @@ fn start_voice_capture(
         return;
     }
 
-    voice_listening.set(true);
+    voice_listening.set(false);
+    voice_starting.set(true);
     voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
     voice_transcriber.start_capture(
         manifest,
