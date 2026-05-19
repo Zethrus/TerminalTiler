@@ -259,6 +259,15 @@ fn voice_hotkey_warm_gate(state: VoiceWarmState) -> VoiceHotkeyWarmGate {
     }
 }
 
+fn apply_voice_listening_started(
+    voice_starting: &Cell<bool>,
+    voice_listening: &Cell<bool>,
+    voice_stopping: &Cell<bool>,
+) {
+    voice_starting.set(false);
+    voice_listening.set(!voice_stopping.get());
+}
+
 enum VoiceTranscriberCommand {
     Prepare {
         manifest: pack::VoicePackManifest,
@@ -837,6 +846,7 @@ fn present_with_initial_workspace(
     let voice_transcriber = Rc::new(VoiceTranscriberHandle::start());
     let voice_listening = Rc::new(Cell::new(false));
     let voice_starting = Rc::new(Cell::new(false));
+    let voice_stopping = Rc::new(Cell::new(false));
     let voice_warm_state = Rc::new(Cell::new(VoiceWarmState::Cold));
     let voice_warm_generation = Rc::new(Cell::new(0_u64));
     let voice_warm_error = Rc::new(RefCell::new(None::<String>));
@@ -897,6 +907,7 @@ fn present_with_initial_workspace(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
+        let voice_stopping = voice_stopping.clone();
         let voice_warm_state = voice_warm_state.clone();
         let voice_warm_generation = voice_warm_generation.clone();
         let voice_warm_error = voice_warm_error.clone();
@@ -933,17 +944,22 @@ fn present_with_initial_workspace(
                         logging::error(format!("voice model warm-up failed: {message}"));
                     }
                     VoiceUiEvent::ListeningStarted => {
-                        voice_starting.set(false);
-                        voice_listening.set(true);
+                        apply_voice_listening_started(
+                            &voice_starting,
+                            &voice_listening,
+                            &voice_stopping,
+                        );
                     }
                     VoiceUiEvent::ListeningCancelled(message) => {
                         voice_starting.set(false);
                         voice_listening.set(false);
+                        voice_stopping.set(false);
                         voice_hud.show(&message, None);
                     }
                     VoiceUiEvent::Final(text) => {
                         voice_starting.set(false);
                         voice_listening.set(false);
+                        voice_stopping.set(false);
                         if text.trim().is_empty() {
                             voice_hud.show("No speech detected", None);
                             voice_hud.hide_later();
@@ -966,6 +982,7 @@ fn present_with_initial_workspace(
                     VoiceUiEvent::Error(message) => {
                         voice_starting.set(false);
                         voice_listening.set(false);
+                        voice_stopping.set(false);
                         logging::error(format!("voice transcription failed: {message}"));
                         voice_hud.show("Voice error", Some(&message));
                         show_toast(&toast_overlay, "Voice transcription failed");
@@ -974,6 +991,9 @@ fn present_with_initial_workspace(
                         voice_hud.show("Voice partial", Some(&text));
                     }
                     VoiceUiEvent::Status(message) => {
+                        if voice_stopping.get() && message == "Listening…" {
+                            continue;
+                        }
                         voice_hud.show(&message, None);
                     }
                     VoiceUiEvent::HotkeyPressed => {
@@ -986,12 +1006,16 @@ fn present_with_initial_workspace(
                                 stop_voice_capture(
                                     &voice_transcriber,
                                     &voice_listening,
+                                    &voice_stopping,
                                     &voice_hud,
                                     &voice_event_tx_for_handler,
                                 );
                             }
                             VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
-                                if !voice_listening.get() && !voice_starting.get() {
+                                if !voice_listening.get()
+                                    && !voice_starting.get()
+                                    && !voice_stopping.get()
+                                {
                                     start_voice_capture(
                                         &preference_store,
                                         &tabs,
@@ -1001,6 +1025,7 @@ fn present_with_initial_workspace(
                                         &voice_transcriber,
                                         &voice_listening,
                                         &voice_starting,
+                                        &voice_stopping,
                                         &voice_warm_state,
                                         &voice_warm_generation,
                                         &voice_warm_error,
@@ -1017,27 +1042,19 @@ fn present_with_initial_workspace(
                             && voice_starting.replace(false)
                             && !voice_listening.get()
                         {
-                            voice_transcriber.reset();
-                            reset_voice_warm_tracking(
-                                &voice_warm_state,
-                                &voice_warm_generation,
-                                &voice_warm_error,
-                            );
-                            warm_voice_engine_if_ready(
-                                &preference_store,
+                            finish_pending_voice_capture(
                                 &voice_transcriber,
+                                &voice_stopping,
+                                &voice_hud,
                                 &voice_event_tx_for_handler,
-                                &voice_warm_state,
-                                &voice_warm_generation,
-                                &voice_warm_error,
                             );
-                            voice_hud.show("Voice capture cancelled", None);
                         } else if voice.enabled
                             && voice.activation_mode == VoiceActivationMode::PushToTalk
                         {
                             stop_voice_capture(
                                 &voice_transcriber,
                                 &voice_listening,
+                                &voice_stopping,
                                 &voice_hud,
                                 &voice_event_tx_for_handler,
                             );
@@ -1063,6 +1080,7 @@ fn present_with_initial_workspace(
         voice_transcriber.clone(),
         voice_listening.clone(),
         voice_starting.clone(),
+        voice_stopping.clone(),
         voice_warm_state.clone(),
         voice_warm_generation.clone(),
         voice_warm_error.clone(),
@@ -4387,6 +4405,7 @@ fn install_voice_hotkey_controller(
     voice_transcriber: Rc<VoiceTranscriberHandle>,
     voice_listening: Rc<Cell<bool>>,
     voice_starting: Rc<Cell<bool>>,
+    voice_stopping: Rc<Cell<bool>>,
     voice_warm_state: Rc<Cell<VoiceWarmState>>,
     voice_warm_generation: Rc<Cell<u64>>,
     voice_warm_error: Rc<RefCell<Option<String>>>,
@@ -4408,6 +4427,7 @@ fn install_voice_hotkey_controller(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
+        let voice_stopping = voice_stopping.clone();
         let voice_warm_state = voice_warm_state.clone();
         let voice_warm_generation = voice_warm_generation.clone();
         let voice_warm_error = voice_warm_error.clone();
@@ -4430,12 +4450,13 @@ fn install_voice_hotkey_controller(
                     stop_voice_capture(
                         &voice_transcriber,
                         &voice_listening,
+                        &voice_stopping,
                         &voice_hud,
                         &voice_event_tx,
                     );
                 }
                 VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
-                    if !voice_listening.get() && !voice_starting.get() {
+                    if !voice_listening.get() && !voice_starting.get() && !voice_stopping.get() {
                         start_voice_capture(
                             &preference_store,
                             &tabs,
@@ -4445,6 +4466,7 @@ fn install_voice_hotkey_controller(
                             &voice_transcriber,
                             &voice_listening,
                             &voice_starting,
+                            &voice_stopping,
                             &voice_warm_state,
                             &voice_warm_generation,
                             &voice_warm_error,
@@ -4464,9 +4486,7 @@ fn install_voice_hotkey_controller(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
-        let voice_warm_state = voice_warm_state.clone();
-        let voice_warm_generation = voice_warm_generation.clone();
-        let voice_warm_error = voice_warm_error.clone();
+        let voice_stopping = voice_stopping.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_released(move |_, key, _, state| {
             let preferences = preference_store.load();
@@ -4477,25 +4497,17 @@ fn install_voice_hotkey_controller(
                 return;
             }
             if voice_starting.replace(false) && !voice_listening.get() {
-                voice_transcriber.reset();
-                reset_voice_warm_tracking(
-                    &voice_warm_state,
-                    &voice_warm_generation,
-                    &voice_warm_error,
-                );
-                warm_voice_engine_if_ready(
-                    &preference_store,
+                finish_pending_voice_capture(
                     &voice_transcriber,
+                    &voice_stopping,
+                    &voice_hud,
                     &voice_event_tx,
-                    &voice_warm_state,
-                    &voice_warm_generation,
-                    &voice_warm_error,
                 );
-                voice_hud.show("Voice capture cancelled", None);
             } else {
                 stop_voice_capture(
                     &voice_transcriber,
                     &voice_listening,
+                    &voice_stopping,
                     &voice_hud,
                     &voice_event_tx,
                 );
@@ -4612,6 +4624,7 @@ fn start_voice_capture(
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
     voice_starting: &Rc<Cell<bool>>,
+    voice_stopping: &Rc<Cell<bool>>,
     voice_warm_state: &Rc<Cell<VoiceWarmState>>,
     voice_warm_generation: &Rc<Cell<u64>>,
     voice_warm_error: &Rc<RefCell<Option<String>>>,
@@ -4684,6 +4697,7 @@ fn start_voice_capture(
 
     voice_listening.set(false);
     voice_starting.set(true);
+    voice_stopping.set(false);
     voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
     voice_transcriber.start_capture(
         manifest,
@@ -4697,12 +4711,25 @@ fn start_voice_capture(
 fn stop_voice_capture(
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
+    voice_stopping: &Rc<Cell<bool>>,
     voice_hud: &VoiceHud,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
     if !voice_listening.replace(false) {
         return;
     }
+    voice_stopping.set(true);
+    voice_hud.show("Finalizing voice text…", None);
+    voice_transcriber.stop(voice_event_tx);
+}
+
+fn finish_pending_voice_capture(
+    voice_transcriber: &Rc<VoiceTranscriberHandle>,
+    voice_stopping: &Rc<Cell<bool>>,
+    voice_hud: &VoiceHud,
+    voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
+) {
+    voice_stopping.set(true);
     voice_hud.show("Finalizing voice text…", None);
     voice_transcriber.stop(voice_event_tx);
 }
@@ -5723,9 +5750,10 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 mod tests {
     use super::{
         VOICE_AUDIO_FLUSH_INTERVAL, VoiceHotkeyWarmGate, VoiceWarmState, WorkspaceTab,
-        move_item_to_position, move_tab_to_position, next_active_index_after_detach,
-        preview_index_for_pointer, voice_hotkey_warm_gate,
+        apply_voice_listening_started, move_item_to_position, move_tab_to_position,
+        next_active_index_after_detach, preview_index_for_pointer, voice_hotkey_warm_gate,
     };
+    use std::cell::Cell;
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
         tabs.to_vec()
@@ -5803,6 +5831,30 @@ mod tests {
             voice_hotkey_warm_gate(VoiceWarmState::Failed),
             VoiceHotkeyWarmGate::ReportFailure
         );
+    }
+
+    #[test]
+    fn pending_push_to_talk_release_does_not_reopen_listening_after_start_ack() {
+        let voice_starting = Cell::new(true);
+        let voice_listening = Cell::new(false);
+        let voice_stopping = Cell::new(true);
+
+        apply_voice_listening_started(&voice_starting, &voice_listening, &voice_stopping);
+
+        assert!(!voice_starting.get());
+        assert!(!voice_listening.get());
+    }
+
+    #[test]
+    fn start_ack_marks_voice_listening_when_no_stop_is_pending() {
+        let voice_starting = Cell::new(true);
+        let voice_listening = Cell::new(false);
+        let voice_stopping = Cell::new(false);
+
+        apply_voice_listening_started(&voice_starting, &voice_listening, &voice_stopping);
+
+        assert!(!voice_starting.get());
+        assert!(voice_listening.get());
     }
 
     #[test]
