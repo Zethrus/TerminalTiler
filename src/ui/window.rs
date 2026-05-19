@@ -219,6 +219,9 @@ impl VoiceHud {
 
 #[derive(Debug)]
 enum VoiceUiEvent {
+    WarmRequested,
+    WarmReady(u64),
+    WarmFailed { generation: u64, message: String },
     ListeningStarted,
     ListeningCancelled(String),
     Final(String),
@@ -230,11 +233,38 @@ enum VoiceUiEvent {
     Toast(String),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum VoiceWarmState {
+    #[default]
+    Cold,
+    Warming,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VoiceHotkeyWarmGate {
+    StartCapture,
+    WaitForWarm,
+    RequestWarm,
+    ReportFailure,
+}
+
+fn voice_hotkey_warm_gate(state: VoiceWarmState) -> VoiceHotkeyWarmGate {
+    match state {
+        VoiceWarmState::Ready => VoiceHotkeyWarmGate::StartCapture,
+        VoiceWarmState::Warming => VoiceHotkeyWarmGate::WaitForWarm,
+        VoiceWarmState::Cold => VoiceHotkeyWarmGate::RequestWarm,
+        VoiceWarmState::Failed => VoiceHotkeyWarmGate::ReportFailure,
+    }
+}
+
 enum VoiceTranscriberCommand {
     Prepare {
         manifest: pack::VoicePackManifest,
         health: VoicePackHealth,
         engine_mode: VoiceEngineMode,
+        warm_generation: u64,
         ui_tx: mpsc::Sender<VoiceUiEvent>,
     },
     Start {
@@ -271,12 +301,14 @@ impl VoiceTranscriberHandle {
         manifest: pack::VoicePackManifest,
         health: VoicePackHealth,
         engine_mode: VoiceEngineMode,
+        warm_generation: u64,
         ui_tx: &mpsc::Sender<VoiceUiEvent>,
     ) {
         let _ = self.tx.send(VoiceTranscriberCommand::Prepare {
             manifest,
             health,
             engine_mode,
+            warm_generation,
             ui_tx: ui_tx.clone(),
         });
     }
@@ -331,9 +363,10 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 manifest,
                 health,
                 engine_mode,
+                warm_generation,
                 ui_tx,
             } => {
-                if let Err(message) = ensure_voice_helper(
+                match ensure_voice_helper(
                     &mut transcriber,
                     &mut current_engine_mode,
                     &mut model_warmed,
@@ -341,7 +374,31 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                     health,
                     engine_mode,
                 ) {
-                    let _ = ui_tx.send(VoiceUiEvent::Error(message));
+                    Ok(()) => match warm_voice_model(transcriber.as_mut()) {
+                        Ok(()) => {
+                            model_warmed = true;
+                            let _ = ui_tx.send(VoiceUiEvent::WarmReady(warm_generation));
+                        }
+                        Err(message) => {
+                            if let Some(transcriber) = transcriber.take() {
+                                let _ = transcriber.shutdown();
+                            }
+                            current_engine_mode = None;
+                            model_warmed = false;
+                            let _ = ui_tx.send(VoiceUiEvent::WarmFailed {
+                                generation: warm_generation,
+                                message,
+                            });
+                        }
+                    },
+                    Err(message) => {
+                        current_engine_mode = None;
+                        model_warmed = false;
+                        let _ = ui_tx.send(VoiceUiEvent::WarmFailed {
+                            generation: warm_generation,
+                            message,
+                        });
+                    }
                 }
             }
             VoiceTranscriberCommand::Start {
@@ -361,13 +418,8 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 )
                 .and_then(|_| {
                     if !model_warmed {
-                        let _ = ui_tx.send(VoiceUiEvent::Status(
-                            "Warming voice model… first use can take a while".into(),
-                        ));
-                        warm_voice_model(transcriber.as_mut(), &ui_tx)?;
-                        model_warmed = true;
                         let _ = ui_tx.send(VoiceUiEvent::ListeningCancelled(
-                            "Voice model ready. Press the voice hotkey again to dictate.".into(),
+                            "Voice model is preparing; try again shortly.".into(),
                         ));
                         return Ok(());
                     }
@@ -472,10 +524,7 @@ fn ensure_voice_helper(
     Ok(())
 }
 
-fn warm_voice_model(
-    transcriber: Option<&mut ParakeetTranscriber>,
-    ui_tx: &mpsc::Sender<VoiceUiEvent>,
-) -> Result<(), String> {
+fn warm_voice_model(transcriber: Option<&mut ParakeetTranscriber>) -> Result<(), String> {
     let Some(transcriber) = transcriber else {
         return Err("voice transcriber unavailable".into());
     };
@@ -487,10 +536,10 @@ fn warm_voice_model(
         .capabilities()
         .map_err(|error| format!("{error:?}"))?;
     let elapsed_ms = warm_started.elapsed().as_millis();
-    let _ = ui_tx.send(VoiceUiEvent::Status(format!(
+    logging::info(format!(
         "Voice model ready in {elapsed_ms}ms ({}, streaming={})",
         capabilities.device, capabilities.streaming
-    )));
+    ));
     Ok(())
 }
 
@@ -788,6 +837,9 @@ fn present_with_initial_workspace(
     let voice_transcriber = Rc::new(VoiceTranscriberHandle::start());
     let voice_listening = Rc::new(Cell::new(false));
     let voice_starting = Rc::new(Cell::new(false));
+    let voice_warm_state = Rc::new(Cell::new(VoiceWarmState::Cold));
+    let voice_warm_generation = Rc::new(Cell::new(0_u64));
+    let voice_warm_error = Rc::new(RefCell::new(None::<String>));
     let voice_global_hotkey = Rc::new(RefCell::new(None::<VoiceGlobalHotkeyRegistration>));
     let (voice_event_tx, voice_event_rx) = mpsc::channel::<VoiceUiEvent>();
     let quit_requested = Rc::new(Cell::new(false));
@@ -845,10 +897,41 @@ fn present_with_initial_workspace(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
+        let voice_warm_state = voice_warm_state.clone();
+        let voice_warm_generation = voice_warm_generation.clone();
+        let voice_warm_error = voice_warm_error.clone();
         let voice_event_tx_for_handler = voice_event_tx.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
             while let Ok(event) = voice_event_rx.try_recv() {
                 match event {
+                    VoiceUiEvent::WarmRequested => {
+                        warm_voice_engine_if_ready(
+                            &preference_store,
+                            &voice_transcriber,
+                            &voice_event_tx_for_handler,
+                            &voice_warm_state,
+                            &voice_warm_generation,
+                            &voice_warm_error,
+                        );
+                    }
+                    VoiceUiEvent::WarmReady(generation) => {
+                        if generation != voice_warm_generation.get() {
+                            continue;
+                        }
+                        voice_warm_state.set(VoiceWarmState::Ready);
+                        voice_warm_error.borrow_mut().take();
+                    }
+                    VoiceUiEvent::WarmFailed {
+                        generation,
+                        message,
+                    } => {
+                        if generation != voice_warm_generation.get() {
+                            continue;
+                        }
+                        voice_warm_state.set(VoiceWarmState::Failed);
+                        voice_warm_error.replace(Some(message.clone()));
+                        logging::error(format!("voice model warm-up failed: {message}"));
+                    }
                     VoiceUiEvent::ListeningStarted => {
                         voice_starting.set(false);
                         voice_listening.set(true);
@@ -918,6 +1001,9 @@ fn present_with_initial_workspace(
                                         &voice_transcriber,
                                         &voice_listening,
                                         &voice_starting,
+                                        &voice_warm_state,
+                                        &voice_warm_generation,
+                                        &voice_warm_error,
                                         &voice_event_tx_for_handler,
                                     );
                                 }
@@ -932,6 +1018,19 @@ fn present_with_initial_workspace(
                             && !voice_listening.get()
                         {
                             voice_transcriber.reset();
+                            reset_voice_warm_tracking(
+                                &voice_warm_state,
+                                &voice_warm_generation,
+                                &voice_warm_error,
+                            );
+                            warm_voice_engine_if_ready(
+                                &preference_store,
+                                &voice_transcriber,
+                                &voice_event_tx_for_handler,
+                                &voice_warm_state,
+                                &voice_warm_generation,
+                                &voice_warm_error,
+                            );
                             voice_hud.show("Voice capture cancelled", None);
                         } else if voice.enabled
                             && voice.activation_mode == VoiceActivationMode::PushToTalk
@@ -964,6 +1063,9 @@ fn present_with_initial_workspace(
         voice_transcriber.clone(),
         voice_listening.clone(),
         voice_starting.clone(),
+        voice_warm_state.clone(),
+        voice_warm_generation.clone(),
+        voice_warm_error.clone(),
         voice_event_tx.clone(),
     );
 
@@ -1661,6 +1763,9 @@ fn present_with_initial_workspace(
         let options_for_settings = options.clone();
         let voice_transcriber_for_settings = voice_transcriber.clone();
         let voice_event_tx_for_settings = voice_event_tx.clone();
+        let voice_warm_state_for_settings = voice_warm_state.clone();
+        let voice_warm_generation_for_settings = voice_warm_generation.clone();
+        let voice_warm_error_for_settings = voice_warm_error.clone();
 
         Rc::new(move || {
             let preferences = preference_store_for_settings.load();
@@ -1957,17 +2062,28 @@ fn present_with_initial_workspace(
                         let toast_overlay = toast_overlay_for_settings.clone();
                         let voice_transcriber = voice_transcriber_for_settings.clone();
                         let voice_event_tx = voice_event_tx_for_settings.clone();
+                        let voice_warm_state = voice_warm_state_for_settings.clone();
+                        let voice_warm_generation = voice_warm_generation_for_settings.clone();
+                        let voice_warm_error = voice_warm_error_for_settings.clone();
                         move |voice| {
                             let previous_voice = preference_store.load().voice;
                             preference_store.save_voice_preferences(voice.clone());
                             if !voice.enabled || previous_voice.engine_mode != voice.engine_mode {
                                 voice_transcriber.reset();
+                                reset_voice_warm_tracking(
+                                    &voice_warm_state,
+                                    &voice_warm_generation,
+                                    &voice_warm_error,
+                                );
                             }
                             if voice.enabled {
                                 warm_voice_engine_if_ready(
                                     &preference_store,
                                     &voice_transcriber,
                                     &voice_event_tx,
+                                    &voice_warm_state,
+                                    &voice_warm_generation,
+                                    &voice_warm_error,
                                 );
                             }
                             logging::info(format!(
@@ -1996,8 +2112,16 @@ fn present_with_initial_workspace(
                         let preference_store = preference_store_for_settings.as_ref().clone();
                         let voice_event_tx = voice_event_tx_for_settings.clone();
                         let voice_transcriber = voice_transcriber_for_settings.clone();
+                        let voice_warm_state = voice_warm_state_for_settings.clone();
+                        let voice_warm_generation = voice_warm_generation_for_settings.clone();
+                        let voice_warm_error = voice_warm_error_for_settings.clone();
                         move || {
                             voice_transcriber.reset();
+                            reset_voice_warm_tracking(
+                                &voice_warm_state,
+                                &voice_warm_generation,
+                                &voice_warm_error,
+                            );
                             let Some(root) = pack::default_voice_pack_dir() else {
                                 show_toast(
                                     &toast_overlay,
@@ -2072,8 +2196,11 @@ fn present_with_initial_workspace(
                                                                     detail
                                                                 ));
                                                                 let _ = voice_event_tx.send(VoiceUiEvent::Toast(
-                                                                    "NVIDIA Parakeet voice pack installed; model will warm on first use".into(),
+                                                                    "NVIDIA Parakeet voice pack installed; warming model in the background".into(),
                                                                 ));
+                                                                let _ = voice_event_tx.send(
+                                                                    VoiceUiEvent::WarmRequested,
+                                                                );
                                                             }
                                                             Ok(VoiceEngineEvent::Health {
                                                                 detail,
@@ -2181,8 +2308,16 @@ fn present_with_initial_workspace(
                         let preference_store = preference_store_for_settings.as_ref().clone();
                         let voice_event_tx = voice_event_tx_for_settings.clone();
                         let voice_transcriber = voice_transcriber_for_settings.clone();
+                        let voice_warm_state = voice_warm_state_for_settings.clone();
+                        let voice_warm_generation = voice_warm_generation_for_settings.clone();
+                        let voice_warm_error = voice_warm_error_for_settings.clone();
                         move || {
                             voice_transcriber.reset();
+                            reset_voice_warm_tracking(
+                                &voice_warm_state,
+                                &voice_warm_generation,
+                                &voice_warm_error,
+                            );
                             let manifest = pack::builtin_parakeet_manifest();
                             let Some(root) = pack::default_voice_pack_dir() else {
                                 show_toast(
@@ -2922,7 +3057,14 @@ fn present_with_initial_workspace(
 
     window.present();
 
-    warm_voice_engine_if_ready(&preference_store, &voice_transcriber, &voice_event_tx);
+    warm_voice_engine_if_ready(
+        &preference_store,
+        &voice_transcriber,
+        &voice_event_tx,
+        &voice_warm_state,
+        &voice_warm_generation,
+        &voice_warm_error,
+    );
 
     if dialog_smoke::is_enabled() {
         dialog_smoke::start(&window);
@@ -4245,6 +4387,9 @@ fn install_voice_hotkey_controller(
     voice_transcriber: Rc<VoiceTranscriberHandle>,
     voice_listening: Rc<Cell<bool>>,
     voice_starting: Rc<Cell<bool>>,
+    voice_warm_state: Rc<Cell<VoiceWarmState>>,
+    voice_warm_generation: Rc<Cell<u64>>,
+    voice_warm_error: Rc<RefCell<Option<String>>>,
     voice_event_tx: mpsc::Sender<VoiceUiEvent>,
 ) {
     if let Some(existing) = controller_handle.borrow_mut().take() {
@@ -4263,6 +4408,9 @@ fn install_voice_hotkey_controller(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
+        let voice_warm_state = voice_warm_state.clone();
+        let voice_warm_generation = voice_warm_generation.clone();
+        let voice_warm_error = voice_warm_error.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_pressed(move |_, key, _, state| {
             let preferences = preference_store.load();
@@ -4297,6 +4445,9 @@ fn install_voice_hotkey_controller(
                             &voice_transcriber,
                             &voice_listening,
                             &voice_starting,
+                            &voice_warm_state,
+                            &voice_warm_generation,
+                            &voice_warm_error,
                             &voice_event_tx,
                         );
                     }
@@ -4313,6 +4464,9 @@ fn install_voice_hotkey_controller(
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
+        let voice_warm_state = voice_warm_state.clone();
+        let voice_warm_generation = voice_warm_generation.clone();
+        let voice_warm_error = voice_warm_error.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_released(move |_, key, _, state| {
             let preferences = preference_store.load();
@@ -4324,6 +4478,19 @@ fn install_voice_hotkey_controller(
             }
             if voice_starting.replace(false) && !voice_listening.get() {
                 voice_transcriber.reset();
+                reset_voice_warm_tracking(
+                    &voice_warm_state,
+                    &voice_warm_generation,
+                    &voice_warm_error,
+                );
+                warm_voice_engine_if_ready(
+                    &preference_store,
+                    &voice_transcriber,
+                    &voice_event_tx,
+                    &voice_warm_state,
+                    &voice_warm_generation,
+                    &voice_warm_error,
+                );
                 voice_hud.show("Voice capture cancelled", None);
             } else {
                 stop_voice_capture(
@@ -4379,13 +4546,38 @@ fn start_voice_pack_progress_heartbeat(
     (stop, handle)
 }
 
+fn reset_voice_warm_tracking(
+    voice_warm_state: &Rc<Cell<VoiceWarmState>>,
+    voice_warm_generation: &Rc<Cell<u64>>,
+    voice_warm_error: &Rc<RefCell<Option<String>>>,
+) {
+    voice_warm_generation.set(voice_warm_generation.get().wrapping_add(1));
+    voice_warm_state.set(VoiceWarmState::Cold);
+    voice_warm_error.borrow_mut().take();
+}
+
+fn reserve_voice_warm_generation(voice_warm_generation: &Rc<Cell<u64>>) -> u64 {
+    let generation = voice_warm_generation.get().wrapping_add(1);
+    voice_warm_generation.set(generation);
+    generation
+}
+
 fn warm_voice_engine_if_ready(
     preference_store: &PreferenceStore,
     voice_transcriber: &VoiceTranscriberHandle,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
+    voice_warm_state: &Rc<Cell<VoiceWarmState>>,
+    voice_warm_generation: &Rc<Cell<u64>>,
+    voice_warm_error: &Rc<RefCell<Option<String>>>,
 ) {
     let voice = preference_store.load().voice;
     if !voice.enabled {
+        return;
+    }
+    if matches!(
+        voice_warm_state.get(),
+        VoiceWarmState::Warming | VoiceWarmState::Ready
+    ) {
         return;
     }
     if !matches!(voice.pack_status, VoicePackStatus::Installed { .. }) {
@@ -4397,7 +4589,16 @@ fn warm_voice_engine_if_ready(
     };
     let health = pack::health_check(&root, &manifest);
     if matches!(health, VoicePackHealth::Ready { .. }) {
-        voice_transcriber.prepare(manifest, health, voice.engine_mode, voice_event_tx);
+        let generation = reserve_voice_warm_generation(voice_warm_generation);
+        voice_warm_state.set(VoiceWarmState::Warming);
+        voice_warm_error.borrow_mut().take();
+        voice_transcriber.prepare(
+            manifest,
+            health,
+            voice.engine_mode,
+            generation,
+            voice_event_tx,
+        );
     }
 }
 
@@ -4411,6 +4612,9 @@ fn start_voice_capture(
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
     voice_starting: &Rc<Cell<bool>>,
+    voice_warm_state: &Rc<Cell<VoiceWarmState>>,
+    voice_warm_generation: &Rc<Cell<u64>>,
+    voice_warm_error: &Rc<RefCell<Option<String>>>,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
     let preferences = preference_store.load();
@@ -4448,6 +4652,34 @@ fn start_voice_capture(
             "Install the NVIDIA Parakeet voice pack in Settings first",
         );
         return;
+    }
+
+    match voice_hotkey_warm_gate(voice_warm_state.get()) {
+        VoiceHotkeyWarmGate::StartCapture => {}
+        VoiceHotkeyWarmGate::WaitForWarm => {
+            voice_hud.show("Voice model is preparing", Some("Try again shortly"));
+            return;
+        }
+        VoiceHotkeyWarmGate::RequestWarm => {
+            warm_voice_engine_if_ready(
+                preference_store,
+                voice_transcriber,
+                voice_event_tx,
+                voice_warm_state,
+                voice_warm_generation,
+                voice_warm_error,
+            );
+            voice_hud.show("Voice model is preparing", Some("Try again shortly"));
+            return;
+        }
+        VoiceHotkeyWarmGate::ReportFailure => {
+            let detail = voice_warm_error
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| "Run a voice runtime health check from Settings".into());
+            voice_hud.show("Voice model failed to warm", Some(&detail));
+            return;
+        }
     }
 
     voice_listening.set(false);
@@ -5490,8 +5722,9 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        VOICE_AUDIO_FLUSH_INTERVAL, WorkspaceTab, move_item_to_position, move_tab_to_position,
-        next_active_index_after_detach, preview_index_for_pointer,
+        VOICE_AUDIO_FLUSH_INTERVAL, VoiceHotkeyWarmGate, VoiceWarmState, WorkspaceTab,
+        move_item_to_position, move_tab_to_position, next_active_index_after_detach,
+        preview_index_for_pointer, voice_hotkey_warm_gate,
     };
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
@@ -5550,6 +5783,26 @@ mod tests {
     #[test]
     fn voice_audio_flush_cadence_targets_low_latency_chunks() {
         assert_eq!(VOICE_AUDIO_FLUSH_INTERVAL.as_millis(), 250);
+    }
+
+    #[test]
+    fn voice_hotkey_waits_until_background_warm_is_ready() {
+        assert_eq!(
+            voice_hotkey_warm_gate(VoiceWarmState::Cold),
+            VoiceHotkeyWarmGate::RequestWarm
+        );
+        assert_eq!(
+            voice_hotkey_warm_gate(VoiceWarmState::Warming),
+            VoiceHotkeyWarmGate::WaitForWarm
+        );
+        assert_eq!(
+            voice_hotkey_warm_gate(VoiceWarmState::Ready),
+            VoiceHotkeyWarmGate::StartCapture
+        );
+        assert_eq!(
+            voice_hotkey_warm_gate(VoiceWarmState::Failed),
+            VoiceHotkeyWarmGate::ReportFailure
+        );
     }
 
     #[test]
