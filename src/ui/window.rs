@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -477,18 +477,27 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 };
                 let released_at = Instant::now();
                 let partial_tx = ui_tx.clone();
+                logging::info("voice capture finalization started");
                 let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
                     let _ = partial_tx.send(VoiceUiEvent::Partial(partial));
                 });
                 match result {
                     Ok(text) => {
                         let elapsed_ms = released_at.elapsed().as_millis();
+                        logging::info(format!(
+                            "voice capture finalized text_len={} elapsed_ms={elapsed_ms}",
+                            text.len()
+                        ));
                         let _ = ui_tx.send(VoiceUiEvent::Status(format!(
                             "Final after release in {elapsed_ms}ms"
                         )));
                         let _ = ui_tx.send(VoiceUiEvent::Final(text));
                     }
                     Err(error) => {
+                        let elapsed_ms = released_at.elapsed().as_millis();
+                        logging::error(format!(
+                            "voice capture finalization failed after {elapsed_ms}ms: {error:?}"
+                        ));
                         let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
                     }
                 }
@@ -550,6 +559,20 @@ fn warm_voice_model(transcriber: Option<&mut ParakeetTranscriber>) -> Result<(),
         capabilities.device, capabilities.streaming
     ));
     Ok(())
+}
+
+fn refresh_builtin_voice_pack_assets_for_runtime(root: &Path) -> Result<(), String> {
+    match pack::refresh_builtin_parakeet_pack_assets(root) {
+        Ok(Some(manifest)) => {
+            logging::info(format!(
+                "refreshed bundled NVIDIA Parakeet voice pack assets id={} version={}",
+                manifest.id, manifest.version
+            ));
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(error) => Err(format!("{error:?}")),
+    }
 }
 
 enum VoiceGlobalHotkeyRegistration {
@@ -2439,56 +2462,70 @@ fn present_with_initial_workspace(
                             let preference_store = preference_store.clone();
                             let voice_event_tx = voice_event_tx.clone();
                             std::thread::spawn(move || {
-                                let toast = match pack::health_check(&root, &manifest) {
-                                    health @ VoicePackHealth::Ready { .. } => {
-                                        let engine_mode = preference_store.load().voice.engine_mode;
-                                        match engine::run_voice_engine_health_check(
-                                            &manifest,
-                                            health,
-                                            engine_mode,
-                                        ) {
-                                            Ok(VoiceEngineEvent::Health { ok, detail }) if ok => {
-                                                logging::info(format!(
-                                                    "NVIDIA Parakeet runtime health check passed id={} version={} root={} detail={}",
-                                                    manifest.id,
-                                                    manifest.version,
-                                                    root.display(),
-                                                    detail
-                                                ));
-                                                "NVIDIA Parakeet runtime is healthy".to_string()
-                                            }
-                                            Ok(VoiceEngineEvent::Health { detail, .. })
-                                            | Ok(VoiceEngineEvent::Error(detail)) => {
-                                                logging::error(format!(
-                                                    "NVIDIA Parakeet runtime health check failed: {detail}"
-                                                ));
-                                                "NVIDIA Parakeet runtime dependencies are missing"
-                                                    .to_string()
-                                            }
-                                            Ok(other) => {
-                                                logging::error(format!(
-                                                    "unexpected NVIDIA Parakeet health event: {other:?}"
-                                                ));
-                                                "NVIDIA Parakeet health check was inconclusive"
-                                                    .to_string()
-                                            }
-                                            Err(error) => {
-                                                logging::error(format!(
-                                                    "failed to run NVIDIA Parakeet runtime health check: {error}"
-                                                ));
-                                                "Failed to run NVIDIA Parakeet health check"
-                                                    .to_string()
+                                let toast = match refresh_builtin_voice_pack_assets_for_runtime(
+                                    &root,
+                                ) {
+                                    Ok(()) => match pack::health_check(&root, &manifest) {
+                                        health @ VoicePackHealth::Ready { .. } => {
+                                            let engine_mode =
+                                                preference_store.load().voice.engine_mode;
+                                            match engine::run_voice_engine_health_check(
+                                                &manifest,
+                                                health,
+                                                engine_mode,
+                                            ) {
+                                                Ok(VoiceEngineEvent::Health { ok, detail })
+                                                    if ok =>
+                                                {
+                                                    logging::info(format!(
+                                                        "NVIDIA Parakeet runtime health check passed id={} version={} root={} detail={}",
+                                                        manifest.id,
+                                                        manifest.version,
+                                                        root.display(),
+                                                        detail
+                                                    ));
+                                                    "NVIDIA Parakeet runtime is healthy".to_string()
+                                                }
+                                                Ok(VoiceEngineEvent::Health { detail, .. })
+                                                | Ok(VoiceEngineEvent::Error(detail)) => {
+                                                    logging::error(format!(
+                                                        "NVIDIA Parakeet runtime health check failed: {detail}"
+                                                    ));
+                                                    "NVIDIA Parakeet runtime dependencies are missing"
+                                                        .to_string()
+                                                }
+                                                Ok(other) => {
+                                                    logging::error(format!(
+                                                        "unexpected NVIDIA Parakeet health event: {other:?}"
+                                                    ));
+                                                    "NVIDIA Parakeet health check was inconclusive"
+                                                        .to_string()
+                                                }
+                                                Err(error) => {
+                                                    logging::error(format!(
+                                                        "failed to run NVIDIA Parakeet runtime health check: {error}"
+                                                    ));
+                                                    "Failed to run NVIDIA Parakeet health check"
+                                                        .to_string()
+                                                }
                                             }
                                         }
-                                    }
-                                    VoicePackHealth::Missing => {
-                                        "NVIDIA Parakeet voice pack is not installed".to_string()
-                                    }
-                                    VoicePackHealth::Broken(message) => {
+                                        VoicePackHealth::Missing => {
+                                            "NVIDIA Parakeet voice pack is not installed"
+                                                .to_string()
+                                        }
+                                        VoicePackHealth::Broken(message) => {
+                                            logging::error(format!(
+                                                "NVIDIA Parakeet voice pack health check failed: {message}"
+                                            ));
+                                            "NVIDIA Parakeet voice pack is incomplete".to_string()
+                                        }
+                                    },
+                                    Err(detail) => {
                                         logging::error(format!(
-                                            "NVIDIA Parakeet voice pack health check failed: {message}"
+                                            "NVIDIA Parakeet voice pack refresh failed before health check: {detail}"
                                         ));
-                                        "NVIDIA Parakeet voice pack is incomplete".to_string()
+                                        "NVIDIA Parakeet voice pack refresh failed".to_string()
                                     }
                                 };
                                 let _ = voice_event_tx.send(VoiceUiEvent::Toast(toast));
@@ -4711,6 +4748,14 @@ fn warm_voice_engine_if_ready(
     let Some(root) = pack::default_voice_pack_dir() else {
         return;
     };
+    if let Err(detail) = refresh_builtin_voice_pack_assets_for_runtime(&root) {
+        logging::error(format!(
+            "voice model warm-up blocked: could not refresh bundled voice pack assets: {detail}"
+        ));
+        voice_warm_state.set(VoiceWarmState::Failed);
+        voice_warm_error.replace(Some(format!("Voice pack refresh failed: {detail}")));
+        return;
+    }
     let health = pack::health_check(&root, &manifest);
     if matches!(health, VoicePackHealth::Ready { .. }) {
         let generation = reserve_voice_warm_generation(voice_warm_generation);
@@ -4778,6 +4823,14 @@ fn start_voice_capture(
         );
         return;
     };
+    if let Err(detail) = refresh_builtin_voice_pack_assets_for_runtime(&root) {
+        logging::error(format!(
+            "voice capture start blocked: could not refresh bundled voice pack assets: {detail}"
+        ));
+        voice_hud.show("Voice pack refresh failed", Some(&detail));
+        show_toast(toast_overlay, "Voice pack refresh failed");
+        return;
+    }
     let health = pack::health_check(&root, &manifest);
     if !matches!(health, VoicePackHealth::Ready { .. }) {
         logging::info("voice capture start blocked: voice pack not ready");

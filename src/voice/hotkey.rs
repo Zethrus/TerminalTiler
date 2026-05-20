@@ -94,6 +94,8 @@ fn canonical_key(key: &str) -> String {
         "semicolon" | ";" => "semicolon".into(),
         "apostrophe" | "'" => "apostrophe".into(),
         "grave" | "`" => "grave".into(),
+        "less" | "<" => "less".into(),
+        "greater" | ">" => "greater".into(),
         "bracketleft" | "[" => "bracketleft".into(),
         "bracketright" | "]" => "bracketright".into(),
         other => other.to_ascii_uppercase(),
@@ -135,6 +137,11 @@ mod tests {
         assert_eq!(
             HotkeySpec::parse("<Control><Alt>period").unwrap().key,
             "period"
+        );
+        assert_eq!(HotkeySpec::parse("<Control><Alt>less").unwrap().key, "less");
+        assert_eq!(
+            HotkeySpec::parse("<Control><Alt>greater").unwrap().key,
+            "greater"
         );
     }
 

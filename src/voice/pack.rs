@@ -69,11 +69,32 @@ pub fn builtin_parakeet_manifest() -> VoicePackManifest {
 pub fn install_builtin_parakeet_pack(root: &Path) -> Result<VoicePackManifest, VoicePackError> {
     let manifest = builtin_parakeet_manifest();
     let pack_root = root.join(&manifest.id).join(&manifest.version);
-    fs::create_dir_all(&pack_root)?;
-    fs::write(
-        pack_root.join(&manifest.engine_executable),
-        BUILTIN_PARAKEET_ENGINE,
-    )?;
+    write_builtin_parakeet_pack_assets(&pack_root, &manifest)?;
+    Ok(manifest)
+}
+
+pub fn refresh_builtin_parakeet_pack_assets(
+    root: &Path,
+) -> Result<Option<VoicePackManifest>, VoicePackError> {
+    let manifest = builtin_parakeet_manifest();
+    let pack_root = pack_root(root, &manifest);
+    if !pack_root.exists() {
+        return Ok(None);
+    }
+    write_builtin_parakeet_pack_assets(&pack_root, &manifest)?;
+    Ok(Some(manifest))
+}
+
+fn write_builtin_parakeet_pack_assets(
+    pack_root: &Path,
+    manifest: &VoicePackManifest,
+) -> Result<(), VoicePackError> {
+    fs::create_dir_all(pack_root)?;
+    let engine_path = pack_root.join(&manifest.engine_executable);
+    if let Some(parent) = engine_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(engine_path, BUILTIN_PARAKEET_ENGINE)?;
     fs::create_dir_all(pack_root.join(&manifest.model_path))?;
     fs::write(pack_root.join("manifest.toml"), BUILTIN_PARAKEET_MANIFEST)?;
     if !manifest.python_requirements.is_empty() {
@@ -82,7 +103,7 @@ pub fn install_builtin_parakeet_pack(root: &Path) -> Result<VoicePackManifest, V
             format!("{}\n", manifest.python_requirements.join("\n")),
         )?;
     }
-    Ok(manifest)
+    Ok(())
 }
 
 pub fn pack_root(root: &Path, manifest: &VoicePackManifest) -> PathBuf {
@@ -438,6 +459,53 @@ mod tests {
         ));
         assert!(delete_pack(&root, &manifest).unwrap());
         assert_eq!(health_check(&root, &manifest), VoicePackHealth::Missing);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_builtin_parakeet_pack_rewrites_assets_without_deleting_cache_or_venv() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-builtin-pack-refresh-{}",
+            Uuid::new_v4()
+        ));
+        let manifest = builtin_parakeet_manifest();
+        let pack_root = pack_root(&root, &manifest);
+        let venv_sentinel = pack_root.join(".venv").join("sentinel.txt");
+        let cache_sentinel = pack_root
+            .join(&manifest.model_path)
+            .join("model-sentinel.txt");
+        fs::create_dir_all(venv_sentinel.parent().unwrap()).unwrap();
+        fs::create_dir_all(cache_sentinel.parent().unwrap()).unwrap();
+        fs::write(
+            pack_root.join(&manifest.engine_executable),
+            "# stale helper",
+        )
+        .unwrap();
+        fs::write(pack_root.join("manifest.toml"), "stale = true").unwrap();
+        fs::write(pack_root.join("requirements.txt"), "stale-requirement").unwrap();
+        fs::write(&venv_sentinel, "keep venv").unwrap();
+        fs::write(&cache_sentinel, "keep cache").unwrap();
+
+        assert_eq!(
+            refresh_builtin_parakeet_pack_assets(&root).unwrap(),
+            Some(manifest.clone())
+        );
+
+        let refreshed_engine =
+            fs::read_to_string(pack_root.join(&manifest.engine_executable)).unwrap();
+        assert!(refreshed_engine.contains("audio-final-pcm16-hex"));
+        assert!(
+            fs::read_to_string(pack_root.join("manifest.toml"))
+                .unwrap()
+                .contains("nvidia-parakeet-tdt-0.6b-v2-nemo")
+        );
+        assert!(
+            fs::read_to_string(pack_root.join("requirements.txt"))
+                .unwrap()
+                .contains("nemo_toolkit")
+        );
+        assert_eq!(fs::read_to_string(venv_sentinel).unwrap(), "keep venv");
+        assert_eq!(fs::read_to_string(cache_sentinel).unwrap(), "keep cache");
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -175,7 +175,7 @@ impl ParakeetTranscriber {
             })
             .map_err(ParakeetTranscriberError::from)?;
         if !samples.is_empty() {
-            self.send_final_audio_compat(samples)?;
+            self.send_final_audio(samples)?;
         }
         self.read_final(on_partial)
     }
@@ -186,21 +186,14 @@ impl ParakeetTranscriber {
         on_partial: impl FnMut(String),
     ) -> Result<String, ParakeetTranscriberError> {
         if !samples.is_empty() {
-            self.send_final_audio_compat(samples)?;
+            self.send_final_audio(samples)?;
         }
         self.read_final(on_partial)
     }
 
-    fn send_final_audio_compat(
-        &mut self,
-        samples: Vec<i16>,
-    ) -> Result<(), ParakeetTranscriberError> {
-        // Some installed voice packs predate the no-partial final-audio frame
-        // and answer `unknown command: audio-final-pcm16-hex`. The ordinary
-        // streaming audio frame carries the same PCM bytes and works with both
-        // old and new helpers; Stop still triggers the final transcript.
+    fn send_final_audio(&mut self, samples: Vec<i16>) -> Result<(), ParakeetTranscriberError> {
         self.engine
-            .send(&VoiceEngineRequest::AudioPcm16(samples))
+            .send(&VoiceEngineRequest::FinalAudioPcm16(samples))
             .map_err(ParakeetTranscriberError::from)
     }
 
@@ -318,33 +311,32 @@ mod tests {
     }
 
     #[test]
-    fn final_audio_uses_streaming_frame_for_legacy_helper_compatibility() {
+    fn final_audio_uses_no_partial_frame_for_release_buffer() {
         let root = std::env::temp_dir().join(format!(
-            "terminaltiler-transcriber-final-compat-{}",
+            "terminaltiler-transcriber-final-frame-{}",
             uuid::Uuid::new_v4()
         ));
-        let pack_root = root.join("legacy-final").join("1");
+        let pack_root = root.join("final-frame").join("1");
         std::fs::create_dir_all(pack_root.join("model")).unwrap();
-        let engine_path = pack_root.join("legacy_engine.py");
+        let engine_path = pack_root.join("final_frame_engine.py");
         std::fs::write(
             &engine_path,
             r#"#!/usr/bin/env python3
 import sys
-received_audio = False
+received_final_audio = False
 def emit(kind, payload=""):
     print(f"{kind} {payload}" if payload else kind, flush=True)
-emit("ready", "legacy-helper")
+emit("ready", "final-frame-helper")
 for raw in sys.stdin:
     kind, _, _payload = raw.rstrip("\n").partition(" ")
     if kind == "start":
         emit("ready", "started")
     elif kind == "audio-pcm16-hex":
-        received_audio = True
-        emit("partial", "received audio")
+        emit("error", "unexpected streaming audio during finalization")
     elif kind == "audio-final-pcm16-hex":
-        emit("error", "unknown command: audio-final-pcm16-hex")
+        received_final_audio = True
     elif kind == "stop":
-        emit("final", "legacy transcript" if received_audio else "")
+        emit("final", "final transcript" if received_final_audio else "")
     elif kind == "shutdown":
         emit("ready", "shutdown")
         raise SystemExit(0)
@@ -354,11 +346,11 @@ for raw in sys.stdin:
         )
         .unwrap();
         let manifest = VoicePackManifest {
-            id: "legacy-final".into(),
+            id: "final-frame".into(),
             version: "1".into(),
-            engine_executable: "legacy_engine.py".into(),
+            engine_executable: "final_frame_engine.py".into(),
             model_path: "model".into(),
-            archive_url: "builtin://legacy-final".into(),
+            archive_url: "builtin://final-frame".into(),
             archive_sha256: "builtin".into(),
             model_name: "legacy/offline".into(),
             streaming_model_name: "legacy/streaming".into(),
@@ -373,7 +365,7 @@ for raw in sys.stdin:
 
         assert_eq!(
             transcriber.transcribe_pcm16(vec![1, -2, 0x1234]).unwrap(),
-            "legacy transcript"
+            "final transcript"
         );
 
         transcriber.shutdown().unwrap();

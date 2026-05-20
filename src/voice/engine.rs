@@ -714,7 +714,9 @@ class FakeModel:
         FakeModel.calls += 1
         if FakeModel.calls == 1:
             return [Transcript("cargo")]
-        return [Transcript("cargo cargo test")]
+        if FakeModel.calls == 2:
+            return [Transcript("cargo cargo test")]
+        return [Transcript("cargo cargo test extra")]
 class ASRModel:
     @staticmethod
     def from_pretrained(model_name):
