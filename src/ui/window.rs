@@ -998,6 +998,15 @@ fn present_with_initial_workspace(
                     }
                     VoiceUiEvent::HotkeyPressed => {
                         let voice = preference_store.load().voice;
+                        logging::info(format!(
+                            "voice hotkey pressed enabled={} mode={} listening={} starting={} stopping={} warm={:?}",
+                            voice.enabled,
+                            voice.activation_mode.label(),
+                            voice_listening.get(),
+                            voice_starting.get(),
+                            voice_stopping.get(),
+                            voice_warm_state.get(),
+                        ));
                         if !voice.enabled {
                             continue;
                         }
@@ -1031,12 +1040,27 @@ fn present_with_initial_workspace(
                                         &voice_warm_error,
                                         &voice_event_tx_for_handler,
                                     );
+                                } else {
+                                    logging::info(format!(
+                                        "voice hotkey press ignored while busy listening={} starting={} stopping={}",
+                                        voice_listening.get(),
+                                        voice_starting.get(),
+                                        voice_stopping.get(),
+                                    ));
                                 }
                             }
                         }
                     }
                     VoiceUiEvent::HotkeyReleased => {
                         let voice = preference_store.load().voice;
+                        logging::info(format!(
+                            "voice hotkey released enabled={} mode={} listening={} starting={} stopping={}",
+                            voice.enabled,
+                            voice.activation_mode.label(),
+                            voice_listening.get(),
+                            voice_starting.get(),
+                            voice_stopping.get(),
+                        ));
                         if voice.enabled
                             && voice.activation_mode == VoiceActivationMode::PushToTalk
                             && voice_starting.replace(false)
@@ -4352,7 +4376,7 @@ fn sync_linux_voice_global_hotkey(
     voice: &crate::voice::VoicePreferences,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
-    if !voice.enabled || !voice.prefer_global_hotkey {
+    if !should_register_linux_voice_global_hotkey(voice) {
         registration.borrow_mut().take();
         return;
     }
@@ -4377,6 +4401,7 @@ fn sync_linux_voice_global_hotkey(
             let ui_tx = voice_event_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(event) = global_rx.recv() {
+                    logging::info(format!("voice global hotkey event={event:?}"));
                     let _ = ui_tx.send(match event {
                         LinuxGlobalHotkeyEvent::Pressed => VoiceUiEvent::HotkeyPressed,
                         LinuxGlobalHotkeyEvent::Released => VoiceUiEvent::HotkeyReleased,
@@ -4391,6 +4416,11 @@ fn sync_linux_voice_global_hotkey(
             ));
         }
     }
+}
+
+fn should_register_linux_voice_global_hotkey(voice: &crate::voice::VoicePreferences) -> bool {
+    voice.enabled
+        && (voice.prefer_global_hotkey || voice.activation_mode == VoiceActivationMode::PushToTalk)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4438,6 +4468,7 @@ fn install_voice_hotkey_controller(
             if !voice_key_event_matches(&voice.hotkey, key, state) {
                 return glib::Propagation::Proceed;
             }
+            logging::info("voice local hotkey press matched");
 
             if !voice.enabled {
                 voice_hud.show("Voice disabled", None);
@@ -4496,6 +4527,7 @@ fn install_voice_hotkey_controller(
             {
                 return;
             }
+            logging::info("voice local hotkey release matched");
             if voice_starting.replace(false) && !voice_listening.get() {
                 finish_pending_voice_capture(
                     &voice_transcriber,
@@ -5753,6 +5785,7 @@ mod tests {
         apply_voice_listening_started, move_item_to_position, move_tab_to_position,
         next_active_index_after_detach, preview_index_for_pointer, voice_hotkey_warm_gate,
     };
+    use crate::voice::{VoiceActivationMode, VoicePreferences};
     use std::cell::Cell;
 
     fn tab_ids(tabs: &[usize]) -> Vec<usize> {
@@ -5855,6 +5888,27 @@ mod tests {
 
         assert!(!voice_starting.get());
         assert!(voice_listening.get());
+    }
+
+    #[test]
+    fn push_to_talk_registers_linux_global_hotkey_for_terminal_focus() {
+        let mut voice = VoicePreferences {
+            enabled: true,
+            activation_mode: VoiceActivationMode::PushToTalk,
+            prefer_global_hotkey: false,
+            ..VoicePreferences::default()
+        };
+
+        assert!(super::should_register_linux_voice_global_hotkey(&voice));
+
+        voice.activation_mode = VoiceActivationMode::Toggle;
+        assert!(!super::should_register_linux_voice_global_hotkey(&voice));
+
+        voice.prefer_global_hotkey = true;
+        assert!(super::should_register_linux_voice_global_hotkey(&voice));
+
+        voice.enabled = false;
+        assert!(!super::should_register_linux_voice_global_hotkey(&voice));
     }
 
     #[test]
