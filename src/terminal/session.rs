@@ -13,7 +13,7 @@ use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
-use crate::services::launch_resolution::resolve_tile_launch;
+use crate::services::launch_resolution::{ResolvedLaunchTransport, resolve_tile_launch};
 use crate::transcript::TranscriptBuffer;
 
 const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
@@ -178,12 +178,18 @@ impl TerminalSession {
             })
         } else {
             match resolve_tile_launch(tile, workspace_root, assets) {
-                Ok(resolved_launch) => Rc::new(TerminalLaunchSpec {
-                    working_directory: working_dir.display().to_string(),
-                    configured_argv: build_spawn_argv(&shell, resolved_launch.command.as_deref()),
-                    local_shell_argv: build_local_shell_argv(&shell),
-                    envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
-                }),
+                Ok(resolved_launch) => {
+                    let launch_shell = shell_for_launch(&shell, &resolved_launch.transport);
+                    Rc::new(TerminalLaunchSpec {
+                        working_directory: working_dir.display().to_string(),
+                        configured_argv: build_spawn_argv(
+                            &launch_shell,
+                            resolved_launch.command.as_deref(),
+                        ),
+                        local_shell_argv: build_local_shell_argv(&launch_shell),
+                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                    })
+                }
                 Err(error) => {
                     report_spawn_problem(&terminal, &descriptor, &error);
                     mark_state_exited(&state);
@@ -758,6 +764,16 @@ fn build_spawn_argv(shell: &str, command: Option<&str>) -> Vec<String> {
     }
 }
 
+fn shell_for_launch(default_shell: &str, transport: &ResolvedLaunchTransport) -> String {
+    match transport {
+        ResolvedLaunchTransport::LocalProfile {
+            shell_program: Some(shell_program),
+            ..
+        } if !shell_program.trim().is_empty() => shell_program.trim().to_string(),
+        _ => default_shell.to_string(),
+    }
+}
+
 fn build_local_shell_argv(shell: &str) -> Vec<String> {
     vec![shell.to_string()]
 }
@@ -779,8 +795,9 @@ fn report_spawn_problem(terminal: &vte4::Terminal, descriptor: &str, message: &s
 mod tests {
     use super::{
         WorkingDirectoryValidationError, build_local_shell_argv, build_spawn_argv,
-        process_group_target, supports_recovery_options, validate_working_dir,
+        process_group_target, shell_for_launch, supports_recovery_options, validate_working_dir,
     };
+    use crate::services::launch_resolution::ResolvedLaunchTransport;
     use std::path::Path;
 
     #[test]
@@ -788,6 +805,43 @@ mod tests {
         let argv = build_spawn_argv("/bin/bash", Some("cargo test"));
 
         assert_eq!(argv, vec!["/bin/bash", "-i", "-c", "cargo test"]);
+    }
+
+    #[test]
+    fn local_profile_shell_overrides_default_shell() {
+        let transport = ResolvedLaunchTransport::LocalProfile {
+            profile_id: "bash-env".into(),
+            profile_name: "Bash Env".into(),
+            shell_program: Some(" /bin/bash ".into()),
+            startup_prefix: None,
+        };
+
+        assert_eq!(shell_for_launch("/usr/bin/fish", &transport), "/bin/bash");
+    }
+
+    #[test]
+    fn local_profile_without_shell_keeps_default_shell() {
+        let transport = ResolvedLaunchTransport::LocalProfile {
+            profile_id: "default".into(),
+            profile_name: "Default".into(),
+            shell_program: Some("   ".into()),
+            startup_prefix: None,
+        };
+
+        assert_eq!(
+            shell_for_launch("/usr/bin/fish", &transport),
+            "/usr/bin/fish"
+        );
+    }
+
+    #[test]
+    fn non_local_profile_launch_keeps_default_shell() {
+        let transport = ResolvedLaunchTransport::DefaultLocal;
+
+        assert_eq!(
+            shell_for_launch("/usr/bin/fish", &transport),
+            "/usr/bin/fish"
+        );
     }
 
     #[test]

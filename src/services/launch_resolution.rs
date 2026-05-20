@@ -296,6 +296,44 @@ mod tests {
     }
 
     #[test]
+    fn resolves_local_profile_shell_program() {
+        let mut tile = tile();
+        tile.connection_target = TileConnectionTarget::Profile("bash-env".into());
+        let assets = WorkspaceAssets {
+            connection_profiles: vec![ConnectionProfile {
+                id: "bash-env".into(),
+                name: "Bash Env".into(),
+                kind: ConnectionKind::Local,
+                inventory_host_id: None,
+                tags: Vec::new(),
+                remote_working_directory: None,
+                shell_program: Some("/bin/bash".into()),
+                startup_prefix: Some("omx --madmax --high".into()),
+            }],
+            inventory_hosts: Vec::new(),
+            inventory_groups: Vec::new(),
+            role_templates: Vec::new(),
+            runbooks: Vec::new(),
+            snippets: Vec::new(),
+        };
+
+        let resolved =
+            resolve_tile_launch(&tile, Path::new("/workspace"), &assets).expect("local profile");
+
+        assert_eq!(resolved.connection_label, "Bash Env");
+        assert_eq!(resolved.command.as_deref(), Some("echo hello"));
+        assert!(matches!(
+            resolved.transport,
+            ResolvedLaunchTransport::LocalProfile {
+                ref profile_id,
+                ref shell_program,
+                ..
+            } if profile_id == "bash-env" && shell_program.as_deref() == Some("/bin/bash")
+        ));
+        assert!(!resolved.remote);
+    }
+
+    #[test]
     fn resolves_ssh_launch_from_profile_and_inventory() {
         let mut tile = tile();
         tile.connection_target = TileConnectionTarget::Profile("prod".into());
