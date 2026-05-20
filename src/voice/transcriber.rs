@@ -117,7 +117,17 @@ impl ParakeetTranscriber {
             .send(&VoiceEngineRequest::Start {
                 sample_rate_hz: 16_000,
             })
-            .map_err(ParakeetTranscriberError::from)
+            .map_err(ParakeetTranscriberError::from)?;
+        loop {
+            match self.engine.read_event()? {
+                Some(VoiceEngineEvent::Ready) => return Ok(()),
+                Some(VoiceEngineEvent::Error(message)) => {
+                    return Err(ParakeetTranscriberError::Engine(message));
+                }
+                Some(_) => continue,
+                None => return Err(ParakeetTranscriberError::EngineExited),
+            }
+        }
     }
 
     pub fn stop_capture_and_transcribe(&mut self) -> Result<String, ParakeetTranscriberError> {
@@ -148,6 +158,7 @@ impl ParakeetTranscriber {
         loop {
             match self.engine.read_event()? {
                 Some(VoiceEngineEvent::Partial(text)) => return Ok(Some(text)),
+                Some(VoiceEngineEvent::Ready) => return Ok(None),
                 Some(VoiceEngineEvent::Error(message)) => {
                     return Err(ParakeetTranscriberError::Engine(message));
                 }

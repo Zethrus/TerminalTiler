@@ -454,8 +454,13 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 let Some(transcriber) = transcriber.as_mut() else {
                     continue;
                 };
+                let flushed_at = Instant::now();
                 match transcriber.flush_captured_audio() {
                     Ok(Some(partial)) => {
+                        logging::info(format!(
+                            "voice audio flush returned partial elapsed_ms={}",
+                            flushed_at.elapsed().as_millis()
+                        ));
                         if let Some(started) = first_partial_started_at.take() {
                             let elapsed_ms = started.elapsed().as_millis();
                             let _ = ui_tx.send(VoiceUiEvent::Status(format!(
@@ -464,7 +469,12 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                         }
                         let _ = ui_tx.send(VoiceUiEvent::Partial(partial));
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        logging::info(format!(
+                            "voice audio flush buffered without partial elapsed_ms={}",
+                            flushed_at.elapsed().as_millis()
+                        ));
+                    }
                     Err(error) => {
                         let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
                     }

@@ -716,7 +716,7 @@ class FakeModel:
             return [Transcript("cargo")]
         if FakeModel.calls == 2:
             return [Transcript("cargo cargo test")]
-        return [Transcript("cargo cargo test extra")]
+        return [Transcript("cargo test extra")]
 class ASRModel:
     @staticmethod
     def from_pretrained(model_name):
@@ -798,7 +798,159 @@ class models:
                 other => panic!("unexpected helper event: {other:?}"),
             }
         };
-        assert_eq!(final_text, "cargo test");
+        assert_eq!(final_text, "cargo test extra");
+        frame_from_request(&VoiceEngineRequest::Shutdown)
+            .encode(&mut stdin)
+            .unwrap();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_python_helper_acks_audio_without_partial_and_transcribes_on_stop() {
+        use std::process::Stdio;
+
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-fake-streaming-empty-partial-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
+        let pack_root = crate::voice::pack::pack_root(&root, &manifest);
+        let fake_modules = root.join("fake-python-modules");
+        std::fs::create_dir_all(fake_modules.join("nemo/collections")).unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/__init__.py"),
+            "__version__ = \"2.7.fake\"\n",
+        )
+        .unwrap();
+        std::fs::write(fake_modules.join("nemo/collections/__init__.py"), "").unwrap();
+        std::fs::write(
+            fake_modules.join("torch.py"),
+            r#"
+__version__ = "2.12.fake"
+class cuda:
+    @staticmethod
+    def is_available():
+        return False
+class nn:
+    class Linear:
+        pass
+class quantization:
+    @staticmethod
+    def quantize_dynamic(model, layers, dtype=None, inplace=False):
+        return model
+qint8 = object()
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            fake_modules.join("numpy.py"),
+            r#"
+class FakeArray:
+    def astype(self, dtype):
+        return self
+    def __truediv__(self, other):
+        return self
+def frombuffer(data, dtype=None):
+    return FakeArray()
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            fake_modules.join("nemo/collections/asr.py"),
+            r#"
+class Transcript:
+    def __init__(self, text):
+        self.text = text
+class FakeModel:
+    calls = 0
+    def to(self, device):
+        return self
+    def eval(self):
+        pass
+    def transcribe(self, audio, **kwargs):
+        FakeModel.calls += 1
+        if FakeModel.calls == 1:
+            return [Transcript("")]
+        return [Transcript("final transcript")]
+class ASRModel:
+    @staticmethod
+    def from_pretrained(model_name):
+        return FakeModel()
+class models:
+    ASRModel = ASRModel
+"#,
+        )
+        .unwrap();
+
+        let mut command = Command::new(python_command());
+        command
+            .arg(pack_root.join(&manifest.engine_executable))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("PYTHONPATH", &fake_modules)
+            .env("TERMINALTILER_PARAKEET_MODEL", &manifest.model_name)
+            .env(
+                "TERMINALTILER_PARAKEET_STREAMING_MODEL",
+                &manifest.streaming_model_name,
+            )
+            .env(
+                "TERMINALTILER_VOICE_MODEL_PATH",
+                pack_root.join(&manifest.model_path),
+            )
+            .env("TERMINALTILER_VOICE_ENGINE_MODE", "cpu")
+            .env("TERMINALTILER_VOICE_PARTIAL_MIN_MS", "0");
+        let mut child = command.spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut stdout = BufReader::new(stdout);
+
+        assert_eq!(
+            read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame)),
+            Some(VoiceEngineEvent::Ready)
+        );
+        frame_from_request(&VoiceEngineRequest::Start {
+            sample_rate_hz: 16_000,
+        })
+        .encode(&mut stdin)
+        .unwrap();
+        frame_from_request(&VoiceEngineRequest::AudioPcm16(vec![0; 160]))
+            .encode(&mut stdin)
+            .unwrap();
+        stdin.flush().unwrap();
+
+        let mut ready_count = 0;
+        while ready_count < 2 {
+            match read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame))
+            {
+                Some(VoiceEngineEvent::Ready) => ready_count += 1,
+                other => panic!("unexpected helper event before audio ack: {other:?}"),
+            }
+        }
+
+        frame_from_request(&VoiceEngineRequest::FinalAudioPcm16(vec![0; 160]))
+            .encode(&mut stdin)
+            .unwrap();
+        frame_from_request(&VoiceEngineRequest::Stop)
+            .encode(&mut stdin)
+            .unwrap();
+        stdin.flush().unwrap();
+        let final_text = loop {
+            match read_framed_message(&mut stdout)
+                .unwrap()
+                .map(|frame| event_from_frame(&frame))
+            {
+                Some(VoiceEngineEvent::Partial(_)) | Some(VoiceEngineEvent::Ready) => continue,
+                Some(VoiceEngineEvent::Final(text)) => break text,
+                other => panic!("unexpected helper event after stop: {other:?}"),
+            }
+        };
+        assert_eq!(final_text, "final transcript");
         frame_from_request(&VoiceEngineRequest::Shutdown)
             .encode(&mut stdin)
             .unwrap();

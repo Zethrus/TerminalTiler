@@ -182,8 +182,11 @@ class ParakeetEngine:
         try:
             chunk = bytes.fromhex(payload.strip())
             self.capture.pcm.extend(chunk)
+            emitted = False
             if emit_partial and chunk:
-                self._emit_streaming_partial()
+                emitted = self._emit_streaming_partial()
+            if not emitted:
+                emit("ready", "audio-buffered")
         except ValueError as exc:
             emit("error", f"invalid pcm16 hex payload: {exc}")
 
@@ -284,14 +287,14 @@ class ParakeetEngine:
             return 0.0
         return len(self.capture.pcm) / 2.0 / float(self.capture.sample_rate_hz)
 
-    def _emit_streaming_partial(self) -> None:
+    def _emit_streaming_partial(self) -> bool:
         now = time.perf_counter()
         if self._last_partial_at and (now - self._last_partial_at) * 1000 < self.partial_min_ms:
-            return
+            return False
         self._last_partial_at = now
         if self.profile == "offline":
             emit("partial", f"Captured {self._captured_seconds():.1f}s of voice audio…")
-            return
+            return True
         try:
             model = self._load_streaming_model()
             text = self._transcribe_pcm_array(
@@ -301,22 +304,26 @@ class ParakeetEngine:
             if self._streaming_error is None:
                 self._streaming_error = str(exc)
                 emit("partial", f"Streaming ASR unavailable; using offline TDT on release: {exc}")
-            return
+                return True
+            return False
         partial = stable_partial(self.latest_partial, text)
         if partial:
             self.latest_partial = partial
             emit("partial", partial)
+            return True
+        return False
 
     def _final_transcript(self, pcm: bytes, sample_rate_hz: int) -> str:
         if self.profile != "offline":
-            if self.latest_partial.strip():
+            try:
+                model = self._load_streaming_model()
+                text = self._transcribe_pcm_array(model, pcm, sample_rate_hz)
+                if text:
+                    self.latest_partial = text
                 return self.latest_partial.strip()
-            if self._streaming_error is None:
-                return ""
-            emit(
-                "partial",
-                f"Streaming ASR unavailable; using offline TDT: {self._streaming_error}",
-            )
+            except Exception as exc:
+                self._streaming_error = str(exc)
+                emit("partial", f"Streaming ASR finalization unavailable; using offline TDT: {exc}")
         emit("partial", "Transcribing with NVIDIA Parakeet TDT offline fallback…")
         return self._transcribe_pcm_wav(pcm, sample_rate_hz)
 
