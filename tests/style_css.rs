@@ -24,6 +24,19 @@ const TERMINAL_CARD_STATES: &[&str] = &[
 ];
 
 #[test]
+fn main_header_icon_buttons_have_clear_tooltips() {
+    assert!(
+        ICONS_RS.contains("button.set_tooltip_text(Some(tooltip))"),
+        "shared icon-only button helper should attach native GTK tooltips"
+    );
+    assert!(
+        WINDOW_RS.contains("icon_name::SETTINGS,\n        \"Open application settings\"")
+            && WINDOW_RS.contains("icon_name::ASSETS,\n        \"Open assets manager\""),
+        "main app header icon-only actions should explain their purpose on hover"
+    );
+}
+
+#[test]
 fn terminal_card_state_selectors_do_not_draw_full_card_rings() {
     let mut checked_selectors = Vec::new();
 

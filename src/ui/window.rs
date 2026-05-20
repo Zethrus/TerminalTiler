@@ -844,7 +844,7 @@ fn present_with_initial_workspace(
 
     let settings_button = icons::icon_button(
         icon_name::SETTINGS,
-        "Application settings",
+        "Open application settings",
         &["flat", "titlebar-action-button", "titlebar-icon-button"],
     );
     header.pack_end(&settings_button);
@@ -861,7 +861,7 @@ fn present_with_initial_workspace(
 
     let assets_button = icons::icon_button(
         icon_name::ASSETS,
-        "Assets manager",
+        "Open assets manager",
         &["flat", "titlebar-action-button", "titlebar-icon-button"],
     );
     header.pack_end(&assets_button);
