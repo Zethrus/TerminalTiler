@@ -552,10 +552,33 @@ fn warm_voice_model(transcriber: Option<&mut ParakeetTranscriber>) -> Result<(),
     Ok(())
 }
 
-struct VoiceGlobalHotkeyRegistration {
-    shortcut: String,
-    #[allow(dead_code)]
-    handle: LinuxGlobalHotkeyHandle,
+enum VoiceGlobalHotkeyRegistration {
+    Active {
+        shortcut: String,
+        #[allow(dead_code)]
+        handle: LinuxGlobalHotkeyHandle,
+    },
+    Unavailable {
+        shortcut: String,
+        last_attempt: Instant,
+    },
+}
+
+impl VoiceGlobalHotkeyRegistration {
+    fn shortcut(&self) -> &str {
+        match self {
+            Self::Active { shortcut, .. } | Self::Unavailable { shortcut, .. } => shortcut,
+        }
+    }
+
+    fn unavailable_retry_pending(&self) -> bool {
+        match self {
+            Self::Unavailable { last_attempt, .. } => {
+                last_attempt.elapsed() < Duration::from_secs(30)
+            }
+            Self::Active { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -847,6 +870,7 @@ fn present_with_initial_workspace(
     let voice_listening = Rc::new(Cell::new(false));
     let voice_starting = Rc::new(Cell::new(false));
     let voice_stopping = Rc::new(Cell::new(false));
+    let voice_local_key_pressed = Rc::new(Cell::new(false));
     let voice_warm_state = Rc::new(Cell::new(VoiceWarmState::Cold));
     let voice_warm_generation = Rc::new(Cell::new(0_u64));
     let voice_warm_error = Rc::new(RefCell::new(None::<String>));
@@ -1105,6 +1129,7 @@ fn present_with_initial_workspace(
         voice_listening.clone(),
         voice_starting.clone(),
         voice_stopping.clone(),
+        voice_local_key_pressed.clone(),
         voice_warm_state.clone(),
         voice_warm_generation.clone(),
         voice_warm_error.clone(),
@@ -4416,12 +4441,18 @@ fn sync_linux_voice_global_hotkey(
         return;
     }
 
-    if registration
-        .borrow()
-        .as_ref()
-        .is_some_and(|current| current.shortcut == voice.hotkey)
     {
-        return;
+        let current = registration.borrow();
+        if let Some(current) = current.as_ref()
+            && current.shortcut() == voice.hotkey
+        {
+            if current.unavailable_retry_pending() {
+                return;
+            }
+            if matches!(current, VoiceGlobalHotkeyRegistration::Active { .. }) {
+                return;
+            }
+        }
     }
 
     registration.borrow_mut().take();
@@ -4432,7 +4463,8 @@ fn sync_linux_voice_global_hotkey(
             logging::info(format!(
                 "registered Linux X11 global voice hotkey {shortcut}"
             ));
-            *registration.borrow_mut() = Some(VoiceGlobalHotkeyRegistration { shortcut, handle });
+            *registration.borrow_mut() =
+                Some(VoiceGlobalHotkeyRegistration::Active { shortcut, handle });
             let ui_tx = voice_event_tx.clone();
             std::thread::spawn(move || {
                 while let Ok(event) = global_rx.recv() {
@@ -4449,6 +4481,10 @@ fn sync_linux_voice_global_hotkey(
                 "Linux global voice hotkey unavailable for '{}': {error}",
                 voice.hotkey
             ));
+            *registration.borrow_mut() = Some(VoiceGlobalHotkeyRegistration::Unavailable {
+                shortcut: voice.hotkey.clone(),
+                last_attempt: Instant::now(),
+            });
         }
     }
 }
@@ -4471,6 +4507,7 @@ fn install_voice_hotkey_controller(
     voice_listening: Rc<Cell<bool>>,
     voice_starting: Rc<Cell<bool>>,
     voice_stopping: Rc<Cell<bool>>,
+    voice_local_key_pressed: Rc<Cell<bool>>,
     voice_warm_state: Rc<Cell<VoiceWarmState>>,
     voice_warm_generation: Rc<Cell<u64>>,
     voice_warm_error: Rc<RefCell<Option<String>>>,
@@ -4493,6 +4530,7 @@ fn install_voice_hotkey_controller(
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
         let voice_stopping = voice_stopping.clone();
+        let voice_local_key_pressed = voice_local_key_pressed.clone();
         let voice_warm_state = voice_warm_state.clone();
         let voice_warm_generation = voice_warm_generation.clone();
         let voice_warm_error = voice_warm_error.clone();
@@ -4502,6 +4540,10 @@ fn install_voice_hotkey_controller(
             let voice = preferences.voice.clone();
             if !voice_key_event_matches(&voice.hotkey, key, state) {
                 return glib::Propagation::Proceed;
+            }
+            if voice_local_key_pressed.replace(true) {
+                logging::info("voice local hotkey press ignored: repeat");
+                return glib::Propagation::Stop;
             }
             logging::info("voice local hotkey press matched");
 
@@ -4553,13 +4595,16 @@ fn install_voice_hotkey_controller(
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
         let voice_stopping = voice_stopping.clone();
+        let voice_local_key_pressed = voice_local_key_pressed.clone();
         let voice_event_tx = voice_event_tx.clone();
-        controller.connect_key_released(move |_, key, _, state| {
+        controller.connect_key_released(move |_, key, _, _state| {
             let preferences = preference_store.load();
             let voice = preferences.voice.clone();
-            if voice.activation_mode != VoiceActivationMode::PushToTalk
-                || !voice_key_event_matches(&voice.hotkey, key, state)
-            {
+            if !voice_key_matches_accelerator_key(&voice.hotkey, key) {
+                return;
+            }
+            voice_local_key_pressed.set(false);
+            if voice.activation_mode != VoiceActivationMode::PushToTalk {
                 return;
             }
             logging::info("voice local hotkey release matched");
@@ -4699,7 +4744,17 @@ fn start_voice_capture(
 ) {
     let preferences = preference_store.load();
     let voice = preferences.voice.clone();
+    logging::info(format!(
+        "voice capture start requested enabled={} mode={} listening={} starting={} stopping={} warm={:?} active_tab={active_tab_id}",
+        voice.enabled,
+        voice.activation_mode.label(),
+        voice_listening.get(),
+        voice_starting.get(),
+        voice_stopping.get(),
+        voice_warm_state.get(),
+    ));
     let Some(runtime) = active_workspace_runtime(tabs, active_tab_id) else {
+        logging::info("voice capture start blocked: no active workspace target");
         voice_hud.show("No workspace target", None);
         show_toast(
             toast_overlay,
@@ -4708,6 +4763,7 @@ fn start_voice_capture(
         return;
     };
     if !runtime.focused_terminal_available() {
+        logging::info("voice capture start blocked: no focused terminal target");
         voice_hud.show("No focused terminal target", None);
         show_toast(toast_overlay, "Focus a terminal pane before dictating");
         return;
@@ -4715,6 +4771,7 @@ fn start_voice_capture(
 
     let manifest = pack::builtin_parakeet_manifest();
     let Some(root) = pack::default_voice_pack_dir() else {
+        logging::error("voice capture start blocked: could not resolve app data directory");
         voice_hud.show(
             "Voice pack error",
             Some("Could not resolve app data directory"),
@@ -4723,6 +4780,7 @@ fn start_voice_capture(
     };
     let health = pack::health_check(&root, &manifest);
     if !matches!(health, VoicePackHealth::Ready { .. }) {
+        logging::info("voice capture start blocked: voice pack not ready");
         voice_hud.show(
             "Voice pack not installed",
             Some("Install NVIDIA Parakeet from Settings"),
@@ -4737,10 +4795,12 @@ fn start_voice_capture(
     match voice_hotkey_warm_gate(voice_warm_state.get()) {
         VoiceHotkeyWarmGate::StartCapture => {}
         VoiceHotkeyWarmGate::WaitForWarm => {
+            logging::info("voice capture start blocked: voice model is still warming");
             voice_hud.show("Voice model is preparing", Some("Try again shortly"));
             return;
         }
         VoiceHotkeyWarmGate::RequestWarm => {
+            logging::info("voice capture start blocked: requesting voice model warm-up");
             warm_voice_engine_if_ready(
                 preference_store,
                 voice_transcriber,
@@ -4757,6 +4817,9 @@ fn start_voice_capture(
                 .borrow()
                 .clone()
                 .unwrap_or_else(|| "Run a voice runtime health check from Settings".into());
+            logging::error(format!(
+                "voice capture start blocked: voice model warm-up failed: {detail}"
+            ));
             voice_hud.show("Voice model failed to warm", Some(&detail));
             return;
         }
@@ -4766,6 +4829,7 @@ fn start_voice_capture(
     voice_starting.set(true);
     voice_stopping.set(false);
     voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
+    logging::info("voice capture start queued");
     voice_transcriber.start_capture(
         manifest,
         health,
@@ -4783,10 +4847,12 @@ fn stop_voice_capture(
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
     if !voice_listening.replace(false) {
+        logging::info("voice capture stop ignored: not listening");
         return;
     }
     voice_stopping.set(true);
     voice_hud.show("Finalizing voice text…", None);
+    logging::info("voice capture stop requested");
     voice_transcriber.stop(voice_event_tx);
 }
 
@@ -4798,6 +4864,7 @@ fn finish_pending_voice_capture(
 ) {
     voice_stopping.set(true);
     voice_hud.show("Finalizing voice text…", None);
+    logging::info("voice capture stop requested before listening started");
     voice_transcriber.stop(voice_event_tx);
 }
 
@@ -4807,6 +4874,13 @@ fn voice_key_event_matches(accelerator: &str, key: gdk::Key, state: gdk::Modifie
     };
     let event_modifiers = state & gtk::accelerator_get_default_mod_mask();
     key == expected_key && event_modifiers == expected_modifiers
+}
+
+fn voice_key_matches_accelerator_key(accelerator: &str, key: gdk::Key) -> bool {
+    let Some((expected_key, _)) = gtk::accelerator_parse(accelerator) else {
+        return false;
+    };
+    key == expected_key
 }
 
 fn install_shortcut_controller<F>(

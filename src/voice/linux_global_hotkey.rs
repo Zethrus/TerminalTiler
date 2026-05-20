@@ -147,6 +147,9 @@ fn run_x11_hotkey_loop(
                         let _ = tx.send(LinuxGlobalHotkeyEvent::Pressed);
                     }
                     KEY_RELEASE => {
+                        if x11_release_is_auto_repeat(&x11, display, keycode, key.time) {
+                            continue;
+                        }
                         pressed = false;
                         let _ = tx.send(LinuxGlobalHotkeyEvent::Released);
                     }
@@ -216,7 +219,38 @@ struct X11 {
     select_input: unsafe extern "C" fn(*mut c_void, c_ulong, c_long) -> c_int,
     pending: unsafe extern "C" fn(*mut c_void) -> c_int,
     next_event: unsafe extern "C" fn(*mut c_void, *mut XEvent) -> c_int,
+    peek_event: unsafe extern "C" fn(*mut c_void, *mut XEvent) -> c_int,
     flush: unsafe extern "C" fn(*mut c_void) -> c_int,
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn x11_release_is_auto_repeat(
+    x11: &X11,
+    display: *mut c_void,
+    keycode: c_uint,
+    release_time: c_ulong,
+) -> bool {
+    if unsafe { (x11.pending)(display) } <= 0 {
+        return false;
+    }
+    let mut next = MaybeUninit::<XEvent>::zeroed();
+    unsafe {
+        (x11.peek_event)(display, next.as_mut_ptr());
+        let next = next.assume_init();
+        if next.type_ != KEY_PRESS {
+            return false;
+        }
+        let next_key = next.xkey;
+        if next_key.keycode != keycode || next_key.time != release_time {
+            return false;
+        }
+    }
+
+    let mut repeated_press = MaybeUninit::<XEvent>::zeroed();
+    unsafe {
+        (x11.next_event)(display, repeated_press.as_mut_ptr());
+    }
+    true
 }
 
 #[cfg(target_os = "linux")]
@@ -240,6 +274,7 @@ impl X11 {
                 select_input: load_symbol(handle, c"XSelectInput")?,
                 pending: load_symbol(handle, c"XPending")?,
                 next_event: load_symbol(handle, c"XNextEvent")?,
+                peek_event: load_symbol(handle, c"XPeekEvent")?,
                 flush: load_symbol(handle, c"XFlush")?,
             })
         }

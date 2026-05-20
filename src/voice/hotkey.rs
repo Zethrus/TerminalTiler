@@ -87,6 +87,15 @@ fn canonical_key(key: &str) -> String {
         "plus" | "+" => "plus".into(),
         "equal" | "=" => "equal".into(),
         "minus" | "-" => "minus".into(),
+        "slash" | "/" => "slash".into(),
+        "backslash" | "\\" => "backslash".into(),
+        "period" | "." => "period".into(),
+        "comma" | "," => "comma".into(),
+        "semicolon" | ";" => "semicolon".into(),
+        "apostrophe" | "'" => "apostrophe".into(),
+        "grave" | "`" => "grave".into(),
+        "bracketleft" | "[" => "bracketleft".into(),
+        "bracketright" | "]" => "bracketright".into(),
         other => other.to_ascii_uppercase(),
     }
 }
@@ -114,6 +123,19 @@ mod tests {
         assert!(spec.shift);
         assert_eq!(spec.key, "space");
         assert!(HotkeySpec::parse("<Ctrl><Shift>").is_none());
+    }
+
+    #[test]
+    fn keeps_x11_case_sensitive_symbol_names_for_punctuation() {
+        assert_eq!(
+            HotkeySpec::parse("<Control><Alt>slash").unwrap().key,
+            "slash"
+        );
+        assert_eq!(HotkeySpec::parse("<Control><Alt>/").unwrap().key, "slash");
+        assert_eq!(
+            HotkeySpec::parse("<Control><Alt>period").unwrap().key,
+            "period"
+        );
     }
 
     #[test]

@@ -451,6 +451,9 @@ impl TerminalSession {
         {
             return;
         }
+        if stream.close(None::<&gio::Cancellable>).is_err() {
+            return;
+        }
         let bytes = stream.steal_as_bytes();
         let snapshot = String::from_utf8_lossy(bytes.as_ref()).into_owned();
         self.transcript.borrow_mut().replace_output(&snapshot);
