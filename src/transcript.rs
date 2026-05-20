@@ -56,32 +56,86 @@ impl TranscriptBuffer {
     }
 
     pub fn recent_output(&self, row_count: usize) -> String {
-        self.output_lines
-            .iter()
-            .rev()
-            .take(row_count)
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n")
+        let skip_count = self.output_lines.len().saturating_sub(row_count);
+        let mut text = String::new();
+        for line in self.output_lines.iter().skip(skip_count) {
+            append_line(&mut text, line);
+        }
+        text
     }
 
     pub fn recent_transcript(&self, line_count: usize) -> String {
-        let mut lines = self.output_lines.iter().cloned().collect::<Vec<_>>();
-        if !self.input_lines.is_empty() {
-            lines.push(String::from("[input]"));
-            lines.extend(self.input_lines.iter().map(|line| format!("> {line}")));
+        let input_line_count = if self.input_lines.is_empty() {
+            0
+        } else {
+            1 + self.input_lines.len()
+        };
+        let total_line_count = self.output_lines.len() + input_line_count;
+        let first_index = total_line_count.saturating_sub(line_count);
+        let mut current_index = 0;
+        let mut text = String::new();
+
+        for line in &self.output_lines {
+            if current_index >= first_index {
+                append_line(&mut text, line);
+            }
+            current_index += 1;
         }
-        lines
-            .into_iter()
-            .rev()
-            .take(line_count)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n")
+
+        if !self.input_lines.is_empty() {
+            if current_index >= first_index {
+                append_line(&mut text, "[input]");
+            }
+            current_index += 1;
+            for line in &self.input_lines {
+                if current_index >= first_index {
+                    append_prefixed_line(&mut text, "> ", line);
+                }
+                current_index += 1;
+            }
+        }
+
+        text
+    }
+}
+
+fn append_line(text: &mut String, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(line);
+}
+
+fn append_prefixed_line(text: &mut String, prefix: &str, line: &str) {
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(prefix);
+    text.push_str(line);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranscriptBuffer;
+
+    #[test]
+    fn recent_output_keeps_original_order_after_truncation() {
+        let mut buffer = TranscriptBuffer::default();
+        buffer.push_output("one\ntwo\nthree\n");
+
+        assert_eq!(buffer.recent_output(2), "two\nthree");
+    }
+
+    #[test]
+    fn recent_transcript_includes_input_marker_and_truncates_from_front() {
+        let mut buffer = TranscriptBuffer::default();
+        buffer.push_output("out-1\nout-2\n");
+        buffer.push_input("cmd-1\ncmd-2\n");
+
+        assert_eq!(buffer.recent_transcript(3), "[input]\n> cmd-1\n> cmd-2");
+        assert_eq!(
+            buffer.recent_transcript(5),
+            "out-1\nout-2\n[input]\n> cmd-1\n> cmd-2"
+        );
     }
 }

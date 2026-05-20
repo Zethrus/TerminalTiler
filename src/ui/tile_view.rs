@@ -13,7 +13,7 @@ use crate::model::assets::{
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::resolve_tile_launch;
-use crate::services::output_helpers::{helper_summary_text, scan_output};
+use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
@@ -124,6 +124,7 @@ pub fn build(
         left.append(&pane_group_label);
     }
 
+    let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
     let initial_status_line = initial_status_snapshot(tile, workspace_root, assets)
         .to_line()
         .trim()
@@ -262,6 +263,7 @@ pub fn build(
         let recovery_button = recovery_button.clone();
         let shell = shell.clone();
         let tile = tile.clone();
+        let output_helpers = output_helpers.clone();
         let workspace_root = workspace_root.to_path_buf();
         let assets = assets.clone();
         let update = move || {
@@ -271,6 +273,7 @@ pub fn build(
                 &assets,
                 &terminal_for_update,
                 &session_for_update,
+                &output_helpers,
             );
             let disconnected = session_for_update.needs_recovery_prompt();
             if disconnected {
@@ -908,6 +911,7 @@ fn status_snapshot_for_terminal(
     assets: &WorkspaceAssets,
     terminal: &vte4::Terminal,
     session: &TerminalSession,
+    output_helpers: &CompiledOutputHelpers,
 ) -> PaneStatusSnapshot {
     let mut snapshot = initial_status_snapshot(tile, workspace_root, assets);
     if let Some(uri) = terminal.current_directory_uri() {
@@ -916,13 +920,10 @@ fn status_snapshot_for_terminal(
         snapshot.location_label = title.to_string();
     }
     let (matches, shell_label) = if let Some(title) = terminal.window_title() {
-        (
-            scan_output(&tile.output_helpers, title.as_str()),
-            title.to_string(),
-        )
+        (output_helpers.scan(title.as_str()), title.to_string())
     } else {
         let recent = session.recent_output(32);
-        let matches = scan_output(&tile.output_helpers, &recent);
+        let matches = output_helpers.scan(&recent);
         let shell_label = if recent.trim().is_empty() {
             tile.agent_label.clone()
         } else {

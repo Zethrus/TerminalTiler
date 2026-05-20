@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -46,6 +47,97 @@ struct AssetsPages {
 }
 
 type RefreshHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
+struct AssetPageContext {
+    snapshot: AssetsManagerState,
+    effective: WorkspaceAssets,
+    source_lookup: AssetSourceLookup,
+}
+
+impl AssetPageContext {
+    fn new(state: &Rc<RefCell<AssetsManagerState>>) -> Self {
+        let snapshot = state.borrow().clone();
+        let effective = effective_assets_for_scope(
+            snapshot.scope,
+            &snapshot.current_assets,
+            &snapshot.global_assets,
+        );
+        let source_lookup = AssetSourceLookup::new(
+            snapshot.scope,
+            &snapshot.current_assets,
+            &snapshot.global_assets,
+        );
+        Self {
+            snapshot,
+            effective,
+            source_lookup,
+        }
+    }
+
+    fn current_connection_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .connection_profiles
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+
+    fn current_host_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .inventory_hosts
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+
+    fn current_group_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .inventory_groups
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+
+    fn current_role_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .role_templates
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+
+    fn current_runbook_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .runbooks
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+
+    fn current_snippet_ids(&self) -> HashSet<String> {
+        current_ids(
+            self.snapshot
+                .current_assets
+                .snippets
+                .iter()
+                .map(|item| &item.id),
+        )
+    }
+}
+
+fn current_ids<'a>(ids: impl Iterator<Item = &'a String>) -> HashSet<String> {
+    ids.cloned().collect()
+}
 
 fn build_window_close_action_group(request_close: Rc<dyn Fn()>) -> gtk::gio::SimpleActionGroup {
     let close_actions = gtk::gio::SimpleActionGroup::new();
@@ -803,29 +895,17 @@ fn render_connections_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
     let global_host_ids = effective
         .inventory_hosts
         .iter()
         .map(|item| (item.id.clone(), item.name.clone()))
         .collect::<Vec<_>>();
 
-    let current_ids = snapshot
-        .current_assets
-        .connection_profiles
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let current_ids = page.current_connection_ids();
 
     for (index, profile) in snapshot
         .current_assets
@@ -1055,23 +1135,11 @@ fn render_hosts_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let current_ids = snapshot
-        .current_assets
-        .inventory_hosts
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
+    let current_ids = page.current_host_ids();
     let groups = effective.inventory_groups.clone();
 
     for (index, host) in snapshot
@@ -1370,23 +1438,11 @@ fn render_groups_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let current_ids = snapshot
-        .current_assets
-        .inventory_groups
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
+    let current_ids = page.current_group_ids();
 
     for (index, group) in snapshot
         .current_assets
@@ -1525,23 +1581,11 @@ fn render_roles_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let current_ids = snapshot
-        .current_assets
-        .role_templates
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
+    let current_ids = page.current_role_ids();
     let connection_options = {
         let mut options = vec![("__none__".to_string(), "No default connection".to_string())];
         options.extend(
@@ -1810,23 +1854,11 @@ fn render_runbooks_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let current_ids = snapshot
-        .current_assets
-        .runbooks
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
+    let current_ids = page.current_runbook_ids();
     let role_options = effective
         .role_templates
         .iter()
@@ -2035,23 +2067,11 @@ fn render_snippets_page(
         },
     );
 
-    let snapshot = state.borrow().clone();
-    let effective = effective_assets_for_scope(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let source_lookup = AssetSourceLookup::new(
-        snapshot.scope,
-        &snapshot.current_assets,
-        &snapshot.global_assets,
-    );
-    let current_ids = snapshot
-        .current_assets
-        .snippets
-        .iter()
-        .map(|item| item.id.clone())
-        .collect::<Vec<_>>();
+    let page = AssetPageContext::new(state);
+    let snapshot = &page.snapshot;
+    let effective = &page.effective;
+    let source_lookup = &page.source_lookup;
+    let current_ids = page.current_snippet_ids();
 
     for (index, snippet) in snapshot.current_assets.snippets.iter().cloned().enumerate() {
         let badge = source_lookup.snippet(&snippet.id);

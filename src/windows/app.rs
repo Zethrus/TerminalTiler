@@ -2166,15 +2166,14 @@ mod imp {
     }
 
     fn tray_icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
-        let notify = NOTIFYICONDATAW {
+        NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: TRAY_ICON_ID,
             uFlags: NIF_MESSAGE | NIF_TIP | NIF_ICON,
             uCallbackMessage: WM_TRAYICON,
             ..unsafe { mem::zeroed() }
-        };
-        notify
+        }
     }
 
     fn open_settings_dialog(parent_hwnd: HWND, state: &mut AppWindowState) {
@@ -2451,7 +2450,7 @@ mod imp {
             hwnd,
             "msctls_progress32",
             "",
-            WS_CHILD | PBS_SMOOTH as u32,
+            WS_CHILD | PBS_SMOOTH,
             0,
             ID_SETTINGS_VOICE_PACK_PROGRESS,
         );
@@ -3077,17 +3076,21 @@ mod imp {
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_VOICE_HOTKEY,
-                state.voice_hotkey_hwnd,
-                ID_SETTINGS_VOICE_RECORD,
-                voice_hotkey_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_VOICE_HOTKEY,
-                0,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_VOICE_HOTKEY,
+                    edit_hwnd: state.voice_hotkey_hwnd,
+                    button_id: ID_SETTINGS_VOICE_RECORD,
+                    note_id: ID_SETTINGS_NOTE_VOICE_HOTKEY,
+                    help_id: 0,
+                },
+                ShortcutRowLayout {
+                    y: voice_hotkey_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             SetWindowPos(
                 state.voice_pack_status_hwnd,
@@ -3145,73 +3148,93 @@ mod imp {
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT,
-                state.fullscreen_shortcut_hwnd,
-                ID_SETTINGS_FULLSCREEN_RECORD,
-                shortcut_row_1_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT,
-                ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_FULLSCREEN_SHORTCUT,
+                    edit_hwnd: state.fullscreen_shortcut_hwnd,
+                    button_id: ID_SETTINGS_FULLSCREEN_RECORD,
+                    note_id: ID_SETTINGS_NOTE_FULLSCREEN_SHORTCUT,
+                    help_id: ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT,
+                },
+                ShortcutRowLayout {
+                    y: shortcut_row_1_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_DENSITY_SHORTCUT,
-                state.density_shortcut_hwnd,
-                ID_SETTINGS_DENSITY_RECORD,
-                shortcut_row_2_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_DENSITY_SHORTCUT,
-                ID_SETTINGS_HELP_DENSITY_SHORTCUT,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_DENSITY_SHORTCUT,
+                    edit_hwnd: state.density_shortcut_hwnd,
+                    button_id: ID_SETTINGS_DENSITY_RECORD,
+                    note_id: ID_SETTINGS_NOTE_DENSITY_SHORTCUT,
+                    help_id: ID_SETTINGS_HELP_DENSITY_SHORTCUT,
+                },
+                ShortcutRowLayout {
+                    y: shortcut_row_2_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT,
-                state.zoom_in_shortcut_hwnd,
-                ID_SETTINGS_ZOOM_IN_RECORD,
-                shortcut_row_3_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT,
-                ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_ZOOM_IN_SHORTCUT,
+                    edit_hwnd: state.zoom_in_shortcut_hwnd,
+                    button_id: ID_SETTINGS_ZOOM_IN_RECORD,
+                    note_id: ID_SETTINGS_NOTE_ZOOM_IN_SHORTCUT,
+                    help_id: ID_SETTINGS_HELP_ZOOM_IN_SHORTCUT,
+                },
+                ShortcutRowLayout {
+                    y: shortcut_row_3_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT,
-                state.zoom_out_shortcut_hwnd,
-                ID_SETTINGS_ZOOM_OUT_RECORD,
-                shortcut_row_4_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT,
-                ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_ZOOM_OUT_SHORTCUT,
+                    edit_hwnd: state.zoom_out_shortcut_hwnd,
+                    button_id: ID_SETTINGS_ZOOM_OUT_RECORD,
+                    note_id: ID_SETTINGS_NOTE_ZOOM_OUT_SHORTCUT,
+                    help_id: ID_SETTINGS_HELP_ZOOM_OUT_SHORTCUT,
+                },
+                ShortcutRowLayout {
+                    y: shortcut_row_4_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             layout_shortcut_row(
                 hwnd,
-                ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT,
-                state.command_palette_shortcut_hwnd,
-                ID_SETTINGS_COMMAND_PALETTE_RECORD,
-                shortcut_row_5_y,
-                shortcut_label_width,
-                shortcut_edit_x,
-                shortcut_edit_width,
-                shortcut_button_x,
-                shortcut_help_x,
-                ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT,
-                ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT,
+                ShortcutRowControls {
+                    label_id: ID_SETTINGS_LABEL_COMMAND_PALETTE_SHORTCUT,
+                    edit_hwnd: state.command_palette_shortcut_hwnd,
+                    button_id: ID_SETTINGS_COMMAND_PALETTE_RECORD,
+                    note_id: ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT,
+                    help_id: ID_SETTINGS_HELP_COMMAND_PALETTE_SHORTCUT,
+                },
+                ShortcutRowLayout {
+                    y: shortcut_row_5_y,
+                    label_width: shortcut_label_width,
+                    edit_x: shortcut_edit_x,
+                    edit_width: shortcut_edit_width,
+                    button_x: shortcut_button_x,
+                    help_x: shortcut_help_x,
+                },
             );
             SetWindowPos(
                 state.shortcut_status_hwnd,
@@ -3288,65 +3311,73 @@ mod imp {
         }
     }
 
-    fn layout_shortcut_row(
-        hwnd: HWND,
+    struct ShortcutRowControls {
         label_id: isize,
         edit_hwnd: HWND,
         button_id: isize,
+        note_id: isize,
+        help_id: isize,
+    }
+
+    struct ShortcutRowLayout {
         y: i32,
         label_width: i32,
         edit_x: i32,
         edit_width: i32,
         button_x: i32,
         help_x: i32,
-        note_id: isize,
-        help_id: isize,
+    }
+
+    fn layout_shortcut_row(
+        hwnd: HWND,
+        controls: ShortcutRowControls,
+        row_layout: ShortcutRowLayout,
     ) {
         unsafe {
             SetWindowPos(
-                GetDlgItem(hwnd, label_id as i32),
+                GetDlgItem(hwnd, controls.label_id as i32),
                 ptr::null_mut(),
                 MARGIN,
-                y + 4,
-                label_width,
+                row_layout.y + 4,
+                row_layout.label_width,
                 LABEL_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                edit_hwnd,
+                controls.edit_hwnd,
                 ptr::null_mut(),
-                edit_x,
-                y,
-                edit_width,
+                row_layout.edit_x,
+                row_layout.y,
+                row_layout.edit_width,
                 FIELD_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                GetDlgItem(hwnd, button_id as i32),
+                GetDlgItem(hwnd, controls.button_id as i32),
                 ptr::null_mut(),
-                button_x,
-                y - 2,
+                row_layout.button_x,
+                row_layout.y - 2,
                 76,
                 BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
-            if help_id != 0 {
+            if controls.help_id != 0 {
                 SetWindowPos(
-                    GetDlgItem(hwnd, help_id as i32),
+                    GetDlgItem(hwnd, controls.help_id as i32),
                     ptr::null_mut(),
-                    help_x,
-                    y - 2,
+                    row_layout.help_x,
+                    row_layout.y - 2,
                     30,
                     BUTTON_HEIGHT,
                     SWP_NOZORDER,
                 );
             }
             SetWindowPos(
-                GetDlgItem(hwnd, note_id as i32),
+                GetDlgItem(hwnd, controls.note_id as i32),
                 ptr::null_mut(),
-                edit_x,
-                y + FIELD_HEIGHT + 4,
-                help_x + 30 - edit_x,
+                row_layout.edit_x,
+                row_layout.y + FIELD_HEIGHT + 4,
+                row_layout.help_x + 30 - row_layout.edit_x,
                 LABEL_HEIGHT + 8,
                 SWP_NOZORDER,
             );
@@ -4544,17 +4575,16 @@ mod imp {
                 title: format!("Apply Suggestion: {title}"),
                 subtitle: suggestion.description.clone(),
                 on_activate: Rc::new(move || {
-                    if let Some(state) = unsafe { state_mut(hwnd) } {
-                        if let Some(index) = state
+                    if let Some(state) = unsafe { state_mut(hwnd) }
+                        && let Some(index) = state
                             .suggestions
                             .iter()
                             .position(|candidate| candidate.id == suggestion.id)
-                        {
-                            unsafe {
-                                SendMessageW(state.suggestion_list_hwnd, LB_SETCURSEL, index, 0);
-                            }
-                            apply_selected_suggestion(state);
+                    {
+                        unsafe {
+                            SendMessageW(state.suggestion_list_hwnd, LB_SETCURSEL, index, 0);
                         }
+                        apply_selected_suggestion(state);
                     }
                 }),
             });
@@ -5424,7 +5454,7 @@ mod imp {
         }
     }
 
-    fn unique_preset_lookup_name<'a>(presets: &'a [WorkspacePreset], name: &str) -> String {
+    fn unique_preset_lookup_name(presets: &[WorkspacePreset], name: &str) -> String {
         presets
             .iter()
             .find(|preset| preset.name == name)

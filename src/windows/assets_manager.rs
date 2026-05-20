@@ -6,18 +6,17 @@ mod imp {
     use std::rc::Rc;
 
     use serde::{Deserialize, Serialize};
-    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-        ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA,
-        GetClientRect, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-        LoadCursorW, RegisterClassW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW,
-        SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE,
-        WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, ES_AUTOHSCROLL,
+        ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect,
+        GetWindowLongPtrW, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY,
+        WM_SETFONT, WM_SIZE, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+        WS_VSCROLL,
     };
 
     use crate::model::assets::{
@@ -30,6 +29,10 @@ mod imp {
         validate_assets,
     };
     use crate::storage::asset_store::AssetStore;
+
+    use crate::windows::win32_helpers::{
+        create_child_window, read_window_text, register_window_class, wide,
+    };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsAssetsManager";
     const ID_GLOBAL_SCOPE: isize = 1001;
@@ -132,7 +135,7 @@ mod imp {
             return Err("could not resolve module handle for assets manager".into());
         }
 
-        register_window_class(instance)?;
+        register_window_class(instance, WINDOW_CLASS, Some(window_proc), "assets manager")?;
         let state = Box::new(AssetsWindowState {
             asset_store,
             workspace_root,
@@ -385,7 +388,7 @@ mod imp {
         let scope_y = MARGIN;
         let section_y = scope_y + BUTTON_HEIGHT + 10;
         let section_gap = 8;
-        let section_columns = (SECTION_BUTTONS.len() + SECTION_ROWS - 1) / SECTION_ROWS;
+        let section_columns = SECTION_BUTTONS.len().div_ceil(SECTION_ROWS);
         let section_button_width = ((content_width - (section_gap * (section_columns as i32 - 1)))
             / section_columns as i32)
             .max(110);
@@ -857,49 +860,6 @@ mod imp {
             .find_map(|(section, id)| (*id == command_id).then_some(*section))
     }
 
-    fn register_window_class(instance: HINSTANCE) -> Result<(), String> {
-        let class_name = wide(WINDOW_CLASS);
-        let mut class = unsafe { mem::zeroed::<WNDCLASSW>() };
-        class.style = CS_HREDRAW | CS_VREDRAW;
-        class.lpfnWndProc = Some(window_proc);
-        class.hInstance = instance;
-        class.hCursor = unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) };
-        class.lpszClassName = class_name.as_ptr();
-        let atom = unsafe { RegisterClassW(&class) };
-        if atom == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(1410) {
-                return Err(format!("RegisterClassW failed for assets manager: {error}"));
-            }
-        }
-        Ok(())
-    }
-
-    fn create_child_window(
-        parent: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        control_id: isize,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                0 as WINDOW_EX_STYLE,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                parent,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                ptr::null_mut(),
-            )
-        }
-    }
-
     unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut AssetsWindowState> {
         let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut AssetsWindowState;
         if ptr.is_null() {
@@ -907,20 +867,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn read_window_text(hwnd: HWND) -> String {
-        let length = unsafe { GetWindowTextLengthW(hwnd) };
-        if length <= 0 {
-            return String::new();
-        }
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-        String::from_utf16_lossy(&buffer[..copied as usize])
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
 

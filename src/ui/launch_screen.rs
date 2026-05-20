@@ -1,9 +1,11 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::gio;
+use gtk::{gio, glib};
 use uuid::Uuid;
 
 use crate::logging;
@@ -521,32 +523,50 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let active_layout = active_layout.clone();
         let tile_editor = tile_editor.clone();
         let session_name_entry = session_name_entry.clone();
+        let pending_rebuild: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
         path_entry.connect_changed(move |entry| {
-            let assets_for_rebuild = assets.clone();
-            rebuild_suggestion_panel(
-                &suggestions_section,
-                &suggestions_row,
-                &suggestion_cards,
-                &PathBuf::from(entry.text().as_str()),
-                &assets_for_rebuild,
-                {
-                    let summary = summary.clone();
-                    let active_layout = active_layout.clone();
-                    let tile_editor = tile_editor.clone();
-                    let session_name_entry = session_name_entry.clone();
-                    let assets = assets_for_rebuild.clone();
-                    move |suggestion| {
-                        apply_project_suggestion(
-                            &suggestion,
-                            &summary,
-                            &active_layout,
-                            &tile_editor,
-                            &assets,
-                            &session_name_entry,
-                        );
-                    }
-                },
-            );
+            if let Some(source_id) = pending_rebuild.borrow_mut().take() {
+                source_id.remove();
+            }
+
+            let suggestions_section = suggestions_section.clone();
+            let suggestions_row = suggestions_row.clone();
+            let suggestion_cards = suggestion_cards.clone();
+            let assets = assets.clone();
+            let summary = summary.clone();
+            let active_layout = active_layout.clone();
+            let tile_editor = tile_editor.clone();
+            let session_name_entry = session_name_entry.clone();
+            let workspace_root = PathBuf::from(entry.text().as_str());
+            let pending_rebuild_for_timeout = pending_rebuild.clone();
+            let source_id = glib::timeout_add_local_once(Duration::from_millis(250), move || {
+                rebuild_suggestion_panel(
+                    &suggestions_section,
+                    &suggestions_row,
+                    &suggestion_cards,
+                    &workspace_root,
+                    &assets,
+                    {
+                        let summary = summary.clone();
+                        let active_layout = active_layout.clone();
+                        let tile_editor = tile_editor.clone();
+                        let session_name_entry = session_name_entry.clone();
+                        let assets = assets.clone();
+                        move |suggestion| {
+                            apply_project_suggestion(
+                                &suggestion,
+                                &summary,
+                                &active_layout,
+                                &tile_editor,
+                                &assets,
+                                &session_name_entry,
+                            );
+                        }
+                    },
+                );
+                pending_rebuild_for_timeout.borrow_mut().take();
+            });
+            *pending_rebuild.borrow_mut() = Some(source_id);
         });
     }
 
@@ -2017,6 +2037,11 @@ fn rebuild_suggestion_panel<F>(
     }
 
     let suggestions = detect_project_suggestions(workspace_root);
+    let role_names_by_id = assets
+        .role_templates
+        .iter()
+        .map(|role| (role.id.as_str(), role.name.as_str()))
+        .collect::<HashMap<_, _>>();
     section.set_visible(!suggestions.is_empty());
 
     for suggestion in suggestions {
@@ -2047,13 +2072,7 @@ fn rebuild_suggestion_panel<F>(
         let role_names = suggestion
             .role_ids
             .iter()
-            .filter_map(|role_id| {
-                assets
-                    .role_templates
-                    .iter()
-                    .find(|role| role.id == *role_id)
-            })
-            .map(|role| role.name.clone())
+            .filter_map(|role_id| role_names_by_id.get(role_id.as_str()).copied())
             .collect::<Vec<_>>()
             .join(", ");
         content.append(

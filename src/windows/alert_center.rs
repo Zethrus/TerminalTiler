@@ -4,19 +4,20 @@ mod imp {
     use std::ptr;
     use std::rc::Rc;
 
-    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-        ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA,
-        GetClientRect, GetWindowLongPtrW, HMENU, IDC_ARROW, LB_ADDSTRING, LB_GETCURSEL,
-        LB_RESETCONTENT, LB_SETCURSEL, LBN_SELCHANGE, LoadCursorW, RegisterClassW, SW_SHOW,
-        SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT,
-        WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+        CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, ES_AUTOHSCROLL,
+        ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect,
+        GetWindowLongPtrW, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
+        LBN_SELCHANGE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY,
+        WM_SETFONT, WM_SIZE, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
         WS_VSCROLL,
     };
+
+    use crate::windows::win32_helpers::{create_child_window, register_window_class, wide};
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsAlertCenter";
     const ID_LIST: isize = 1001;
@@ -40,6 +41,9 @@ mod imp {
         pub on_mark_read: Rc<dyn Fn()>,
     }
 
+    type AlertAction = Rc<dyn Fn()>;
+    type SelectedAlertCallbacks = (usize, AlertAction, AlertAction);
+
     struct AlertCenterWindowState {
         entries: Vec<AlertCenterEntry>,
         list_hwnd: HWND,
@@ -62,7 +66,7 @@ mod imp {
             return Err("could not resolve module handle for alert center".into());
         }
 
-        register_window_class(instance)?;
+        register_window_class(instance, WINDOW_CLASS, Some(window_proc), "alert center")?;
         let state = Box::new(AlertCenterWindowState {
             entries,
             list_hwnd: ptr::null_mut(),
@@ -438,9 +442,7 @@ mod imp {
         }
     }
 
-    fn selected_jump_callbacks(
-        state: &AlertCenterWindowState,
-    ) -> Option<(usize, Rc<dyn Fn()>, Rc<dyn Fn()>)> {
+    fn selected_jump_callbacks(state: &AlertCenterWindowState) -> Option<SelectedAlertCallbacks> {
         let index = selected_index(state)?;
         let entry = state.entries.get(index)?.clone();
         Some((index, entry.on_jump, entry.on_mark_read))
@@ -448,7 +450,7 @@ mod imp {
 
     fn selected_reconnect_callbacks(
         state: &AlertCenterWindowState,
-    ) -> Option<(usize, Rc<dyn Fn()>, Rc<dyn Fn()>)> {
+    ) -> Option<SelectedAlertCallbacks> {
         let index = selected_index(state)?;
         let entry = state.entries.get(index)?.clone();
         Some((index, entry.on_reconnect?, entry.on_mark_read))
@@ -477,49 +479,6 @@ mod imp {
         }
     }
 
-    fn register_window_class(instance: HINSTANCE) -> Result<(), String> {
-        let class_name = wide(WINDOW_CLASS);
-        let mut class = unsafe { mem::zeroed::<WNDCLASSW>() };
-        class.style = CS_HREDRAW | CS_VREDRAW;
-        class.lpfnWndProc = Some(window_proc);
-        class.hInstance = instance;
-        class.hCursor = unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) };
-        class.lpszClassName = class_name.as_ptr();
-        let atom = unsafe { RegisterClassW(&class) };
-        if atom == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(1410) {
-                return Err(format!("RegisterClassW failed for alert center: {error}"));
-            }
-        }
-        Ok(())
-    }
-
-    fn create_child_window(
-        parent: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        control_id: isize,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                0 as WINDOW_EX_STYLE,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                parent,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                ptr::null_mut(),
-            )
-        }
-    }
-
     unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut AlertCenterWindowState> {
         let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut AlertCenterWindowState;
         if ptr.is_null() {
@@ -527,10 +486,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
 

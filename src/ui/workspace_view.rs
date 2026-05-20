@@ -17,7 +17,7 @@ use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
 use crate::services::layout_editor::{
     close_tile as close_layout_tile, split_web_tile, update_split_ratio,
 };
-use crate::services::output_helpers::{helper_summary_text, scan_output};
+use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
@@ -1330,6 +1330,7 @@ fn install_tile_alert_hooks(
     max_reconnect_attempts: u32,
 ) {
     let terminal = session.widget();
+    let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
     let last_helper_signature = Rc::new(RefCell::new(String::new()));
     {
         let session = session.clone();
@@ -1338,7 +1339,7 @@ fn install_tile_alert_hooks(
         let last_helper_signature = last_helper_signature.clone();
         terminal.connect_contents_changed(move |_| {
             let recent = session.recent_output(48);
-            let matches = scan_output(&tile.output_helpers, &recent);
+            let matches = output_helpers.scan(&recent);
             let (summary, severity) = helper_summary_text(&matches);
             let signature = format!("{}::{:?}", summary, severity);
             if matches.is_empty() || *last_helper_signature.borrow() == signature {

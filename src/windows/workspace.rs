@@ -95,7 +95,7 @@ mod imp {
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::services::layout_editor::{plan_tile_reconciliation, split_web_tile};
-    use crate::services::output_helpers::{helper_summary_text, scan_output};
+    use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::services::runbooks::resolve_runbook;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::PreferenceStore;
@@ -235,6 +235,9 @@ mod imp {
         voice_listening: bool,
         voice_global_hotkey_registered: bool,
         webview_environment: Option<ICoreWebView2Environment>,
+        // Pane HWND user data stores raw PaneState pointers; boxing keeps pane addresses stable
+        // even when the Vec reallocates.
+        #[allow(clippy::vec_box)]
         panes: Vec<Box<PaneState>>,
     }
 
@@ -289,6 +292,7 @@ mod imp {
         pressed_mouse_button: Option<u8>,
         header_press_origin: Option<POINT>,
         transcript: TranscriptBuffer,
+        output_helpers: CompiledOutputHelpers,
         last_helper_signature: String,
         reconnect_attempts: u8,
         termination_requested: bool,
@@ -974,7 +978,7 @@ mod imp {
             }
             WM_WEBVIEW_AUTO_REFRESH => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                    let _ = reload_web_pane_by_id(state, wparam as usize);
+                    let _ = reload_web_pane_by_id(state, wparam);
                 }
                 0
             }
@@ -996,13 +1000,13 @@ mod imp {
             }
             WM_PANE_EXIT => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                    mark_pane_exited(state, wparam as usize);
+                    mark_pane_exited(state, wparam);
                 }
                 0
             }
             WM_RECONNECT_PANE => {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                    let pane_id = wparam as usize;
+                    let pane_id = wparam;
                     let expected_attempt = lparam as u8;
                     let _ = reconnect_pane(state, pane_id, Some(expected_attempt));
                 }
@@ -2172,11 +2176,7 @@ mod imp {
             return false;
         };
         pane.transcript.push_input(text);
-        if session.write_input(text.as_bytes()).is_ok() {
-            true
-        } else {
-            false
-        }
+        session.write_input(text.as_bytes()).is_ok()
     }
 
     fn send_text_to_target(
@@ -2318,16 +2318,15 @@ mod imp {
                         });
                         if let Err(error) =
                             runbook_dialog::present(hwnd, runbook_for_dialog, on_submit)
+                            && let Some(state) = unsafe { window_state_mut(hwnd) }
                         {
-                            if let Some(state) = unsafe { window_state_mut(hwnd) } {
-                                let mut alert = AlertEventInput::new(
-                                    AlertSourceKind::Runbook,
-                                    AlertSeverity::Error,
-                                    format!("Runbook '{}' failed", runbook.name),
-                                );
-                                alert.detail = error;
-                                push_alert(state, alert);
-                            }
+                            let mut alert = AlertEventInput::new(
+                                AlertSourceKind::Runbook,
+                                AlertSeverity::Error,
+                                format!("Runbook '{}' failed", runbook.name),
+                            );
+                            alert.detail = error;
+                            push_alert(state, alert);
                         }
                     }
                 }),
@@ -3636,6 +3635,7 @@ mod imp {
         ui_font: HGDIOBJ,
     ) -> Box<PaneState> {
         let initial_web_uri = tile.url.clone();
+        let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
         let is_web_tile = tile.tile_kind == TileKind::WebView;
         let mut pane = Box::new(PaneState {
             id: NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed),
@@ -3661,6 +3661,7 @@ mod imp {
             pressed_mouse_button: None,
             header_press_origin: None,
             transcript: TranscriptBuffer::default(),
+            output_helpers,
             last_helper_signature: String::new(),
             reconnect_attempts: 0,
             termination_requested: false,
@@ -4546,7 +4547,7 @@ mod imp {
             logging::error(format!("pane OSC 52 clipboard write failed: {error}"));
         }
         let recent = pane.transcript.recent_output(48);
-        let matches = scan_output(&pane.tile.output_helpers, &recent);
+        let matches = pane.output_helpers.scan(&recent);
         let (summary, severity) = helper_summary_text(&matches);
         let signature = format!("{}::{:?}", summary, severity);
         if !matches.is_empty() && pane.last_helper_signature != signature {
@@ -5272,12 +5273,12 @@ mod imp {
         }
     }
 
-    fn hyperlink_at_lparam<'a>(pane: &'a PaneState, lparam: LPARAM) -> Option<&'a str> {
+    fn hyperlink_at_lparam(pane: &PaneState, lparam: LPARAM) -> Option<&str> {
         let position = pane_position_from_lparam(pane, lparam);
         pane.terminal.hyperlink_at(position.row, position.column)
     }
 
-    fn hyperlink_under_pointer<'a>(hwnd: HWND, pane: &'a PaneState) -> Option<&'a str> {
+    fn hyperlink_under_pointer(hwnd: HWND, pane: &PaneState) -> Option<&str> {
         let mut point = POINT { x: 0, y: 0 };
         unsafe {
             if GetCursorPos(&mut point) == 0 {

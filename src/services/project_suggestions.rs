@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -55,20 +55,30 @@ pub fn introspect_workspace(workspace_root: &Path) -> RepoIntrospectionReport {
 struct RootScan<'a> {
     root: &'a Path,
     entries: Vec<PathBuf>,
+    entry_names: HashSet<String>,
 }
 
 impl<'a> RootScan<'a> {
     fn new(root: &'a Path) -> Self {
+        let entries = fs::read_dir(root)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let entry_names = entries
+            .iter()
+            .filter_map(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+            })
+            .collect();
         Self {
             root,
-            entries: fs::read_dir(root)
-                .map(|entries| {
-                    entries
-                        .filter_map(Result::ok)
-                        .map(|entry| entry.path())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            entries,
+            entry_names,
         }
     }
 
@@ -77,9 +87,7 @@ impl<'a> RootScan<'a> {
     }
 
     fn has(&self, name: &str) -> bool {
-        self.entries
-            .iter()
-            .any(|path| path.file_name().is_some_and(|file_name| file_name == name))
+        self.entry_names.contains(name)
     }
 
     fn any_entry(&self, predicate: impl Fn(&Path) -> bool) -> bool {

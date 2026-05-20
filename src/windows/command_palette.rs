@@ -4,18 +4,20 @@ mod imp {
     use std::ptr;
     use std::rc::Rc;
 
-    use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-        EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW,
-        GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, LB_ADDSTRING, LB_GETCURSEL,
-        LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LoadCursorW, RegisterClassW, SW_SHOW,
-        SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        WINDOW_EX_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT,
-        WM_SIZE, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-        WS_VSCROLL,
+        CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE, ES_AUTOHSCROLL,
+        GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, LB_ADDSTRING, LB_GETCURSEL,
+        LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, SW_SHOW, SWP_NOZORDER, SendMessageW,
+        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE, WM_COMMAND,
+        WM_CREATE, WM_NCCREATE, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WS_BORDER, WS_CHILD,
+        WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    };
+
+    use crate::windows::win32_helpers::{
+        create_child_window, read_window_text, register_window_class, wide,
     };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsCommandPalette";
@@ -56,7 +58,7 @@ mod imp {
             return Err("could not resolve module handle for command palette".into());
         }
 
-        register_window_class(instance)?;
+        register_window_class(instance, WINDOW_CLASS, Some(window_proc), "command palette")?;
         let state = Box::new(PaletteWindowState {
             actions,
             filtered_indexes: Vec::new(),
@@ -344,51 +346,6 @@ mod imp {
         }
     }
 
-    fn register_window_class(instance: HINSTANCE) -> Result<(), String> {
-        let class_name = wide(WINDOW_CLASS);
-        let mut class = unsafe { mem::zeroed::<WNDCLASSW>() };
-        class.style = CS_HREDRAW | CS_VREDRAW;
-        class.lpfnWndProc = Some(window_proc);
-        class.hInstance = instance;
-        class.hCursor = unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) };
-        class.lpszClassName = class_name.as_ptr();
-        let atom = unsafe { RegisterClassW(&class) };
-        if atom == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(1410) {
-                return Err(format!(
-                    "RegisterClassW failed for command palette: {error}"
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn create_child_window(
-        parent: HWND,
-        class_name: &str,
-        text: &str,
-        style: u32,
-        control_id: isize,
-    ) -> HWND {
-        unsafe {
-            CreateWindowExW(
-                0 as WINDOW_EX_STYLE,
-                wide(class_name).as_ptr(),
-                wide(text).as_ptr(),
-                style,
-                0,
-                0,
-                0,
-                0,
-                parent,
-                control_id as HMENU,
-                GetModuleHandleW(ptr::null()),
-                ptr::null_mut(),
-            )
-        }
-    }
-
     unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut PaletteWindowState> {
         let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut PaletteWindowState;
         if ptr.is_null() {
@@ -396,20 +353,6 @@ mod imp {
         } else {
             Some(unsafe { &mut *ptr })
         }
-    }
-
-    fn read_window_text(hwnd: HWND) -> String {
-        let length = unsafe { GetWindowTextLengthW(hwnd) };
-        if length <= 0 {
-            return String::new();
-        }
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-        String::from_utf16_lossy(&buffer[..copied as usize])
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }
 
