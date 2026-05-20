@@ -175,9 +175,7 @@ impl ParakeetTranscriber {
             })
             .map_err(ParakeetTranscriberError::from)?;
         if !samples.is_empty() {
-            self.engine
-                .send(&VoiceEngineRequest::FinalAudioPcm16(samples))
-                .map_err(ParakeetTranscriberError::from)?;
+            self.send_final_audio_compat(samples)?;
         }
         self.read_final(on_partial)
     }
@@ -188,11 +186,22 @@ impl ParakeetTranscriber {
         on_partial: impl FnMut(String),
     ) -> Result<String, ParakeetTranscriberError> {
         if !samples.is_empty() {
-            self.engine
-                .send(&VoiceEngineRequest::FinalAudioPcm16(samples))
-                .map_err(ParakeetTranscriberError::from)?;
+            self.send_final_audio_compat(samples)?;
         }
         self.read_final(on_partial)
+    }
+
+    fn send_final_audio_compat(
+        &mut self,
+        samples: Vec<i16>,
+    ) -> Result<(), ParakeetTranscriberError> {
+        // Some installed voice packs predate the no-partial final-audio frame
+        // and answer `unknown command: audio-final-pcm16-hex`. The ordinary
+        // streaming audio frame carries the same PCM bytes and works with both
+        // old and new helpers; Stop still triggers the final transcript.
+        self.engine
+            .send(&VoiceEngineRequest::AudioPcm16(samples))
+            .map_err(ParakeetTranscriberError::from)
     }
 
     fn read_final(
@@ -303,6 +312,69 @@ mod tests {
         assert_eq!(transcriber.engine_process_id(), process_id);
         assert_eq!(transcriber.transcribe_pcm16(Vec::new()).unwrap(), "");
         assert_eq!(transcriber.engine_process_id(), process_id);
+
+        transcriber.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn final_audio_uses_streaming_frame_for_legacy_helper_compatibility() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-transcriber-final-compat-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let pack_root = root.join("legacy-final").join("1");
+        std::fs::create_dir_all(pack_root.join("model")).unwrap();
+        let engine_path = pack_root.join("legacy_engine.py");
+        std::fs::write(
+            &engine_path,
+            r#"#!/usr/bin/env python3
+import sys
+received_audio = False
+def emit(kind, payload=""):
+    print(f"{kind} {payload}" if payload else kind, flush=True)
+emit("ready", "legacy-helper")
+for raw in sys.stdin:
+    kind, _, _payload = raw.rstrip("\n").partition(" ")
+    if kind == "start":
+        emit("ready", "started")
+    elif kind == "audio-pcm16-hex":
+        received_audio = True
+        emit("partial", "received audio")
+    elif kind == "audio-final-pcm16-hex":
+        emit("error", "unknown command: audio-final-pcm16-hex")
+    elif kind == "stop":
+        emit("final", "legacy transcript" if received_audio else "")
+    elif kind == "shutdown":
+        emit("ready", "shutdown")
+        raise SystemExit(0)
+    else:
+        emit("error", f"unexpected command: {kind}")
+"#,
+        )
+        .unwrap();
+        let manifest = VoicePackManifest {
+            id: "legacy-final".into(),
+            version: "1".into(),
+            engine_executable: "legacy_engine.py".into(),
+            model_path: "model".into(),
+            archive_url: "builtin://legacy-final".into(),
+            archive_sha256: "builtin".into(),
+            model_name: "legacy/offline".into(),
+            streaming_model_name: "legacy/streaming".into(),
+            python_requirements: Vec::new(),
+        };
+        let health = VoicePackHealth::Ready {
+            engine_path,
+            model_path: pack_root.join("model"),
+        };
+        let mut transcriber =
+            ParakeetTranscriber::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
+
+        assert_eq!(
+            transcriber.transcribe_pcm16(vec![1, -2, 0x1234]).unwrap(),
+            "legacy transcript"
+        );
 
         transcriber.shutdown().unwrap();
         let _ = std::fs::remove_dir_all(root);
