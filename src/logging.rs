@@ -75,16 +75,25 @@ pub fn error(message: impl AsRef<str>) {
     write_log_line("ERROR", message.as_ref());
 }
 
-fn standard_log_path() -> Option<PathBuf> {
+pub fn log_directory() -> Option<PathBuf> {
     ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
         .and_then(|dirs| dirs.state_dir().map(|state_dir| state_dir.join("logs")))
-        .map(|dir| dir.join("terminaltiler.log"))
+}
+
+pub fn ensure_log_directory() -> io::Result<PathBuf> {
+    let dir = log_directory().ok_or_else(|| {
+        io::Error::other("could not resolve an application state directory for logs")
+    })?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn standard_log_path() -> Option<PathBuf> {
+    log_directory().map(|dir| dir.join("terminaltiler.log"))
 }
 
 fn session_log_path() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-        .and_then(|dirs| dirs.state_dir().map(|state_dir| state_dir.join("logs")))
-        .map(|dir| dir.join("terminaltiler-session.log"))
+    log_directory().map(|dir| dir.join("terminaltiler-session.log"))
 }
 
 fn open_logger(path: &Path, session_path: &Path) -> io::Result<(File, File)> {

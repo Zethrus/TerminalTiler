@@ -14,6 +14,7 @@ const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
+const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
@@ -144,6 +145,27 @@ fn voice_pack_install_uses_inline_progress_replacement() {
             && SETTINGS_DIALOG_RS.contains("set_visible_child_name(\"progress\")")
             && SETTINGS_DIALOG_RS.contains("voice_pack_status_provider"),
         "voice pack installation should replace the install button with a live progress bar while downloading"
+    );
+}
+
+#[test]
+fn settings_exposes_application_logs_folder_action() {
+    assert!(
+        SETTINGS_DIALOG_RS.contains("on_open_logs_folder")
+            && SETTINGS_DIALOG_RS.contains("\"Open Logs Folder\"")
+            && SETTINGS_DIALOG_RS.contains("icon_name::FOLDER"),
+        "GTK settings should expose a folder button for opening application logs"
+    );
+    assert!(
+        WINDOW_RS.contains("logging::ensure_log_directory()")
+            && WINDOW_RS.contains("gio::AppInfo::launch_default_for_uri"),
+        "GTK settings log-folder action should create the logs directory and launch it through the desktop"
+    );
+    assert!(
+        WINDOWS_APP_RS.contains("ID_SETTINGS_OPEN_LOGS_FOLDER")
+            && WINDOWS_APP_RS.contains("open_logs_folder_from_settings")
+            && WINDOWS_APP_RS.contains("ShellExecuteW"),
+        "Windows settings should expose and handle an Open Logs Folder button"
     );
 }
 

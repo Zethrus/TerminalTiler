@@ -20,7 +20,7 @@ mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-        Shell_NotifyIconW,
+        Shell_NotifyIconW, ShellExecuteW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
@@ -176,6 +176,7 @@ mod imp {
     const ID_SETTINGS_VOICE_PACK_HEALTH: isize = 2059;
     const ID_SETTINGS_VOICE_PACK_DELETE: isize = 2060;
     const ID_SETTINGS_VOICE_PACK_PROGRESS: isize = 2063;
+    const ID_SETTINGS_OPEN_LOGS_FOLDER: isize = 2064;
     const BUTTON_HEIGHT: i32 = 32;
     const BUTTON_WIDTH: i32 = 160;
     const MARGIN: i32 = 16;
@@ -762,6 +763,7 @@ mod imp {
                         ID_SETTINGS_VOICE_PACK_INSTALL => install_voice_pack_from_settings(state),
                         ID_SETTINGS_VOICE_PACK_HEALTH => check_voice_pack_from_settings(state),
                         ID_SETTINGS_VOICE_PACK_DELETE => delete_voice_pack_from_settings(state),
+                        ID_SETTINGS_OPEN_LOGS_FOLDER => open_logs_folder_from_settings(state),
                         ID_SETTINGS_HELP_FULLSCREEN_SHORTCUT => {
                             show_shortcut_help(hwnd, ShortcutField::Fullscreen)
                         }
@@ -2696,6 +2698,14 @@ mod imp {
             0,
             ID_SETTINGS_LABEL_RUNTIME,
         );
+        let _ = create_child_window(
+            hwnd,
+            "BUTTON",
+            "Open Logs Folder",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+            0,
+            ID_SETTINGS_OPEN_LOGS_FOLDER,
+        );
         state.runtime_status_hwnd = create_child_window(
             hwnd,
             "EDIT",
@@ -2803,6 +2813,7 @@ mod imp {
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_NOTE_COMMAND_PALETTE_SHORTCUT as i32) },
             state.shortcut_status_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_RUNTIME as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_OPEN_LOGS_FOLDER as i32) },
             state.runtime_status_hwnd,
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_PROBE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_RESET as i32) },
@@ -3216,8 +3227,17 @@ mod imp {
                 ptr::null_mut(),
                 MARGIN,
                 runtime_label_y,
-                content_width,
+                (content_width - BUTTON_WIDTH - 12).max(120),
                 LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_OPEN_LOGS_FOLDER as i32),
+                ptr::null_mut(),
+                width - MARGIN - BUTTON_WIDTH,
+                runtime_label_y - 6,
+                BUTTON_WIDTH,
+                BUTTON_HEIGHT,
                 SWP_NOZORDER,
             );
             SetWindowPos(
@@ -3355,6 +3375,45 @@ mod imp {
                 state.runtime_status_hwnd,
                 wide(&format!("{}\r\n\r\n{}", runtime_text, browser_text)).as_ptr(),
             );
+        }
+    }
+
+    fn open_logs_folder_from_settings(state: &SettingsWindowState) {
+        match logging::ensure_log_directory() {
+            Ok(path) => {
+                let operation = wide("open");
+                let target_text = path.to_string_lossy().to_string();
+                let target = wide(&target_text);
+                let result = unsafe {
+                    ShellExecuteW(
+                        state.window_hwnd,
+                        operation.as_ptr(),
+                        target.as_ptr(),
+                        ptr::null(),
+                        ptr::null(),
+                        SW_SHOW,
+                    )
+                };
+
+                if result as usize <= 32 {
+                    logging::error(format!(
+                        "failed to open application logs folder '{}': ShellExecuteW returned {}",
+                        path.display(),
+                        result as usize
+                    ));
+                    set_settings_status(state, "Failed to open logs folder.");
+                } else {
+                    logging::info(format!("opened application logs folder {}", path.display()));
+                    set_settings_status(state, "Opened logs folder.");
+                }
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "failed to prepare application logs folder: {}",
+                    error
+                ));
+                set_settings_status(state, "Could not resolve logs folder.");
+            }
         }
     }
 

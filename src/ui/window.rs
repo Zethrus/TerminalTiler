@@ -2470,6 +2470,41 @@ fn present_with_initial_workspace(
                             });
                         }
                     }),
+                    on_open_logs_folder: Rc::new({
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        move || match logging::ensure_log_directory() {
+                            Ok(path) => {
+                                let uri = gio::File::for_path(&path).uri();
+                                match gio::AppInfo::launch_default_for_uri(
+                                    uri.as_str(),
+                                    None::<&gio::AppLaunchContext>,
+                                ) {
+                                    Ok(()) => {
+                                        logging::info(format!(
+                                            "opened application logs folder {}",
+                                            path.display()
+                                        ));
+                                        show_toast(&toast_overlay, "Opened logs folder");
+                                    }
+                                    Err(error) => {
+                                        logging::error(format!(
+                                            "failed to open application logs folder '{}': {}",
+                                            path.display(),
+                                            error
+                                        ));
+                                        show_toast(&toast_overlay, "Failed to open logs folder");
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                logging::error(format!(
+                                    "failed to prepare application logs folder: {}",
+                                    error
+                                ));
+                                show_toast(&toast_overlay, "Could not resolve logs folder");
+                            }
+                        }
+                    }),
                     on_reset_defaults: Rc::new({
                         let preference_store = preference_store_for_settings.clone();
                         let refresh_handle = refresh_for_settings.clone();

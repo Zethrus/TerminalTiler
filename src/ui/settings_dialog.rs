@@ -78,6 +78,7 @@ pub struct SettingsDialogActions {
     pub voice_pack_status_provider: Rc<dyn Fn() -> VoicePackStatus>,
     pub on_voice_pack_delete_requested: Rc<dyn Fn()>,
     pub on_voice_pack_health_check_requested: Rc<dyn Fn()>,
+    pub on_open_logs_folder: Rc<dyn Fn()>,
     pub on_reset_defaults: Rc<dyn Fn()>,
     pub on_reset_builtin_presets: Rc<dyn Fn()>,
     pub on_size_changed: Rc<dyn Fn(i32, i32)>,
@@ -391,6 +392,7 @@ pub fn present(
         voice_pack_status_provider,
         on_voice_pack_delete_requested,
         on_voice_pack_health_check_requested,
+        on_open_logs_folder,
         on_reset_defaults,
         on_reset_builtin_presets,
         on_size_changed,
@@ -782,6 +784,29 @@ pub fn present(
     }
     reconnect_row.append(&reconnect_spin);
     connection_section.append(&reconnect_row);
+
+    let diagnostics_section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["config-panel", "settings-section"])
+        .build();
+    content.append(&diagnostics_section);
+
+    diagnostics_section.append(&build_section_header(
+        "Diagnostics",
+        "Local logs",
+        "Open the folder containing TerminalTiler's rolling log and current-session crash breadcrumb log.",
+    ));
+    diagnostics_section.append(&build_settings_action_row_with_icon(
+        "Application log files",
+        "Contains terminaltiler.log and terminaltiler-session.log for troubleshooting startup, runtime, and crash details.",
+        "Open Logs Folder",
+        icon_name::FOLDER,
+        {
+            let callback = on_open_logs_folder.clone();
+            move || callback()
+        },
+    ));
 
     let voice_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1594,6 +1619,19 @@ fn build_settings_action_row<F>(
 where
     F: Fn() + 'static,
 {
+    build_settings_action_row_with_icon(title, note, button_label, icon_name::RESET, on_click)
+}
+
+fn build_settings_action_row_with_icon<F>(
+    title: &str,
+    note: &str,
+    button_label: &str,
+    button_icon: &str,
+    on_click: F,
+) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
@@ -1627,7 +1665,7 @@ where
 
     let button = icons::labeled_button(
         button_label,
-        icon_name::RESET,
+        button_icon,
         &["pill-button", "secondary-button"],
     );
     button.connect_clicked(move |_| on_click());
