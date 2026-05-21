@@ -304,6 +304,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         launcher_editor_hwnd: HWND,
         controls_initializing: bool,
         controls_ready: bool,
+        syncing_launcher_controls: bool,
         startup_init_completed: bool,
         startup_probe_running: bool,
         runtime_probe_preferred_distribution: Option<String>,
@@ -431,6 +432,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             launcher_editor_hwnd: ptr::null_mut(),
             controls_initializing: false,
             controls_ready: false,
+            syncing_launcher_controls: false,
             startup_init_completed: false,
             startup_probe_running: false,
             runtime_probe_preferred_distribution: None,
@@ -639,7 +641,10 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 if let Some(state) = unsafe { state_mut(hwnd) } {
-                    if state.controls_initializing || !state.controls_ready {
+                    if state.controls_initializing
+                        || !state.controls_ready
+                        || state.syncing_launcher_controls
+                    {
                         return 0;
                     }
                     let notification = ((wparam >> 16) & 0xffff) as u32;
@@ -1657,9 +1662,18 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         refresh_suggestions(state);
         logging::info("Windows startup assets and suggestions refreshed");
 
+        let was_syncing = state.syncing_launcher_controls;
+        state.syncing_launcher_controls = true;
+        logging::info("Windows startup preset list population begin");
         populate_preset_list(state);
+        logging::info("Windows startup preset list population complete");
+        logging::info("Windows startup suggestion list population begin");
         populate_suggestion_list(state);
+        logging::info("Windows startup suggestion list population complete");
+        logging::info("Windows startup launcher selection apply begin");
         apply_launcher_selection(state);
+        logging::info("Windows startup launcher selection apply complete");
+        state.syncing_launcher_controls = was_syncing;
         logging::info("Windows startup lists populated and launcher selection applied");
 
         let session_outcome = state.session_store.load_with_status();
@@ -5277,7 +5291,25 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     fn apply_launcher_selection(state: &mut AppWindowState) {
-        match state.selected_source {
+        let was_syncing = state.syncing_launcher_controls;
+        state.syncing_launcher_controls = true;
+
+        apply_launcher_selection_controls(state);
+        sync_launch_appearance_controls(state);
+        sync_launcher_editor(state);
+        update_preset_action_buttons(state);
+        sync_status_text(state);
+
+        state.syncing_launcher_controls = was_syncing;
+    }
+
+    fn apply_launcher_selection_controls(state: &mut AppWindowState) {
+        let selected_source = match state.selected_source {
+            LaunchSelection::Preset(_) if state.presets.is_empty() => LaunchSelection::Template(0),
+            selected_source => selected_source,
+        };
+
+        match selected_source {
             LaunchSelection::Template(index) => {
                 let resolved = index.min(state.templates.len().saturating_sub(1));
                 state.selected_source = LaunchSelection::Template(resolved);
@@ -5297,11 +5329,6 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
             }
             LaunchSelection::Preset(index) => {
-                if state.presets.is_empty() {
-                    state.selected_source = LaunchSelection::Template(0);
-                    apply_launcher_selection(state);
-                    return;
-                }
                 let resolved = index.min(state.presets.len().saturating_sub(1));
                 state.selected_source = LaunchSelection::Preset(resolved);
                 if let Some(preset) = state.presets.get(resolved) {
@@ -5326,10 +5353,6 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
             }
         }
-        sync_launch_appearance_controls(state);
-        sync_launcher_editor(state);
-        update_preset_action_buttons(state);
-        sync_status_text(state);
     }
 
     fn sync_status_text(state: &AppWindowState) {

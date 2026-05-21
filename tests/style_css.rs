@@ -203,9 +203,16 @@ fn windows_launcher_startup_defers_heavy_initialization() {
     assert!(
         source_contains(
             WINDOWS_APP_RS,
-            "if state.controls_initializing || !state.controls_ready {\n                        return 0;\n                    }"
+            "if state.controls_initializing\n                        || !state.controls_ready\n                        || state.syncing_launcher_controls\n                    {\n                        return 0;\n                    }"
         ),
-        "Windows startup should ignore reentrant control notifications until controls are ready"
+        "Windows startup should ignore reentrant control notifications until controls are ready and while programmatically syncing controls"
+    );
+    assert!(
+        source_contains(
+            WINDOWS_APP_RS,
+            "let was_syncing = state.syncing_launcher_controls;\n        state.syncing_launcher_controls = true;"
+        ) && WINDOWS_APP_RS.contains("fn apply_launcher_selection_controls"),
+        "programmatic launcher selection sync should guard against recursive WM_COMMAND notifications"
     );
 }
 
