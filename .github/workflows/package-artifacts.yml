@@ -1,19 +1,21 @@
 name: Package Artifacts
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: package-artifacts-${{ github.ref }}
+  group: package-artifacts-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: true
 
 jobs:
   resolve-version:
-    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     outputs:
       package_version: ${{ steps.package_version.outputs.package_version }}
@@ -27,11 +29,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Resolve package version
         id: package_version
         env:
-          CI_BUILD_NUMBER: ${{ github.run_number }}
+          CI_BUILD_NUMBER: ${{ github.event.workflow_run.run_number || github.run_number }}
         run: bash packaging/resolve-package-version.sh
 
   package-linux:
@@ -42,6 +46,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Install Linux validation dependencies
         run: bash packaging/install-ubuntu-workflow-deps.sh
@@ -77,6 +83,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0

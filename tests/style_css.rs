@@ -12,6 +12,7 @@ const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
 const PACKAGE_APPIMAGE_SH: &str = include_str!("../packaging/build-appimage.sh");
+const PACKAGE_ARTIFACTS_YML: &str = include_str!("../.github/workflows/package-artifacts.yml");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
@@ -566,7 +567,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         CI_YML.contains("verify-windows-gtk")
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
-            && CI_YML.contains("windows-gtk-runtime-gvsbuild-v3")
+            && CI_YML.contains("windows-gtk-runtime-gvsbuild-v4")
             && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
@@ -579,6 +580,8 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SETUP_GTK_PS1.contains("PKG_CONFIG_PATH")
             && WINDOWS_SETUP_GTK_PS1.contains("libadwaita-1")
             && WINDOWS_SETUP_GTK_PS1.contains("RUSTUP_TOOLCHAIN = \"stable\"")
+            && WINDOWS_SETUP_GTK_PS1.contains("RUSTUP_HOME")
+            && WINDOWS_SETUP_GTK_PS1.contains("CARGO_HOME")
             && WINDOWS_SETUP_GTK_PS1.contains("GITHUB_ENV"),
         "Windows GTK setup script should provision/export native GTK/libadwaita build environment"
     );
@@ -627,6 +630,30 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_INSTALLER_WXS
                 .contains(r#"ComponentGroupRef Id="HarvestedPayloadComponents""#),
         "MSI packaging should harvest the full staged payload, including CSS, logo, hover icons, and GTK runtime files"
+    );
+}
+
+#[test]
+fn package_artifacts_waits_for_successful_ci_on_main() {
+    assert!(
+        PACKAGE_ARTIFACTS_YML.contains("workflow_run:")
+            && PACKAGE_ARTIFACTS_YML.contains("workflows: [CI]")
+            && PACKAGE_ARTIFACTS_YML.contains("types: [completed]")
+            && PACKAGE_ARTIFACTS_YML.contains("github.event.workflow_run.conclusion == 'success'")
+            && PACKAGE_ARTIFACTS_YML.contains(
+                "github.event.workflow_run.head_branch == github.event.repository.default_branch"
+            )
+            && PACKAGE_ARTIFACTS_YML
+                .contains("ref: ${{ github.event.workflow_run.head_sha || github.ref }}")
+            && PACKAGE_ARTIFACTS_YML.contains(
+                "CI_BUILD_NUMBER: ${{ github.event.workflow_run.run_number || github.run_number }}"
+            ),
+        "Package Artifacts should build the exact commit that completed the full CI workflow successfully on the default branch"
+    );
+
+    assert!(
+        !PACKAGE_ARTIFACTS_YML.contains("\n  push:"),
+        "Package Artifacts should not race CI by triggering directly on push"
     );
 }
 

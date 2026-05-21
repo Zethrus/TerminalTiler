@@ -133,7 +133,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\gtk-build\gtk\x64\release
-          key: windows-gtk-runtime-gvsbuild-v3-${{ runner.os }}
+          key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
 
       - name: Verify installer toolchain
         shell: pwsh

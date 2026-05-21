@@ -168,6 +168,8 @@ function Install-GtkWithGvsbuild {
         Add-PathPrefix -PathPrefix $scriptRoot.FullName
     }
     $gvsbuild = Get-Command gvsbuild -ErrorAction Stop
+    $gvsbuildCargoHome = Join-Path $BuildRoot "tools\cargo"
+    New-Item -ItemType Directory -Force -Path $gvsbuildCargoHome | Out-Null
 
     # gvsbuild builds Rust-based GTK dependencies such as librsvg with its own
     # rustup/cargo toolchain. GitHub Actions checks out TerminalTiler before this
@@ -176,7 +178,14 @@ function Install-GtkWithGvsbuild {
     # toolchain. cargo-c tracks recent Cargo internals and currently requires a
     # newer compiler than TerminalTiler itself, so isolate only the gvsbuild
     # subprocesses onto stable without exporting that override to later CI steps.
-    Invoke-WithProcessEnvironment -Variables @{ RUSTUP_TOOLCHAIN = "stable" } -ScriptBlock {
+    # The hosted runner also exports CARGO_HOME for the project toolchain; point
+    # gvsbuild at its own cargo home so cargo-cbuild lands beside gvsbuild's
+    # cargo.exe and Meson can find it when configuring librsvg.
+    Invoke-WithProcessEnvironment -Variables @{
+        RUSTUP_TOOLCHAIN = "stable"
+        RUSTUP_HOME      = $gvsbuildCargoHome
+        CARGO_HOME       = $gvsbuildCargoHome
+    } -ScriptBlock {
         Invoke-WithRetry -Description "build GTK4/libadwaita with gvsbuild" -Attempts 2 -DelaySeconds 60 -ScriptBlock {
             & $gvsbuild.Source build --build-dir $BuildRoot --configuration release gtk4 libadwaita librsvg adwaita-icon-theme
             if ($LASTEXITCODE -ne 0) {
