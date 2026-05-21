@@ -609,6 +609,35 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
                 .contains("tooltip_text(format!(\"Pane groups: {pane_groups}\"))"),
         "Windows GTK workspace preview headers should carry pane-group chips like the Linux GTK workspace headers"
     );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("\"Alerts (0)\"")
+            && WORKSPACE_PREVIEW_RS.contains("\"Broadcast Off\"")
+            && WORKSPACE_PREVIEW_RS.contains("\"Quick send command\"")
+            && WORKSPACE_PREVIEW_RS.contains("workspace-broadcast-entry")
+            && WORKSPACE_PREVIEW_RS.contains("\"Add Web Tile\"")
+            && WORKSPACE_PREVIEW_RS.contains("workspace-url-entry")
+            && WORKSPACE_PREVIEW_RS.contains("\"Reload\"")
+            && WORKSPACE_PREVIEW_RS.contains("surface-select-control")
+            && WORKSPACE_PREVIEW_RS.contains("\"Runbook\"")
+            && WORKSPACE_PREVIEW_RS.contains("\"Run\"")
+            && WORKSPACE_PREVIEW_RS.contains("fn saved_groups(tab: &SavedTab) -> Vec<String>"),
+        "Windows GTK workspace preview summary should mirror the Linux GTK workspace toolbar controls and classes"
+    );
+    assert!(
+        source_contains(
+            WORKSPACE_PREVIEW_RS,
+            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
+        ) && source_contains(
+            WORKSPACE_VIEW_RS,
+            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
+        ),
+        "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces"
+    );
+    assert!(
+        !WORKSPACE_PREVIEW_RS.contains("tab.preset.description")
+            && !WORKSPACE_PREVIEW_RS.contains("tab.preset.density.label"),
+        "Windows GTK workspace preview summary should not keep preview-only description/density chips that are absent from the Linux GTK workspace toolbar"
+    );
 
     assert!(
         WINDOW_RS.contains("gtk_shell::DEFAULT_WINDOW_WIDTH")

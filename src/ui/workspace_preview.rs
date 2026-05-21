@@ -139,42 +139,80 @@ fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
         .build();
     make_shrinkable(&summary);
 
-    let name_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(2)
+    let name_label = gtk::Label::builder()
+        .label(&tab.preset.name)
+        .halign(gtk::Align::Start)
         .hexpand(true)
+        .ellipsize(pango::EllipsizeMode::End)
+        .css_classes(["workspace-summary-name"])
         .build();
-    make_shrinkable(&name_box);
-    name_box.append(
-        &gtk::Label::builder()
-            .label(&tab.preset.name)
-            .halign(gtk::Align::Start)
-            .ellipsize(pango::EllipsizeMode::End)
-            .css_classes(["workspace-summary-name"])
-            .build(),
-    );
-    name_box.append(
-        &gtk::Label::builder()
-            .label(&tab.preset.description)
-            .halign(gtk::Align::Start)
-            .ellipsize(pango::EllipsizeMode::End)
-            .css_classes(["workspace-summary-subtitle"])
-            .build(),
-    );
-    summary.append(&name_box);
+    make_shrinkable(&name_label);
 
-    for label in [
-        format!("{} panes", tab.preset.layout.tile_specs().len()),
-        tab.preset.density.label().to_string(),
-    ] {
-        summary.append(
-            &gtk::Label::builder()
-                .label(label)
-                .valign(gtk::Align::Center)
-                .css_classes(["status-chip", "muted-chip"])
-                .build(),
-        );
+    let alert_button =
+        icons::labeled_button("Alerts (0)", icon_name::ALERTS, &["flat", "surface-button"]);
+    alert_button.set_sensitive(false);
+
+    let broadcast_state = gtk::Label::builder()
+        .label("Broadcast Off")
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "muted-chip"])
+        .build();
+
+    let broadcast_selector = gtk::ComboBoxText::new();
+    broadcast_selector.add_css_class("surface-select-control");
+    broadcast_selector.append(Some("off"), "Broadcast Off");
+    broadcast_selector.append(Some("all"), "Broadcast All");
+    for group in saved_groups(tab) {
+        let id = format!("group:{group}");
+        broadcast_selector.append(Some(&id), &format!("Group: {group}"));
     }
+    broadcast_selector.set_active_id(Some("off"));
+    broadcast_selector.set_sensitive(false);
+
+    let broadcast_entry = gtk::Entry::builder()
+        .placeholder_text("Quick send command")
+        .width_chars(18)
+        .css_classes(["workspace-broadcast-entry"])
+        .sensitive(false)
+        .build();
+    let broadcast_button =
+        icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
+    broadcast_button.set_sensitive(false);
+
+    let add_web_tile_button =
+        icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
+    add_web_tile_button.set_sensitive(false);
+
+    let url_entry = gtk::Entry::builder()
+        .placeholder_text("URL")
+        .width_chars(30)
+        .hexpand(false)
+        .css_classes(["workspace-url-entry"])
+        .sensitive(false)
+        .build();
+    let url_reload_button =
+        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
+    url_reload_button.set_sensitive(false);
+
+    let runbook_selector = gtk::ComboBoxText::new();
+    runbook_selector.add_css_class("surface-select-control");
+    runbook_selector.append(Some(""), "Runbook");
+    runbook_selector.set_active_id(Some(""));
+    runbook_selector.set_sensitive(false);
+    let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
+    runbook_button.set_sensitive(false);
+
+    summary.append(&name_label);
+    summary.append(&alert_button);
+    summary.append(&broadcast_state);
+    summary.append(&broadcast_selector);
+    summary.append(&broadcast_entry);
+    summary.append(&broadcast_button);
+    summary.append(&add_web_tile_button);
+    summary.append(&url_entry);
+    summary.append(&url_reload_button);
+    summary.append(&runbook_selector);
+    summary.append(&runbook_button);
 
     summary.append(
         &gtk::Label::builder()
@@ -188,6 +226,20 @@ fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
     );
 
     summary.upcast()
+}
+
+fn saved_groups(tab: &SavedTab) -> Vec<String> {
+    let mut groups = tab
+        .preset
+        .layout
+        .tile_specs()
+        .into_iter()
+        .flat_map(|tile| tile.pane_groups)
+        .filter(|group| !group.trim().is_empty())
+        .collect::<Vec<_>>();
+    groups.sort();
+    groups.dedup();
+    groups
 }
 
 fn build_layout(layout: &LayoutNode) -> gtk::Widget {
