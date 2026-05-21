@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: create-release-tag
@@ -28,6 +29,7 @@ jobs:
           fetch-depth: 0
 
       - name: Create next release tag
+        id: create_tag
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           VERIFY_LINUX_RELEASE: ${{ inputs.verify_linux_release }}
@@ -39,3 +41,21 @@ jobs:
           fi
 
           bash packaging/create-release-tag.sh "${args[@]}"
+
+      - name: Dispatch release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.create_tag.outputs.release_tag }}
+        shell: bash
+        run: |
+          if [[ -z "$RELEASE_TAG" ]]; then
+            echo "release tag output was empty" >&2
+            exit 1
+          fi
+
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f tag="$RELEASE_TAG"
+
+          echo "dispatched Release workflow for ${RELEASE_TAG}"

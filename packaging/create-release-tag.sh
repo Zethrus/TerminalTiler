@@ -91,6 +91,34 @@ ensure_tag_does_not_exist() {
   fi
 }
 
+configure_github_actions_git_identity() {
+  if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+    return 0
+  fi
+
+  if ! git -C "$ROOT_DIR" config user.name >/dev/null; then
+    git -C "$ROOT_DIR" config user.name "github-actions[bot]"
+  fi
+
+  if ! git -C "$ROOT_DIR" config user.email >/dev/null; then
+    git -C "$ROOT_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  fi
+}
+
+write_github_outputs() {
+  local release_version="$1"
+  local release_tag="$2"
+
+  if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
+    return 0
+  fi
+
+  {
+    printf 'release_version=%s\n' "$release_version"
+    printf 'release_tag=%s\n' "$release_tag"
+  } >> "$GITHUB_OUTPUT"
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -141,8 +169,11 @@ main() {
     PACKAGE_VERSION="$next_version" RELEASE_TAG="$next_tag" bash "$ROOT_DIR/packaging/release-verify.sh"
   fi
 
+  configure_github_actions_git_identity
+
   git -C "$ROOT_DIR" tag -a "$next_tag" -m "Release ${next_tag}"
   git -C "$ROOT_DIR" push origin "$next_tag"
+  write_github_outputs "$next_version" "$next_tag"
 
   echo "created and pushed ${next_tag}"
 }

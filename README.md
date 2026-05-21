@@ -204,7 +204,7 @@ The local script:
 - runs `packaging/release-verify.sh` by default before creating the tag
 - creates and pushes an annotated tag, which triggers the `Release` workflow
 
-GitHub Actions also exposes a manual `Create Release Tag` workflow. Run it from the Actions UI when you want GitHub to create and push the next tag for you. By default it skips the local Linux preflight and lets the downstream `Release` workflow handle build validation, but you can enable the preflight input when you want that extra gate before tagging.
+GitHub Actions also exposes a manual `Create Release Tag` workflow. Run it from the Actions UI when you want GitHub to create and push the next tag for you. The workflow tags with the standard `github-actions[bot]` identity and then explicitly dispatches the `Release` workflow for the new tag. By default it skips the local Linux preflight and lets the downstream `Release` workflow handle build validation, but you can enable the preflight input when you want that extra gate before tagging.
 
 Manual equivalent:
 

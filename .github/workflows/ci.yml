@@ -56,6 +56,7 @@ jobs:
             packaging/build-appimage.sh \
             packaging/build-deb.sh \
             packaging/build-in-container.sh \
+            packaging/create-release-tag.sh \
             packaging/resolve-package-version.sh \
             packaging/release-smoke-test.sh \
             packaging/release-verify.sh \
