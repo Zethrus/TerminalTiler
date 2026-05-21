@@ -278,32 +278,32 @@ pub fn load_config_snapshot(workspace_root: Option<&Path>) -> io::Result<ConfigS
 
 pub fn load_sync_snapshot(options: SyncSnapshotOptions) -> io::Result<SyncSnapshot> {
     let mut documents = Vec::new();
-    if options.include_preferences {
-        if let Some(path) = preferences_path() {
-            push_preference_document_if_exists(&mut documents, &path)?;
-        }
+    if options.include_preferences
+        && let Some(path) = preferences_path()
+    {
+        push_preference_document_if_exists(&mut documents, &path)?;
     }
-    if options.include_presets {
-        if let Some(path) = presets_path() {
-            push_sync_document_if_exists(
-                &mut documents,
-                SyncDocumentKind::Presets,
-                "presets",
-                "presets.toml",
-                &path,
-            )?;
-        }
+    if options.include_presets
+        && let Some(path) = presets_path()
+    {
+        push_sync_document_if_exists(
+            &mut documents,
+            SyncDocumentKind::Presets,
+            "presets",
+            "presets.toml",
+            &path,
+        )?;
     }
-    if options.include_global_assets {
-        if let Some(path) = assets_path() {
-            push_sync_document_if_exists(
-                &mut documents,
-                SyncDocumentKind::GlobalAssets,
-                "global-assets",
-                "workspace-assets.toml",
-                &path,
-            )?;
-        }
+    if options.include_global_assets
+        && let Some(path) = assets_path()
+    {
+        push_sync_document_if_exists(
+            &mut documents,
+            SyncDocumentKind::GlobalAssets,
+            "global-assets",
+            "workspace-assets.toml",
+            &path,
+        )?;
     }
     if options.include_workspace_configs {
         for root in sync_workspace_roots(&options)? {
@@ -547,12 +547,12 @@ fn sync_workspace_roots(options: &SyncSnapshotOptions) -> io::Result<Vec<PathBuf
     for root in &options.workspace_roots {
         roots.insert(root.clone());
     }
-    if let Some(path) = presets_path() {
-        if let Ok(document) = read_preset_document(&path) {
-            for preset in document.presets {
-                if let Some(root) = preset.workspace_root {
-                    roots.insert(root);
-                }
+    if let Some(path) = presets_path()
+        && let Ok(document) = read_preset_document(&path)
+    {
+        for preset in document.presets {
+            if let Some(root) = preset.workspace_root {
+                roots.insert(root);
             }
         }
     }
