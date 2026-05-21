@@ -17,19 +17,9 @@ TerminalTiler follows an open-core product model: the core app stays public and 
 
 Already-public features should not be hidden retroactively. Keep public functionality available in this repository.
 
-## External Add-ons Stay Separate
+## External Boundaries
 
-External add-on materials must stay outside this repository:
-
-- External add-on materials
-- External add-on materials
-- External add-on materials
-- External add-on materials
-- External add-on materials
-- External add-on materials
-- External add-on materials
-
-The dependency direction should stay one-way: External projects may use Core public APIs, but Core must remain independent.
+External materials must stay outside this repository. Public Core APIs may be used by other projects, but Core must remain independent of external code, credentials, services, and unpublished build steps.
 
 ## Stable Public Identity
 
