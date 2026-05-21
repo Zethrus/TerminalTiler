@@ -3,6 +3,7 @@ mod app;
 mod app_paths;
 mod dropped_paths;
 pub mod extension;
+pub mod gtk_shell;
 mod logging;
 mod model;
 pub mod open_core;
@@ -15,7 +16,10 @@ mod terminal;
 mod transcript;
 #[cfg(target_os = "linux")]
 mod tray;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 mod ui;
 pub mod voice;
 #[cfg(target_os = "windows")]

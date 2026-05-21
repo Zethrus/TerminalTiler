@@ -3,7 +3,9 @@ const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
+const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const DESIGN_MD: &str = include_str!("../DESIGN.md");
+const GTK_SHELL_RS: &str = include_str!("../src/gtk_shell/mod.rs");
 const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
@@ -15,6 +17,11 @@ const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
 const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
+const WINDOWS_BUILD_PS1: &str = include_str!("../packaging/build-windows.ps1");
+const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
+const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
+const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
+const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
@@ -476,6 +483,107 @@ fn launch_buttons_use_premium_role_contract() {
     assert!(
         !global_flat_button_override,
         "premium polish should not restyle every flat row/list/context-menu button globally"
+    );
+}
+
+#[test]
+fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback() {
+    for dependency in [
+        "windows-gtk-shell = [\"dep:adw\", \"dep:gdk\", \"dep:gtk\"]",
+        "windows-win32-shell = []",
+        "adw = { package = \"libadwaita\"",
+        "gtk = { package = \"gtk4\"",
+        "gdk = { package = \"gdk4\"",
+    ] {
+        assert!(
+            CARGO_TOML.contains(dependency),
+            "Windows GTK parity should declare explicit optional GTK/libadwaita dependency or feature: {dependency}"
+        );
+    }
+
+    assert!(
+        GTK_SHELL_RS.contains("STYLE_CSS: &str = include_str!")
+            && GTK_SHELL_RS.contains("SHARED_VISUAL_CONTRACT_CLASSES")
+            && GTK_SHELL_RS.contains("WINDOWS_GTK_RESOURCE_PAYLOAD")
+            && GTK_SHELL_RS.contains("PLATFORM_RUNTIME_ADAPTERS")
+            && GTK_SHELL_RS.contains("terminal-pane")
+            && GTK_SHELL_RS.contains("web-pane"),
+        "shared GTK shell contract should centralize CSS, resources, visual classes, and runtime adapter boundaries"
+    );
+
+    for class_name in [
+        "window-shell",
+        "launch-shell",
+        "launch-stage",
+        "launch-dashboard",
+        "launch-wizard-shell",
+        "saved-workspace-card",
+        "wizard-step-chip",
+        "app-tab",
+        "workspace-summary",
+        "terminal-card",
+        "web-tile-frame",
+        "primary-cta-button",
+    ] {
+        assert!(
+            GTK_SHELL_RS.contains(class_name) && STYLE_CSS.contains(&format!(".{class_name}")),
+            "Windows GTK parity contract should name and CSS should style class {class_name}"
+        );
+    }
+
+    assert!(
+        WINDOWS_MOD_RS.contains("feature = \"windows-gtk-shell\"")
+            && WINDOWS_MOD_RS.contains("feature = \"windows-win32-shell\"")
+            && WINDOWS_MOD_RS.contains("gtk_app::run")
+            && WINDOWS_MOD_RS.contains("app::run"),
+        "Windows module routing should make GTK shell selectable while retaining the Win32 fallback"
+    );
+
+    assert!(
+        WINDOWS_GTK_APP_RS.contains("windows GTK shell startup")
+            && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
+            && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
+            && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
+            && WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
+            && WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
+        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and keep Windows runtime launch behind adapters"
+    );
+}
+
+#[test]
+fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
+    for payload in [
+        "resources\\style.css",
+        "resources\\terminaltiler.svg",
+        "resources\\hover-icons\\*.svg",
+        "Copy-WindowsGtkRuntime",
+        "TERMINALTILER_GTK_RUNTIME_ROOT",
+    ] {
+        assert!(
+            WINDOWS_BUILD_PS1.contains(payload),
+            "Windows packaging should stage GTK/libadwaita parity payload: {payload}"
+        );
+    }
+
+    for payload in [
+        "share\\style.css",
+        "share\\terminaltiler.svg",
+        "share\\hover-icons\\terminal.svg",
+        "share\\hover-icons\\layout-dashboard.svg",
+        "share\\hover-icons\\save.svg",
+    ] {
+        assert!(
+            WINDOWS_SMOKE_PS1.contains(payload),
+            "Windows smoke test should assert GTK parity payload: {payload}"
+        );
+    }
+
+    assert!(
+        WINDOWS_INSTALLER_WXS.contains("GtkSharedResourceComponent")
+            && WINDOWS_INSTALLER_WXS.contains("GtkHoverIconComponent")
+            && WINDOWS_INSTALLER_WXS.contains("share\\style.css")
+            && WINDOWS_INSTALLER_WXS.contains("share\\hover-icons\\terminal.svg"),
+        "MSI packaging should include CSS, logo, and hover icons rather than only the executable"
     );
 }
 

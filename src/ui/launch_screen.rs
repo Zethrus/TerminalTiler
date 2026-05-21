@@ -1521,7 +1521,9 @@ fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
 }
 
 fn build_terminaltiler_logo_image() -> gtk::Image {
-    let logo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/terminaltiler.svg");
+    let logo_path = gtk_resource_path("terminaltiler.svg").unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/terminaltiler.svg")
+    });
     let launch_icon = if logo_path.exists() {
         gtk::Image::from_file(logo_path)
     } else {
@@ -1533,6 +1535,29 @@ fn build_terminaltiler_logo_image() -> gtk::Image {
     launch_icon.set_size_request(28, 28);
     launch_icon.add_css_class("launch-overview-logo-image");
     launch_icon
+}
+
+fn gtk_resource_path(file_name: &str) -> Option<PathBuf> {
+    let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join(file_name);
+    if manifest_path.exists() {
+        return Some(manifest_path);
+    }
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(app_root) = exe.parent()
+    {
+        let portable_path = app_root.join("share").join(file_name);
+        if portable_path.exists() {
+            return Some(portable_path);
+        }
+        if let Some(parent) = app_root.parent() {
+            return Some(parent.join("share").join(file_name));
+        }
+    }
+
+    Some(PathBuf::from("/usr/share/terminaltiler").join(file_name))
 }
 
 fn build_section_header(kicker: &str, title: &str, body: &str) -> gtk::Widget {

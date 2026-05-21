@@ -47,6 +47,54 @@
       </Component>
     </DirectoryRef>
 
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Directory Id="ShareFolder" Name="share">
+        <Directory Id="HoverIconsFolder" Name="hover-icons" />
+      </Directory>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ShareFolder">
+      <Component Id="GtkSharedResourceComponent" Guid="{1BA05BB4-36ED-4FF6-91FE-8EF3F4CB8E79}" Win64="yes">
+        <File Id="GtkStyleCssFile" Source="$(var.StageDir)\share\style.css" />
+        <File Id="GtkLogoFile" Source="$(var.StageDir)\share\terminaltiler.svg" />
+        <RemoveFolder Id="RemoveShareFolder" Directory="ShareFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Zethrus\TerminalTiler"
+          Name="GtkResourcesInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="HoverIconsFolder">
+      <Component Id="GtkHoverIconComponent" Guid="{25373405-2CB3-488C-9752-591B2A45BE15}" Win64="yes">
+        <File Id="HoverArrowBackIcon" Source="$(var.StageDir)\share\hover-icons\arrow-back.svg" />
+        <File Id="HoverArrowNarrowRightIcon" Source="$(var.StageDir)\share\hover-icons\arrow-narrow-right.svg" />
+        <File Id="HoverCheckedIcon" Source="$(var.StageDir)\share\hover-icons\checked.svg" />
+        <File Id="HoverCopyIcon" Source="$(var.StageDir)\share\hover-icons\copy.svg" />
+        <File Id="HoverExternalLinkIcon" Source="$(var.StageDir)\share\hover-icons\external-link.svg" />
+        <File Id="HoverLayoutDashboardIcon" Source="$(var.StageDir)\share\hover-icons\layout-dashboard.svg" />
+        <File Id="HoverPlayerIcon" Source="$(var.StageDir)\share\hover-icons\player.svg" />
+        <File Id="HoverRefreshIcon" Source="$(var.StageDir)\share\hover-icons\refresh.svg" />
+        <File Id="HoverSaveIcon" Source="$(var.StageDir)\share\hover-icons\save.svg" />
+        <File Id="HoverSendHorizontalIcon" Source="$(var.StageDir)\share\hover-icons\send-horizontal.svg" />
+        <File Id="HoverTerminalIcon" Source="$(var.StageDir)\share\hover-icons\terminal.svg" />
+        <File Id="HoverTrashIcon" Source="$(var.StageDir)\share\hover-icons\trash.svg" />
+        <File Id="HoverTriangleAlertIcon" Source="$(var.StageDir)\share\hover-icons\triangle-alert.svg" />
+        <File Id="HoverXIcon" Source="$(var.StageDir)\share\hover-icons\x.svg" />
+        <RemoveFolder Id="RemoveHoverIconsFolder" Directory="HoverIconsFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Zethrus\TerminalTiler"
+          Name="GtkHoverIconsInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
     <DirectoryRef Id="ApplicationProgramsFolder">
       <Component Id="ShortcutComponent" Guid="{9761F1E4-A877-4E17-8A66-5AF96A1A7E5E}" Win64="yes">
         <Shortcut
@@ -68,6 +116,8 @@
 
     <Feature Id="MainFeature" Title="TerminalTiler" Level="1">
       <ComponentRef Id="InstallPayloadComponent" />
+      <ComponentRef Id="GtkSharedResourceComponent" />
+      <ComponentRef Id="GtkHoverIconComponent" />
       <ComponentRef Id="ShortcutComponent" />
     </Feature>
   </Product>

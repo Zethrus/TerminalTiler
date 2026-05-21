@@ -34,7 +34,7 @@ pub fn run_with_options(options: RuntimeOptions) -> adw::glib::ExitCode {
         let tray_rx = tray_rx.clone();
         let tray_controller = tray_controller.clone();
         app.connect_startup(move |app| {
-            load_css();
+            crate::gtk_shell::load_css_for_default_display();
             if let Some(receiver) = tray_rx.borrow_mut().take() {
                 install_tray_command_pump(app, receiver, tray_controller.clone());
             }
@@ -163,17 +163,4 @@ fn primary_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {
 fn restore_window(window: &adw::ApplicationWindow) {
     window.set_visible(true);
     window.present();
-}
-
-fn load_css() {
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(include_str!("../../resources/style.css"));
-
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
 }

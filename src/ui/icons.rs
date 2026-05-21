@@ -148,9 +148,15 @@ fn hover_icon_path(icon_name: &str) -> Option<PathBuf> {
     }
 
     if let Ok(exe) = std::env::current_exe()
-        && let Some(app_root) = exe.parent().and_then(|bin| bin.parent())
+        && let Some(exe_dir) = exe.parent()
     {
-        return Some(app_root.join("share/hover-icons").join(file_name));
+        let portable_path = exe_dir.join("share/hover-icons").join(file_name);
+        if portable_path.exists() {
+            return Some(portable_path);
+        }
+        if let Some(app_root) = exe_dir.parent() {
+            return Some(app_root.join("share/hover-icons").join(file_name));
+        }
     }
 
     Some(PathBuf::from("/usr/share/terminaltiler/hover-icons").join(file_name))

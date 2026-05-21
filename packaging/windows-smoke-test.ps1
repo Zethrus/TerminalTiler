@@ -40,6 +40,16 @@ function Assert-Path {
     }
 }
 
+function Assert-WindowsGtkPayload {
+    param([string]$PayloadRoot)
+
+    Assert-Path -Path (Join-Path $PayloadRoot "share\style.css") -Description "Shared GTK CSS"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\terminaltiler.svg") -Description "TerminalTiler GTK logo"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\terminal.svg") -Description "GTK terminal hover icon"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\layout-dashboard.svg") -Description "GTK dashboard hover icon"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\save.svg") -Description "GTK save hover icon"
+}
+
 function Convert-ToTomlPath {
     param([string]$Path)
 
@@ -449,6 +459,7 @@ $PortableExe = Join-Path $PortableExtractRoot "TerminalTiler.exe"
 $PortableReadme = Join-Path $PortableExtractRoot "README-windows.txt"
 Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
+Assert-WindowsGtkPayload -PayloadRoot $PortableExtractRoot
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $PortableExe `
@@ -470,6 +481,7 @@ $InstalledExe = Join-Path $NsisInstallRoot "TerminalTiler.exe"
 $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
+Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $InstalledExe `
@@ -489,6 +501,7 @@ if ($MsiInstallProcess.ExitCode -ne 0) {
 
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
+Assert-WindowsGtkPayload -PayloadRoot $MsiInstallRoot
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $MsiInstalledExe `

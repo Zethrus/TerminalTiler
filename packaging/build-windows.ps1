@@ -1,5 +1,7 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
+    [switch]$UseGtkShell,
+    [string]$GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT,
     [switch]$SkipCargoBuild,
     [switch]$RequireInstallers
 )
@@ -80,6 +82,59 @@ function Save-SuccessfulBuildVersion {
     Set-Content -Path $LastSuccessfulVersionFile -Value $Version -NoNewline
 }
 
+function Copy-WindowsGtkResources {
+    param(
+        [string]$RootDir,
+        [string]$PortableRoot
+    )
+
+    $ShareRoot = Join-Path $PortableRoot "share"
+    $HoverIconRoot = Join-Path $ShareRoot "hover-icons"
+    New-Item -ItemType Directory -Force -Path $HoverIconRoot | Out-Null
+
+    Copy-Item -Path (Join-Path $RootDir "resources\style.css") -Destination (Join-Path $ShareRoot "style.css") -Force
+    Copy-Item -Path (Join-Path $RootDir "resources\terminaltiler.svg") -Destination (Join-Path $ShareRoot "terminaltiler.svg") -Force
+    Copy-Item -Path (Join-Path $RootDir "resources\hover-icons\*.svg") -Destination $HoverIconRoot -Force
+}
+
+function Copy-WindowsGtkRuntime {
+    param(
+        [string]$RuntimeRoot,
+        [string]$PortableRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+        Write-Host "==> no GTK runtime root supplied; staged payload will rely on system GTK/libadwaita"
+        return
+    }
+    if (-not (Test-Path $RuntimeRoot)) {
+        throw "GTK runtime root was not found at $RuntimeRoot"
+    }
+
+    Write-Host "==> bundling GTK/libadwaita runtime from $RuntimeRoot"
+    $RuntimeBin = Join-Path $RuntimeRoot "bin"
+    if (Test-Path $RuntimeBin) {
+        Copy-Item -Path (Join-Path $RuntimeBin "*.dll") -Destination $PortableRoot -Force
+    }
+
+    foreach ($relative in @(
+        "etc",
+        "lib\gdk-pixbuf-2.0",
+        "lib\gio",
+        "lib\gtk-4.0",
+        "share\glib-2.0",
+        "share\icons",
+        "share\themes"
+    )) {
+        $source = Join-Path $RuntimeRoot $relative
+        if (Test-Path $source) {
+            $destination = Join-Path $PortableRoot $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -Path $source -Destination $destination -Recurse -Force
+        }
+    }
+}
+
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -101,7 +156,11 @@ $WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
 
 if (-not $SkipCargoBuild) {
     Write-Host "==> building Windows release binary"
-    cargo build --release --features voice-cpal --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
+    $BuildFeatures = @("voice-cpal")
+    if ($UseGtkShell) {
+        $BuildFeatures += "windows-gtk-shell"
+    }
+    cargo build --release --features ($BuildFeatures -join ",") --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
 } else {
     Write-Host "==> using existing Windows release binary"
 }
@@ -116,11 +175,23 @@ New-Item -ItemType Directory -Force -Path $PortableRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Copy-Item -Path $BinaryPath -Destination (Join-Path $PortableRoot "TerminalTiler.exe")
+Copy-WindowsGtkResources -RootDir $RootDir -PortableRoot $PortableRoot
+if ($UseGtkShell) {
+    Copy-WindowsGtkRuntime -RuntimeRoot $GtkRuntimeRoot -PortableRoot $PortableRoot
+}
 
 $ReadmePath = Join-Path $PortableRoot "README-windows.txt"
 @"
 TerminalTiler for Windows
 =========================
+
+Shell:
+- GTK/libadwaita is the canonical parity shell when the package is built with
+  -UseGtkShell. It loads the same style.css, TerminalTiler logo, and hover icon
+  payload as the Ubuntu GTK build.
+- The Win32 shell remains available as an internal compatibility fallback when
+  the package is built without -UseGtkShell or with the windows-win32-shell
+  cargo feature.
 
 Runtime selection:
 - WSL2 is preferred when a valid distro is available.
