@@ -566,6 +566,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         CI_YML.contains("verify-windows-gtk")
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
+            && CI_YML.contains("windows-gtk-runtime-gvsbuild-v3")
             && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
@@ -577,6 +578,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SETUP_GTK_PS1.contains("TERMINALTILER_GTK_RUNTIME_ROOT")
             && WINDOWS_SETUP_GTK_PS1.contains("PKG_CONFIG_PATH")
             && WINDOWS_SETUP_GTK_PS1.contains("libadwaita-1")
+            && WINDOWS_SETUP_GTK_PS1.contains("RUSTUP_TOOLCHAIN = \"stable\"")
             && WINDOWS_SETUP_GTK_PS1.contains("GITHUB_ENV"),
         "Windows GTK setup script should provision/export native GTK/libadwaita build environment"
     );

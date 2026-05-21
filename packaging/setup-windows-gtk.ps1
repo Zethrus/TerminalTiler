@@ -60,6 +60,28 @@ function Invoke-WithRetry {
     }
 }
 
+function Invoke-WithProcessEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Variables,
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock
+    )
+
+    $previousValues = @{}
+    foreach ($entry in $Variables.GetEnumerator()) {
+        $previousValues[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, "Process")
+        [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, "Process")
+    }
+
+    try {
+        & $ScriptBlock
+    }
+    finally {
+        foreach ($entry in $previousValues.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        }
+    }
+}
+
 function Save-HicolorIconThemeArchive {
     param([string]$BuildRoot)
 
@@ -146,10 +168,20 @@ function Install-GtkWithGvsbuild {
         Add-PathPrefix -PathPrefix $scriptRoot.FullName
     }
     $gvsbuild = Get-Command gvsbuild -ErrorAction Stop
-    Invoke-WithRetry -Description "build GTK4/libadwaita with gvsbuild" -Attempts 2 -DelaySeconds 60 -ScriptBlock {
-        & $gvsbuild.Source build --build-dir $BuildRoot --configuration release gtk4 libadwaita librsvg adwaita-icon-theme
-        if ($LASTEXITCODE -ne 0) {
-            throw "gvsbuild failed with exit code $LASTEXITCODE"
+
+    # gvsbuild builds Rust-based GTK dependencies such as librsvg with its own
+    # rustup/cargo toolchain. GitHub Actions checks out TerminalTiler before this
+    # script runs, so the repository rust-toolchain.toml can otherwise force
+    # gvsbuild's transient `cargo install cargo-c --locked` onto the project MSRV
+    # toolchain. cargo-c tracks recent Cargo internals and currently requires a
+    # newer compiler than TerminalTiler itself, so isolate only the gvsbuild
+    # subprocesses onto stable without exporting that override to later CI steps.
+    Invoke-WithProcessEnvironment -Variables @{ RUSTUP_TOOLCHAIN = "stable" } -ScriptBlock {
+        Invoke-WithRetry -Description "build GTK4/libadwaita with gvsbuild" -Attempts 2 -DelaySeconds 60 -ScriptBlock {
+            & $gvsbuild.Source build --build-dir $BuildRoot --configuration release gtk4 libadwaita librsvg adwaita-icon-theme
+            if ($LASTEXITCODE -ne 0) {
+                throw "gvsbuild failed with exit code $LASTEXITCODE"
+            }
         }
     }
 }
