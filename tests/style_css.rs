@@ -513,6 +513,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
 
     assert!(
         GTK_SHELL_RS.contains("STYLE_CSS: &str = include_str!")
+            && GTK_SHELL_RS.contains("DEFAULT_WINDOW_WIDTH: i32 = 1280")
+            && GTK_SHELL_RS.contains("DEFAULT_WINDOW_HEIGHT: i32 = 680")
             && GTK_SHELL_RS.contains("SHARED_VISUAL_CONTRACT_CLASSES")
             && GTK_SHELL_RS.contains("WINDOWS_GTK_RESOURCE_PAYLOAD")
             && GTK_SHELL_RS.contains("PLATFORM_RUNTIME_ADAPTERS")
@@ -553,6 +555,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         WINDOWS_GTK_APP_RS.contains("windows GTK shell startup")
             && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
+            && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_WIDTH")
+            && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_HEIGHT")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
@@ -563,6 +567,16 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
             && WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
         "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and keep Windows runtime launch behind adapters"
+    );
+
+    assert!(
+        WINDOW_RS.contains("gtk_shell::DEFAULT_WINDOW_WIDTH")
+            && WINDOW_RS.contains("gtk_shell::DEFAULT_WINDOW_HEIGHT")
+            && !WINDOW_RS.contains(".default_width(1280)")
+            && !WINDOW_RS.contains(".default_height(680)")
+            && !WINDOWS_GTK_APP_RS.contains(".default_width(1180)")
+            && !WINDOWS_GTK_APP_RS.contains(".default_height(780)"),
+        "Linux and Windows GTK shells should share the same default window geometry"
     );
 }
 

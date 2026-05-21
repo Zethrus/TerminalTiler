@@ -13,6 +13,7 @@ use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
 use crate::extension::RuntimeOptions;
+use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
@@ -818,8 +819,8 @@ fn present_with_initial_workspace(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(&options.product.app_title)
-        .default_width(1280)
-        .default_height(680)
+        .default_width(gtk_shell::DEFAULT_WINDOW_WIDTH)
+        .default_height(gtk_shell::DEFAULT_WINDOW_HEIGHT)
         .resizable(true)
         .content(&window_shell)
         .build();
@@ -5450,8 +5451,8 @@ fn present_detached_workspace_window(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(&title)
-        .default_width(1280)
-        .default_height(680)
+        .default_width(gtk_shell::DEFAULT_WINDOW_WIDTH)
+        .default_height(gtk_shell::DEFAULT_WINDOW_HEIGHT)
         .resizable(true)
         .content(&window_shell)
         .build();

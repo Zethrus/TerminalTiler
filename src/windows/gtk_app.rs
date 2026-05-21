@@ -75,8 +75,8 @@ mod imp {
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(&options.product.app_title)
-            .default_width(1180)
-            .default_height(780)
+            .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
+            .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
             .build();
         window.add_css_class("window-shell");
         window.add_css_class("windows-gtk-shell");

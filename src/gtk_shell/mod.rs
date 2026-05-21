@@ -7,6 +7,14 @@
 /// Canonical GTK/libadwaita stylesheet shared by every GTK shell.
 pub const STYLE_CSS: &str = include_str!("../../resources/style.css");
 
+/// Canonical default GTK shell size shared by Linux and Windows GTK frontends.
+///
+/// Keeping the startup window geometry in the shared GTK contract prevents the
+/// Windows GTK launcher from drifting away from the Ubuntu/Linux baseline before
+/// any responsive layout or density styles are applied.
+pub const DEFAULT_WINDOW_WIDTH: i32 = 1280;
+pub const DEFAULT_WINDOW_HEIGHT: i32 = 680;
+
 /// Resource paths that Windows packaging must stage next to the executable.
 pub const WINDOWS_GTK_RESOURCE_PAYLOAD: &[&str] = &[
     "resources/style.css",
