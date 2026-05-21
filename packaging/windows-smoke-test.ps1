@@ -1,5 +1,7 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
+    [switch]$UseGtkShell,
+    [string]$GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT,
     [switch]$SkipBuild,
     [switch]$SkipLaunchSmoke,
     [ValidateSet("clean-first-run", "mixed", "terminal-only")]
@@ -48,6 +50,19 @@ function Assert-WindowsGtkPayload {
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\terminal.svg") -Description "GTK terminal hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\layout-dashboard.svg") -Description "GTK dashboard hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\save.svg") -Description "GTK save hover icon"
+}
+
+function Assert-WindowsGtkRuntimePayload {
+    param([string]$PayloadRoot)
+
+    if (-not (Get-ChildItem -Path $PayloadRoot -Filter "*gtk-4*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "GTK4 runtime DLL was not found in $PayloadRoot"
+    }
+    if (-not (Get-ChildItem -Path $PayloadRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "libadwaita runtime DLL was not found in $PayloadRoot"
+    }
+    Assert-Path -Path (Join-Path $PayloadRoot "share\glib-2.0") -Description "GTK GLib shared data"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\icons") -Description "GTK icon theme data"
 }
 
 function Convert-ToTomlPath {
@@ -336,12 +351,17 @@ function Invoke-LaunchSmoke {
             throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
         }
 
-        $requiredPattern = if ($ProfileKind -eq "clean-first-run") {
-            "Windows startup init complete"
-        } elseif ($ProfileKind -eq "mixed") {
-            "web pane \d+ navigating to https://example.com"
-        } else {
-            "opened 1 restored Windows workspace host window\(s\)"
+        if ($UseGtkShell -and $ProfileKind -eq "clean-first-run") {
+            $requiredPattern = "windows GTK shell loaded canonical GTK CSS"
+        }
+        elseif ($ProfileKind -eq "clean-first-run") {
+            $requiredPattern = "Windows startup init complete"
+        }
+        elseif ($ProfileKind -eq "mixed") {
+            $requiredPattern = "web pane \d+ navigating to https://example.com"
+        }
+        else {
+            $requiredPattern = "opened 1 restored Windows workspace host window\(s\)"
         }
         $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
 
@@ -349,7 +369,12 @@ function Invoke-LaunchSmoke {
             Stop-Process -Id $process.Id -Force
         }
 
-        if ($ProfileKind -eq "clean-first-run") {
+        if ($UseGtkShell -and $ProfileKind -eq "clean-first-run") {
+            if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
+                throw "$Label did not complete GTK launcher initialization.`n$logText"
+            }
+        }
+        elseif ($ProfileKind -eq "clean-first-run") {
             if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created" -or $logText -notmatch "Windows startup init complete") {
                 throw "$Label did not complete launcher initialization.`n$logText"
             }
@@ -413,11 +438,20 @@ $MsiInstallRoot = Join-Path $SmokeRoot "install-msi"
 
 if (-not $SkipBuild) {
     $BuildScript = Join-Path $RootDir "packaging\build-windows.ps1"
-    if ($PackageVersion) {
-        & $BuildScript -PackageVersion $PackageVersion -RequireInstallers
-    } else {
-        & $BuildScript -RequireInstallers
+    $BuildArgs = @{}
+    if ($UseGtkShell) {
+        & (Join-Path $RootDir "packaging\setup-windows-gtk.ps1") -GtkRuntimeRoot $GtkRuntimeRoot
+        $BuildArgs.UseGtkShell = $true
+        $BuildArgs.GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT
     }
+    if ($PackageVersion) {
+        $BuildArgs.PackageVersion = $PackageVersion
+    }
+    $BuildArgs.RequireInstallers = $true
+    & $BuildScript @BuildArgs
+}
+elseif ($UseGtkShell) {
+    & (Join-Path $RootDir "packaging\setup-windows-gtk.ps1") -GtkRuntimeRoot $GtkRuntimeRoot
 }
 
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
@@ -460,6 +494,9 @@ $PortableReadme = Join-Path $PortableExtractRoot "README-windows.txt"
 Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
 Assert-WindowsGtkPayload -PayloadRoot $PortableExtractRoot
+if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+    Assert-WindowsGtkRuntimePayload -PayloadRoot $PortableExtractRoot
+}
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $PortableExe `
@@ -482,6 +519,9 @@ $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
+if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+    Assert-WindowsGtkRuntimePayload -PayloadRoot $NsisInstallRoot
+}
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $InstalledExe `
@@ -502,6 +542,9 @@ if ($MsiInstallProcess.ExitCode -ne 0) {
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
 Assert-WindowsGtkPayload -PayloadRoot $MsiInstallRoot
+if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+    Assert-WindowsGtkRuntimePayload -PayloadRoot $MsiInstallRoot
+}
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $MsiInstalledExe `

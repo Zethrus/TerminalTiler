@@ -9,10 +9,11 @@ mod imp {
     use crate::extension::RuntimeOptions;
     use crate::logging;
     use crate::model::preset::{ApplicationDensity, ThemeMode};
+    use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
-    use crate::storage::session_store::{SavedSession, SavedTab};
+    use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::windows::{workspace, wsl};
 
@@ -64,7 +65,12 @@ mod imp {
         let asset_store = AssetStore::new();
         asset_store.ensure_seeded();
         let asset_outcome = asset_store.load_assets_with_status();
-        let load_warning = combine_warnings(preset_outcome.warning, asset_outcome.warning);
+        let session_store = SessionStore::new();
+        let session_outcome = session_store.load_with_status();
+        let load_warning = combine_warnings(
+            combine_warnings(preset_outcome.warning, asset_outcome.warning),
+            session_outcome.warning,
+        );
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -123,6 +129,39 @@ mod imp {
         overlay.set_child(Some(&launch));
         window.set_content(Some(&overlay));
         window.present();
+
+        if let Some(session) = session_outcome
+            .session
+            .as_ref()
+            .and_then(|session| session_for_restore_mode(session, preferences.default_restore_mode))
+        {
+            let overlay = overlay.clone();
+            let preferences = preferences.clone();
+            gtk::glib::idle_add_local_once(move || {
+                restore_saved_session_from_gtk(&overlay, &preferences, session);
+            });
+        }
+    }
+
+    fn restore_saved_session_from_gtk(
+        overlay: &adw::ToastOverlay,
+        preferences: &AppPreferences,
+        session: SavedSession,
+    ) {
+        match wsl::probe_runtime(preferences.windows_wsl_distribution.as_deref())
+            .and_then(|runtime| workspace::open_saved_workspaces(&session, &runtime))
+        {
+            Ok((windows, panes)) => {
+                logging::info(format!(
+                    "opened {windows} restored Windows workspace host window(s) from GTK shell with {panes} pane(s)"
+                ));
+                overlay.add_toast(adw::Toast::new("Restored saved workspace session"));
+            }
+            Err(error) => {
+                logging::error(format!("Windows GTK shell session restore failed: {error}"));
+                overlay.add_toast(adw::Toast::new(&format!("Restore failed: {error}")));
+            }
+        }
     }
 
     fn primary_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {

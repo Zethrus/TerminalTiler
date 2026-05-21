@@ -110,3 +110,55 @@ jobs:
           name: terminaltiler-windows-smoke-diagnostics-ci
           path: packaging/.build/windows-smoke
           if-no-files-found: ignore
+
+  verify-windows-gtk:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-gtk
+
+      - name: Cache gvsbuild GTK runtime
+        uses: actions/cache@v4
+        with:
+          path: C:\gtk-build\gtk\x64\release
+          key: windows-gtk-runtime-gvsbuild-v1-${{ runner.os }}
+
+      - name: Verify installer toolchain
+        shell: pwsh
+        run: ./packaging/assert-windows-installer-tools.ps1
+
+      - name: Prepare native GTK/libadwaita runtime
+        shell: pwsh
+        run: ./packaging/setup-windows-gtk.ps1 -InstallWithGvsbuild -SkipBuildIfPresent
+
+      - name: Check Windows GTK target
+        shell: pwsh
+        run: cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell
+
+      - name: Build Windows GTK release artifacts
+        shell: pwsh
+        run: ./packaging/build-windows.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -RequireInstallers
+
+      - name: Run Windows GTK smoke test
+        shell: pwsh
+        run: ./packaging/windows-smoke-test.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
+
+      - name: Upload Windows GTK smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminaltiler-windows-gtk-smoke-diagnostics-ci
+          path: packaging/.build/windows-smoke
+          if-no-files-found: ignore

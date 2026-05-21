@@ -4,7 +4,9 @@ const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
+const CI_YML: &str = include_str!("../.github/workflows/ci.yml");
 const DESIGN_MD: &str = include_str!("../DESIGN.md");
+const DOC_WINDOWS_GTK_VISUAL_QA: &str = include_str!("../docs/windows-gtk-visual-qa.md");
 const GTK_SHELL_RS: &str = include_str!("../src/gtk_shell/mod.rs");
 const ICONS_RS: &str = include_str!("../src/ui/icons.rs");
 const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
@@ -18,9 +20,13 @@ const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
 const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
 const WINDOWS_BUILD_PS1: &str = include_str!("../packaging/build-windows.ps1");
+const WINDOWS_CAPTURE_VISUALS_PS1: &str =
+    include_str!("../packaging/capture-windows-gtk-visuals.ps1");
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
+const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
+const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
@@ -544,6 +550,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
+            && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
+            && WINDOWS_GTK_APP_RS.contains(
+                "opened {windows} restored Windows workspace host window(s) from GTK shell"
+            )
             && WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
             && WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
         "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and keep Windows runtime launch behind adapters"
@@ -552,6 +562,24 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
 
 #[test]
 fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
+    assert!(
+        CI_YML.contains("verify-windows-gtk")
+            && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
+            && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
+            && CI_YML.contains("build-windows.ps1 -UseGtkShell")
+            && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
+        "CI should include native Windows GTK build, package, and smoke coverage"
+    );
+
+    assert!(
+        WINDOWS_SETUP_GTK_PS1.contains("gvsbuild")
+            && WINDOWS_SETUP_GTK_PS1.contains("TERMINALTILER_GTK_RUNTIME_ROOT")
+            && WINDOWS_SETUP_GTK_PS1.contains("PKG_CONFIG_PATH")
+            && WINDOWS_SETUP_GTK_PS1.contains("libadwaita-1")
+            && WINDOWS_SETUP_GTK_PS1.contains("GITHUB_ENV"),
+        "Windows GTK setup script should provision/export native GTK/libadwaita build environment"
+    );
+
     for payload in [
         "resources\\style.css",
         "resources\\terminaltiler.svg",
@@ -564,6 +592,14 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             "Windows packaging should stage GTK/libadwaita parity payload: {payload}"
         );
     }
+
+    assert!(
+        WINDOWS_GTK_SMOKE_PS1.contains("setup-windows-gtk.ps1")
+            && WINDOWS_GTK_SMOKE_PS1.contains("build-windows.ps1")
+            && WINDOWS_GTK_SMOKE_PS1.contains("windows-smoke-test.ps1")
+            && WINDOWS_GTK_SMOKE_PS1.contains("UseGtkShell"),
+        "dedicated Windows GTK smoke script should run setup, package build, and package smoke"
+    );
 
     for payload in [
         "share\\style.css",
@@ -584,6 +620,34 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_INSTALLER_WXS.contains("share\\style.css")
             && WINDOWS_INSTALLER_WXS.contains("share\\hover-icons\\terminal.svg"),
         "MSI packaging should include CSS, logo, and hover icons rather than only the executable"
+    );
+}
+
+#[test]
+fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
+    assert!(
+        DOC_WINDOWS_GTK_VISUAL_QA
+            .contains("Ubuntu/Linux GTK shell as the canonical visual baseline")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-windows-gtk-visuals.ps1")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("Launch dashboard")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("Saved workspace cards")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("New/edit wizard")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("Active 3-pane workspace")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("Dark and light themes")
+            && DOC_WINDOWS_GTK_VISUAL_QA
+                .contains("Comfortable, standard, and compact density modes"),
+        "visual QA documentation should define baseline, capture command, and required comparison screens"
+    );
+
+    assert!(
+        WINDOWS_CAPTURE_VISUALS_PS1.contains("launch-dashboard")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("restored-workspace")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("System.Drawing")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("PrintWindow")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Restore"),
+        "visual capture helper should seed isolated profiles and capture launcher/workspace windows"
     );
 }
 

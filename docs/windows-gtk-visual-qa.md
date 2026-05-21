@@ -1,0 +1,82 @@
+# Windows GTK Visual QA
+
+TerminalTiler treats the Ubuntu/Linux GTK shell as the canonical visual baseline. The Windows GTK shell must load the same `resources/style.css`, TerminalTiler logo, hover icons, visual role classes, density classes, and light/dark theme classes. Only unavoidable OS differences are acceptable: font rasterization, titlebar/window-frame behavior, compositor shadows, and external system dialogs.
+
+## Automated preflight before screenshots
+
+Run these on a native Windows 11 machine or Windows GitHub runner with the MSVC Rust target installed:
+
+```powershell
+./packaging/setup-windows-gtk.ps1 -InstallWithGvsbuild -SkipBuildIfPresent
+cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell
+./packaging/build-windows.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -RequireInstallers
+./packaging/windows-smoke-test.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
+```
+
+`setup-windows-gtk.ps1` accepts `TERMINALTILER_GTK_RUNTIME_ROOT` if you already have a GTK runtime, and otherwise can build one with gvsbuild. The script exports `PATH`, `LIB`, `INCLUDE`, and `PKG_CONFIG_PATH` for gtk-rs/MSVC builds.
+
+## Capture helper
+
+After building a GTK package, capture starter screenshots with:
+
+```powershell
+./packaging/capture-windows-gtk-visuals.ps1 `
+  -ExePath .\dist\TerminalTiler-latest-portable-x86_64.exe `
+  -Theme dark `
+  -Density compact
+```
+
+The helper writes PNGs under `packaging/.build/windows-gtk-visuals/`. It seeds isolated profiles for:
+
+- `launch-dashboard`: clean first-run launch deck.
+- `restored-workspace`: restored 3-pane terminal workspace.
+
+Repeat with `-Theme light` and each density (`comfortable`, `standard`, `compact`) when preparing a complete review bundle.
+
+## Manual screenshot checklist
+
+Capture these Windows GTK screens and pair each with the current Ubuntu reference at the same app size:
+
+1. Launch dashboard / launch deck.
+2. Saved workspace cards.
+3. New/edit wizard: setup, appearance, layout, and tiles steps.
+4. Active 3-pane workspace.
+5. Tab strip and command/app chrome.
+6. Active workspace toolbar / summary controls.
+7. Terminal tile card headers, pane chips, focus states, hover states.
+8. Buttons/chips in primary, secondary, ghost, surface, destructive, disabled, and focused states.
+9. Dark and light themes.
+10. Comfortable, standard, and compact density modes.
+
+## Naming convention for review bundles
+
+Use this form so screenshots can be diffed and discussed unambiguously:
+
+```text
+<platform>-<theme>-<density>-<screen>-<state>.png
+```
+
+Examples:
+
+```text
+ubuntu-dark-compact-launch-dashboard-default.png
+windows-dark-compact-launch-dashboard-default.png
+ubuntu-light-standard-workspace-3pane-focused-terminal.png
+windows-light-standard-workspace-3pane-focused-terminal.png
+```
+
+## Acceptance rubric
+
+Mark each screenshot pair as:
+
+- `pass`: visually equivalent except for allowed OS-level differences.
+- `minor`: small spacing/rasterization/state difference that does not change hierarchy or affordance.
+- `fail`: layout, spacing, color, contrast, typography, density, state, or component mismatch that would make Windows feel like a different design system.
+
+Record failures with:
+
+- screenshot pair names;
+- exact component/region;
+- expected Ubuntu behavior;
+- observed Windows behavior;
+- whether the fix belongs in shared CSS/classes, Windows GTK resource/runtime packaging, or a platform adapter.
