@@ -714,7 +714,8 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Active 3-pane workspace")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Dark and light themes")
             && DOC_WINDOWS_GTK_VISUAL_QA
-                .contains("Comfortable, standard, and compact density modes"),
+                .contains("Comfortable, standard, and compact density modes")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`"),
         "visual QA documentation should define baseline, capture command, and required comparison screens"
     );
 
@@ -725,8 +726,12 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("PrintWindow")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
-            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Restore"),
-        "visual capture helper should seed isolated profiles and capture launcher/workspace windows"
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Restore")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessTreeIds")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-DescendantProcessIds")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Stop-ProcessTree")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessWindows -ProcessIds $processIds"),
+        "visual capture helper should seed isolated profiles and capture launcher/workspace windows, including self-extracting launcher child processes"
     );
 }
 

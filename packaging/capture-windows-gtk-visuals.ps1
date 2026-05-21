@@ -169,7 +169,7 @@ type = "workspace-root"
 }
 
 function Get-ProcessWindows {
-    param([int]$ProcessId)
+    param([int[]]$ProcessIds)
 
     $windows = New-Object System.Collections.Generic.List[object]
     $callback = [WindowCaptureNative+EnumWindowsProc]{
@@ -177,7 +177,7 @@ function Get-ProcessWindows {
         if (-not [WindowCaptureNative]::IsWindowVisible($hWnd)) { return $true }
         $pid = [uint32]0
         [void][WindowCaptureNative]::GetWindowThreadProcessId($hWnd, [ref]$pid)
-        if ($pid -ne [uint32]$ProcessId) { return $true }
+        if ($ProcessIds -notcontains [int]$pid) { return $true }
         $titleBuilder = New-Object System.Text.StringBuilder 512
         [void][WindowCaptureNative]::GetWindowText($hWnd, $titleBuilder, $titleBuilder.Capacity)
         $title = $titleBuilder.ToString()
@@ -190,6 +190,54 @@ function Get-ProcessWindows {
     }
     [void][WindowCaptureNative]::EnumWindows($callback, [IntPtr]::Zero)
     return @($windows)
+}
+
+function Get-DescendantProcessIds {
+    param([int]$RootProcessId)
+
+    $descendants = New-Object System.Collections.Generic.List[int]
+    $pending = New-Object System.Collections.Generic.Queue[int]
+    $pending.Enqueue($RootProcessId)
+
+    while ($pending.Count -gt 0) {
+        $parentId = $pending.Dequeue()
+        try {
+            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentId" -ErrorAction Stop
+        }
+        catch {
+            $children = @()
+        }
+
+        foreach ($child in $children) {
+            $childId = [int]$child.ProcessId
+            if (-not $descendants.Contains($childId)) {
+                $descendants.Add($childId)
+                $pending.Enqueue($childId)
+            }
+        }
+    }
+
+    return $descendants
+}
+
+function Get-ProcessTreeIds {
+    param([int]$RootProcessId)
+
+    return @($RootProcessId) + @(Get-DescendantProcessIds -RootProcessId $RootProcessId)
+}
+
+function Stop-ProcessTree {
+    param([System.Diagnostics.Process]$Process)
+
+    $processIds = @(Get-DescendantProcessIds -RootProcessId $Process.Id)
+    [array]::Reverse($processIds)
+    foreach ($processId in $processIds) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Save-WindowPng {
@@ -224,10 +272,12 @@ function Wait-ForWindows {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $Process.Refresh()
-        if ($Process.HasExited) {
+        $processIds = @(Get-ProcessTreeIds -RootProcessId $Process.Id)
+        $descendantIds = @($processIds | Where-Object { $_ -ne $Process.Id })
+        if ($Process.HasExited -and $descendantIds.Count -eq 0) {
             throw "TerminalTiler exited before visual capture with code $($Process.ExitCode)"
         }
-        $windows = @(Get-ProcessWindows -ProcessId $Process.Id)
+        $windows = @(Get-ProcessWindows -ProcessIds $processIds)
         if ($windows.Count -gt 0) { return $windows }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
@@ -277,8 +327,8 @@ function Invoke-VisualCaptureScenario {
         }
     }
     finally {
-        if ($process -and -not $process.HasExited -and -not $KeepProcess) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        if ($process -and -not $KeepProcess) {
+            Stop-ProcessTree -Process $process
         }
         $env:APPDATA = $previousEnvironment.APPDATA
         $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA

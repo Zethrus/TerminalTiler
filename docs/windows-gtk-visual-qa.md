@@ -31,6 +31,10 @@ The helper writes PNGs under `packaging/.build/windows-gtk-visuals/`. It seeds i
 - `launch-dashboard`: clean first-run launch deck.
 - `restored-workspace`: restored 3-pane terminal workspace.
 
+The capture helper follows the launched process tree, so it works with the
+published self-extracting portable `.exe` as well as an unpacked
+`TerminalTiler.exe`.
+
 Repeat with `-Theme light` and each density (`comfortable`, `standard`, `compact`) when preparing a complete review bundle.
 
 ## Manual screenshot checklist
