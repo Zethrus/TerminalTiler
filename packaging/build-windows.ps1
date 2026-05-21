@@ -294,8 +294,14 @@ if ($Candle -and $Light -and $Heat) {
         throw "WiX candle failed while compiling $WixHarvestedSourcePath"
     }
 
+    # Harvested payload files install under the per-user LocalAppDataFolder
+    # tree. They intentionally use file key paths so future staged files are
+    # packaged without hand-authored HKCU registry keys for every component.
     & $Light `
         "-nologo" `
+        "-sice:ICE38" `
+        "-sice:ICE64" `
+        "-sice:ICE91" `
         "-out" $MsiPath `
         $WixObjectPath `
         $WixHarvestedObjectPath

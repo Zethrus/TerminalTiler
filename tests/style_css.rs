@@ -620,6 +620,8 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_BUILD_PS1.contains("HarvestedPayloadComponents")
             && WINDOWS_BUILD_PS1.contains(r#""-var" "var.StageDir""#)
             && WINDOWS_BUILD_PS1.contains(r#""-arch" "x64""#)
+            && WINDOWS_BUILD_PS1.contains(r#""-sice:ICE38""#)
+            && WINDOWS_BUILD_PS1.contains(r#""-sice:ICE64""#)
             && WINDOWS_INSTALLER_WXS
                 .contains(r#"ComponentGroupRef Id="HarvestedPayloadComponents""#),
         "MSI packaging should harvest the full staged payload, including CSS, logo, hover icons, and GTK runtime files"
