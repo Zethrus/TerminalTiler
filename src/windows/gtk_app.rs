@@ -15,7 +15,6 @@ mod imp {
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
-    use crate::windows::{workspace, wsl};
 
     const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
 
@@ -96,7 +95,7 @@ mod imp {
                 move |density| apply_window_density(&window, density)
             }),
             on_launch: Rc::new(move |preset, workspace_root| {
-                launch_workspace_from_gtk(
+                present_workspace_preview_from_launch(
                     &launch_overlay,
                     &launch_preferences,
                     preset,
@@ -136,30 +135,17 @@ mod imp {
             let overlay = overlay.clone();
             let preferences = preferences.clone();
             gtk::glib::idle_add_local_once(move || {
-                restore_saved_session_from_gtk(&overlay, &preferences, session);
+                present_workspace_preview_from_restore(&overlay, &preferences, session);
             });
         }
     }
 
-    fn restore_saved_session_from_gtk(
+    fn present_workspace_preview_from_restore(
         overlay: &adw::ToastOverlay,
-        preferences: &AppPreferences,
+        _preferences: &AppPreferences,
         session: SavedSession,
     ) {
-        match wsl::probe_runtime(preferences.windows_wsl_distribution.as_deref())
-            .and_then(|runtime| workspace::open_saved_workspaces(&session, &runtime))
-        {
-            Ok((windows, panes)) => {
-                logging::info(format!(
-                    "opened {windows} restored Windows workspace host window(s) from GTK shell with {panes} pane(s)"
-                ));
-                overlay.add_toast(adw::Toast::new("Restored saved workspace session"));
-            }
-            Err(error) => {
-                logging::error(format!("Windows GTK shell session restore failed: {error}"));
-                overlay.add_toast(adw::Toast::new(&format!("Restore failed: {error}")));
-            }
-        }
+        present_workspace_preview(overlay, session, "restored");
     }
 
     fn primary_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {
@@ -192,9 +178,9 @@ mod imp {
         window.add_css_class(density.css_class());
     }
 
-    fn launch_workspace_from_gtk(
+    fn present_workspace_preview_from_launch(
         overlay: &adw::ToastOverlay,
-        preferences: &AppPreferences,
+        _preferences: &AppPreferences,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
     ) {
@@ -208,22 +194,19 @@ mod imp {
             active_tab_index: 0,
         };
 
-        match wsl::probe_runtime(preferences.windows_wsl_distribution.as_deref())
-            .and_then(|runtime| workspace::open_saved_workspaces(&session, &runtime))
-        {
-            Ok((windows, panes)) => {
-                logging::info(format!(
-                    "Windows GTK shell opened {windows} workspace host window(s) with {panes} pane(s)"
-                ));
-                overlay.add_toast(adw::Toast::new(
-                    "Workspace opened in the Windows runtime host",
-                ));
-            }
-            Err(error) => {
-                logging::error(format!("Windows GTK shell launch failed: {error}"));
-                overlay.add_toast(adw::Toast::new(&format!("Launch failed: {error}")));
-            }
-        }
+        present_workspace_preview(overlay, session, "opened");
+    }
+
+    fn present_workspace_preview(overlay: &adw::ToastOverlay, session: SavedSession, action: &str) {
+        let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
+        let preview = crate::ui::workspace_preview::build_session_preview(&session);
+        overlay.set_child(Some(&preview));
+        logging::info(format!(
+            "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
+        ));
+        overlay.add_toast(adw::Toast::new(
+            "Workspace opened in the shared GTK visual shell",
+        ));
     }
 
     fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {

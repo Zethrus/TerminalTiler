@@ -26,5 +26,7 @@ pub mod tile_view;
 pub mod web_tile;
 #[cfg(target_os = "linux")]
 pub mod window;
+#[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
+pub mod workspace_preview;
 #[cfg(target_os = "linux")]
 pub mod workspace_view;

@@ -69,7 +69,7 @@ public static class WindowCaptureNative {
 
 function Convert-ToTomlPath {
     param([string]$Path)
-    return ($Path -replace '\\', '\\')
+    return ($Path -replace '\\', '\\\\')
 }
 
 function Initialize-VisualProfile {

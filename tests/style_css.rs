@@ -32,6 +32,7 @@ const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
 const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.nsi");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
+const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
@@ -561,12 +562,25 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
-            && WINDOWS_GTK_APP_RS.contains(
-                "opened {windows} restored Windows workspace host window(s) from GTK shell"
-            )
-            && WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
-            && WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
-        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and keep Windows runtime launch behind adapters"
+            && WINDOWS_GTK_APP_RS.contains("crate::ui::workspace_preview::build_session_preview")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
+            && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
+            && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
+        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and restore/open workspaces inside the shared GTK visual shell instead of the legacy Win32 host"
+    );
+
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("workspace-summary")
+            && WORKSPACE_PREVIEW_RS.contains("app-tab-strip")
+            && WORKSPACE_PREVIEW_RS.contains("app-tab-shell")
+            && WORKSPACE_PREVIEW_RS.contains("terminal-card")
+            && WORKSPACE_PREVIEW_RS.contains("terminal-header")
+            && WORKSPACE_PREVIEW_RS.contains("terminal-frame")
+            && WORKSPACE_PREVIEW_RS.contains("terminal-surface")
+            && WORKSPACE_PREVIEW_RS.contains("web-tile-frame")
+            && WORKSPACE_PREVIEW_RS.contains("build_session_preview")
+            && WORKSPACE_PREVIEW_RS.contains("session_shape"),
+        "Windows GTK workspace preview should reuse the same visible workspace classes as the Linux GTK workspace shell"
     );
 
     assert!(
@@ -664,8 +678,10 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_SMOKE_PS1.contains("windows GTK shell startup")
             && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
+            && WINDOWS_SMOKE_PS1.contains("Windows GTK shell restored GTK workspace preview with")
+            && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
             && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow"),
-        "Windows smoke test should validate GTK startup logs even for self-extracting portable launchers"
+        "Windows smoke test should validate GTK startup/restored-preview logs even for self-extracting portable launchers"
     );
 
     for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {
@@ -725,7 +741,8 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Launch dashboard")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Saved workspace cards")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("New/edit wizard")
-            && DOC_WINDOWS_GTK_VISUAL_QA.contains("Active 3-pane workspace")
+            && DOC_WINDOWS_GTK_VISUAL_QA
+                .contains("Active/restored 3-pane workspace in the shared GTK shell")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Dark and light themes")
             && DOC_WINDOWS_GTK_VISUAL_QA
                 .contains("Comfortable, standard, and compact density modes")
@@ -741,6 +758,7 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Restore")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("return ($Path -replace '\\\\', '\\\\\\\\')")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessTreeIds")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-DescendantProcessIds")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Stop-ProcessTree")
