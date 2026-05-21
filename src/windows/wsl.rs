@@ -1,6 +1,12 @@
 use std::fmt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use std::os::windows::process::CommandExt;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+use crate::logging;
 
 use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::platform::{home_dir, parse_wsl_unc_path, translate_path_for_wsl};
@@ -13,6 +19,7 @@ use crate::storage::session_store::SavedSession;
 const DEFAULT_WSL_SHELL: &str = "/bin/bash";
 const TERM_EXPORTS: &str = "export TERM=xterm-256color COLORTERM=truecolor;";
 const DEFAULT_POWERSHELL_ENV: &str = "$env:TERM='xterm-256color'; $env:COLORTERM='truecolor';";
+const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WslDistribution {
@@ -331,11 +338,103 @@ fn resolve_wsl_runtime(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeProbeCommand {
+    program: String,
+    args: Vec<String>,
+    timeout: Duration,
+    creation_flags: u32,
+}
+
+impl RuntimeProbeCommand {
+    fn new(program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+            timeout: RUNTIME_PROBE_TIMEOUT,
+            creation_flags: CREATE_NO_WINDOW,
+        }
+    }
+
+    fn label(&self) -> String {
+        let mut parts = Vec::with_capacity(self.args.len() + 1);
+        parts.push(self.program.as_str());
+        parts.extend(self.args.iter().map(String::as_str));
+        parts.join(" ")
+    }
+}
+
+fn wsl_verbose_probe_command() -> RuntimeProbeCommand {
+    RuntimeProbeCommand::new("wsl.exe", ["--list", "--verbose"])
+}
+
+fn powershell_probe_command(program: &str) -> RuntimeProbeCommand {
+    RuntimeProbeCommand::new(program, ["-NoLogo", "-NoProfile", "-Command", "exit 0"])
+}
+
+fn ssh_probe_command() -> RuntimeProbeCommand {
+    RuntimeProbeCommand::new("ssh.exe", ["-V"])
+}
+
+fn run_runtime_probe(spec: &RuntimeProbeCommand) -> Result<Output, String> {
+    logging::info(format!(
+        "starting Windows runtime probe '{}' with {}ms timeout",
+        spec.label(),
+        spec.timeout.as_millis()
+    ));
+
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.args)
+        .creation_flags(spec.creation_flags)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let started_at = Instant::now();
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to start {}: {error}", spec.program))?;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child.wait_with_output().map_err(|error| {
+                    format!("failed to collect {} output: {error}", spec.program)
+                })?;
+                logging::info(format!(
+                    "Windows runtime probe '{}' completed in {}ms with status {}",
+                    spec.label(),
+                    started_at.elapsed().as_millis(),
+                    output.status
+                ));
+                return Ok(output);
+            }
+            Ok(None) if started_at.elapsed() >= spec.timeout => {
+                let _ = child.kill();
+                let _ = child.wait_with_output();
+                let message = format!(
+                    "{} timed out after {}ms",
+                    spec.label(),
+                    spec.timeout.as_millis()
+                );
+                logging::error(format!("Windows runtime probe {message}"));
+                return Err(message);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait_with_output();
+                return Err(format!(
+                    "failed while waiting for {}: {error}",
+                    spec.program
+                ));
+            }
+        }
+    }
+}
+
 fn query_wsl_verbose_output() -> Result<String, String> {
-    let output = Command::new("wsl.exe")
-        .args(["--list", "--verbose"])
-        .output()
-        .map_err(|error| format!("failed to start wsl.exe: {error}"))?;
+    let output = run_runtime_probe(&wsl_verbose_probe_command())?;
 
     if output.status.success() {
         String::from_utf8(output.stdout)
@@ -358,7 +457,7 @@ fn detect_powershell_shell() -> Option<String> {
 }
 
 fn probe_ssh_client() -> Result<String, String> {
-    if shell_invocation_works_for_exit("ssh.exe", ["-V"]) {
+    if shell_invocation_works_for_exit(&ssh_probe_command()) {
         Ok("ssh.exe".into())
     } else {
         Err("Windows SSH profile launches require 'ssh.exe' on PATH.".into())
@@ -366,17 +465,13 @@ fn probe_ssh_client() -> Result<String, String> {
 }
 
 fn shell_invocation_works(program: &str) -> bool {
-    Command::new(program)
-        .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
-        .output()
+    run_runtime_probe(&powershell_probe_command(program))
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
 
-fn shell_invocation_works_for_exit<const N: usize>(program: &str, args: [&str; N]) -> bool {
-    Command::new(program)
-        .args(args)
-        .output()
+fn shell_invocation_works_for_exit(spec: &RuntimeProbeCommand) -> bool {
+    run_runtime_probe(spec)
         .map(|output| output.status.success() || !output.stderr.is_empty())
         .unwrap_or(false)
 }
@@ -644,10 +739,11 @@ fn looks_like_windows_absolute_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        PowerShellRuntime, WindowsLaunchRuntime, WindowsRuntime, WslDistribution,
-        build_launch_command, build_powershell_script, build_wsl_shell_script,
-        collect_session_launch_commands, parse_verbose_list, resolve_powershell_working_directory,
-        resolve_wsl_runtime,
+        CREATE_NO_WINDOW, PowerShellRuntime, RUNTIME_PROBE_TIMEOUT, WindowsLaunchRuntime,
+        WindowsRuntime, WslDistribution, build_launch_command, build_powershell_script,
+        build_wsl_shell_script, collect_session_launch_commands, parse_verbose_list,
+        powershell_probe_command, resolve_powershell_working_directory, resolve_wsl_runtime,
+        ssh_probe_command, wsl_verbose_probe_command,
     };
     use crate::model::assets::{ConnectionKind, ConnectionProfile, InventoryHost, WorkspaceAssets};
     use crate::model::layout::{ReconnectPolicy, TileKind, TileSpec, WorkingDirectory};
@@ -814,6 +910,38 @@ mod tests {
             runbooks: Vec::new(),
             snippets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn runtime_probe_commands_are_hidden_and_bounded() {
+        let probes = [
+            wsl_verbose_probe_command(),
+            powershell_probe_command("pwsh.exe"),
+            powershell_probe_command("powershell.exe"),
+            ssh_probe_command(),
+        ];
+
+        for probe in probes {
+            assert_eq!(probe.creation_flags, CREATE_NO_WINDOW);
+            assert_eq!(probe.timeout, RUNTIME_PROBE_TIMEOUT);
+            assert!(!probe.program.trim().is_empty());
+            assert!(!probe.args.is_empty());
+        }
+    }
+
+    #[test]
+    fn runtime_probe_command_specs_match_required_windows_tools() {
+        assert_eq!(wsl_verbose_probe_command().program, "wsl.exe");
+        assert_eq!(
+            wsl_verbose_probe_command().args,
+            vec!["--list".to_string(), "--verbose".to_string()]
+        );
+        assert_eq!(
+            powershell_probe_command("pwsh.exe").args,
+            vec!["-NoLogo", "-NoProfile", "-Command", "exit 0"]
+        );
+        assert_eq!(ssh_probe_command().program, "ssh.exe");
+        assert_eq!(ssh_probe_command().args, vec!["-V".to_string()]);
     }
 
     #[test]

@@ -12,9 +12,7 @@ mod imp {
     use std::thread;
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
-    use windows_sys::Win32::Graphics::Gdi::{
-        COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject, UpdateWindow,
-    };
+    use windows_sys::Win32::Graphics::Gdi::{DEFAULT_GUI_FONT, GetStockObject, HDC, UpdateWindow};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Controls::{PBM_SETPOS, PBM_SETRANGE32, PBS_SMOOTH};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
@@ -34,9 +32,10 @@ mod imp {
         MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
         SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
         SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN,
-        WM_LBUTTONUP, WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW,
-        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+        WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP,
+        WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::extension::{
@@ -72,7 +71,7 @@ mod imp {
     use crate::windows::workspace;
     use crate::windows::wsl::{self, WindowsRuntime};
     use crate::windows::{
-        assets_manager, command_palette, launcher_editor, restore_prompt, shortcut_capture,
+        assets_manager, command_palette, launcher_editor, restore_prompt, shortcut_capture, theme,
     };
 
     const WINDOW_CLASS: &str = "TerminalTilerWindowsShell";
@@ -177,11 +176,11 @@ mod imp {
     const ID_SETTINGS_VOICE_PACK_DELETE: isize = 2060;
     const ID_SETTINGS_VOICE_PACK_PROGRESS: isize = 2063;
     const ID_SETTINGS_OPEN_LOGS_FOLDER: isize = 2064;
-    const BUTTON_HEIGHT: i32 = 32;
+    const BUTTON_HEIGHT: i32 = theme::COMPACT_DENSITY.button_height;
     const BUTTON_WIDTH: i32 = 160;
-    const MARGIN: i32 = 16;
-    const FIELD_HEIGHT: i32 = 28;
-    const LABEL_HEIGHT: i32 = 18;
+    const MARGIN: i32 = theme::COMPACT_DENSITY.margin;
+    const FIELD_HEIGHT: i32 = theme::COMPACT_DENSITY.field_height;
+    const LABEL_HEIGHT: i32 = theme::COMPACT_DENSITY.label_height;
     const LIST_HEIGHT: i32 = 150;
     const SETTINGS_LIST_HEIGHT: i32 = 64;
     const CHECKBOX_UNCHECKED: usize = 0;
@@ -212,9 +211,40 @@ mod imp {
             Ok(code) => code,
             Err(error) => {
                 logging::error(format!("windows GUI shell failed: {error}"));
-                eprintln!("TerminalTiler Windows shell failed: {error}");
+                show_fatal_startup_error(&error);
                 ExitCode::FAILURE
             }
+        }
+    }
+
+    fn show_fatal_startup_error(error: &str) {
+        let log_folder = logging::ensure_log_directory()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|log_error| format!("unavailable ({log_error})"));
+        let message = format!(
+            "TerminalTiler could not start.
+
+{error}
+
+Logs: {log_folder}
+
+Please include terminaltiler.log and terminaltiler-session.log when reporting this startup failure."
+        );
+        unsafe {
+            MessageBoxW(
+                ptr::null_mut(),
+                wide(&message).as_ptr(),
+                wide("TerminalTiler startup failure").as_ptr(),
+                MB_OK | MB_ICONWARNING,
+            );
+        }
+    }
+
+    fn themed_surface_for_message(message: u32) -> theme::ControlSurface {
+        match message {
+            WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => theme::ControlSurface::Field,
+            WM_CTLCOLORBTN => theme::ControlSurface::Panel,
+            _ => theme::ControlSurface::Window,
         }
     }
 
@@ -442,7 +472,7 @@ mod imp {
             hInstance: instance,
             lpszClassName: class_name.as_ptr(),
             hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
-            hbrBackground: (COLOR_WINDOW as isize + 1) as _,
+            hbrBackground: theme::brush_for(theme::ControlSurface::Window),
             ..unsafe { mem::zeroed() }
         };
 
@@ -510,6 +540,16 @@ mod imp {
                     return 0;
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_ERASEBKGND => {
+                if theme::paint_window_background(hwnd, wparam as HDC) {
+                    return 1;
+                }
+                0
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+                let surface = themed_surface_for_message(message);
+                theme::apply_control_colors(wparam as HDC, surface, true) as isize
             }
             WM_TRAYICON => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
@@ -656,6 +696,16 @@ mod imp {
                     return 0;
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+            WM_ERASEBKGND => {
+                if theme::paint_window_background(hwnd, wparam as HDC) {
+                    return 1;
+                }
+                0
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+                let surface = themed_surface_for_message(message);
+                theme::apply_control_colors(wparam as HDC, surface, true) as isize
             }
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
@@ -1487,6 +1537,7 @@ mod imp {
         }
 
         state.preset_store.ensure_seeded();
+        state.asset_store.ensure_seeded();
         let preset_outcome = state.preset_store.load_presets_with_status();
         state.presets = preset_outcome.presets;
         state.preset_warning = preset_outcome.warning;
@@ -1767,6 +1818,7 @@ mod imp {
         ));
         lines.push(format!("License: {}", product::PRODUCT_LICENSE));
         lines.push(format!("Source: {}", product::PRODUCT_SOURCE_URL));
+        lines.push(theme::accessibility_summary());
         lines.push(String::new());
 
         if let Some(runtime) = state.runtime.as_ref() {

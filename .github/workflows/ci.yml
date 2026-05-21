@@ -93,7 +93,7 @@ jobs:
         run: cargo test --features voice-cpal
 
       - name: Check Windows target
-        run: cargo check --target x86_64-pc-windows-msvc
+        run: cargo check --target x86_64-pc-windows-msvc --features voice-cpal
 
       - name: Build Windows release artifacts
         shell: pwsh
@@ -101,4 +101,12 @@ jobs:
 
       - name: Run Windows smoke test
         shell: pwsh
-        run: ./packaging/windows-smoke-test.ps1 -SkipLaunchSmoke -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -SmokeProfileKind terminal-only -SkipBuild
+
+      - name: Upload Windows smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminaltiler-windows-smoke-logs-ci
+          path: packaging/.build/windows-smoke/**/terminaltiler*.log
+          if-no-files-found: ignore

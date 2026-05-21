@@ -6,6 +6,7 @@ mod launcher_editor;
 mod restore_prompt;
 pub mod runbook_dialog;
 pub mod shortcut_capture;
+pub mod theme;
 pub mod transcript_viewer;
 mod vt;
 mod win32_helpers;

@@ -137,7 +137,15 @@ jobs:
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
-        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SkipLaunchSmoke -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SmokeProfileKind terminal-only -SkipBuild
+
+      - name: Upload Windows smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminaltiler-windows-smoke-logs-release
+          path: packaging/.build/windows-smoke/**/terminaltiler*.log
+          if-no-files-found: ignore
 
       - name: Publish Windows release assets
         uses: softprops/action-gh-release@v2
@@ -145,6 +153,7 @@ jobs:
           tag_name: ${{ steps.release_meta.outputs.tag }}
           files: |
             ${{ steps.package_version.outputs.windows_portable_exe_path }}
+            ${{ steps.package_version.outputs.windows_zip_path }}
             ${{ steps.package_version.outputs.windows_installer_path }}
             ${{ steps.package_version.outputs.windows_msi_path }}
           fail_on_unmatched_files: true

@@ -2,8 +2,8 @@ param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
     [switch]$SkipBuild,
     [switch]$SkipLaunchSmoke,
-    [ValidateSet("mixed", "terminal-only")]
-    [string]$SmokeProfileKind = "mixed"
+    [ValidateSet("clean-first-run", "mixed", "terminal-only")]
+    [string]$SmokeProfileKind = "terminal-only"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +35,7 @@ function Get-PackageVersion {
 function Assert-Path {
     param([string]$Path, [string]$Description)
 
-    if (-not (Test-Path $Path)) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
         throw "$Description was not found at $Path"
     }
 }
@@ -65,11 +65,11 @@ function Initialize-SmokeProfile {
     $roamingRoot = Join-Path $SandboxRoot "AppData\Roaming"
     $localRoot = Join-Path $SandboxRoot "AppData\Local"
     $configTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
-        "dev\Zethrus\TerminalTiler\config"
+        "dev\Zethrus\TerminalTiler\config",
         "dev\Zethrus\TerminalTiler"
     )
     $dataTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
-        "dev\Zethrus\TerminalTiler\data"
+        "dev\Zethrus\TerminalTiler\data",
         "dev\Zethrus\TerminalTiler"
     )
 
@@ -83,12 +83,21 @@ function Initialize-SmokeProfile {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
 
+    $restoreMode = if ($ProfileKind -eq "clean-first-run") { "prompt" } else { "shell-only" }
     $preferences = @"
 version = 1
-default_restore_mode = "shell-only"
+default_restore_mode = "$restoreMode"
 "@
     foreach ($configDir in $configTargets) {
         Set-Content -Path (Join-Path $configDir "preferences.toml") -Value $preferences -Encoding ASCII
+    }
+
+    if ($ProfileKind -eq "clean-first-run") {
+        return @{
+            AppData = $roamingRoot
+            LocalAppData = $localRoot
+            UserProfile = Join-Path $SandboxRoot "User"
+        }
     }
 
     $workspacePath = Convert-ToTomlPath -Path $workspaceRoot
@@ -186,6 +195,49 @@ function Find-SessionLog {
         Select-Object -First 1 -ExpandProperty FullName
 }
 
+function Find-SmokeLogs {
+    param([string]$SandboxRoot)
+
+    return Get-ChildItem -Path $SandboxRoot -Include "terminaltiler-session.log", "terminaltiler.log" -Recurse -ErrorAction SilentlyContinue
+}
+
+function Write-SmokeDiagnostics {
+    param([string]$SandboxRoot, [string]$Label)
+
+    Write-Host "==> diagnostics for $Label"
+    $logs = @(Find-SmokeLogs -SandboxRoot $SandboxRoot)
+    if ($logs.Count -eq 0) {
+        Write-Host "No TerminalTiler logs were found under $SandboxRoot"
+        return
+    }
+
+    foreach ($log in $logs) {
+        Write-Host "--- $($log.FullName) ---"
+        Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue | Write-Host
+    }
+}
+
+function Wait-ForMainWindow {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [int]$TimeoutSeconds = 8
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            return $false
+        }
+        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    $Process.Refresh()
+    return (-not $Process.HasExited -and $Process.MainWindowHandle -ne [IntPtr]::Zero)
+}
+
 function Invoke-LaunchSmoke {
     param(
         [string]$ExePath,
@@ -201,6 +253,7 @@ function Invoke-LaunchSmoke {
         USERPROFILE = $env:USERPROFILE
         HOME = $env:HOME
     }
+    $process = $null
 
     New-Item -ItemType Directory -Force -Path $profile.UserProfile | Out-Null
     $env:APPDATA = $profile.AppData
@@ -210,9 +263,14 @@ function Invoke-LaunchSmoke {
 
     try {
         $process = Start-Process -FilePath $ExePath -PassThru
-        Start-Sleep -Seconds 6
+        $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds 8
+        Start-Sleep -Seconds 2
+        $process.Refresh()
         if ($process.HasExited -and $process.ExitCode -ne 0) {
             throw "Process $ExePath exited with code $($process.ExitCode)"
+        }
+        if (-not $hasMainWindow) {
+            throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
         }
         if (-not $process.HasExited) {
             Stop-Process -Id $process.Id -Force
@@ -222,20 +280,35 @@ function Invoke-LaunchSmoke {
         Assert-Path -Path $sessionLog -Description "$Label session log"
 
         $logText = Get-Content -Path $sessionLog -Raw
-        if ($logText -notmatch "opened 1 restored Windows workspace host window\(s\)") {
-            throw "$Label did not restore a saved workspace session.\n$logText"
-        }
-        if ($ProfileKind -eq "mixed" -and $logText -notmatch "web pane \d+ navigating to https://example.com") {
-            throw "$Label did not restore the web tile.\n$logText"
+        if ($ProfileKind -eq "clean-first-run") {
+            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "refreshed Windows shell state") {
+                throw "$Label did not complete launcher initialization.`n$logText"
+            }
+            if ($logText -match "opened \d+ restored Windows workspace host window") {
+                throw "$Label unexpectedly restored a workspace during clean first-run.`n$logText"
+            }
+        } else {
+            if ($logText -notmatch "opened 1 restored Windows workspace host window\(s\)") {
+                throw "$Label did not restore a saved workspace session.`n$logText"
+            }
+            if ($ProfileKind -eq "mixed" -and $logText -notmatch "web pane \d+ navigating to https://example.com") {
+                throw "$Label did not restore the web tile.`n$logText"
+            }
         }
     }
+    catch {
+        Write-SmokeDiagnostics -SandboxRoot $SandboxRoot -Label $Label
+        throw
+    }
     finally {
+        if ($process -and -not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        }
         $env:APPDATA = $previousEnvironment.APPDATA
         $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
         $env:USERPROFILE = $previousEnvironment.USERPROFILE
         $env:HOME = $previousEnvironment.HOME
     }
-
 }
 
 function Invoke-OptionalLaunchSmoke {
@@ -259,11 +332,6 @@ function Invoke-OptionalLaunchSmoke {
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DistDir = Join-Path $RootDir "dist"
-$ResolvedVersion = $null
-$PortableExePath = $null
-$ZipPath = Join-Path $DistDir "TerminalTiler-$ResolvedVersion-windows-x86_64.zip"
-$InstallerPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.exe"
-$MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
 $SmokeRoot = Join-Path $RootDir "packaging\.build\windows-smoke"
 $PortableExtractRoot = Join-Path $SmokeRoot "portable"
 $NsisInstallRoot = Join-Path $SmokeRoot "install-nsis"
@@ -295,11 +363,19 @@ Assert-Path -Path $MsiPath -Description "MSI installer"
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $PortableExePath `
-    -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") `
-    -Label "Portable executable" `
-    -ProfileKind $SmokeProfileKind `
+    -SandboxRoot (Join-Path $SmokeRoot "portable-direct-clean-profile") `
+    -Label "Portable executable clean first-run" `
+    -ProfileKind "clean-first-run" `
     -SkipLaunchSmoke $SkipLaunchSmoke `
-    -SkipMessage "skipping direct portable executable launch smoke"
+    -SkipMessage "skipping direct portable executable clean first-run launch smoke"
+
+Invoke-OptionalLaunchSmoke `
+    -ExePath $PortableExePath `
+    -SandboxRoot (Join-Path $SmokeRoot "portable-direct-profile") `
+    -Label "Portable executable restored terminal-only" `
+    -ProfileKind "terminal-only" `
+    -SkipLaunchSmoke $SkipLaunchSmoke `
+    -SkipMessage "skipping direct portable executable restored-session launch smoke"
 
 Write-Host "==> extracting portable zip"
 New-Item -ItemType Directory -Force -Path $PortableExtractRoot | Out-Null
