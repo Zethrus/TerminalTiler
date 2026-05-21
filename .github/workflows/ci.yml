@@ -134,6 +134,7 @@ jobs:
         with:
           path: C:\gtk-build\gtk\x64\release
           key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
+          save-always: true
 
       - name: Verify installer toolchain
         shell: pwsh

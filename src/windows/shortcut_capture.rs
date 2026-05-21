@@ -231,5 +231,10 @@ mod imp {
     }
 }
 
+#[cfg(all(
+    target_os = "windows",
+    any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell")
+))]
+pub use imp::{capture_shortcut_from_keydown, display_label};
 #[cfg(target_os = "windows")]
-pub use imp::{capture_shortcut_from_keydown, display_label, matches_keydown, registration_parts};
+pub use imp::{matches_keydown, registration_parts};

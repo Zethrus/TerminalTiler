@@ -952,7 +952,7 @@ mod imp {
                         ID_WORKSPACE_MOVE_RIGHT => move_active_tab(hwnd, state, 1),
                         ID_WORKSPACE_CLOSE_TAB => close_active_tab(hwnd, state),
                         ID_WORKSPACE_SHOW_LAUNCHER => {
-                            let _ = crate::windows::app::show_primary_shell_window();
+                            let _ = crate::windows::show_primary_shell_window();
                         }
                         ID_WORKSPACE_BROADCAST_TARGET => cycle_broadcast_target(state),
                         ID_WORKSPACE_BROADCAST_SEND => send_broadcast_command(state),
@@ -6096,5 +6096,8 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 pub use imp::open_saved_workspaces;
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    target_os = "windows",
+    any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell")
+))]
 pub use imp::probe_webview2_runtime;

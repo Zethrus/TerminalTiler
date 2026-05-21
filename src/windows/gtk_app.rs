@@ -43,11 +43,11 @@ mod imp {
     }
 
     fn glib_exit_to_process_exit(code: gtk::glib::ExitCode) -> ExitCode {
-        let value = code.value();
+        let value = code.get();
         if value == 0 {
             ExitCode::SUCCESS
         } else {
-            ExitCode::from(value.clamp(1, u8::MAX as i32) as u8)
+            ExitCode::from(value)
         }
     }
 
@@ -77,8 +77,6 @@ mod imp {
             .title(&options.product.app_title)
             .default_width(1180)
             .default_height(780)
-            .content_width(1180)
-            .content_height(780)
             .build();
         window.add_css_class("window-shell");
         window.add_css_class("windows-gtk-shell");

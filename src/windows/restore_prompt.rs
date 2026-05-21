@@ -335,5 +335,8 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(
+    target_os = "windows",
+    any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell")
+))]
 pub use imp::present;

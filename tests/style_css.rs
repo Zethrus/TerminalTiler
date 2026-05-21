@@ -543,7 +543,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         WINDOWS_MOD_RS.contains("feature = \"windows-gtk-shell\"")
             && WINDOWS_MOD_RS.contains("feature = \"windows-win32-shell\"")
             && WINDOWS_MOD_RS.contains("gtk_app::run")
-            && WINDOWS_MOD_RS.contains("app::run"),
+            && WINDOWS_MOD_RS.contains("app::run")
+            && WINDOWS_MOD_RS.contains("show_primary_shell_window"),
         "Windows module routing should make GTK shell selectable while retaining the Win32 fallback"
     );
 
@@ -552,6 +553,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
+            && WINDOWS_GTK_APP_RS.contains("code.get()")
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
             && WINDOWS_GTK_APP_RS.contains(
                 "opened {windows} restored Windows workspace host window(s) from GTK shell"
@@ -568,6 +570,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         CI_YML.contains("verify-windows-gtk")
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
             && CI_YML.contains("windows-gtk-runtime-gvsbuild-v4")
+            && CI_YML.contains("save-always: true")
             && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),

@@ -33,3 +33,17 @@ pub fn run_with_options(options: crate::extension::RuntimeOptions) -> std::proce
     #[cfg(any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell"))]
     app::run_with_options(options)
 }
+
+pub(crate) fn show_primary_shell_window() -> bool {
+    #[cfg(all(feature = "windows-gtk-shell", not(feature = "windows-win32-shell")))]
+    {
+        crate::logging::info(
+            "Windows GTK shell owns the launcher window; Win32 workspace launcher reveal is unavailable",
+        );
+        false
+    }
+    #[cfg(any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell"))]
+    {
+        app::show_primary_shell_window()
+    }
+}
