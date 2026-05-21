@@ -46,15 +46,6 @@ function Convert-ToTomlPath {
     return ($Path -replace '\\', '\\\\')
 }
 
-function Join-SmokePaths {
-    param(
-        [string]$Root,
-        [string[]]$RelativePaths
-    )
-
-    return $RelativePaths | ForEach-Object { Join-Path $Root $_ }
-}
-
 function Initialize-SmokeProfile {
     param(
         [string]$SandboxRoot,
@@ -62,24 +53,14 @@ function Initialize-SmokeProfile {
     )
 
     $workspaceRoot = Join-Path $SandboxRoot "workspace"
-    $roamingRoot = Join-Path $SandboxRoot "AppData\Roaming"
-    $localRoot = Join-Path $SandboxRoot "AppData\Local"
-    $configTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
-        "dev\Zethrus\TerminalTiler\config",
-        "dev\Zethrus\TerminalTiler"
-    )
-    $dataTargets = Join-SmokePaths -Root $roamingRoot -RelativePaths @(
-        "dev\Zethrus\TerminalTiler\data",
-        "dev\Zethrus\TerminalTiler"
-    )
+    $profileRoot = Join-Path $SandboxRoot "profile"
+    $configRoot = Join-Path $profileRoot "config"
+    $dataRoot = Join-Path $profileRoot "data"
+    $localDataRoot = Join-Path $profileRoot "local-data"
+    $logsRoot = Join-Path $profileRoot "state\logs"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $workspaceRoot "src") | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $localRoot "dev\Zethrus\TerminalTiler\state\logs") | Out-Null
-
-    foreach ($dir in $configTargets + $dataTargets) {
-        if ($dir -isnot [string]) {
-            throw "Smoke profile target path must be a string, got '$($dir.GetType().FullName)'"
-        }
+    foreach ($dir in @($configRoot, $dataRoot, $localDataRoot, $logsRoot)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
 
@@ -88,16 +69,17 @@ function Initialize-SmokeProfile {
 version = 1
 default_restore_mode = "$restoreMode"
 "@
-    foreach ($configDir in $configTargets) {
-        Set-Content -Path (Join-Path $configDir "preferences.toml") -Value $preferences -Encoding ASCII
+    Set-Content -Path (Join-Path $configRoot "preferences.toml") -Value $preferences -Encoding ASCII
+
+    $profile = @{
+        ProfileRoot = $profileRoot
+        AppData = Join-Path $SandboxRoot "AppData\Roaming"
+        LocalAppData = Join-Path $SandboxRoot "AppData\Local"
+        UserProfile = Join-Path $SandboxRoot "User"
     }
 
     if ($ProfileKind -eq "clean-first-run") {
-        return @{
-            AppData = $roamingRoot
-            LocalAppData = $localRoot
-            UserProfile = Join-Path $SandboxRoot "User"
-        }
+        return $profile
     }
 
     $workspacePath = Convert-ToTomlPath -Path $workspaceRoot
@@ -177,15 +159,9 @@ url = "https://example.com"
 type = "workspace-root"
 "@
     }
-    foreach ($dataDir in $dataTargets) {
-        Set-Content -Path (Join-Path $dataDir "session.toml") -Value $session -Encoding ASCII
-    }
+    Set-Content -Path (Join-Path $dataRoot "session.toml") -Value $session -Encoding ASCII
 
-    return @{
-        AppData = $roamingRoot
-        LocalAppData = $localRoot
-        UserProfile = Join-Path $SandboxRoot "User"
-    }
+    return $profile
 }
 
 function Find-SessionLog {
@@ -201,20 +177,63 @@ function Find-SmokeLogs {
     return Get-ChildItem -Path $SandboxRoot -Include "terminaltiler-session.log", "terminaltiler.log" -Recurse -ErrorAction SilentlyContinue
 }
 
+function Format-ExitCode {
+    param([int]$ExitCode)
+
+    $unsignedExitCode = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$ExitCode), 0)
+    return "$ExitCode (0x$($unsignedExitCode.ToString('X8')))"
+}
+
+function Write-ApplicationEventLogDiagnostics {
+    param([string]$Label)
+
+    Write-Host "--- Windows Application Event Log: $Label ---"
+    try {
+        $events = Get-WinEvent -FilterHashtable @{
+            LogName = "Application"
+            StartTime = (Get-Date).AddMinutes(-10)
+        } -ErrorAction Stop |
+            Where-Object {
+                $_.ProviderName -like "*TerminalTiler*" -or
+                $_.Message -like "*TerminalTiler*.exe*" -or
+                $_.Message -like "*TerminalTiler.exe*"
+            } |
+            Select-Object -First 20 TimeCreated, Id, ProviderName, LevelDisplayName, Message
+
+        if (-not $events) {
+            Write-Host "No recent TerminalTiler Application Event Log entries were found."
+            return
+        }
+
+        $events | Format-List | Out-String | Write-Host
+    }
+    catch {
+        Write-Host "Could not read Windows Application Event Log: $_"
+    }
+}
+
 function Write-SmokeDiagnostics {
-    param([string]$SandboxRoot, [string]$Label)
+    param(
+        [string]$SandboxRoot,
+        [string]$Label,
+        [object]$ExitCode
+    )
 
     Write-Host "==> diagnostics for $Label"
+    if ($null -ne $ExitCode) {
+        Write-Host "Process exit code: $(Format-ExitCode -ExitCode $ExitCode)"
+    }
     $logs = @(Find-SmokeLogs -SandboxRoot $SandboxRoot)
     if ($logs.Count -eq 0) {
         Write-Host "No TerminalTiler logs were found under $SandboxRoot"
-        return
     }
-
-    foreach ($log in $logs) {
-        Write-Host "--- $($log.FullName) ---"
-        Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue | Write-Host
+    else {
+        foreach ($log in $logs) {
+            Write-Host "--- $($log.FullName) ---"
+            Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue | Write-Host
+        }
     }
+    Write-ApplicationEventLogDiagnostics -Label $Label
 }
 
 function Wait-ForMainWindow {
@@ -238,6 +257,36 @@ function Wait-ForMainWindow {
     return (-not $Process.HasExited -and $Process.MainWindowHandle -ne [IntPtr]::Zero)
 }
 
+function Wait-ForSessionLogPattern {
+    param(
+        [string]$SandboxRoot,
+        [System.Diagnostics.Process]$Process,
+        [string]$Pattern,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $latestText = ""
+    while ((Get-Date) -lt $deadline) {
+        $sessionLog = Find-SessionLog -SandboxRoot $SandboxRoot
+        if (-not [string]::IsNullOrWhiteSpace($sessionLog) -and (Test-Path $sessionLog)) {
+            $latestText = Get-Content -Path $sessionLog -Raw
+            if ($latestText -match $Pattern) {
+                return $latestText
+            }
+        }
+
+        $Process.Refresh()
+        if ($Process.HasExited -and $Process.ExitCode -ne 0) {
+            throw "Process exited while waiting for smoke log pattern '$Pattern' with code $(Format-ExitCode -ExitCode $Process.ExitCode).`n$latestText"
+        }
+
+        Start-Sleep -Milliseconds 250
+    }
+
+    throw "Timed out waiting for smoke log pattern '$Pattern'.`n$latestText"
+}
+
 function Invoke-LaunchSmoke {
     param(
         [string]$ExePath,
@@ -252,14 +301,18 @@ function Invoke-LaunchSmoke {
         LOCALAPPDATA = $env:LOCALAPPDATA
         USERPROFILE = $env:USERPROFILE
         HOME = $env:HOME
+        TERMINALTILER_PROFILE_ROOT = $env:TERMINALTILER_PROFILE_ROOT
     }
     $process = $null
 
     New-Item -ItemType Directory -Force -Path $profile.UserProfile | Out-Null
+    New-Item -ItemType Directory -Force -Path $profile.AppData | Out-Null
+    New-Item -ItemType Directory -Force -Path $profile.LocalAppData | Out-Null
     $env:APPDATA = $profile.AppData
     $env:LOCALAPPDATA = $profile.LocalAppData
     $env:USERPROFILE = $profile.UserProfile
     $env:HOME = $profile.UserProfile
+    $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
 
     try {
         $process = Start-Process -FilePath $ExePath -PassThru
@@ -267,21 +320,27 @@ function Invoke-LaunchSmoke {
         Start-Sleep -Seconds 2
         $process.Refresh()
         if ($process.HasExited -and $process.ExitCode -ne 0) {
-            throw "Process $ExePath exited with code $($process.ExitCode)"
+            throw "Process $ExePath exited with code $(Format-ExitCode -ExitCode $process.ExitCode)"
         }
         if (-not $hasMainWindow) {
             throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
         }
+
+        $requiredPattern = if ($ProfileKind -eq "clean-first-run") {
+            "Windows launcher window created"
+        } elseif ($ProfileKind -eq "mixed") {
+            "web pane \d+ navigating to https://example.com"
+        } else {
+            "opened 1 restored Windows workspace host window\(s\)"
+        }
+        $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
+
         if (-not $process.HasExited) {
             Stop-Process -Id $process.Id -Force
         }
 
-        $sessionLog = Find-SessionLog -SandboxRoot $SandboxRoot
-        Assert-Path -Path $sessionLog -Description "$Label session log"
-
-        $logText = Get-Content -Path $sessionLog -Raw
         if ($ProfileKind -eq "clean-first-run") {
-            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "refreshed Windows shell state") {
+            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created") {
                 throw "$Label did not complete launcher initialization.`n$logText"
             }
             if ($logText -match "opened \d+ restored Windows workspace host window") {
@@ -297,7 +356,11 @@ function Invoke-LaunchSmoke {
         }
     }
     catch {
-        Write-SmokeDiagnostics -SandboxRoot $SandboxRoot -Label $Label
+        $exitCode = $null
+        if ($process -and $process.HasExited) {
+            $exitCode = $process.ExitCode
+        }
+        Write-SmokeDiagnostics -SandboxRoot $SandboxRoot -Label $Label -ExitCode $exitCode
         throw
     }
     finally {
@@ -308,6 +371,7 @@ function Invoke-LaunchSmoke {
         $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
         $env:USERPROFILE = $previousEnvironment.USERPROFILE
         $env:HOME = $previousEnvironment.HOME
+        $env:TERMINALTILER_PROFILE_ROOT = $previousEnvironment.TERMINALTILER_PROFILE_ROOT
     }
 }
 

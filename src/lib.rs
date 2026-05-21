@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 mod app;
+mod app_paths;
 mod dropped_paths;
 pub mod extension;
 mod logging;

@@ -103,10 +103,10 @@ jobs:
         shell: pwsh
         run: ./packaging/windows-smoke-test.ps1 -SmokeProfileKind terminal-only -SkipBuild
 
-      - name: Upload Windows smoke logs
+      - name: Upload Windows smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: terminaltiler-windows-smoke-logs-ci
-          path: packaging/.build/windows-smoke/**/terminaltiler*.log
+          name: terminaltiler-windows-smoke-diagnostics-ci
+          path: packaging/.build/windows-smoke
           if-no-files-found: ignore

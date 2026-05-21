@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::app_paths;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
@@ -198,8 +198,7 @@ impl Default for PreferenceStore {
 
 impl PreferenceStore {
     pub fn new() -> Self {
-        let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-            .map(|dirs| dirs.config_dir().join("preferences.toml"));
+        let path = app_paths::config_dir().map(|dir| dir.join("preferences.toml"));
         Self { path }
     }
 

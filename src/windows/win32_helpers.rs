@@ -3,17 +3,39 @@ use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::mem;
 #[cfg(target_os = "windows")]
+use std::panic::{self, AssertUnwindSafe};
+#[cfg(target_os = "windows")]
 use std::ptr;
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, LoadCursorW,
-    RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WNDPROC,
+    CreateWindowExW, DefWindowProcW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
+    LoadCursorW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WNDPROC,
 };
+
+#[cfg(target_os = "windows")]
+pub unsafe fn catch_window_proc(
+    label: &str,
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    handler: impl FnOnce() -> LRESULT,
+) -> LRESULT {
+    match panic::catch_unwind(AssertUnwindSafe(handler)) {
+        Ok(result) => result,
+        Err(_) => {
+            crate::logging::error(format!(
+                "panic escaped {label} window procedure while handling message 0x{message:04X}"
+            ));
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 pub fn wide(value: &str) -> Vec<u16> {

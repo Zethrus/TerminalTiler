@@ -192,6 +192,24 @@ mod imp {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "assets_manager::window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn window_proc_impl(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match message {
             WM_NCCREATE => {
                 let create = lparam as *const CREATESTRUCTW;

@@ -186,7 +186,9 @@ mod imp {
     const CHECKBOX_UNCHECKED: usize = 0;
     const CHECKBOX_CHECKED: usize = 1;
     const WM_TRAYICON: u32 = 0x8001;
-    const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 50;
+    const WM_STARTUP_PROBE_REQUEST: u32 = WM_APP + 50;
+    const WM_STARTUP_PROBE_COMPLETE: u32 = WM_APP + 51;
+    const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 60;
     const TRAY_ICON_ID: u32 = 1;
     const TRAY_MENU_SHOW: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
@@ -248,6 +250,12 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
     }
 
+    fn prewarm_theme_resources() {
+        let _ = theme::brush_for(theme::ControlSurface::Window);
+        let _ = theme::brush_for(theme::ControlSurface::Panel);
+        let _ = theme::brush_for(theme::ControlSurface::Field);
+    }
+
     struct AppWindowState {
         runtime_options: RuntimeOptions,
         preference_store: PreferenceStore,
@@ -294,6 +302,14 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         palette_button_hwnd: HWND,
         companion_button_hwnd: HWND,
         launcher_editor_hwnd: HWND,
+        startup_probe_running: bool,
+        runtime_probe_preferred_distribution: Option<String>,
+    }
+
+    struct StartupProbeResult {
+        runtime: Option<WindowsRuntime>,
+        runtime_error: Option<String>,
+        webview2_error: Option<String>,
     }
 
     struct PromptWindowState {
@@ -360,6 +376,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             return Err("could not resolve module handle".into());
         }
 
+        prewarm_theme_resources();
         register_window_classes(instance)?;
 
         let window_title = options.product.app_title.clone();
@@ -409,6 +426,8 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             palette_button_hwnd: ptr::null_mut(),
             companion_button_hwnd: ptr::null_mut(),
             launcher_editor_hwnd: ptr::null_mut(),
+            startup_probe_running: false,
+            runtime_probe_preferred_distribution: None,
         });
         let state_ptr = Box::into_raw(state);
 
@@ -493,6 +512,24 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn window_proc_impl(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match message {
             WM_NCCREATE => {
                 let create = lparam as *const CREATESTRUCTW;
@@ -511,6 +548,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                     create_controls(hwnd, state);
                     install_tray_icon(hwnd, state);
                     refresh_state(hwnd, state);
+                    logging::info("Windows launcher window created");
                 }
                 0
             }
@@ -554,6 +592,25 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             WM_TRAYICON => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     handle_tray_event(hwnd, state, lparam as u32);
+                }
+                0
+            }
+            WM_STARTUP_PROBE_REQUEST => {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    start_runtime_probe(
+                        hwnd,
+                        state,
+                        state.runtime_probe_preferred_distribution.clone(),
+                    );
+                }
+                0
+            }
+            WM_STARTUP_PROBE_COMPLETE => {
+                if lparam != 0 {
+                    let result = unsafe { Box::from_raw(lparam as *mut StartupProbeResult) };
+                    if let Some(state) = unsafe { state_mut(hwnd) } {
+                        apply_startup_probe_result(hwnd, state, *result);
+                    }
                 }
                 0
             }
@@ -657,6 +714,24 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     unsafe extern "system" fn settings_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "settings_window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || settings_window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn settings_window_proc_impl(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,
@@ -1529,12 +1604,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         let preferred_distribution = preferences.windows_wsl_distribution.clone();
         state.runtime = None;
         state.runtime_error = None;
-        state.webview2_error = workspace::probe_webview2_runtime().err();
-
-        match wsl::probe_runtime(preferred_distribution.as_deref()) {
-            Ok(runtime) => state.runtime = Some(runtime),
-            Err(error) => state.runtime_error = Some(error),
-        }
+        state.webview2_error = None;
 
         state.preset_store.ensure_seeded();
         state.asset_store.ensure_seeded();
@@ -1573,9 +1643,97 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             );
         }
         sync_tray_tooltip(hwnd, state);
-        maybe_prompt_startup_resume(hwnd, state);
 
-        logging::info("refreshed Windows shell state");
+        state.runtime_probe_preferred_distribution = preferred_distribution;
+        if unsafe { PostMessageW(hwnd, WM_STARTUP_PROBE_REQUEST, 0, 0) } == 0 {
+            logging::error(format!(
+                "failed to post Windows runtime probe request: {}",
+                std::io::Error::last_os_error()
+            ));
+            start_runtime_probe(
+                hwnd,
+                state,
+                state.runtime_probe_preferred_distribution.clone(),
+            );
+        }
+        logging::info("refreshed Windows shell state without blocking runtime probes");
+    }
+
+    fn start_runtime_probe(
+        hwnd: HWND,
+        state: &mut AppWindowState,
+        preferred_distribution: Option<String>,
+    ) {
+        if state.startup_probe_running {
+            logging::info("skipped Windows runtime probe because one is already running");
+            return;
+        }
+        state.startup_probe_running = true;
+        unsafe {
+            SetWindowTextW(
+                state.status_hwnd,
+                wide("Checking WSL/PowerShell and WebView2 runtime availability...").as_ptr(),
+            );
+        }
+
+        let hwnd_value = hwnd as isize;
+        thread::spawn(move || {
+            let webview2_error = workspace::probe_webview2_runtime().err();
+            let (runtime, runtime_error) =
+                match wsl::probe_runtime(preferred_distribution.as_deref()) {
+                    Ok(runtime) => (Some(runtime), None),
+                    Err(error) => (None, Some(error)),
+                };
+            let result = Box::new(StartupProbeResult {
+                runtime,
+                runtime_error,
+                webview2_error,
+            });
+            let result_ptr = Box::into_raw(result);
+            let posted = unsafe {
+                PostMessageW(
+                    hwnd_value as HWND,
+                    WM_STARTUP_PROBE_COMPLETE,
+                    0,
+                    result_ptr as LPARAM,
+                )
+            };
+            if posted == 0 {
+                logging::error(format!(
+                    "failed to post Windows runtime probe completion: {}",
+                    std::io::Error::last_os_error()
+                ));
+                unsafe {
+                    drop(Box::from_raw(result_ptr));
+                }
+            }
+        });
+    }
+
+    fn apply_startup_probe_result(
+        hwnd: HWND,
+        state: &mut AppWindowState,
+        result: StartupProbeResult,
+    ) {
+        state.startup_probe_running = false;
+        state.runtime = result.runtime;
+        state.runtime_error = result.runtime_error;
+        state.webview2_error = result.webview2_error;
+
+        unsafe {
+            sync_status_text(state);
+            EnableWindow(
+                state.launch_preset_button_hwnd,
+                can_launch_selected_preset(state) as i32,
+            );
+            EnableWindow(
+                state.launch_button_hwnd,
+                can_launch_saved_session(state) as i32,
+            );
+        }
+        sync_tray_tooltip(hwnd, state);
+        maybe_prompt_startup_resume(hwnd, state);
+        logging::info("completed Windows runtime probes");
     }
 
     fn current_workspace_root(state: &AppWindowState) -> Option<PathBuf> {
@@ -4852,6 +5010,24 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     unsafe extern "system" fn prompt_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "prompt_window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || prompt_window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn prompt_window_proc_impl(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,

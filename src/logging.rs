@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use directories::ProjectDirs;
 #[cfg(target_os = "linux")]
 use gtk::glib;
 
@@ -76,8 +75,7 @@ pub fn error(message: impl AsRef<str>) {
 }
 
 pub fn log_directory() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-        .and_then(|dirs| dirs.state_dir().map(|state_dir| state_dir.join("logs")))
+    crate::app_paths::log_dir()
 }
 
 pub fn ensure_log_directory() -> io::Result<PathBuf> {

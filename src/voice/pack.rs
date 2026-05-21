@@ -5,8 +5,9 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+
+use crate::app_paths;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoicePackManifest {
@@ -198,8 +199,7 @@ pub fn delete_pack(root: &Path, manifest: &VoicePackManifest) -> Result<bool, Vo
 }
 
 pub fn default_voice_pack_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-        .map(|dirs| dirs.data_local_dir().join("voice-packs"))
+    app_paths::data_local_dir().map(|dir| dir.join("voice-packs"))
 }
 
 pub fn verify_archive_checksum(bytes: &[u8], expected_sha256: &str) -> Result<(), VoicePackError> {

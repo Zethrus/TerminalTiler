@@ -139,12 +139,12 @@ jobs:
           PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
         run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SmokeProfileKind terminal-only -SkipBuild
 
-      - name: Upload Windows smoke logs
+      - name: Upload Windows smoke diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: terminaltiler-windows-smoke-logs-release
-          path: packaging/.build/windows-smoke/**/terminaltiler*.log
+          name: terminaltiler-windows-smoke-diagnostics-release
+          path: packaging/.build/windows-smoke
           if-no-files-found: ignore
 
       - name: Publish Windows release assets

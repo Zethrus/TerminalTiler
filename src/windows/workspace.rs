@@ -850,6 +850,24 @@ mod imp {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "workspace::window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn window_proc_impl(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match message {
             WM_NCCREATE => {
                 let create = lparam as *const CREATESTRUCTW;
@@ -1035,6 +1053,24 @@ mod imp {
     }
 
     unsafe extern "system" fn pane_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "workspace::pane_window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || pane_window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn pane_window_proc_impl(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,
@@ -1331,6 +1367,24 @@ mod imp {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "workspace::pane_header_window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || pane_header_window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn pane_header_window_proc_impl(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match message {
             WM_NCCREATE => {
                 let create = lparam as *const CREATESTRUCTW;
@@ -1399,6 +1453,24 @@ mod imp {
     }
 
     unsafe extern "system" fn tab_button_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe {
+            crate::windows::win32_helpers::catch_window_proc(
+                "workspace::tab_button_window_proc",
+                hwnd,
+                message,
+                wparam,
+                lparam,
+                || tab_button_window_proc_impl(hwnd, message, wparam, lparam),
+            )
+        }
+    }
+
+    unsafe fn tab_button_window_proc_impl(
         hwnd: HWND,
         message: u32,
         wparam: WPARAM,

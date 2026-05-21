@@ -1,9 +1,9 @@
 use std::io;
 use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::app_paths;
 use crate::logging;
 use crate::model::preset::{WorkspacePreset, builtin_presets, is_builtin_preset_id};
 use crate::storage::document::{
@@ -37,8 +37,7 @@ impl Default for PresetStore {
 
 impl PresetStore {
     pub fn new() -> Self {
-        let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-            .map(|dirs| dirs.config_dir().join("presets.toml"));
+        let path = app_paths::config_dir().map(|dir| dir.join("presets.toml"));
         Self { path }
     }
 

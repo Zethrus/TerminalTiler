@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::app_paths;
 use crate::logging;
 use crate::model::assets::{WorkspaceAssets, builtin_role_templates};
 use crate::model::workspace_config::{ConfigScope, WorkspaceConfig};
@@ -52,8 +52,7 @@ impl Default for AssetStore {
 
 impl AssetStore {
     pub fn new() -> Self {
-        let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-            .map(|dirs| dirs.config_dir().join("workspace-assets.toml"));
+        let path = app_paths::config_dir().map(|dir| dir.join("workspace-assets.toml"));
         Self {
             path,
             workspace_config_store: WorkspaceConfigStore::new(),

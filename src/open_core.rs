@@ -9,8 +9,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+
+use crate::app_paths;
 
 pub use crate::model::{
     assets::{
@@ -334,19 +335,15 @@ where
 }
 
 fn presets_path() -> Option<PathBuf> {
-    project_dirs().map(|dirs| dirs.config_dir().join("presets.toml"))
+    app_paths::config_dir().map(|dir| dir.join("presets.toml"))
 }
 
 fn assets_path() -> Option<PathBuf> {
-    project_dirs().map(|dirs| dirs.config_dir().join("workspace-assets.toml"))
+    app_paths::config_dir().map(|dir| dir.join("workspace-assets.toml"))
 }
 
 fn workspace_config_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".terminaltiler").join("workspace.toml")
-}
-
-fn project_dirs() -> Option<ProjectDirs> {
-    ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
 }
 
 fn write_toml<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {

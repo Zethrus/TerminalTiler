@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::app_paths;
 use crate::logging;
 use crate::model::preset::WorkspacePreset;
 use crate::platform::resolve_workspace_root;
@@ -58,8 +58,7 @@ impl Default for SessionStore {
 
 impl SessionStore {
     pub fn new() -> Self {
-        let path = ProjectDirs::from("dev", "Zethrus", "TerminalTiler")
-            .map(|dirs| dirs.data_dir().join("session.toml"));
+        let path = app_paths::data_dir().map(|dir| dir.join("session.toml"));
         Self { path }
     }
 
