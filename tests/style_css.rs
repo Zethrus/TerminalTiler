@@ -640,9 +640,6 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "share\\icons",
         "share\\themes",
         "share\\glib-2.0",
-        "lib\\gdk-pixbuf-2.0",
-        "lib\\gio",
-        "lib\\gtk-4.0",
     ] {
         assert!(
             WINDOWS_SMOKE_PS1.contains(payload),

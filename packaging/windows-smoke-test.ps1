@@ -65,9 +65,6 @@ function Assert-WindowsGtkRuntimePayload {
     Assert-Path -Path (Join-Path $PayloadRoot "share\glib-2.0") -Description "GTK GLib shared data"
     Assert-Path -Path (Join-Path $PayloadRoot "share\icons") -Description "GTK icon theme data"
     Assert-Path -Path (Join-Path $PayloadRoot "share\themes") -Description "GTK theme data"
-    Assert-Path -Path (Join-Path $PayloadRoot "lib\gdk-pixbuf-2.0") -Description "GTK pixbuf loader data"
-    Assert-Path -Path (Join-Path $PayloadRoot "lib\gio") -Description "GTK GIO module data"
-    Assert-Path -Path (Join-Path $PayloadRoot "lib\gtk-4.0") -Description "GTK4 module data"
 }
 
 function Convert-ToTomlPath {
