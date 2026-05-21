@@ -136,6 +136,9 @@ function Copy-WindowsGtkRuntime {
             Write-Host "==> GTK runtime path $relative was not present in $RuntimeRoot; staging placeholder directory"
             Set-Content -Path (Join-Path $destination ".terminaltiler-keep") -Value "GTK runtime did not provide this optional directory." -Encoding ASCII
         }
+        if (-not (Get-ChildItem -Path $destination -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            Set-Content -Path (Join-Path $destination ".terminaltiler-keep") -Value "GTK runtime provided an empty optional directory." -Encoding ASCII
+        }
     }
 }
 
