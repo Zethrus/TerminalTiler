@@ -94,21 +94,32 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Cache gvsbuild GTK runtime
+        uses: actions/cache@v4
+        with:
+          path: C:\gtk-build\gtk\x64\release
+          key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
+          save-always: true
+
       - name: Verify installer toolchain
         shell: pwsh
         run: ./packaging/assert-windows-installer-tools.ps1
+
+      - name: Prepare native GTK/libadwaita runtime
+        shell: pwsh
+        run: ./packaging/setup-windows-gtk.ps1 -InstallWithGvsbuild -SkipBuildIfPresent
 
       - name: Build Windows artifacts
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
-        run: ./packaging/build-windows.ps1 -PackageVersion $env:PACKAGE_VERSION -RequireInstallers
+        run: ./packaging/build-windows.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -RequireInstallers
 
       - name: Validate Windows artifacts
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.resolve-version.outputs.package_version }}
-        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
 
       - name: Upload Windows smoke diagnostics
         if: failure()

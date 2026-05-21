@@ -1,6 +1,7 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
     [switch]$UseGtkShell,
+    [switch]$UseWin32Shell,
     [string]$GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT,
     [switch]$SkipBuild,
     [switch]$SkipLaunchSmoke,
@@ -63,6 +64,10 @@ function Assert-WindowsGtkRuntimePayload {
     }
     Assert-Path -Path (Join-Path $PayloadRoot "share\glib-2.0") -Description "GTK GLib shared data"
     Assert-Path -Path (Join-Path $PayloadRoot "share\icons") -Description "GTK icon theme data"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\themes") -Description "GTK theme data"
+    Assert-Path -Path (Join-Path $PayloadRoot "lib\gdk-pixbuf-2.0") -Description "GTK pixbuf loader data"
+    Assert-Path -Path (Join-Path $PayloadRoot "lib\gio") -Description "GTK GIO module data"
+    Assert-Path -Path (Join-Path $PayloadRoot "lib\gtk-4.0") -Description "GTK4 module data"
 }
 
 function Convert-ToTomlPath {
@@ -270,16 +275,75 @@ function Wait-ForMainWindow {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         $Process.Refresh()
-        if ($Process.HasExited) {
-            return $false
-        }
-        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+        if (Test-ProcessTreeHasMainWindow -RootProcessId $Process.Id) {
             return $true
+        }
+        if ($Process.HasExited -and -not (Get-DescendantProcessIds -RootProcessId $Process.Id | Select-Object -First 1)) {
+            return $false
         }
         Start-Sleep -Milliseconds 250
     }
     $Process.Refresh()
-    return (-not $Process.HasExited -and $Process.MainWindowHandle -ne [IntPtr]::Zero)
+    return (Test-ProcessTreeHasMainWindow -RootProcessId $Process.Id)
+}
+
+function Get-DescendantProcessIds {
+    param([int]$RootProcessId)
+
+    $descendants = New-Object System.Collections.Generic.List[int]
+    $pending = New-Object System.Collections.Generic.Queue[int]
+    $pending.Enqueue($RootProcessId)
+
+    while ($pending.Count -gt 0) {
+        $parentId = $pending.Dequeue()
+        try {
+            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentId" -ErrorAction Stop
+        }
+        catch {
+            $children = @()
+        }
+
+        foreach ($child in $children) {
+            $childId = [int]$child.ProcessId
+            if (-not $descendants.Contains($childId)) {
+                $descendants.Add($childId)
+                $pending.Enqueue($childId)
+            }
+        }
+    }
+
+    return $descendants
+}
+
+function Test-ProcessTreeHasMainWindow {
+    param([int]$RootProcessId)
+
+    $processIds = @($RootProcessId) + @(Get-DescendantProcessIds -RootProcessId $RootProcessId)
+    foreach ($processId in $processIds) {
+        try {
+            $candidate = Get-Process -Id $processId -ErrorAction Stop
+            if ($candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                return $true
+            }
+        }
+        catch {
+        }
+    }
+
+    return $false
+}
+
+function Stop-ProcessTree {
+    param([System.Diagnostics.Process]$Process)
+
+    $processIds = @(Get-DescendantProcessIds -RootProcessId $Process.Id)
+    [array]::Reverse($processIds)
+    foreach ($processId in $processIds) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Wait-ForSessionLogPattern {
@@ -320,6 +384,7 @@ function Invoke-LaunchSmoke {
         [string]$ProfileKind
     )
 
+    $expectGtkShell = -not $UseWin32Shell
     $profile = Initialize-SmokeProfile -SandboxRoot $SandboxRoot -ProfileKind $ProfileKind
     $previousEnvironment = @{
         APPDATA = $env:APPDATA
@@ -351,7 +416,7 @@ function Invoke-LaunchSmoke {
             throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
         }
 
-        if ($UseGtkShell -and $ProfileKind -eq "clean-first-run") {
+        if ($expectGtkShell -and $ProfileKind -eq "clean-first-run") {
             $requiredPattern = "windows GTK shell loaded canonical GTK CSS"
         }
         elseif ($ProfileKind -eq "clean-first-run") {
@@ -365,11 +430,9 @@ function Invoke-LaunchSmoke {
         }
         $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
 
-        if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force
-        }
+        Stop-ProcessTree -Process $process
 
-        if ($UseGtkShell -and $ProfileKind -eq "clean-first-run") {
+        if ($expectGtkShell) {
             if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
                 throw "$Label did not complete GTK launcher initialization.`n$logText"
             }
@@ -399,8 +462,8 @@ function Invoke-LaunchSmoke {
         throw
     }
     finally {
-        if ($process -and -not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        if ($process) {
+            Stop-ProcessTree -Process $process
         }
         $env:APPDATA = $previousEnvironment.APPDATA
         $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
@@ -436,13 +499,20 @@ $PortableExtractRoot = Join-Path $SmokeRoot "portable"
 $NsisInstallRoot = Join-Path $SmokeRoot "install-nsis"
 $MsiInstallRoot = Join-Path $SmokeRoot "install-msi"
 
+if ($UseGtkShell -and $UseWin32Shell) {
+    throw "Use either the canonical GTK shell or the explicit Win32 fallback, not both."
+}
+$ExpectGtkShell = -not $UseWin32Shell
+
 if (-not $SkipBuild) {
     $BuildScript = Join-Path $RootDir "packaging\build-windows.ps1"
     $BuildArgs = @{}
-    if ($UseGtkShell) {
+    if ($ExpectGtkShell) {
         & (Join-Path $RootDir "packaging\setup-windows-gtk.ps1") -GtkRuntimeRoot $GtkRuntimeRoot
-        $BuildArgs.UseGtkShell = $true
         $BuildArgs.GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT
+    }
+    else {
+        $BuildArgs.UseWin32Shell = $true
     }
     if ($PackageVersion) {
         $BuildArgs.PackageVersion = $PackageVersion
@@ -450,7 +520,7 @@ if (-not $SkipBuild) {
     $BuildArgs.RequireInstallers = $true
     & $BuildScript @BuildArgs
 }
-elseif ($UseGtkShell) {
+elseif ($ExpectGtkShell -and $GtkRuntimeRoot) {
     & (Join-Path $RootDir "packaging\setup-windows-gtk.ps1") -GtkRuntimeRoot $GtkRuntimeRoot
 }
 
@@ -494,7 +564,7 @@ $PortableReadme = Join-Path $PortableExtractRoot "README-windows.txt"
 Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
 Assert-WindowsGtkPayload -PayloadRoot $PortableExtractRoot
-if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $PortableExtractRoot
 }
 
@@ -519,7 +589,7 @@ $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
-if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $NsisInstallRoot
 }
 
@@ -542,7 +612,7 @@ if ($MsiInstallProcess.ExitCode -ne 0) {
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
 Assert-WindowsGtkPayload -PayloadRoot $MsiInstallRoot
-if ($UseGtkShell -and $env:TERMINALTILER_GTK_RUNTIME_ROOT) {
+if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $MsiInstallRoot
 }
 

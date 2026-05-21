@@ -1,6 +1,7 @@
 param(
     [string]$PackageVersion = $env:PACKAGE_VERSION,
     [switch]$UseGtkShell,
+    [switch]$UseWin32Shell,
     [string]$GtkRuntimeRoot = $env:TERMINALTILER_GTK_RUNTIME_ROOT,
     [switch]$SkipCargoBuild,
     [switch]$RequireInstallers
@@ -104,8 +105,7 @@ function Copy-WindowsGtkRuntime {
     )
 
     if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
-        Write-Host "==> no GTK runtime root supplied; staged payload will rely on system GTK/libadwaita"
-        return
+        throw "GTK runtime root is required for the canonical Windows GTK payload. Run setup-windows-gtk.ps1 or set TERMINALTILER_GTK_RUNTIME_ROOT. Use -UseWin32Shell only for an explicit fallback build."
     }
     if (-not (Test-Path $RuntimeRoot)) {
         throw "GTK runtime root was not found at $RuntimeRoot"
@@ -135,6 +135,48 @@ function Copy-WindowsGtkRuntime {
     }
 }
 
+function Assert-Path {
+    param([string]$Path, [string]$Description)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "$Description was not found at $Path"
+    }
+}
+
+function Assert-WindowsStagedPayload {
+    param(
+        [string]$PortableRoot,
+        [switch]$RequireGtkRuntime
+    )
+
+    Assert-Path -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Description "Staged TerminalTiler executable"
+    Assert-Path -Path (Join-Path $PortableRoot "share\style.css") -Description "Staged canonical GTK CSS"
+    Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.svg") -Description "Staged TerminalTiler logo"
+    Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\terminal.svg") -Description "Staged terminal hover icon"
+    Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\layout-dashboard.svg") -Description "Staged dashboard hover icon"
+    Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\save.svg") -Description "Staged save hover icon"
+
+    if ($RequireGtkRuntime) {
+        if (-not (Get-ChildItem -Path $PortableRoot -Filter "*gtk-4*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            throw "Staged GTK4 runtime DLL was not found in $PortableRoot"
+        }
+        if (-not (Get-ChildItem -Path $PortableRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            throw "Staged libadwaita runtime DLL was not found in $PortableRoot"
+        }
+        foreach ($relative in @(
+            "etc",
+            "lib\gdk-pixbuf-2.0",
+            "lib\gio",
+            "lib\gtk-4.0",
+            "share\glib-2.0",
+            "share\icons",
+            "share\themes"
+        )) {
+            Assert-Path -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
+        }
+    }
+}
+
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
 $TargetTriple = "x86_64-pc-windows-msvc"
@@ -152,12 +194,25 @@ $InstallerLatestPath = Join-Path $DistDir "TerminalTiler-setup-latest-x86_64.exe
 $MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
 $MsiLatestPath = Join-Path $DistDir "TerminalTiler-setup-latest-x86_64.msi"
 $NsisScript = Join-Path $RootDir "packaging\windows\installer.nsi"
+$PortableNsisScript = Join-Path $RootDir "packaging\windows\portable.nsi"
 $WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
+
+if ($UseGtkShell -and $UseWin32Shell) {
+    throw "Use either the canonical GTK shell or the explicit Win32 fallback, not both."
+}
+
+$BuildGtkShell = -not $UseWin32Shell
+if ($UseWin32Shell) {
+    Write-Host "==> explicit Win32 fallback build requested"
+}
+else {
+    Write-Host "==> canonical Windows GTK/libadwaita shell build selected"
+}
 
 if (-not $SkipCargoBuild) {
     Write-Host "==> building Windows release binary"
     $BuildFeatures = @("voice-cpal")
-    if ($UseGtkShell) {
+    if ($BuildGtkShell) {
         $BuildFeatures += "windows-gtk-shell"
     }
     cargo build --release --features ($BuildFeatures -join ",") --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
@@ -176,7 +231,7 @@ New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Copy-Item -Path $BinaryPath -Destination (Join-Path $PortableRoot "TerminalTiler.exe")
 Copy-WindowsGtkResources -RootDir $RootDir -PortableRoot $PortableRoot
-if ($UseGtkShell) {
+if ($BuildGtkShell) {
     Copy-WindowsGtkRuntime -RuntimeRoot $GtkRuntimeRoot -PortableRoot $PortableRoot
 }
 
@@ -187,11 +242,11 @@ TerminalTiler for Windows
 
 Shell:
 - GTK/libadwaita is the canonical parity shell when the package is built with
-  -UseGtkShell. It loads the same style.css, TerminalTiler logo, and hover icon
-  payload as the Ubuntu GTK build.
+  the default packaging path. It loads the same style.css, TerminalTiler logo,
+  and hover icon payload as the Ubuntu GTK build.
 - The Win32 shell remains available as an internal compatibility fallback when
-  the package is built without -UseGtkShell or with the windows-win32-shell
-  cargo feature.
+  the package is built with -UseWin32Shell or the windows-win32-shell cargo
+  feature.
 
 Runtime selection:
 - WSL2 is preferred when a valid distro is available.
@@ -210,21 +265,39 @@ Support:
 - Windows 11 is the supported Windows target.
 "@ | Set-Content -Path $ReadmePath -Encoding ASCII
 
-Write-Host "==> publishing direct portable executable"
-Remove-Item -Force $PortableExePath, $PortableExeLatestPath -ErrorAction SilentlyContinue
-Copy-Item -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Destination $PortableExePath -Force
-Copy-Item -Path $PortableExePath -Destination $PortableExeLatestPath -Force
-
-Write-Host "==> creating portable zip"
-Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
-Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
+Assert-WindowsStagedPayload -PortableRoot $PortableRoot -RequireGtkRuntime:$BuildGtkShell
 
 $InstallerTools = Assert-WindowsInstallerTools -RequireInstallers:$RequireInstallers
 $Makensis = $InstallerTools.Makensis
 $Candle = $InstallerTools.Candle
 $Light = $InstallerTools.Light
 $Heat = $InstallerTools.Heat
+
+if (-not $Makensis) {
+    throw "NSIS is required to build the direct portable self-extracting executable"
+}
+
+Write-Host "==> publishing direct portable executable"
+Remove-Item -Force $PortableExePath, $PortableExeLatestPath -ErrorAction SilentlyContinue
+& $Makensis `
+    "/DAPP_VERSION=$ResolvedVersion" `
+    "/DSTAGE_DIR=$PortableRoot" `
+    "/DOUT_FILE=$PortableExePath" `
+    $PortableNsisScript
+
+if ($LASTEXITCODE -ne 0) {
+    throw "NSIS failed while building portable executable $PortableExePath"
+}
+if (-not (Test-Path $PortableExePath)) {
+    throw "Expected portable executable was not created at $PortableExePath"
+}
+
+Copy-Item -Path $PortableExePath -Destination $PortableExeLatestPath -Force
+
+Write-Host "==> creating portable zip"
+Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
+Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
+Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
 if ($Makensis) {
     Write-Host "==> building NSIS installer"

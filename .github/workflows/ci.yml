@@ -97,11 +97,11 @@ jobs:
 
       - name: Build Windows release artifacts
         shell: pwsh
-        run: ./packaging/build-windows.ps1 -RequireInstallers
+        run: ./packaging/build-windows.ps1 -UseWin32Shell -RequireInstallers
 
       - name: Run Windows smoke test
         shell: pwsh
-        run: ./packaging/windows-smoke-test.ps1 -SmokeProfileKind terminal-only -SkipBuild
+        run: ./packaging/windows-smoke-test.ps1 -UseWin32Shell -SmokeProfileKind terminal-only -SkipBuild
 
       - name: Upload Windows smoke diagnostics
         if: failure()

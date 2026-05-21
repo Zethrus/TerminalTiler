@@ -14,6 +14,7 @@ const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
 const PACKAGE_APPIMAGE_SH: &str = include_str!("../packaging/build-appimage.sh");
 const PACKAGE_ARTIFACTS_YML: &str = include_str!("../.github/workflows/package-artifacts.yml");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
+const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
@@ -28,6 +29,7 @@ const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
+const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.nsi");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
@@ -595,12 +597,31 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "resources\\hover-icons\\*.svg",
         "Copy-WindowsGtkRuntime",
         "TERMINALTILER_GTK_RUNTIME_ROOT",
+        "[switch]$UseWin32Shell",
+        "$BuildGtkShell = -not $UseWin32Shell",
+        "Assert-WindowsStagedPayload",
+        "portable.nsi",
     ] {
         assert!(
             WINDOWS_BUILD_PS1.contains(payload),
-            "Windows packaging should stage GTK/libadwaita parity payload: {payload}"
+            "Windows packaging should default to staging the canonical GTK/libadwaita parity payload: {payload}"
         );
     }
+
+    assert!(
+        WINDOWS_BUILD_PS1
+            .contains("GTK runtime root is required for the canonical Windows GTK payload")
+            && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build"),
+        "Windows packaging should require a bundled GTK runtime unless the explicit Win32 fallback is selected"
+    );
+
+    assert!(
+        WINDOWS_PORTABLE_NSI.contains("InitPluginsDir")
+            && WINDOWS_PORTABLE_NSI.contains(r#"File /r "${STAGE_DIR}\*""#)
+            && WINDOWS_PORTABLE_NSI.contains(r#"ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0"#)
+            && WINDOWS_PORTABLE_NSI.contains("SetErrorLevel $0"),
+        "direct portable exe should be a self-extracting launcher for the full staged payload"
+    );
 
     assert!(
         WINDOWS_GTK_SMOKE_PS1.contains("setup-windows-gtk.ps1")
@@ -616,10 +637,34 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "share\\hover-icons\\terminal.svg",
         "share\\hover-icons\\layout-dashboard.svg",
         "share\\hover-icons\\save.svg",
+        "share\\icons",
+        "share\\themes",
+        "share\\glib-2.0",
+        "lib\\gdk-pixbuf-2.0",
+        "lib\\gio",
+        "lib\\gtk-4.0",
     ] {
         assert!(
             WINDOWS_SMOKE_PS1.contains(payload),
             "Windows smoke test should assert GTK parity payload: {payload}"
+        );
+    }
+
+    assert!(
+        WINDOWS_SMOKE_PS1.contains("windows GTK shell startup")
+            && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
+            && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow"),
+        "Windows smoke test should validate GTK startup logs even for self-extracting portable launchers"
+    );
+
+    for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {
+        assert!(
+            workflow.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild -SkipBuildIfPresent")
+                && workflow.contains("build-windows.ps1")
+                && workflow.contains("-UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -RequireInstallers")
+                && workflow.contains("windows-smoke-test.ps1")
+                && workflow.contains("-UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild"),
+            "release/package workflows should publish only GTK/libadwaita parity Windows artifacts by default"
         );
     }
 
