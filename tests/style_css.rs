@@ -30,8 +30,13 @@ fn main_header_icon_buttons_have_clear_tooltips() {
         "shared icon-only button helper should attach native GTK tooltips"
     );
     assert!(
-        WINDOW_RS.contains("icon_name::SETTINGS,\n        \"Open application settings\"")
-            && WINDOW_RS.contains("icon_name::ASSETS,\n        \"Open assets manager\""),
+        source_contains(
+            WINDOW_RS,
+            "icon_name::SETTINGS,\n        \"Open application settings\"",
+        ) && source_contains(
+            WINDOW_RS,
+            "icon_name::ASSETS,\n        \"Open assets manager\"",
+        ),
         "main app header icon-only actions should explain their purpose on hover"
     );
 }
@@ -348,15 +353,21 @@ fn launch_buttons_use_premium_role_contract() {
     }
 
     assert!(
-        LAUNCH_SCREEN_RS
-            .contains("\"primary-cta-button\",\n            \"new-workspace-layout-button\"")
-            && LAUNCH_SCREEN_RS
-                .contains("\"primary-cta-button\",\n            \"compact-action-button\"")
-            && LAUNCH_SCREEN_RS.contains("\"ghost-link-button\"")
-            && LAUNCH_SCREEN_RS
-                .contains("\"secondary-button\",\n            \"compact-action-button\"")
-            && LAUNCH_SCREEN_RS
-                .contains("\"destructive-button\",\n            \"compact-icon-button\""),
+        source_contains(
+            LAUNCH_SCREEN_RS,
+            "\"primary-cta-button\",\n            \"new-workspace-layout-button\"",
+        ) && source_contains(
+            LAUNCH_SCREEN_RS,
+            "\"primary-cta-button\",\n            \"compact-action-button\"",
+        ) && LAUNCH_SCREEN_RS.contains("\"ghost-link-button\"")
+            && source_contains(
+                LAUNCH_SCREEN_RS,
+                "\"secondary-button\",\n            \"compact-action-button\"",
+            )
+            && source_contains(
+                LAUNCH_SCREEN_RS,
+                "\"destructive-button\",\n            \"compact-icon-button\"",
+            ),
         "launch dashboard and wizard actions should use explicit primary, secondary, ghost, and destructive roles"
     );
 
@@ -549,9 +560,10 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
         );
         for label in ["&title", "&status", "&badge"] {
             assert!(
-                source.contains(&format!(
-                    "configure_dynamic_header_label(\n        {label},"
-                )),
+                source_contains(
+                    source,
+                    &format!("configure_dynamic_header_label(\n        {label},"),
+                ),
                 "{source_name} should constrain dynamic header label {label}"
             );
         }
@@ -616,6 +628,10 @@ fn assert_css_block_contains(selector: &str, expected: &str, reason: &str) {
     });
 
     assert!(found, "{selector} must contain {expected:?}; {reason}");
+}
+
+fn source_contains(source: &str, needle: &str) -> bool {
+    source.replace("\r\n", "\n").contains(needle)
 }
 
 fn declaration_value<'a>(body: &'a str, property: &str) -> Option<&'a str> {
