@@ -31,7 +31,7 @@ from typing import Optional
 
 DEFAULT_OFFLINE_MODEL = "nvidia/parakeet-tdt-0.6b-v2"
 DEFAULT_STREAMING_MODEL = "nvidia/parakeet-ctc-0.6b"
-PROTOCOL_STDOUT = sys.stdout
+PROTOCOL_STDOUT = sys.stdout.buffer
 # NeMo, PyTorch, Hugging Face, and Xet may print progress/log lines to stdout
 # while loading or downloading the model. Keep stdout reserved for the framed
 # TerminalTiler protocol and send third-party chatter to stderr instead.
@@ -40,7 +40,9 @@ sys.stdout = sys.stderr
 
 def emit(kind: str, payload: str = "") -> None:
     safe = payload.replace("\n", "\\n")
-    print(f"{kind} {safe}" if safe else kind, file=PROTOCOL_STDOUT, flush=True)
+    frame = f"{kind} {safe}" if safe else kind
+    PROTOCOL_STDOUT.write(f"{frame}\n".encode("utf-8"))
+    PROTOCOL_STDOUT.flush()
 
 
 def decode_payload(payload: str) -> str:

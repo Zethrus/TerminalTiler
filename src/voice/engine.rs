@@ -1036,6 +1036,7 @@ class models:
                 "TERMINALTILER_VOICE_MODEL_PATH",
                 pack_root.join(&manifest.model_path),
             )
+            .env("PYTHONIOENCODING", "cp1252")
             .env("TERMINALTILER_VOICE_ENGINE_MODE", "cpu");
         let mut child = command.spawn().unwrap();
         let mut stdin = child.stdin.take().unwrap();
