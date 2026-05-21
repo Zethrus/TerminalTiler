@@ -587,14 +587,20 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS
                 .contains("for (index, tile) in layout.tile_specs().iter().enumerate()")
             && WORKSPACE_PREVIEW_RS.contains("slot.append(&build_tile(tile, index == 0))")
-            && !WORKSPACE_PREVIEW_RS.contains("LayoutNode::Split {\n            axis,"),
+            && !source_contains(
+                WORKSPACE_PREVIEW_RS,
+                "LayoutNode::Split {\n            axis,"
+            ),
         "Windows GTK workspace preview should reuse the shared Linux GTK split renderer so split orientation, ratios, resize handles, and shrink behavior stay identical"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS
-            .contains("if active {\n        shell.add_css_class(\"is-active-tile\");\n    }")
-            && !WORKSPACE_PREVIEW_RS
-                .contains("shell.add_css_class(\"is-active-tile\");\n    make_shrinkable"),
+        source_contains(
+            WORKSPACE_PREVIEW_RS,
+            "if active {\n        shell.add_css_class(\"is-active-tile\");\n    }"
+        ) && !source_contains(
+            WORKSPACE_PREVIEW_RS,
+            "shell.add_css_class(\"is-active-tile\");\n    make_shrinkable"
+        ),
         "Windows GTK workspace preview should only mark the active tile with the same header-local active styling as Linux"
     );
     assert!(

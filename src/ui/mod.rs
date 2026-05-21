@@ -14,7 +14,10 @@ pub(crate) mod dialog_smoke;
 mod header_actions;
 pub(crate) mod icons;
 pub mod launch_screen;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod layout_tree;
 #[cfg(target_os = "linux")]
 pub mod settings_dialog;
