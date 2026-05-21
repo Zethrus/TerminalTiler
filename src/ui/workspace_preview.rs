@@ -12,7 +12,8 @@ use crate::ui::icons::{self, name as icon_name};
 /// adapters are being moved behind the shared GTK layout.  The widget therefore
 /// intentionally reuses Linux CSS classes (`workspace-summary`, `app-tab-*`,
 /// `terminal-card`, `terminal-header`, `terminal-frame`, `terminal-surface`,
-/// `web-tile-frame`) instead of opening the legacy Win32 workspace host.
+/// `web-tile-frame`) and the shared `layout_tree` split renderer instead of
+/// opening the legacy Win32 workspace host.
 pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
     let active_index = session
         .active_tab_index
@@ -190,34 +191,17 @@ fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
 }
 
 fn build_layout(layout: &LayoutNode) -> gtk::Widget {
-    match layout {
-        LayoutNode::Tile(tile) => build_tile(tile),
-        LayoutNode::Split {
-            axis,
-            first,
-            second,
-            ..
-        } => {
-            let orientation = match axis {
-                crate::model::layout::SplitAxis::Horizontal => gtk::Orientation::Horizontal,
-                crate::model::layout::SplitAxis::Vertical => gtk::Orientation::Vertical,
-            };
-            let split = gtk::Box::builder()
-                .orientation(orientation)
-                .spacing(8)
-                .hexpand(true)
-                .vexpand(true)
-                .css_classes(["split-pane"])
-                .build();
-            make_shrinkable(&split);
-            split.append(&build_layout(first));
-            split.append(&build_layout(second));
-            split.upcast()
-        }
+    let shell = crate::ui::layout_tree::build(layout, None);
+    for (index, tile) in layout.tile_specs().iter().enumerate() {
+        let Some(slot) = shell.slots.get(index) else {
+            continue;
+        };
+        slot.append(&build_tile(tile, index == 0));
     }
+    shell.widget
 }
 
-fn build_tile(tile: &TileSpec) -> gtk::Widget {
+fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -225,7 +209,9 @@ fn build_tile(tile: &TileSpec) -> gtk::Widget {
         .vexpand(true)
         .css_classes(["terminal-card", tile.accent_class.as_str()])
         .build();
-    shell.add_css_class("is-active-tile");
+    if active {
+        shell.add_css_class("is-active-tile");
+    }
     make_shrinkable(&shell);
 
     let header = gtk::Box::builder()
@@ -262,6 +248,16 @@ fn build_tile(tile: &TileSpec) -> gtk::Widget {
             .css_classes(["tile-title"])
             .build(),
     );
+    if !tile.pane_groups.is_empty() {
+        let pane_groups = tile.pane_groups.join(", ");
+        let pane_group_label = gtk::Label::builder()
+            .label(&pane_groups)
+            .halign(gtk::Align::Start)
+            .tooltip_text(format!("Pane groups: {pane_groups}"))
+            .css_classes(["status-chip", "muted-chip"])
+            .build();
+        left.append(&pane_group_label);
+    }
     header.append(&left);
 
     let status = match tile.tile_kind {

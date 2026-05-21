@@ -582,6 +582,27 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("session_shape"),
         "Windows GTK workspace preview should reuse the same visible workspace classes as the Linux GTK workspace shell"
     );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")
+            && WORKSPACE_PREVIEW_RS
+                .contains("for (index, tile) in layout.tile_specs().iter().enumerate()")
+            && WORKSPACE_PREVIEW_RS.contains("slot.append(&build_tile(tile, index == 0))")
+            && !WORKSPACE_PREVIEW_RS.contains("LayoutNode::Split {\n            axis,"),
+        "Windows GTK workspace preview should reuse the shared Linux GTK split renderer so split orientation, ratios, resize handles, and shrink behavior stay identical"
+    );
+    assert!(
+        WORKSPACE_PREVIEW_RS
+            .contains("if active {\n        shell.add_css_class(\"is-active-tile\");\n    }")
+            && !WORKSPACE_PREVIEW_RS
+                .contains("shell.add_css_class(\"is-active-tile\");\n    make_shrinkable"),
+        "Windows GTK workspace preview should only mark the active tile with the same header-local active styling as Linux"
+    );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("tile.pane_groups.join(\", \")")
+            && WORKSPACE_PREVIEW_RS
+                .contains("tooltip_text(format!(\"Pane groups: {pane_groups}\"))"),
+        "Windows GTK workspace preview headers should carry pane-group chips like the Linux GTK workspace headers"
+    );
 
     assert!(
         WINDOW_RS.contains("gtk_shell::DEFAULT_WINDOW_WIDTH")
