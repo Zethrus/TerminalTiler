@@ -5,6 +5,7 @@
 //! configuration files without depending on Core internals.
 
 use std::{
+    collections::BTreeSet,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -22,9 +23,14 @@ pub use crate::model::{
     preset::{ApplicationDensity, ThemeMode, WorkspacePreset},
     workspace_config::WorkspaceConfig,
 };
+pub use crate::{
+    model::assets::RestoreLaunchMode,
+    voice::{VoiceActivationMode, VoiceEngineMode},
+};
 
 const PRESET_STORE_VERSION: u32 = 1;
 const ASSET_STORE_VERSION: u32 = 1;
+const PREFERENCE_STORE_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +38,51 @@ pub enum ConfigBlobKind {
     Presets,
     GlobalAssets,
     WorkspaceConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncDocumentKind {
+    Preferences,
+    Presets,
+    GlobalAssets,
+    WorkspaceConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncSnapshotOptions {
+    pub include_preferences: bool,
+    pub include_presets: bool,
+    pub include_global_assets: bool,
+    pub include_workspace_configs: bool,
+    pub workspace_roots: Vec<PathBuf>,
+}
+
+impl Default for SyncSnapshotOptions {
+    fn default() -> Self {
+        Self {
+            include_preferences: true,
+            include_presets: true,
+            include_global_assets: true,
+            include_workspace_configs: true,
+            workspace_roots: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncDocument {
+    pub kind: SyncDocumentKind,
+    /// Stable logical document id. Pro encrypts this before using it as a server object id.
+    pub id: String,
+    /// Human-readable logical path for local routing only. Pro must not send this plaintext to v2 APIs.
+    pub logical_path: String,
+    pub contents: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncSnapshot {
+    pub documents: Vec<SyncDocument>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -107,6 +158,99 @@ struct WorkspaceConfigDocument {
     introspection: crate::model::workspace_config::RepoIntrospectionConfig,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PreferenceDocument {
+    version: u32,
+    #[serde(default = "default_density", alias = "last_density")]
+    default_density: ApplicationDensity,
+    #[serde(default = "default_theme")]
+    default_theme: ThemeMode,
+    #[serde(default = "default_close_to_background")]
+    close_to_background: bool,
+    #[serde(default)]
+    default_restore_mode: RestoreLaunchMode,
+    #[serde(default = "default_fullscreen_shortcut")]
+    workspace_fullscreen_shortcut: String,
+    #[serde(default = "default_density_shortcut")]
+    workspace_density_shortcut: String,
+    #[serde(default = "default_zoom_in_shortcut")]
+    workspace_zoom_in_shortcut: String,
+    #[serde(default = "default_zoom_out_shortcut")]
+    workspace_zoom_out_shortcut: String,
+    #[serde(default = "default_command_palette_shortcut")]
+    command_palette_shortcut: String,
+    #[serde(default = "default_max_reconnect_attempts")]
+    max_reconnect_attempts: u32,
+    #[serde(default)]
+    voice: SyncVoicePreferences,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SyncVoicePreferences {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    activation_mode: VoiceActivationMode,
+    #[serde(default = "default_voice_hotkey")]
+    hotkey: String,
+    #[serde(default)]
+    prefer_global_hotkey: bool,
+    #[serde(default)]
+    engine_mode: VoiceEngineMode,
+}
+
+impl Default for SyncVoicePreferences {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            activation_mode: VoiceActivationMode::PushToTalk,
+            hotkey: default_voice_hotkey(),
+            prefer_global_hotkey: false,
+            engine_mode: VoiceEngineMode::Auto,
+        }
+    }
+}
+
+fn default_density() -> ApplicationDensity {
+    ApplicationDensity::Compact
+}
+
+fn default_theme() -> ThemeMode {
+    ThemeMode::System
+}
+
+fn default_close_to_background() -> bool {
+    false
+}
+
+fn default_fullscreen_shortcut() -> String {
+    "F11".into()
+}
+
+fn default_density_shortcut() -> String {
+    "<Ctrl><Shift>D".into()
+}
+
+fn default_zoom_in_shortcut() -> String {
+    "<Ctrl>plus".into()
+}
+
+fn default_zoom_out_shortcut() -> String {
+    "<Ctrl>minus".into()
+}
+
+fn default_command_palette_shortcut() -> String {
+    "<Ctrl><Shift>P".into()
+}
+
+fn default_max_reconnect_attempts() -> u32 {
+    5
+}
+
+fn default_voice_hotkey() -> String {
+    crate::voice::preferences::DEFAULT_VOICE_HOTKEY.into()
+}
+
 pub fn load_config_snapshot(workspace_root: Option<&Path>) -> io::Result<ConfigSnapshot> {
     let mut blobs = Vec::new();
     if let Some(path) = presets_path() {
@@ -130,6 +274,76 @@ pub fn load_config_snapshot(workspace_root: Option<&Path>) -> io::Result<ConfigS
         )?;
     }
     Ok(ConfigSnapshot { blobs })
+}
+
+pub fn load_sync_snapshot(options: SyncSnapshotOptions) -> io::Result<SyncSnapshot> {
+    let mut documents = Vec::new();
+    if options.include_preferences {
+        if let Some(path) = preferences_path() {
+            push_preference_document_if_exists(&mut documents, &path)?;
+        }
+    }
+    if options.include_presets {
+        if let Some(path) = presets_path() {
+            push_sync_document_if_exists(
+                &mut documents,
+                SyncDocumentKind::Presets,
+                "presets",
+                "presets.toml",
+                &path,
+            )?;
+        }
+    }
+    if options.include_global_assets {
+        if let Some(path) = assets_path() {
+            push_sync_document_if_exists(
+                &mut documents,
+                SyncDocumentKind::GlobalAssets,
+                "global-assets",
+                "workspace-assets.toml",
+                &path,
+            )?;
+        }
+    }
+    if options.include_workspace_configs {
+        for root in sync_workspace_roots(&options)? {
+            let path = workspace_config_path(&root);
+            let id = format!("workspace:{}", root.display());
+            push_sync_document_if_exists(
+                &mut documents,
+                SyncDocumentKind::WorkspaceConfig,
+                &id,
+                ".terminaltiler/workspace.toml",
+                &path,
+            )?;
+        }
+    }
+    Ok(SyncSnapshot { documents })
+}
+
+pub fn apply_sync_snapshot(
+    snapshot: &SyncSnapshot,
+    conflict_policy: ConflictPolicy,
+) -> io::Result<ApplyReport> {
+    let mut report = ApplyReport::default();
+    for document in &snapshot.documents {
+        let Some(path) = path_for_sync_document(document) else {
+            report.skipped += 1;
+            continue;
+        };
+        if path.exists() && conflict_policy == ConflictPolicy::PreferLocal {
+            report.skipped += 1;
+            continue;
+        }
+        validate_sync_document(document)?;
+        if document.kind == SyncDocumentKind::Preferences {
+            apply_preference_projection(&path, &document.contents)?;
+        } else {
+            write_private(&path, &document.contents)?;
+        }
+        report.applied += 1;
+    }
+    Ok(report)
 }
 
 pub fn apply_config_snapshot(
@@ -251,6 +465,25 @@ fn validate_blob(blob: &ConfigBlob) -> io::Result<()> {
     }
 }
 
+fn validate_sync_document(document: &SyncDocument) -> io::Result<()> {
+    match document.kind {
+        SyncDocumentKind::Preferences => toml::from_str::<PreferenceDocument>(&document.contents)
+            .map(|_| ())
+            .map_err(toml_error),
+        SyncDocumentKind::Presets => toml::from_str::<PresetDocument>(&document.contents)
+            .map(|_| ())
+            .map_err(toml_error),
+        SyncDocumentKind::GlobalAssets => toml::from_str::<AssetDocument>(&document.contents)
+            .map(|_| ())
+            .map_err(toml_error),
+        SyncDocumentKind::WorkspaceConfig => {
+            toml::from_str::<WorkspaceConfigDocument>(&document.contents)
+                .map(|_| ())
+                .map_err(toml_error)
+        }
+    }
+}
+
 fn push_blob_if_exists(
     blobs: &mut Vec<ConfigBlob>,
     kind: ConfigBlobKind,
@@ -267,6 +500,129 @@ fn push_blob_if_exists(
         Err(error) => return Err(error),
     }
     Ok(())
+}
+
+fn push_sync_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    kind: SyncDocumentKind,
+    id: &str,
+    logical_path: &str,
+    path: &Path,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(contents) => documents.push(SyncDocument {
+            kind,
+            id: id.to_string(),
+            logical_path: logical_path.to_string(),
+            contents,
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn push_preference_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    path: &Path,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(contents) => {
+            let document = sync_preference_projection(&contents)?;
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::Preferences,
+                id: "preferences".into(),
+                logical_path: "preferences.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn sync_workspace_roots(options: &SyncSnapshotOptions) -> io::Result<Vec<PathBuf>> {
+    let mut roots = BTreeSet::new();
+    for root in &options.workspace_roots {
+        roots.insert(root.clone());
+    }
+    if let Some(path) = presets_path() {
+        if let Ok(document) = read_preset_document(&path) {
+            for preset in document.presets {
+                if let Some(root) = preset.workspace_root {
+                    roots.insert(root);
+                }
+            }
+        }
+    }
+    Ok(roots.into_iter().collect())
+}
+
+fn path_for_sync_document(document: &SyncDocument) -> Option<PathBuf> {
+    match document.kind {
+        SyncDocumentKind::Preferences => preferences_path(),
+        SyncDocumentKind::Presets => presets_path(),
+        SyncDocumentKind::GlobalAssets => assets_path(),
+        SyncDocumentKind::WorkspaceConfig => document
+            .id
+            .strip_prefix("workspace:")
+            .map(PathBuf::from)
+            .map(|root| workspace_config_path(&root)),
+    }
+}
+
+fn sync_preference_projection(raw: &str) -> io::Result<PreferenceDocument> {
+    let mut document: PreferenceDocument = toml::from_str(raw).map_err(toml_error)?;
+    document.version = PREFERENCE_STORE_VERSION;
+    Ok(document)
+}
+
+fn apply_preference_projection(path: &Path, incoming_raw: &str) -> io::Result<()> {
+    let incoming: PreferenceDocument = toml::from_str(incoming_raw).map_err(toml_error)?;
+    let merged = match fs::read_to_string(path) {
+        Ok(local_raw) => {
+            let mut local: toml::Table = local_raw.parse().map_err(toml_error)?;
+            let incoming_table: toml::Table = incoming_raw.parse().map_err(toml_error)?;
+            for key in [
+                "version",
+                "default_density",
+                "default_theme",
+                "close_to_background",
+                "default_restore_mode",
+                "workspace_fullscreen_shortcut",
+                "workspace_density_shortcut",
+                "workspace_zoom_in_shortcut",
+                "workspace_zoom_out_shortcut",
+                "command_palette_shortcut",
+                "max_reconnect_attempts",
+            ] {
+                if let Some(value) = incoming_table.get(key).cloned() {
+                    local.insert(key.to_string(), value);
+                }
+            }
+            if let Some(incoming_voice) = incoming_table
+                .get("voice")
+                .and_then(|value| value.as_table())
+            {
+                let mut merged_voice = local
+                    .get("voice")
+                    .and_then(|value| value.as_table())
+                    .cloned()
+                    .unwrap_or_default();
+                for (key, value) in incoming_voice {
+                    merged_voice.insert(key.clone(), value.clone());
+                }
+                local.insert("voice".into(), toml::Value::Table(merged_voice));
+            }
+            toml::to_string_pretty(&local).map_err(toml_ser_error)?
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            toml::to_string_pretty(&incoming).map_err(toml_ser_error)?
+        }
+        Err(error) => return Err(error),
+    };
+    write_private(path, &merged)
 }
 
 fn read_preset_document(path: &Path) -> io::Result<PresetDocument> {
@@ -340,6 +696,10 @@ fn presets_path() -> Option<PathBuf> {
 
 fn assets_path() -> Option<PathBuf> {
     app_paths::config_dir().map(|dir| dir.join("workspace-assets.toml"))
+}
+
+fn preferences_path() -> Option<PathBuf> {
+    app_paths::config_dir().map(|dir| dir.join("preferences.toml"))
 }
 
 fn workspace_config_path(workspace_root: &Path) -> PathBuf {
@@ -424,6 +784,97 @@ mod tests {
                 Some("bash"),
             ),
         }
+    }
+
+    #[test]
+    fn sync_snapshot_projects_preferences_without_local_only_fields() {
+        with_config_home("sync-prefs", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(
+                config_dir.join("preferences.toml"),
+                r#"
+version = 1
+default_density = "comfortable"
+default_theme = "dark"
+settings_dialog_width = 1200
+settings_dialog_height = 900
+max_reconnect_attempts = 9
+
+[voice]
+enabled = true
+microphone_id = "local-mic"
+hotkey = "<Ctrl><Shift>space"
+pack_status = { state = "installed", version = "1" }
+engine_mode = "cpu"
+"#,
+            )
+            .unwrap();
+
+            let snapshot = load_sync_snapshot(SyncSnapshotOptions::default()).unwrap();
+            let prefs = snapshot
+                .documents
+                .iter()
+                .find(|document| document.kind == SyncDocumentKind::Preferences)
+                .unwrap();
+
+            assert!(prefs.contents.contains("default_density"));
+            assert!(prefs.contents.contains("max_reconnect_attempts"));
+            assert!(!prefs.contents.contains("settings_dialog_width"));
+            assert!(!prefs.contents.contains("microphone_id"));
+            assert!(!prefs.contents.contains("pack_status"));
+        });
+    }
+
+    #[test]
+    fn applying_preference_projection_preserves_local_only_fields() {
+        with_config_home("apply-sync-prefs", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let prefs_path = config_dir.join("preferences.toml");
+            fs::write(
+                &prefs_path,
+                r#"
+version = 1
+default_density = "compact"
+settings_dialog_width = 777
+
+[voice]
+microphone_id = "local-mic"
+pack_status = { state = "installed", version = "1" }
+"#,
+            )
+            .unwrap();
+
+            apply_sync_snapshot(
+                &SyncSnapshot {
+                    documents: vec![SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "preferences".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: r#"
+version = 1
+default_density = "comfortable"
+default_theme = "dark"
+
+[voice]
+enabled = true
+hotkey = "<Ctrl><Shift>space"
+engine_mode = "cpu"
+"#
+                        .into(),
+                    }],
+                },
+                ConflictPolicy::PreferRemote,
+            )
+            .unwrap();
+
+            let merged = fs::read_to_string(prefs_path).unwrap();
+            assert!(merged.contains("default_density = \"comfortable\""));
+            assert!(merged.contains("settings_dialog_width = 777"));
+            assert!(merged.contains("microphone_id = \"local-mic\""));
+            assert!(merged.contains("pack_status"));
+        });
     }
 
     #[test]
