@@ -127,10 +127,14 @@ function Copy-WindowsGtkRuntime {
         "share\themes"
     )) {
         $source = Join-Path $RuntimeRoot $relative
+        $destination = Join-Path $PortableRoot $relative
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
         if (Test-Path $source) {
-            $destination = Join-Path $PortableRoot $relative
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
-            Copy-Item -Path $source -Destination $destination -Recurse -Force
+            Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        else {
+            Write-Host "==> GTK runtime path $relative was not present in $RuntimeRoot; staging placeholder directory"
+            Set-Content -Path (Join-Path $destination ".terminaltiler-keep") -Value "GTK runtime did not provide this optional directory." -Encoding ASCII
         }
     }
 }
