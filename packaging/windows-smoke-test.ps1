@@ -403,7 +403,8 @@ function Invoke-LaunchSmoke {
 
     try {
         $process = Start-Process -FilePath $ExePath -PassThru
-        $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds 8
+        $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
+        $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
         Start-Sleep -Seconds 2
         $process.Refresh()
         if ($process.HasExited -and $process.ExitCode -ne 0) {
