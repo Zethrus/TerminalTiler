@@ -18,6 +18,7 @@ const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
+const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
 const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
@@ -608,6 +609,32 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS
                 .contains("tooltip_text(format!(\"Pane groups: {pane_groups}\"))"),
         "Windows GTK workspace preview headers should carry pane-group chips like the Linux GTK workspace headers"
+    );
+    assert!(
+        UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
+            && UI_MOD_RS.contains("mod header_actions;")
+            && WORKSPACE_PREVIEW_RS.contains("build_header_icon_button")
+            && WORKSPACE_PREVIEW_RS.contains("tile-recovery-action")
+            && WORKSPACE_PREVIEW_RS.contains("tile-snippet-action")
+            && WORKSPACE_PREVIEW_RS.contains("\"Edit URL and refresh settings\"")
+            && WORKSPACE_PREVIEW_RS.contains("actions.append(&status);\n    match tile.tile_kind")
+            && source_contains(
+                WORKSPACE_PREVIEW_RS,
+                "actions.append(&recovery_button);\n            actions.append(&snippet_button);"
+            )
+            && source_contains(WORKSPACE_PREVIEW_RS, "actions.append(&settings_button);")
+            && source_contains(WORKSPACE_PREVIEW_RS, "actions.append(&close_button);"),
+        "Windows GTK preview tile headers should share the Linux header action order and controls for terminal and web tiles"
+    );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("configure_dynamic_header_label")
+            && WORKSPACE_PREVIEW_RS.contains("HEADER_STATUS_MAX_CHARS")
+            && WORKSPACE_PREVIEW_RS.contains("HEADER_TITLE_MAX_CHARS")
+            && WORKSPACE_PREVIEW_RS.contains("HEADER_GROUP_MAX_CHARS")
+            && WORKSPACE_PREVIEW_RS.contains("domain_from_url(&url)")
+            && WORKSPACE_PREVIEW_RS.contains("pango::EllipsizeMode::Start")
+            && WORKSPACE_PREVIEW_RS.contains("pango::EllipsizeMode::End"),
+        "Windows GTK preview header labels should use the same bounded ellipsized status/title/group behavior as Linux tile headers"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("\"Alerts (0)\"")

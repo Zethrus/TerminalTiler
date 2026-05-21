@@ -3,7 +3,14 @@ use gtk::{glib, pango};
 
 use crate::model::layout::{LayoutNode, TileKind, TileSpec, normalize_web_url};
 use crate::storage::session_store::{SavedSession, SavedTab};
+use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
+
+const TERMINAL_HEADER_BADGE_MAX_CHARS: i32 = 12;
+const WEB_HEADER_BADGE_MAX_CHARS: i32 = 4;
+const HEADER_GROUP_MAX_CHARS: i32 = 16;
+const HEADER_STATUS_MAX_CHARS: i32 = 28;
+const HEADER_TITLE_MAX_CHARS: i32 = 28;
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
@@ -280,26 +287,43 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
         .valign(gtk::Align::Center)
         .build();
     make_shrinkable(&left);
-    let badge_text = match tile.tile_kind {
-        TileKind::Terminal => tile.agent_label.as_str(),
-        TileKind::WebView => "🌐",
-    };
-    left.append(
-        &gtk::Label::builder()
-            .label(badge_text)
-            .halign(gtk::Align::Start)
-            .css_classes(["agent-badge"])
-            .build(),
+    left.set_tooltip_text(Some(match tile.tile_kind {
+        TileKind::Terminal => "Drag this header to swap terminal positions",
+        TileKind::WebView => "Drag this header to swap tile positions",
+    }));
+
+    let badge_text = tile_badge_text(tile);
+    let badge_tooltip = tile_badge_tooltip(tile);
+    let badge = gtk::Label::builder()
+        .label(&badge_text)
+        .halign(gtk::Align::Start)
+        .css_classes(["agent-badge"])
+        .build();
+    configure_dynamic_header_label(
+        &badge,
+        &badge_tooltip,
+        match tile.tile_kind {
+            TileKind::Terminal => TERMINAL_HEADER_BADGE_MAX_CHARS,
+            TileKind::WebView => WEB_HEADER_BADGE_MAX_CHARS,
+        },
+        pango::EllipsizeMode::End,
     );
-    left.append(
-        &gtk::Label::builder()
-            .label(&tile.title)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .ellipsize(pango::EllipsizeMode::End)
-            .css_classes(["tile-title"])
-            .build(),
+    left.append(&badge);
+
+    let title = gtk::Label::builder()
+        .label(&tile.title)
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .css_classes(["tile-title"])
+        .build();
+    configure_dynamic_header_label(
+        &title,
+        &tile.title,
+        HEADER_TITLE_MAX_CHARS,
+        pango::EllipsizeMode::End,
     );
+    left.append(&title);
+
     if !tile.pane_groups.is_empty() {
         let pane_groups = tile.pane_groups.join(", ");
         let pane_group_label = gtk::Label::builder()
@@ -308,29 +332,71 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
             .tooltip_text(format!("Pane groups: {pane_groups}"))
             .css_classes(["status-chip", "muted-chip"])
             .build();
+        configure_dynamic_header_label(
+            &pane_group_label,
+            &pane_groups,
+            HEADER_GROUP_MAX_CHARS,
+            pango::EllipsizeMode::End,
+        );
+        pane_group_label.set_tooltip_text(Some(&format!("Pane groups: {pane_groups}")));
         left.append(&pane_group_label);
     }
     header.append(&left);
 
-    let status = match tile.tile_kind {
-        TileKind::Terminal => tile.working_directory.short_label(),
-        TileKind::WebView => normalize_web_url(tile.url.as_deref().unwrap_or("https://google.com")),
+    let (status_text, status_tooltip) = match tile.tile_kind {
+        TileKind::Terminal => {
+            let label = tile.working_directory.short_label();
+            (label.clone(), label)
+        }
+        TileKind::WebView => {
+            let url = normalize_web_url(tile.url.as_deref().unwrap_or("https://google.com"));
+            (domain_from_url(&url), url)
+        }
     };
-    header.append(
-        &gtk::Label::builder()
-            .label(status)
-            .ellipsize(pango::EllipsizeMode::End)
-            .valign(gtk::Align::Center)
-            .css_classes(["status-chip"])
-            .build(),
+    let status = gtk::Label::builder()
+        .label(&status_text)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip"])
+        .build();
+    configure_dynamic_header_label(
+        &status,
+        &status_tooltip,
+        HEADER_STATUS_MAX_CHARS,
+        match tile.tile_kind {
+            TileKind::Terminal => pango::EllipsizeMode::Start,
+            TileKind::WebView => pango::EllipsizeMode::End,
+        },
     );
-    let action = icons::icon_button(
-        icon_name::CLOSE,
-        "Runtime action",
-        &["flat", "tile-header-action"],
-    );
-    action.set_sensitive(false);
-    header.append(&action);
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .build();
+    actions.append(&status);
+    match tile.tile_kind {
+        TileKind::Terminal => {
+            let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
+            recovery_button.add_css_class("tile-recovery-action");
+            recovery_button.set_sensitive(false);
+            let snippet_button = build_header_icon_button(icon_name::SNIPPET, "Run CLI snippet");
+            snippet_button.add_css_class("tile-snippet-action");
+            snippet_button.set_sensitive(false);
+            actions.append(&recovery_button);
+            actions.append(&snippet_button);
+        }
+        TileKind::WebView => {
+            let settings_button =
+                build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
+            settings_button.set_sensitive(false);
+            actions.append(&settings_button);
+        }
+    }
+
+    let close_button = build_header_icon_button(icon_name::CLOSE, "Close tile");
+    close_button.set_sensitive(false);
+    actions.append(&close_button);
+    header.append(&actions);
     shell.append(&header);
 
     let frame_class = match tile.tile_kind {
@@ -382,6 +448,40 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     shell.append(&frame);
 
     shell.upcast()
+}
+
+fn tile_badge_text(tile: &TileSpec) -> String {
+    match tile.tile_kind {
+        TileKind::Terminal => tile.agent_label.clone(),
+        TileKind::WebView => "🌐".into(),
+    }
+}
+
+fn tile_badge_tooltip(tile: &TileSpec) -> String {
+    match tile.tile_kind {
+        TileKind::Terminal => tile.agent_label.clone(),
+        TileKind::WebView => "Web tile".into(),
+    }
+}
+
+fn configure_dynamic_header_label(
+    label: &gtk::Label,
+    full_text: &str,
+    max_width_chars: i32,
+    ellipsize: pango::EllipsizeMode,
+) {
+    label.set_ellipsize(ellipsize);
+    label.set_max_width_chars(max_width_chars);
+    label.set_single_line_mode(true);
+    label.set_tooltip_text(Some(full_text));
+}
+
+fn domain_from_url(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(url)
+        .to_string()
 }
 
 fn build_empty_state() -> gtk::Widget {
