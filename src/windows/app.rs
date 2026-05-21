@@ -32,7 +32,7 @@ mod imp {
         MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
         SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
         SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-        TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+        TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
         WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP,
         WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
         WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
@@ -186,6 +186,7 @@ mod imp {
     const CHECKBOX_UNCHECKED: usize = 0;
     const CHECKBOX_CHECKED: usize = 1;
     const WM_TRAYICON: u32 = 0x8001;
+    const WM_STARTUP_INIT: u32 = WM_APP + 49;
     const WM_STARTUP_PROBE_REQUEST: u32 = WM_APP + 50;
     const WM_STARTUP_PROBE_COMPLETE: u32 = WM_APP + 51;
     const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 60;
@@ -245,7 +246,6 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     fn themed_surface_for_message(message: u32) -> theme::ControlSurface {
         match message {
             WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => theme::ControlSurface::Field,
-            WM_CTLCOLORBTN => theme::ControlSurface::Panel,
             _ => theme::ControlSurface::Window,
         }
     }
@@ -302,6 +302,9 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         palette_button_hwnd: HWND,
         companion_button_hwnd: HWND,
         launcher_editor_hwnd: HWND,
+        controls_initializing: bool,
+        controls_ready: bool,
+        startup_init_completed: bool,
         startup_probe_running: bool,
         runtime_probe_preferred_distribution: Option<String>,
     }
@@ -426,6 +429,9 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             palette_button_hwnd: ptr::null_mut(),
             companion_button_hwnd: ptr::null_mut(),
             launcher_editor_hwnd: ptr::null_mut(),
+            controls_initializing: false,
+            controls_ready: false,
+            startup_init_completed: false,
             startup_probe_running: false,
             runtime_probe_preferred_distribution: None,
         });
@@ -545,10 +551,18 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             }
             WM_CREATE => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
+                    state.controls_initializing = true;
                     create_controls(hwnd, state);
-                    install_tray_icon(hwnd, state);
-                    refresh_state(hwnd, state);
+                    state.controls_initializing = false;
+                    state.controls_ready = true;
                     logging::info("Windows launcher window created");
+                    if unsafe { PostMessageW(hwnd, WM_STARTUP_INIT, 0, 0) } == 0 {
+                        logging::error(format!(
+                            "failed to post Windows startup init request: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                        run_deferred_startup_init(hwnd, state);
+                    }
                 }
                 0
             }
@@ -566,7 +580,9 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 0
             }
             WM_SIZE => {
-                if let Some(state) = unsafe { state_mut(hwnd) } {
+                if let Some(state) = unsafe { state_mut(hwnd) }
+                    && state.controls_ready
+                {
                     layout_controls(hwnd, state);
                 }
                 0
@@ -585,13 +601,19 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
                 0
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let surface = themed_surface_for_message(message);
                 theme::apply_control_colors(wparam as HDC, surface, true) as isize
             }
             WM_TRAYICON => {
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     handle_tray_event(hwnd, state, lparam as u32);
+                }
+                0
+            }
+            WM_STARTUP_INIT => {
+                if let Some(state) = unsafe { state_mut(hwnd) } {
+                    run_deferred_startup_init(hwnd, state);
                 }
                 0
             }
@@ -617,6 +639,9 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 if let Some(state) = unsafe { state_mut(hwnd) } {
+                    if state.controls_initializing || !state.controls_ready {
+                        return 0;
+                    }
                     let notification = ((wparam >> 16) & 0xffff) as u32;
                     match command_id {
                         ID_TEMPLATE_LIST if notification == LBN_SELCHANGE => {
@@ -778,7 +803,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
                 0
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let surface = themed_surface_for_message(message);
                 theme::apply_control_colors(wparam as HDC, surface, true) as isize
             }
@@ -1599,7 +1624,20 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
     }
 
+    fn run_deferred_startup_init(hwnd: HWND, state: &mut AppWindowState) {
+        if state.startup_init_completed {
+            logging::info("skipped Windows startup init because it already completed");
+            return;
+        }
+        state.startup_init_completed = true;
+        logging::info("Windows startup init begin");
+        install_tray_icon(hwnd, state);
+        refresh_state(hwnd, state);
+        logging::info("Windows startup init complete");
+    }
+
     fn refresh_state(hwnd: HWND, state: &mut AppWindowState) {
+        logging::info("Windows shell state refresh begin");
         let preferences = state.preference_store.load();
         let preferred_distribution = preferences.windows_wsl_distribution.clone();
         state.runtime = None;
@@ -1607,21 +1645,27 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         state.webview2_error = None;
 
         state.preset_store.ensure_seeded();
+        logging::info("Windows startup presets seeded");
         state.asset_store.ensure_seeded();
+        logging::info("Windows startup assets seeded");
         let preset_outcome = state.preset_store.load_presets_with_status();
         state.presets = preset_outcome.presets;
         state.preset_warning = preset_outcome.warning;
+        logging::info("Windows startup presets loaded");
 
         refresh_asset_warning(state);
         refresh_suggestions(state);
+        logging::info("Windows startup assets and suggestions refreshed");
 
         populate_preset_list(state);
         populate_suggestion_list(state);
         apply_launcher_selection(state);
+        logging::info("Windows startup lists populated and launcher selection applied");
 
         let session_outcome = state.session_store.load_with_status();
         state.session = session_outcome.session;
         state.session_warning = session_outcome.warning;
+        logging::info("Windows startup session loaded");
 
         unsafe {
             sync_status_text(state);
@@ -1642,7 +1686,9 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 has_launcher_selection(state) as i32,
             );
         }
+        logging::info("Windows startup controls enabled");
         sync_tray_tooltip(hwnd, state);
+        logging::info("Windows startup tray tooltip synced");
 
         state.runtime_probe_preferred_distribution = preferred_distribution;
         if unsafe { PostMessageW(hwnd, WM_STARTUP_PROBE_REQUEST, 0, 0) } == 0 {
@@ -1656,6 +1702,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 state.runtime_probe_preferred_distribution.clone(),
             );
         }
+        logging::info("Windows startup runtime probe posted");
         logging::info("refreshed Windows shell state without blocking runtime probes");
     }
 
@@ -1748,7 +1795,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             Ok(path) => Some(path),
             Err(error) => {
                 logging::error(format!(
-                    "could not resolve workspace root while saving preset: {error}"
+                    "could not resolve workspace root for preset snapshot: {error}"
                 ));
                 (!workspace_root_input.is_empty()).then(|| PathBuf::from(workspace_root_input))
             }
@@ -2184,9 +2231,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     fn selected_launcher_requires_webview2(state: &AppWindowState) -> bool {
-        launcher_preset_snapshot(state)
-            .map(|preset| layout_requires_webview2(&preset.layout))
-            .unwrap_or(false)
+        layout_requires_webview2(&state.active_layout)
     }
 
     fn can_launch_selected_preset(state: &AppWindowState) -> bool {

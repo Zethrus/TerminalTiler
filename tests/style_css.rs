@@ -188,6 +188,39 @@ fn settings_exposes_application_logs_folder_action() {
 }
 
 #[test]
+fn windows_launcher_startup_defers_heavy_initialization() {
+    assert!(
+        source_contains(
+            WINDOWS_APP_RS,
+            "logging::info(\"Windows launcher window created\");\n                    if unsafe { PostMessageW(hwnd, WM_STARTUP_INIT, 0, 0) } == 0"
+        ),
+        "Windows WM_CREATE should create/show the launcher and post deferred startup init"
+    );
+    assert!(
+        source_contains(WINDOWS_APP_RS, "run_deferred_startup_init(hwnd, state);"),
+        "Windows startup init should run from a posted message/fallback helper"
+    );
+    assert!(
+        source_contains(
+            WINDOWS_APP_RS,
+            "if state.controls_initializing || !state.controls_ready {\n                        return 0;\n                    }"
+        ),
+        "Windows startup should ignore reentrant control notifications until controls are ready"
+    );
+}
+
+#[test]
+fn windows_status_webview_check_stays_side_effect_free() {
+    assert!(
+        source_contains(
+            WINDOWS_APP_RS,
+            "fn selected_launcher_requires_webview2(state: &AppWindowState) -> bool {\n        layout_requires_webview2(&state.active_layout)\n    }"
+        ),
+        "status rendering should inspect active layout directly instead of building saveable preset snapshots"
+    );
+}
+
+#[test]
 fn microphone_selector_stays_compact_and_premium() {
     assert!(
         SETTINGS_DIALOG_RS.contains("\"settings-microphone-row\"")

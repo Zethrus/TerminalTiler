@@ -327,7 +327,7 @@ function Invoke-LaunchSmoke {
         }
 
         $requiredPattern = if ($ProfileKind -eq "clean-first-run") {
-            "Windows launcher window created"
+            "Windows startup init complete"
         } elseif ($ProfileKind -eq "mixed") {
             "web pane \d+ navigating to https://example.com"
         } else {
@@ -340,7 +340,7 @@ function Invoke-LaunchSmoke {
         }
 
         if ($ProfileKind -eq "clean-first-run") {
-            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created") {
+            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created" -or $logText -notmatch "Windows startup init complete") {
                 throw "$Label did not complete launcher initialization.`n$logText"
             }
             if ($logText -match "opened \d+ restored Windows workspace host window") {

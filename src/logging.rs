@@ -17,6 +17,10 @@ use gtk::glib;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Diagnostics::Debug::{
+    AddVectoredExceptionHandler, EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS,
+};
 
 #[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -236,8 +240,46 @@ fn install_signal_handlers() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn install_signal_handlers() {
+    let handle = unsafe { AddVectoredExceptionHandler(1, Some(windows_exception_handler)) };
+    if handle.is_null() {
+        error(format!(
+            "Windows vectored exception handler installation failed: {}",
+            io::Error::last_os_error()
+        ));
+    } else {
+        info("Windows vectored exception handler installed");
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn install_signal_handlers() {}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn windows_exception_handler(
+    exception_info: *mut EXCEPTION_POINTERS,
+) -> i32 {
+    if exception_info.is_null() {
+        error("fatal Windows exception captured with missing exception information");
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    let record = unsafe { (*exception_info).ExceptionRecord };
+    if record.is_null() {
+        error("fatal Windows exception captured with missing exception record");
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    let code = unsafe { (*record).ExceptionCode } as u32;
+    let flags = unsafe { (*record).ExceptionFlags };
+    let address = unsafe { (*record).ExceptionAddress };
+    error(format!(
+        "fatal Windows exception captured code=0x{code:08X} flags=0x{flags:08X} address={address:p}"
+    ));
+
+    EXCEPTION_CONTINUE_SEARCH
+}
 
 #[cfg(target_os = "linux")]
 fn install_platform_logging_hooks() {
