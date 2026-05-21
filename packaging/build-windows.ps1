@@ -224,6 +224,7 @@ $InstallerTools = Assert-WindowsInstallerTools -RequireInstallers:$RequireInstal
 $Makensis = $InstallerTools.Makensis
 $Candle = $InstallerTools.Candle
 $Light = $InstallerTools.Light
+$Heat = $InstallerTools.Heat
 
 if ($Makensis) {
     Write-Host "==> building NSIS installer"
@@ -244,16 +245,35 @@ if ($Makensis) {
     Write-Host "    To build the installer, install NSIS from https://nsis.sourceforge.io/"
 }
 
-if ($Candle -and $Light) {
+if ($Candle -and $Light -and $Heat) {
     Write-Host "==> building MSI installer"
     $WixBuildDir = Join-Path $StageRoot "wix"
+    $WixHarvestedSourcePath = Join-Path $WixBuildDir "harvested-payload.wxs"
     $WixObjectPath = Join-Path $WixBuildDir "terminaltiler-installer.wixobj"
+    $WixHarvestedObjectPath = Join-Path $WixBuildDir "harvested-payload.wixobj"
 
     New-Item -ItemType Directory -Force -Path $WixBuildDir | Out-Null
-    Remove-Item -Force $WixObjectPath, $MsiPath, $MsiLatestPath -ErrorAction SilentlyContinue
+    Remove-Item -Force $WixHarvestedSourcePath, $WixObjectPath, $WixHarvestedObjectPath, $MsiPath, $MsiLatestPath -ErrorAction SilentlyContinue
+
+    & $Heat `
+        "dir" $PortableRoot `
+        "-nologo" `
+        "-cg" "HarvestedPayloadComponents" `
+        "-dr" "INSTALLFOLDER" `
+        "-srd" `
+        "-sreg" `
+        "-scom" `
+        "-gg" `
+        "-var" "var.StageDir" `
+        "-out" $WixHarvestedSourcePath
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "WiX heat failed while harvesting $PortableRoot"
+    }
 
     & $Candle `
         "-nologo" `
+        "-arch" "x64" `
         "-dProductVersion=$ResolvedVersion" `
         "-dStageDir=$PortableRoot" `
         "-out" $WixObjectPath `
@@ -263,10 +283,22 @@ if ($Candle -and $Light) {
         throw "WiX candle failed while compiling $WixScript"
     }
 
+    & $Candle `
+        "-nologo" `
+        "-arch" "x64" `
+        "-dStageDir=$PortableRoot" `
+        "-out" $WixHarvestedObjectPath `
+        $WixHarvestedSourcePath
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "WiX candle failed while compiling $WixHarvestedSourcePath"
+    }
+
     & $Light `
         "-nologo" `
         "-out" $MsiPath `
-        $WixObjectPath
+        $WixObjectPath `
+        $WixHarvestedObjectPath
 
     if ($LASTEXITCODE -ne 0) {
         throw "WiX light failed while linking $MsiPath"
@@ -289,6 +321,6 @@ Write-Host "  zip: $ZipPath"
 if ($Makensis) {
     Write-Host "  installer: $InstallerPath"
 }
-if ($Candle -and $Light) {
+if ($Candle -and $Light -and $Heat) {
     Write-Host "  msi: $MsiPath"
 }

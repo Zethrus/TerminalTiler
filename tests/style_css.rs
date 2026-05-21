@@ -24,6 +24,7 @@ const WINDOWS_CAPTURE_VISUALS_PS1: &str =
     include_str!("../packaging/capture-windows-gtk-visuals.ps1");
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
+const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
@@ -615,11 +616,13 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     }
 
     assert!(
-        WINDOWS_INSTALLER_WXS.contains("GtkSharedResourceComponent")
-            && WINDOWS_INSTALLER_WXS.contains("GtkHoverIconComponent")
-            && WINDOWS_INSTALLER_WXS.contains("share\\style.css")
-            && WINDOWS_INSTALLER_WXS.contains("share\\hover-icons\\terminal.svg"),
-        "MSI packaging should include CSS, logo, and hover icons rather than only the executable"
+        WINDOWS_INSTALLER_TOOLS_PS1.contains("heat.exe")
+            && WINDOWS_BUILD_PS1.contains("HarvestedPayloadComponents")
+            && WINDOWS_BUILD_PS1.contains(r#""-var" "var.StageDir""#)
+            && WINDOWS_BUILD_PS1.contains(r#""-arch" "x64""#)
+            && WINDOWS_INSTALLER_WXS
+                .contains(r#"ComponentGroupRef Id="HarvestedPayloadComponents""#),
+        "MSI packaging should harvest the full staged payload, including CSS, logo, hover icons, and GTK runtime files"
     );
 }
 

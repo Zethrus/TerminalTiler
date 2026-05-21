@@ -7,7 +7,7 @@ BUILD_DIR="$ROOT_DIR/packaging/.build/release-smoke"
 export PACKAGE_VERSION BUILD_DATE
 SKIP_PACKAGE_BUILD="${SKIP_PACKAGE_BUILD:-0}"
 SMOKE_PROFILE_KIND="${SMOKE_PROFILE_KIND:-mixed}"
-SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-12s}"
+SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-30s}"
 
 APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
@@ -41,6 +41,43 @@ fail_smoke() {
   exit 1
 }
 
+
+duration_to_seconds() {
+  local duration="$1"
+
+  case "$duration" in
+    *s) printf '%s\n' "${duration%s}" ;;
+    *m) printf '%s\n' "$(( ${duration%m} * 60 ))" ;;
+    *h) printf '%s\n' "$(( ${duration%h} * 3600 ))" ;;
+    ''|*[!0-9]*) printf '%s\n' "30" ;;
+    *) printf '%s\n' "$duration" ;;
+  esac
+}
+
+terminate_process_tree() {
+  local pid="$1"
+  local signal="${2:-TERM}"
+  local child
+
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
+    terminate_process_tree "$child" "$signal"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+log_has_restore_success() {
+  local log_path="$1"
+  local profile_kind="$2"
+
+  [[ -f "$log_path" ]] || return 1
+  grep -E -q "restored workspace tab .*" "$log_path" || return 1
+  if [[ "$profile_kind" == "mixed" ]]; then
+    grep -q "web tile web-smoke load event Finished uri='https://example.com/'" "$log_path" || return 1
+  fi
+}
+
 find_first() {
   local root="$1"
   shift
@@ -67,8 +104,6 @@ need_cmd() {
 
 need_cmd dpkg-deb
 need_cmd appstreamcli
-need_cmd timeout
-
 if [[ "$SKIP_PACKAGE_BUILD" != "1" ]]; then
   need_cmd cargo
   need_cmd appimagetool
@@ -214,24 +249,60 @@ run_restore_smoke() {
     launch_command=(xvfb-run -a "$@")
   fi
 
-  local status=0
-  HOME="$home_root" \
-  XDG_CONFIG_HOME="$sandbox_root/config" \
-  XDG_DATA_HOME="$sandbox_root/data" \
-  XDG_STATE_HOME="$sandbox_root/state" \
-  XDG_RUNTIME_DIR="$runtime_root" \
-  XDG_DESKTOP_PORTAL_DIR="$portal_root" \
-  GIO_USE_VFS=local \
-  GSETTINGS_BACKEND=memory \
-  GTK_USE_PORTAL=0 \
-  NO_AT_BRIDGE=1 \
-  timeout "$SMOKE_LAUNCH_TIMEOUT" "${launch_command[@]}" || status=$?
+  local status_file="$sandbox_root/launch-status"
+  local timeout_seconds
+  local deadline
+  local launch_pid
+  local log_path=""
+  local status
 
-  if [[ ${status:-0} -ne 0 && ${status:-0} -ne 124 ]]; then
-    fail_smoke "$sandbox_root" "$label" "$label exited with unexpected status ${status:-0}"
-  fi
+  rm -f "$status_file"
+  timeout_seconds="$(duration_to_seconds "$SMOKE_LAUNCH_TIMEOUT")"
+  deadline=$((SECONDS + timeout_seconds))
 
-  assert_restore_log "$sandbox_root" "$label" "$profile_kind"
+  (
+    set +e
+    HOME="$home_root" \
+    XDG_CONFIG_HOME="$sandbox_root/config" \
+    XDG_DATA_HOME="$sandbox_root/data" \
+    XDG_STATE_HOME="$sandbox_root/state" \
+    XDG_RUNTIME_DIR="$runtime_root" \
+    XDG_DESKTOP_PORTAL_DIR="$portal_root" \
+    GIO_USE_VFS=local \
+    GSETTINGS_BACKEND=memory \
+    GTK_USE_PORTAL=0 \
+    NO_AT_BRIDGE=1 \
+    "${launch_command[@]}"
+    printf '%s\n' "$?" > "$status_file"
+  ) &
+  launch_pid=$!
+
+  while (( SECONDS < deadline )); do
+    log_path="$(find "$sandbox_root" -name terminaltiler-session.log -print -quit)"
+    if [[ -n "$log_path" ]] && log_has_restore_success "$log_path" "$profile_kind"; then
+      terminate_process_tree "$launch_pid" TERM
+      wait "$launch_pid" 2>/dev/null || true
+      assert_restore_log "$sandbox_root" "$label" "$profile_kind"
+      return
+    fi
+
+    if [[ -f "$status_file" ]]; then
+      status="$(cat "$status_file")"
+      wait "$launch_pid" 2>/dev/null || true
+      if [[ "$status" -ne 0 ]]; then
+        fail_smoke "$sandbox_root" "$label" "$label exited with unexpected status $status before restore completed"
+      fi
+      fail_smoke "$sandbox_root" "$label" "$label exited before restore completed"
+    fi
+
+    sleep 0.25
+  done
+
+  terminate_process_tree "$launch_pid" TERM
+  sleep 0.5
+  terminate_process_tree "$launch_pid" KILL
+  wait "$launch_pid" 2>/dev/null || true
+  fail_smoke "$sandbox_root" "$label" "$label did not complete restore within $SMOKE_LAUNCH_TIMEOUT"
 }
 
 validate_appstream() {

@@ -32,6 +32,75 @@ function Add-EnvPrefix {
     }
 }
 
+
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [Parameter(Mandatory = $true)][string]$Description,
+        [int]$Attempts = 3,
+        [int]$DelaySeconds = 20
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Write-Host "==> $Description (attempt $attempt/$Attempts)"
+            & $ScriptBlock
+            return
+        }
+        catch {
+            if ($attempt -ge $Attempts) {
+                throw
+            }
+
+            $sleepSeconds = $DelaySeconds * $attempt
+            Write-Warning "$Description failed on attempt $($attempt)/$($Attempts): $($_.Exception.Message)"
+            Write-Warning "Retrying in $sleepSeconds seconds..."
+            Start-Sleep -Seconds $sleepSeconds
+        }
+    }
+}
+
+function Save-HicolorIconThemeArchive {
+    param([string]$BuildRoot)
+
+    $srcRoot = Join-Path $BuildRoot "src"
+    $archivePath = Join-Path $srcRoot "hicolor-icon-theme-0.18.tar.xz"
+    New-Item -ItemType Directory -Force -Path $srcRoot | Out-Null
+
+    if ((Test-Path $archivePath) -and ((Get-Item $archivePath).Length -gt 0)) {
+        Write-Host "==> hicolor icon theme archive already cached at $archivePath"
+        return
+    }
+
+    $urls = @(
+        "https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-0.18.tar.xz",
+        "https://www.freedesktop.org/software/icon-theme/releases/hicolor-icon-theme-0.18.tar.xz",
+        "https://distfiles.macports.org/hicolor-icon-theme/hicolor-icon-theme-0.18.tar.xz"
+    )
+
+    foreach ($url in $urls) {
+        try {
+            Remove-Item -Force $archivePath -ErrorAction SilentlyContinue
+            Invoke-WithRetry `
+                -Description "prefetch hicolor-icon-theme from $url" `
+                -Attempts 2 `
+                -DelaySeconds 15 `
+                -ScriptBlock {
+                    Invoke-WebRequest -Uri $url -OutFile $archivePath -UseBasicParsing -TimeoutSec 120
+                    if (-not (Test-Path $archivePath) -or ((Get-Item $archivePath).Length -le 0)) {
+                        throw "Downloaded hicolor icon theme archive is empty"
+                    }
+                }
+            return
+        }
+        catch {
+            Write-Warning "Unable to prefetch hicolor icon theme from ${url}: $($_.Exception.Message)"
+        }
+    }
+
+    throw "Unable to prefetch hicolor-icon-theme-0.18.tar.xz for gvsbuild"
+}
+
 function Resolve-GtkRuntimeRoot {
     param([string]$Candidate)
 
@@ -56,15 +125,33 @@ function Install-GtkWithGvsbuild {
         throw "Python is required to install gvsbuild for Windows GTK setup."
     }
 
-    python -m pip install --upgrade pip
-    python -m pip install --user --upgrade gvsbuild
+    New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
+    Save-HicolorIconThemeArchive -BuildRoot $BuildRoot
+
+    Invoke-WithRetry -Description "upgrade pip" -ScriptBlock {
+        python -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) {
+            throw "pip upgrade failed with exit code $LASTEXITCODE"
+        }
+    }
+    Invoke-WithRetry -Description "install gvsbuild" -ScriptBlock {
+        python -m pip install --user --upgrade gvsbuild
+        if ($LASTEXITCODE -ne 0) {
+            throw "gvsbuild pip install failed with exit code $LASTEXITCODE"
+        }
+    }
 
     $scriptRoots = Get-ChildItem -Path (Join-Path $env:APPDATA "Python") -Filter "Scripts" -Directory -Recurse -ErrorAction SilentlyContinue
     foreach ($scriptRoot in $scriptRoots) {
         Add-PathPrefix -PathPrefix $scriptRoot.FullName
     }
     $gvsbuild = Get-Command gvsbuild -ErrorAction Stop
-    & $gvsbuild.Source build gtk4 libadwaita librsvg adwaita-icon-theme
+    Invoke-WithRetry -Description "build GTK4/libadwaita with gvsbuild" -Attempts 2 -DelaySeconds 60 -ScriptBlock {
+        & $gvsbuild.Source build --build-dir $BuildRoot --configuration release gtk4 libadwaita librsvg adwaita-icon-theme
+        if ($LASTEXITCODE -ne 0) {
+            throw "gvsbuild failed with exit code $LASTEXITCODE"
+        }
+    }
 }
 
 $ResolvedRoot = Resolve-GtkRuntimeRoot -Candidate $GtkRuntimeRoot
@@ -89,6 +176,7 @@ Add-EnvPrefix -Name "LIB" -Value (Join-Path $ResolvedRoot "lib")
 Add-EnvPrefix -Name "INCLUDE" -Value (Join-Path $ResolvedRoot "include")
 Add-EnvPrefix -Name "INCLUDE" -Value (Join-Path $ResolvedRoot "include\cairo")
 Add-EnvPrefix -Name "INCLUDE" -Value (Join-Path $ResolvedRoot "include\glib-2.0")
+Add-EnvPrefix -Name "INCLUDE" -Value (Join-Path $ResolvedRoot "include\gobject-introspection-1.0")
 Add-EnvPrefix -Name "INCLUDE" -Value (Join-Path $ResolvedRoot "lib\glib-2.0\include")
 $env:PKG_CONFIG_PATH = Join-Path $ResolvedRoot "lib\pkgconfig"
 

@@ -48,10 +48,19 @@ function Get-WindowsInstallerTools {
         "$env:ProgramFiles\WiX Toolset v3.11\bin\light.exe"
     )
 
+    $heat = Find-ExecutablePath -CommandNames @("heat.exe", "heat") -CandidatePaths @(
+        "$env:WIX\bin\heat.exe",
+        "$env:ProgramFiles(x86)\WiX Toolset v3.14\bin\heat.exe",
+        "$env:ProgramFiles\WiX Toolset v3.14\bin\heat.exe",
+        "$env:ProgramFiles(x86)\WiX Toolset v3.11\bin\heat.exe",
+        "$env:ProgramFiles\WiX Toolset v3.11\bin\heat.exe"
+    )
+
     [pscustomobject]@{
         Makensis = $makensis
         Candle = $candle
         Light = $light
+        Heat = $heat
     }
 }
 
@@ -79,11 +88,17 @@ function Assert-WindowsInstallerTools {
         Write-Host "    light: missing"
     }
 
+    if ($tools.Heat) {
+        Write-Host "    heat: $($tools.Heat)"
+    } else {
+        Write-Host "    heat: missing"
+    }
+
     if ($RequireInstallers -and -not $tools.Makensis) {
         throw "NSIS is required when installer validation is enabled"
     }
 
-    if ($RequireInstallers -and (-not $tools.Candle -or -not $tools.Light)) {
+    if ($RequireInstallers -and (-not $tools.Candle -or -not $tools.Light -or -not $tools.Heat)) {
         throw "WiX Toolset is required when installer validation is enabled"
     }
 
