@@ -43,6 +43,17 @@ function Assert-Path {
     }
 }
 
+function Assert-DirectoryHasFiles {
+    param([string]$Path, [string]$Description)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path -PathType Container)) {
+        throw "$Description was not found at $Path"
+    }
+    if (-not (Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "$Description at $Path did not contain any files"
+    }
+}
+
 function Assert-WindowsGtkPayload {
     param([string]$PayloadRoot)
 
@@ -71,7 +82,7 @@ function Assert-WindowsGtkRuntimePayload {
         "share\icons",
         "share\themes"
     )) {
-        Assert-Path -Path (Join-Path $PayloadRoot $relative) -Description "GTK runtime resource $relative"
+        Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative) -Description "GTK runtime resource $relative"
     }
 }
 

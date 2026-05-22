@@ -22,7 +22,7 @@ mod imp {
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
-    use crate::ui::title_chrome::{TitleChrome, build_title_tab_chrome};
+    use crate::ui::title_chrome::{TitleChrome, apply_title_tab_state, build_title_tab_chrome};
     use crate::ui::{assets_manager, companion_dialog, settings_dialog};
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
@@ -907,16 +907,13 @@ mod imp {
 
     fn build_windows_title_tab(tab: WindowsTitleTab) -> gtk::Widget {
         let chrome = build_title_tab_chrome();
-        let shell = chrome.shell;
-        shell.remove_css_class("is-inactive");
-        shell.remove_css_class("is-active");
-        shell.add_css_class(if tab.active {
-            "is-active"
-        } else {
-            "is-inactive"
-        });
-        shell.set_tooltip_text(Some(&tab.tooltip));
-        chrome.title_label.set_label(&tab.label);
+        apply_title_tab_state(
+            &chrome,
+            &tab.label,
+            &tab.tooltip,
+            tab.active,
+            tab.on_close.is_some(),
+        );
 
         if let Some(on_select) = tab.on_select {
             chrome.select_button.connect_clicked(move |_| on_select());
@@ -924,11 +921,9 @@ mod imp {
 
         if let Some(on_close) = tab.on_close {
             chrome.close_button.connect_clicked(move |_| on_close());
-        } else {
-            chrome.close_button.set_sensitive(false);
         }
 
-        shell.upcast()
+        chrome.shell.upcast()
     }
 
     fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {

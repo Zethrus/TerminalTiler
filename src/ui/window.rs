@@ -36,7 +36,9 @@ use crate::ui::appearance::{
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
-    launch_screen, settings_dialog, title_chrome::build_title_tab_chrome, workspace_view,
+    launch_screen, settings_dialog,
+    title_chrome::{TitleTabChrome, apply_title_tab_state, build_title_tab_chrome},
+    workspace_view,
 };
 use crate::voice::audio::AudioCapture;
 use crate::voice::engine::{self, VoiceEngineEvent};
@@ -653,7 +655,7 @@ struct LinuxMainAttachTarget {
 struct TabStripItem {
     tab_id: usize,
     shell: gtk::Box,
-    title_label: gtk::Label,
+    chrome: TitleTabChrome,
 }
 
 struct TabStripDragState {
@@ -3409,15 +3411,13 @@ impl TabStripController {
         for tab in tabs {
             if let Some(item) = self.find_item(tab.id) {
                 let title = tab_display_title(tab);
-                item.title_label.set_label(&title);
-                item.shell.set_tooltip_text(Some(&tab.subtitle));
-                item.shell.remove_css_class("is-active");
-                item.shell.remove_css_class("is-inactive");
-                item.shell.add_css_class(if tab.id == active_tab_id {
-                    "is-active"
-                } else {
-                    "is-inactive"
-                });
+                apply_title_tab_state(
+                    &item.chrome,
+                    &title,
+                    &tab.subtitle,
+                    tab.id == active_tab_id,
+                    true,
+                );
             }
         }
 
@@ -3434,10 +3434,9 @@ impl TabStripController {
 
     fn build_item(&self, controller: &TabStripControllerHandle, tab_id: usize) -> TabStripItem {
         let chrome = build_title_tab_chrome();
-        let shell = chrome.shell;
-        let select_button = chrome.select_button;
-        let close_button = chrome.close_button;
-        let title_label = chrome.title_label;
+        let shell = chrome.shell.clone();
+        let select_button = chrome.select_button.clone();
+        let close_button = chrome.close_button.clone();
 
         let select_handle = self.select_tab.clone();
         select_button.connect_clicked(move |_| {
@@ -3550,7 +3549,7 @@ impl TabStripController {
         TabStripItem {
             tab_id,
             shell,
-            title_label,
+            chrome,
         }
     }
 

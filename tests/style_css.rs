@@ -683,7 +683,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && !WINDOWS_GTK_APP_RS.contains("title.add_button.set_sensitive(false)")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell returned to launch deck")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
-            && WINDOW_RS.contains("title_chrome::build_title_tab_chrome")
+            && WINDOW_RS.contains("build_title_tab_chrome")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
@@ -760,14 +760,20 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && TITLE_CHROME_RS.contains("app-tab-add")
             && TITLE_CHROME_RS.contains("pub(crate) fn build_title_tab_chrome")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleTabChrome")
+            && TITLE_CHROME_RS.contains("pub(crate) fn apply_title_tab_state")
+            && TITLE_CHROME_RS.contains("chrome.shell.remove_css_class(\"is-inactive\")")
+            && TITLE_CHROME_RS.contains("chrome.shell.remove_css_class(\"is-active\")")
+            && TITLE_CHROME_RS.contains("chrome.close_button.set_sensitive(close_enabled)")
             && APP_CHROME_RS.contains("let title = TitleChrome::new();")
             && WINDOW_RS.contains("build_title_tab_chrome()")
+            && WINDOW_RS.contains("apply_title_tab_state(")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
+            && WINDOWS_GTK_APP_RS.contains("apply_title_tab_state(")
             && WINDOWS_GTK_APP_RS.contains("SessionPreview::with_assets(&session, false, assets)")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
-        "Linux and Windows GTK shells should share the same titlebar tab chrome builder while Windows drives workspace-preview tab switching from the titlebar"
+        "Linux and Windows GTK shells should share the same titlebar tab chrome builder/state contract while Windows drives workspace-preview tab switching from the titlebar"
     );
     assert!(
         UI_MOD_RS.contains("pub(crate) mod pane_status;")
@@ -973,6 +979,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "$BuildGtkShell = -not $UseWin32Shell",
         "Assert-DirectoryExists",
         "Test-DirectoryHasFiles",
+        "Assert-DirectoryHasFiles",
         "Assert-WindowsStagedPayload",
         "portable.nsi",
     ] {
@@ -986,9 +993,12 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         WINDOWS_BUILD_PS1
             .contains("GTK runtime root is required for the canonical Windows GTK payload")
             && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build")
-            && WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
-            && WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
-        "Windows packaging should preserve optional GTK runtime roots for WiX harvesting even when gvsbuild leaves them absent or empty"
+            && WINDOWS_BUILD_PS1.contains("Assert-DirectoryHasFiles -Path $source")
+            && WINDOWS_BUILD_PS1
+                .contains("Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative)")
+            && !WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
+            && !WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
+        "Windows packaging should require a complete GTK runtime/resource payload before building release artifacts"
     );
 
     assert!(
@@ -1027,6 +1037,13 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             "Windows smoke test should assert GTK parity payload: {payload}"
         );
     }
+    assert!(
+        WINDOWS_SMOKE_PS1.contains("function Assert-DirectoryHasFiles")
+            && WINDOWS_SMOKE_PS1.contains("did not contain any files")
+            && WINDOWS_SMOKE_PS1
+                .contains("Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative)"),
+        "Windows smoke test should verify GTK runtime/resource directories are populated, not just present"
+    );
 
     assert!(
         WINDOWS_SMOKE_PS1.contains("windows GTK shell startup")

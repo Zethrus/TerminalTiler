@@ -2,6 +2,7 @@ use adw::prelude::*;
 
 use crate::ui::icons::{self, name as icon_name};
 
+#[derive(Clone)]
 pub(crate) struct TitleTabChrome {
     pub(crate) shell: gtk::Box,
     pub(crate) select_button: gtk::Button,
@@ -97,4 +98,21 @@ pub(crate) fn build_title_tab_chrome() -> TitleTabChrome {
         close_button,
         title_label,
     }
+}
+
+pub(crate) fn apply_title_tab_state(
+    chrome: &TitleTabChrome,
+    label: &str,
+    tooltip: &str,
+    active: bool,
+    close_enabled: bool,
+) {
+    chrome.shell.set_tooltip_text(Some(tooltip));
+    chrome.shell.remove_css_class("is-inactive");
+    chrome.shell.remove_css_class("is-active");
+    chrome
+        .shell
+        .add_css_class(if active { "is-active" } else { "is-inactive" });
+    chrome.title_label.set_label(label);
+    chrome.close_button.set_sensitive(close_enabled);
 }

@@ -112,6 +112,15 @@ function Test-DirectoryHasFiles {
     return [bool](Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
+function Assert-DirectoryHasFiles {
+    param([string]$Path, [string]$Description)
+
+    Assert-DirectoryExists -Path $Path -Description $Description
+    if (-not (Test-DirectoryHasFiles -Path $Path)) {
+        throw "$Description at $Path did not contain any files"
+    }
+}
+
 function Copy-WindowsGtkRuntime {
     param(
         [string]$RuntimeRoot,
@@ -147,14 +156,9 @@ function Copy-WindowsGtkRuntime {
     )) {
         $source = Join-Path $RuntimeRoot $relative
         $destination = Join-Path $PortableRoot $relative
+        Assert-DirectoryHasFiles -Path $source -Description "GTK runtime resource $relative"
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
-        if ((Test-Path $source -PathType Container) -and (Test-DirectoryHasFiles -Path $source)) {
-            Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
-        }
-        else {
-            Write-Host "==> GTK runtime path $relative was not present or was empty in $RuntimeRoot; staging directory sentinel"
-            Set-Content -Path (Join-Path $destination "terminaltiler-runtime-dir.txt") -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
-        }
+        Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
     }
 }
 
@@ -195,7 +199,7 @@ function Assert-WindowsStagedPayload {
             "share\icons",
             "share\themes"
         )) {
-            Assert-Path -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
+            Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
         }
     }
 }
