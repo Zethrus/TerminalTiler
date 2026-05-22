@@ -22,8 +22,8 @@ use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::workspace_chrome::{
-    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
-    build_workspace_shell_chrome, build_workspace_summary_chrome,
+    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
+    build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 use crate::ui::{layout_tree, tile_view, web_tile};
 
@@ -1088,37 +1088,10 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let mark_all_read_button = icons::labeled_button(
-        "Mark All Read",
-        icon_name::APPLY,
-        &["flat", "surface-button"],
-    );
-    let alert_list = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .build();
-    let alert_scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .min_content_width(320)
-        .build();
-    alert_scroller.set_child(Some(&alert_list));
-    let alert_sidebar = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .margin_start(12)
-        .css_classes(["config-panel"])
-        .build();
-    alert_sidebar.append(
-        &gtk::Label::builder()
-            .label("Alert Center")
-            .halign(gtk::Align::Start)
-            .css_classes(["card-title"])
-            .build(),
-    );
-    alert_sidebar.append(&mark_all_read_button);
-    alert_sidebar.append(&alert_scroller);
-    let alert_revealer = build_workspace_alert_revealer(&alert_sidebar);
+    let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
+    let mark_all_read_button = alert_sidebar.mark_all_read_button.clone();
+    let alert_list = alert_sidebar.alert_list.clone();
+    let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
     {
         let alert_revealer = alert_revealer.clone();
         alert_button.connect_clicked(move |_| {

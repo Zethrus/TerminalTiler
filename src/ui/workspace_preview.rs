@@ -14,8 +14,8 @@ use crate::ui::tile_chrome::{
 };
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
-    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
-    build_workspace_shell_chrome, build_workspace_summary_chrome,
+    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
+    build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
@@ -114,7 +114,8 @@ fn render_session_preview(
     if let Some(tab) = active_tab {
         shell.append(&build_workspace_summary(tab));
         let layout = build_layout(&tab.preset.layout);
-        let alert_revealer = build_workspace_alert_revealer(&build_preview_alert_sidebar());
+        let alert_sidebar = build_workspace_alert_sidebar_chrome(false);
+        let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
         shell.append(&build_workspace_content_chrome(&layout, &alert_revealer));
     } else {
         shell.append(&build_empty_state());
@@ -206,30 +207,6 @@ fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
         controls_sensitive: false,
     })
     .widget
-}
-
-fn build_preview_alert_sidebar() -> gtk::Widget {
-    let alert_sidebar = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .margin_start(12)
-        .css_classes(["config-panel"])
-        .build();
-    alert_sidebar.append(
-        &gtk::Label::builder()
-            .label("Alert Center")
-            .halign(gtk::Align::Start)
-            .css_classes(["card-title"])
-            .build(),
-    );
-    let mark_all_read_button = icons::labeled_button(
-        "Mark All Read",
-        icon_name::APPLY,
-        &["flat", "surface-button"],
-    );
-    mark_all_read_button.set_sensitive(false);
-    alert_sidebar.append(&mark_all_read_button);
-    alert_sidebar.upcast()
 }
 
 fn saved_groups(tab: &SavedTab) -> Vec<String> {

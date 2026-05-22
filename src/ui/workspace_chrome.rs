@@ -25,6 +25,14 @@ pub(crate) struct WorkspaceSummaryChrome {
     pub(crate) path_label: gtk::Label,
 }
 
+pub(crate) struct WorkspaceAlertSidebarChrome {
+    pub(crate) widget: gtk::Widget,
+    #[cfg(target_os = "linux")]
+    pub(crate) mark_all_read_button: gtk::Button,
+    #[cfg(target_os = "linux")]
+    pub(crate) alert_list: gtk::Box,
+}
+
 pub(crate) fn build_workspace_shell_chrome() -> gtk::Box {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -38,6 +46,52 @@ pub(crate) fn build_workspace_shell_chrome() -> gtk::Box {
         .build();
     make_shrinkable(&shell);
     shell
+}
+
+pub(crate) fn build_workspace_alert_sidebar_chrome(
+    controls_sensitive: bool,
+) -> WorkspaceAlertSidebarChrome {
+    let mark_all_read_button = icons::labeled_button(
+        "Mark All Read",
+        icon_name::APPLY,
+        &["flat", "surface-button"],
+    );
+    mark_all_read_button.set_sensitive(controls_sensitive);
+
+    let alert_list = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .build();
+    let alert_scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(320)
+        .build();
+    alert_scroller.set_child(Some(&alert_list));
+
+    let alert_sidebar = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_start(12)
+        .css_classes(["config-panel"])
+        .build();
+    alert_sidebar.append(
+        &gtk::Label::builder()
+            .label("Alert Center")
+            .halign(gtk::Align::Start)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    alert_sidebar.append(&mark_all_read_button);
+    alert_sidebar.append(&alert_scroller);
+
+    WorkspaceAlertSidebarChrome {
+        widget: alert_sidebar.upcast(),
+        #[cfg(target_os = "linux")]
+        mark_all_read_button,
+        #[cfg(target_os = "linux")]
+        alert_list,
+    }
 }
 
 pub(crate) fn build_workspace_content_chrome(
