@@ -50,6 +50,24 @@ The capture helper follows the launched process tree, so it works with the
 published self-extracting portable `.exe` as well as an unpacked
 `TerminalTiler.exe`.
 
+To prove the full release set is visually equivalent, capture every Windows
+artifact form from the same staged GTK payload:
+
+```powershell
+./packaging/capture-windows-release-gtk-visuals.ps1 `
+  -PackageVersion $env:PACKAGE_VERSION `
+  -Theme dark `
+  -Density compact
+```
+
+The release helper captures these artifact labels into separate subdirectories
+under `packaging/.build/windows-gtk-release-visuals/`:
+
+- `portable-exe`: published self-extracting portable executable.
+- `portable-zip`: extracted portable zip payload.
+- `nsis-install`: silent NSIS install location.
+- `msi-install`: silent MSI install location.
+
 Repeat with `-Theme light` and each density (`comfortable`, `standard`, `compact`) when preparing a complete review bundle.
 
 ## Automated screenshot comparison
@@ -86,6 +104,7 @@ Capture these Windows GTK screens and pair each with the current Ubuntu referenc
 8. Buttons/chips in primary, secondary, ghost, surface, destructive, disabled, and focused states.
 9. Dark and light themes.
 10. Comfortable, standard, and compact density modes.
+11. Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`.
 
 ## Naming convention for review bundles
 

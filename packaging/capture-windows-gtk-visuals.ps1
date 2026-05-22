@@ -30,6 +30,7 @@ if (-not (Test-Path $ExePath)) {
 }
 
 Add-Type -AssemblyName System.Drawing
+if (-not ("WindowCaptureNative" -as [type])) {
 Add-Type @"
 using System;
 using System.Collections.Generic;
@@ -66,6 +67,7 @@ public static class WindowCaptureNative {
     }
 }
 "@
+}
 
 function Convert-ToTomlPath {
     param([string]$Path)

@@ -32,6 +32,8 @@ const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
 const WINDOWS_BUILD_PS1: &str = include_str!("../packaging/build-windows.ps1");
 const WINDOWS_CAPTURE_VISUALS_PS1: &str =
     include_str!("../packaging/capture-windows-gtk-visuals.ps1");
+const WINDOWS_CAPTURE_RELEASE_VISUALS_PS1: &str =
+    include_str!("../packaging/capture-windows-release-gtk-visuals.ps1");
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
@@ -1042,6 +1044,9 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Dark and light themes")
             && DOC_WINDOWS_GTK_VISUAL_QA
                 .contains("Comfortable, standard, and compact density modes")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains(
+                "Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`"
+            )
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`"),
         "visual QA documentation should define baseline, capture command, and required comparison screens"
     );
@@ -1061,8 +1066,31 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessTreeIds")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-DescendantProcessIds")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Stop-ProcessTree")
-            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessWindows -ProcessIds $processIds"),
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessWindows -ProcessIds $processIds")
+            && WINDOWS_CAPTURE_VISUALS_PS1
+                .contains(r#"if (-not ("WindowCaptureNative" -as [type]))"#),
         "visual capture helper should seed isolated profiles and capture launcher/workspace windows, including self-extracting launcher child processes"
+    );
+
+    assert!(
+        WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+            .contains("TerminalTiler-$ResolvedVersion-portable-x86_64.exe")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains("TerminalTiler-$ResolvedVersion-windows-x86_64.zip")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains("TerminalTiler-setup-$ResolvedVersion-x86_64.exe")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains("TerminalTiler-setup-$ResolvedVersion-x86_64.msi")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("portable-exe")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("portable-zip")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("nsis-install")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msi-install")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("Expand-Archive")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msiexec.exe")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains("-OutputDir (Join-Path $OutputDir $Label)")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-windows-release-gtk-visuals.ps1"),
+        "Windows release visual QA should capture every published GTK artifact shape into separate comparable bundles"
     );
 
     assert!(
