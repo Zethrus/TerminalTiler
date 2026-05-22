@@ -91,6 +91,7 @@ mod imp {
 
         let overlay = adw::ToastOverlay::new();
         let titlebar_actions = build_main_titlebar_actions(&header, false);
+        let back_button = titlebar_actions.back_button;
         let settings_button = titlebar_actions.settings_button;
         let assets_button = titlebar_actions.assets_button;
 
@@ -163,6 +164,7 @@ mod imp {
         let launch_overlay = overlay.clone();
         let launch_title = title.clone();
         let launch_assets = workspace_assets.clone();
+        let launch_back_button = back_button.clone();
         let actions = LaunchScreenActions {
             on_theme_preview: Rc::new({
                 let window = window.clone();
@@ -177,6 +179,7 @@ mod imp {
                     &launch_overlay,
                     &launch_title,
                     &launch_preferences,
+                    &launch_back_button,
                     launch_assets.clone(),
                     preset,
                     workspace_root,
@@ -203,6 +206,26 @@ mod imp {
             },
             actions,
         );
+        {
+            let overlay = overlay.clone();
+            let title = title.clone();
+            let launch = launch.clone();
+            let back_button_for_click = back_button.clone();
+            back_button.connect_clicked(move |_| {
+                sync_windows_title_tabs(
+                    &title,
+                    vec![WindowsTitleTab {
+                        label: "Workspace 1".into(),
+                        tooltip: "Launch deck".into(),
+                        active: true,
+                        on_select: None,
+                    }],
+                );
+                overlay.set_child(Some(&launch));
+                back_button_for_click.set_visible(false);
+                logging::info("Windows GTK shell returned to launch deck");
+            });
+        }
         overlay.set_child(Some(&launch));
         window.present();
 
@@ -213,6 +236,7 @@ mod imp {
         {
             let overlay = overlay.clone();
             let title = title.clone();
+            let back_button = back_button.clone();
             let preferences = preferences.clone();
             let workspace_assets = workspace_assets.clone();
             gtk::glib::idle_add_local_once(move || {
@@ -220,6 +244,7 @@ mod imp {
                     &overlay,
                     &title,
                     &preferences,
+                    &back_button,
                     workspace_assets,
                     session,
                 );
@@ -231,10 +256,11 @@ mod imp {
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
+        back_button: &gtk::Button,
         assets: crate::model::assets::WorkspaceAssets,
         session: SavedSession,
     ) {
-        present_workspace_preview(overlay, title, session, assets, "restored");
+        present_workspace_preview(overlay, title, back_button, session, assets, "restored");
     }
 
     fn present_settings_dialog(
@@ -671,6 +697,7 @@ mod imp {
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
+        back_button: &gtk::Button,
         assets: crate::model::assets::WorkspaceAssets,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
@@ -685,12 +712,13 @@ mod imp {
             active_tab_index: 0,
         };
 
-        present_workspace_preview(overlay, title, session, assets, "opened");
+        present_workspace_preview(overlay, title, back_button, session, assets, "opened");
     }
 
     fn present_workspace_preview(
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
+        back_button: &gtk::Button,
         session: SavedSession,
         assets: crate::model::assets::WorkspaceAssets,
         action: &str,
@@ -700,6 +728,7 @@ mod imp {
             crate::ui::workspace_preview::SessionPreview::with_assets(&session, false, assets);
         sync_title_tabs_for_session(title, &session, &preview);
         overlay.set_child(Some(&preview.widget()));
+        back_button.set_visible(true);
         logging::info(format!(
             "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
         ));
