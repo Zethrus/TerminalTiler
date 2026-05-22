@@ -1083,9 +1083,11 @@ mod imp {
             let snapshot = preview.snapshot();
             let (tabs, panes) = crate::ui::workspace_preview::session_shape(&snapshot);
             logging::info(format!(
-                "Windows GTK shell opened GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
+                "Windows GTK shell opened interactive GTK workspace with {tabs} tab(s) and {panes} pane(s)"
             ));
-            overlay.add_toast(adw::Toast::new("Workspace opened as a new GTK tab"));
+            overlay.add_toast(adw::Toast::new(
+                "Workspace opened as an interactive GTK tab",
+            ));
         } else {
             let session = SavedSession {
                 tabs: vec![saved_tab],
@@ -1120,8 +1122,14 @@ mod imp {
         action: &str,
     ) {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
-        let preview =
-            crate::ui::workspace_preview::SessionPreview::with_assets(&session, false, assets);
+        let preview = crate::ui::workspace_preview::SessionPreview::with_runtime_assets(
+            &session,
+            false,
+            assets,
+            Some(Rc::new(
+                crate::windows::gtk_runtime::build_tile_runtime_surface,
+            )),
+        );
         *shell_state.preview.borrow_mut() = Some(preview.clone());
         shell_state.launch_deck_active.set(false);
         overlay.set_child(Some(&preview.widget()));
@@ -1137,10 +1145,10 @@ mod imp {
             shell_state,
         );
         logging::info(format!(
-            "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
+            "Windows GTK shell {action} interactive GTK workspace with {tabs} tab(s) and {panes} pane(s)"
         ));
         overlay.add_toast(adw::Toast::new(
-            "Workspace opened in the shared GTK visual shell",
+            "Workspace opened in the shared interactive GTK shell",
         ));
     }
 

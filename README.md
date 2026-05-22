@@ -1,6 +1,6 @@
 # TerminalTiler
 
-TerminalTiler is a native desktop application for launching polished multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 builds use a native Win32 shell with ConPTY and prefer WSL2, falling back to PowerShell when WSL2 is unavailable.
+TerminalTiler is a native desktop application for launching polished multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 release builds use the GTK/libadwaita parity shell with interactive Windows terminal panes, and prefer WSL2 while falling back to PowerShell when WSL2 is unavailable; the native Win32 shell remains an explicit compatibility fallback.
 
 - Product site: <https://terminaltiler.app>
 - Source code: <https://github.com/Zethrus/TerminalTiler>

@@ -1492,6 +1492,23 @@ button.tile-header-action:disabled {
   background: rgba(5, 7, 12, 0.96);
 }
 
+.windows-gtk-terminal-runtime,
+.windows-gtk-web-runtime {
+  padding: 10px;
+}
+
+.terminal-runtime-output {
+  padding: 10px;
+  color: rgba(238, 243, 255, 0.92);
+  background: transparent;
+}
+
+.terminal-runtime-output text,
+.terminal-runtime-output viewport {
+  background: transparent;
+}
+
+
 .terminal-card {
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -3443,6 +3460,11 @@ window.window-shell.theme-light .terminal-card.is-disconnected button.tile-heade
 window.window-shell.theme-light .terminal-surface {
   background: rgba(244, 239, 228, 0.98);
 }
+
+window.window-shell.theme-light .terminal-runtime-output {
+  color: rgba(25, 35, 50, 0.88);
+}
+
 
 window.window-shell.theme-light .web-tile-settings-popover contents {
   border-color: rgba(25, 35, 50, 0.12);

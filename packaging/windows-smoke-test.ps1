@@ -440,7 +440,7 @@ function Invoke-LaunchSmoke {
             $requiredPattern = "Windows startup init complete"
         }
         elseif ($expectGtkShell) {
-            $requiredPattern = "Windows GTK shell restored GTK workspace preview with"
+            $requiredPattern = "Windows GTK shell restored interactive GTK workspace with"
         }
         elseif ($ProfileKind -eq "mixed") {
             $requiredPattern = "web pane \d+ navigating to https://example.com"
@@ -456,8 +456,8 @@ function Invoke-LaunchSmoke {
             if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
                 throw "$Label did not complete GTK launcher initialization.`n$logText"
             }
-            if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored GTK workspace preview with") {
-                throw "$Label did not restore inside the shared GTK workspace preview.`n$logText"
+            if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored interactive GTK workspace with") {
+                throw "$Label did not restore inside the shared interactive GTK workspace.`n$logText"
             }
             if ($logText -match "opened \d+ restored Windows workspace host window") {
                 throw "$Label unexpectedly opened the legacy Win32 workspace host from the GTK parity shell.`n$logText"

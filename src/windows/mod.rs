@@ -5,6 +5,8 @@ pub mod assets_manager;
 pub mod command_palette;
 #[cfg(all(feature = "windows-gtk-shell", not(feature = "windows-win32-shell")))]
 mod gtk_app;
+#[cfg(all(feature = "windows-gtk-shell", not(feature = "windows-win32-shell")))]
+mod gtk_runtime;
 mod launcher_editor;
 mod restore_prompt;
 pub mod runbook_dialog;

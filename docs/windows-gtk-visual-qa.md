@@ -44,7 +44,7 @@ After building a GTK package, capture starter screenshots with:
 The helper writes PNGs under `packaging/.build/windows-gtk-visuals/`. It seeds isolated profiles for:
 
 - `launch-dashboard`: clean first-run launch deck.
-- `restored-workspace`: restored 3-pane workspace in the shared GTK workspace preview shell. This verifies the canonical release no longer opens the legacy Win32 workspace host for restored sessions.
+- `restored-workspace`: restored 3-pane workspace in the shared interactive GTK workspace shell. This verifies the canonical release no longer opens the legacy Win32 workspace host for restored sessions.
 
 The capture helper follows the launched process tree, so it works with the
 published self-extracting portable `.exe` as well as an unpacked

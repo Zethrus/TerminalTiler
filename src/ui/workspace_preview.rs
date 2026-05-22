@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk::pango;
@@ -21,11 +22,13 @@ use crate::ui::workspace_chrome::{
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 
+pub type TileRuntimeFactory = Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> gtk::Widget>;
+
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
 ///
 /// Windows uses this as the visual parity surface while its ConPTY/WebView2
-/// adapters are being moved behind the shared GTK layout.  The widget therefore
+/// adapters are being moved behind the shared GTK layout. The widget therefore
 /// intentionally reuses Linux CSS classes (`workspace-summary`, `app-tab-*`,
 /// `terminal-card`, `terminal-header`, `terminal-frame`, `terminal-surface`,
 /// `web-tile-frame`) and the shared `layout_tree` split renderer instead of
@@ -41,6 +44,8 @@ pub struct SessionPreview {
     assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
+    runtime_factory: Option<TileRuntimeFactory>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, gtk::Widget>>>,
 }
 
 impl SessionPreview {
@@ -52,6 +57,15 @@ impl SessionPreview {
         session: &SavedSession,
         show_inline_tab_strip: bool,
         assets: WorkspaceAssets,
+    ) -> Self {
+        Self::with_runtime_assets(session, show_inline_tab_strip, assets, None)
+    }
+
+    pub fn with_runtime_assets(
+        session: &SavedSession,
+        show_inline_tab_strip: bool,
+        assets: WorkspaceAssets,
+        runtime_factory: Option<TileRuntimeFactory>,
     ) -> Self {
         let session = Rc::new(RefCell::new(session.clone()));
         let assets = Rc::new(assets);
@@ -71,6 +85,8 @@ impl SessionPreview {
             assets,
             active_index,
             show_inline_tab_strip,
+            runtime_factory,
+            runtime_surfaces: Rc::new(RefCell::new(HashMap::new())),
         };
         preview.render();
         preview
@@ -113,6 +129,7 @@ impl SessionPreview {
 
     pub fn close_tab(&self, index: usize) -> bool {
         if close_tab_in_preview_state(&self.session, &self.active_index, index) {
+            self.prune_runtime_surfaces();
             self.render();
             true
         } else {
@@ -127,7 +144,16 @@ impl SessionPreview {
             &self.assets,
             &self.active_index,
             self.show_inline_tab_strip,
+            self.runtime_factory.clone(),
+            self.runtime_surfaces.clone(),
         );
+    }
+
+    fn prune_runtime_surfaces(&self) {
+        let live_keys = runtime_surface_keys(&self.session.borrow());
+        self.runtime_surfaces
+            .borrow_mut()
+            .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
     }
 }
 
@@ -166,6 +192,8 @@ fn render_session_preview(
     assets: &Rc<WorkspaceAssets>,
     active_index: &Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
+    runtime_factory: Option<TileRuntimeFactory>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, gtk::Widget>>>,
 ) {
     while let Some(child) = shell.first_child() {
         shell.remove(&child);
@@ -183,9 +211,23 @@ fn render_session_preview(
             let session = session.clone();
             let assets = assets.clone();
             let active_index = active_index.clone();
+            let runtime_factory = runtime_factory.clone();
+            let runtime_surfaces = runtime_surfaces.clone();
             Rc::new(move |index: usize| {
                 if close_tab_in_preview_state(&session, &active_index, index) {
-                    render_session_preview(&shell, &session, &assets, &active_index, true);
+                    let live_keys = runtime_surface_keys(&session.borrow());
+                    runtime_surfaces
+                        .borrow_mut()
+                        .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
+                    render_session_preview(
+                        &shell,
+                        &session,
+                        &assets,
+                        &active_index,
+                        true,
+                        runtime_factory.clone(),
+                        runtime_surfaces.clone(),
+                    );
                 }
             })
         };
@@ -194,6 +236,8 @@ fn render_session_preview(
             let session = session.clone();
             let assets = assets.clone();
             let active_index = active_index.clone();
+            let runtime_factory = runtime_factory.clone();
+            let runtime_surfaces = runtime_surfaces.clone();
             Rc::new(move |next_index: usize| {
                 let next_index = {
                     let session = session.borrow();
@@ -201,7 +245,15 @@ fn render_session_preview(
                 };
                 active_index.set(next_index);
                 session.borrow_mut().active_tab_index = next_index;
-                render_session_preview(&shell, &session, &assets, &active_index, true);
+                render_session_preview(
+                    &shell,
+                    &session,
+                    &assets,
+                    &active_index,
+                    true,
+                    runtime_factory.clone(),
+                    runtime_surfaces.clone(),
+                );
             })
         };
         shell.append(&build_tab_strip(
@@ -214,7 +266,13 @@ fn render_session_preview(
 
     if let Some(tab) = session_ref.tabs.get(current_index) {
         shell.append(&build_workspace_summary(tab));
-        let layout = build_layout(tab, assets);
+        let layout = build_layout(
+            current_index,
+            tab,
+            assets,
+            runtime_factory.as_ref(),
+            &runtime_surfaces,
+        );
         let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
         let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
         shell.append(&build_workspace_content_chrome(&layout, &alert_revealer));
@@ -230,6 +288,40 @@ pub fn session_shape(session: &SavedSession) -> (usize, usize) {
         .map(|tab| tab.preset.layout.tile_specs().len())
         .sum::<usize>();
     (session.tabs.len(), pane_count)
+}
+
+fn runtime_surface_keys(session: &SavedSession) -> Vec<String> {
+    session
+        .tabs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tab)| {
+            tab.preset
+                .layout
+                .tile_specs()
+                .into_iter()
+                .map(|tile| runtime_surface_key(index, tab, &tile))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn runtime_surface_key(tab_index: usize, tab: &SavedTab, tile: &TileSpec) -> String {
+    format!(
+        "{}::{}::{}::{}",
+        tab_index,
+        tab.workspace_root.display(),
+        tab.preset.id,
+        tile.id
+    )
+}
+
+fn detach_from_previous_parent(widget: &gtk::Widget) {
+    if let Some(parent) = widget.parent()
+        && let Ok(container) = parent.downcast::<gtk::Box>()
+    {
+        container.remove(widget);
+    }
 }
 
 fn build_tab_strip(
@@ -324,23 +416,40 @@ fn saved_groups(tab: &SavedTab) -> Vec<String> {
     groups
 }
 
-fn build_layout(tab: &SavedTab, assets: &WorkspaceAssets) -> gtk::Widget {
+fn build_layout(
+    tab_index: usize,
+    tab: &SavedTab,
+    assets: &WorkspaceAssets,
+    runtime_factory: Option<&TileRuntimeFactory>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, gtk::Widget>>>,
+) -> gtk::Widget {
     let layout = &tab.preset.layout;
     let shell = crate::ui::layout_tree::build(layout, None);
     for (index, tile) in layout.tile_specs().iter().enumerate() {
         let Some(slot) = shell.slots.get(index) else {
             continue;
         };
-        slot.append(&build_tile(tile, tab, assets, index == 0));
+        slot.append(&build_tile(
+            tab_index,
+            tile,
+            tab,
+            assets,
+            index == 0,
+            runtime_factory,
+            runtime_surfaces,
+        ));
     }
     shell.widget
 }
 
 fn build_tile(
+    tab_index: usize,
     tile: &TileSpec,
     tab: &SavedTab,
     assets: &WorkspaceAssets,
     active: bool,
+    runtime_factory: Option<&TileRuntimeFactory>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, gtk::Widget>>>,
 ) -> gtk::Widget {
     let shell = build_tile_shell(tile);
     if active {
@@ -398,7 +507,18 @@ fn build_tile(
     };
     let frame = build_tile_frame(frame_class);
 
-    let surface = build_tile_surface(tile);
+    let surface = if let Some(runtime_factory) = runtime_factory {
+        let key = runtime_surface_key(tab_index, tab, tile);
+        let mut surfaces = runtime_surfaces.borrow_mut();
+        let surface = surfaces
+            .entry(key)
+            .or_insert_with(|| runtime_factory(tile, tab, assets))
+            .clone();
+        detach_from_previous_parent(&surface);
+        surface
+    } else {
+        build_tile_surface(tile).upcast()
+    };
     frame.append(&surface);
     shell.append(&frame);
 

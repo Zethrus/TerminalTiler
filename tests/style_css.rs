@@ -36,6 +36,7 @@ const WINDOWS_CAPTURE_VISUALS_PS1: &str =
 const WINDOWS_CAPTURE_RELEASE_VISUALS_PS1: &str =
     include_str!("../packaging/capture-windows-release-gtk-visuals.ps1");
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
+const WINDOWS_GTK_RUNTIME_RS: &str = include_str!("../src/windows/gtk_runtime.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
@@ -690,7 +691,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_MOD_RS.contains("feature = \"windows-win32-shell\"")
             && WINDOWS_MOD_RS.contains("gtk_app::run")
             && WINDOWS_MOD_RS.contains("app::run")
-            && WINDOWS_MOD_RS.contains("show_primary_shell_window"),
+            && WINDOWS_MOD_RS.contains("show_primary_shell_window")
+            && WINDOWS_MOD_RS.contains("mod gtk_runtime;"),
         "Windows module routing should make GTK shell selectable while retaining the Win32 fallback"
     );
 
@@ -714,7 +716,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("code.get()")
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
             && WINDOWS_GTK_APP_RS
-                .contains("crate::ui::workspace_preview::SessionPreview::with_assets")
+                .contains("crate::ui::workspace_preview::SessionPreview::with_runtime_assets")
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState")
             && WINDOWS_GTK_APP_RS.contains("show_launch_deck_tab")
             && WINDOWS_GTK_APP_RS.contains("show_workspace_preview_tab")
@@ -723,11 +725,16 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("pub fn push_tab(&self, tab: SavedTab)")
             && WINDOWS_GTK_APP_RS.contains("on_close: Some(Rc::new")
             && WINDOWS_GTK_APP_RS.contains("preview.close_tab(index)")
-            && WINDOWS_GTK_APP_RS.contains("Workspace opened as a new GTK tab")
-            && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
+            && WINDOWS_GTK_APP_RS.contains("Workspace opened as an interactive GTK tab")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} interactive GTK workspace")
             && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
-            && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
-        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, share the Linux header/tab chrome, and restore/open workspaces inside the shared GTK visual shell instead of the legacy Win32 host"
+            && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("build_tile_runtime_surface")
+            && WINDOWS_GTK_RUNTIME_RS.contains("wsl::probe_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("resolve_tile_launch")
+            && WINDOWS_GTK_RUNTIME_RS.contains("Command::new(&command.program)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("probe_webview2_runtime"),
+        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, share the Linux header/tab chrome, and restore/open workspaces inside the shared interactive GTK shell instead of the legacy Win32 host"
     );
 
     assert!(
@@ -800,7 +807,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("apply_title_tab_state(")
-            && WINDOWS_GTK_APP_RS.contains("SessionPreview::with_assets(&session, false, assets)")
+            && WINDOWS_GTK_APP_RS.contains(
+                "SessionPreview::with_runtime_assets(
+            &session,"
+            )
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
         "Linux and Windows GTK shells should share the same titlebar tab chrome builder/state contract while Windows drives workspace-preview tab switching from the titlebar"
@@ -821,8 +831,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")
             && WORKSPACE_PREVIEW_RS
                 .contains("for (index, tile) in layout.tile_specs().iter().enumerate()")
-            && WORKSPACE_PREVIEW_RS
-                .contains("slot.append(&build_tile(tile, tab, assets, index == 0))")
+            && WORKSPACE_PREVIEW_RS.contains("slot.append(&build_tile(")
+            && WORKSPACE_PREVIEW_RS.contains("runtime_factory")
+            && WORKSPACE_PREVIEW_RS.contains("runtime_surfaces")
             && !source_contains(
                 WORKSPACE_PREVIEW_RS,
                 "LayoutNode::Split {\n            axis,"
@@ -1098,12 +1109,13 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_SMOKE_PS1.contains("windows GTK shell startup")
             && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
-            && WINDOWS_SMOKE_PS1.contains("Windows GTK shell restored GTK workspace preview with")
+            && WINDOWS_SMOKE_PS1
+                .contains("Windows GTK shell restored interactive GTK workspace with")
             && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
             && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow")
             && WINDOWS_SMOKE_PS1
                 .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }"),
-        "Windows smoke test should validate GTK startup/restored-preview logs even for self-extracting portable launchers"
+        "Windows smoke test should validate GTK startup/restored-runtime logs even for self-extracting portable launchers"
     );
 
     for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {

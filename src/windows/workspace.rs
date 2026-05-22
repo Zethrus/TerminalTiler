@@ -6080,8 +6080,5 @@ mod imp {
 
 #[cfg(target_os = "windows")]
 pub use imp::open_saved_workspaces;
-#[cfg(all(
-    target_os = "windows",
-    any(not(feature = "windows-gtk-shell"), feature = "windows-win32-shell")
-))]
-pub use imp::probe_webview2_runtime;
+#[cfg(target_os = "windows")]
+pub(crate) use imp::probe_webview2_runtime;

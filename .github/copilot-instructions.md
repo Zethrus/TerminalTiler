@@ -1,6 +1,6 @@
 # Copilot instructions for TerminalTiler
 
-TerminalTiler is a Rust desktop app with platform-specific frontends: Linux uses GTK4/libadwaita/VTE/WebKit and Windows uses a native Win32 shell with ConPTY/WebView2, WSL2-first terminal launching, and PowerShell fallback.
+TerminalTiler is a Rust desktop app with platform-specific frontends: Linux uses GTK4/libadwaita/VTE/WebKit and Windows release builds use the GTK/libadwaita parity shell with interactive Windows terminal panes, WSL2-first terminal launching, PowerShell fallback, and a Win32 compatibility shell only when explicitly selected.
 
 ## Build, test, and lint commands
 
