@@ -132,7 +132,7 @@ fn tile_surfaces_have_zero_minimum_css_for_split_resizing() {
 
 #[test]
 fn tile_widgets_and_panes_are_configured_as_shrinkable() {
-    for source in [TILE_VIEW_RS, WEB_TILE_RS, LAYOUT_TREE_RS] {
+    for source in [TILE_CHROME_RS, LAYOUT_TREE_RS] {
         assert!(
             source.contains("set_size_request(0, 0)"),
             "tile, layout slot, and pane widgets should advertise a zero minimum size"
@@ -142,6 +142,16 @@ fn tile_widgets_and_panes_are_configured_as_shrinkable() {
             "tile, layout slot, and pane widgets should hide child overflow while resizing"
         );
     }
+
+    assert!(
+        TILE_VIEW_RS.contains("build_tile_shell(tile)")
+            && TILE_VIEW_RS.contains("build_tile_frame(\"terminal-frame\")")
+            && TILE_VIEW_RS.contains("make_shrinkable(&terminal)")
+            && WEB_TILE_RS.contains("build_tile_shell(tile)")
+            && WEB_TILE_RS.contains("build_tile_frame(\"web-tile-frame\")")
+            && WEB_TILE_RS.contains("make_shrinkable(&web_view)"),
+        "terminal and web tiles should opt into the shared shrinkable tile shell/frame helpers while keeping runtime surfaces shrinkable"
+    );
 
     assert!(
         TERMINAL_SESSION_RS.contains("terminal.set_size_request(0, 0)")
@@ -576,8 +586,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         WORKSPACE_PREVIEW_RS.contains("workspace-summary")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-strip")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-shell")
-            && WORKSPACE_PREVIEW_RS.contains("terminal-card")
-            && WORKSPACE_PREVIEW_RS.contains("terminal-header")
+            && WORKSPACE_PREVIEW_RS.contains("build_tile_shell")
+            && TILE_CHROME_RS.contains("terminal-card")
+            && TILE_CHROME_RS.contains("terminal-header")
             && WORKSPACE_PREVIEW_RS.contains("terminal-frame")
             && WORKSPACE_PREVIEW_RS.contains("terminal-surface")
             && WORKSPACE_PREVIEW_RS.contains("web-tile-frame")
@@ -607,11 +618,14 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview should only mark the active tile with the same header-local active styling as Linux"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("build_pane_group_chip(&tile.pane_groups)")
+        WORKSPACE_PREVIEW_RS.contains("build_tile_header_chrome")
+            && TILE_VIEW_RS.contains("build_tile_header_chrome")
+            && WEB_TILE_RS.contains("build_tile_header_chrome")
+            && TILE_CHROME_RS.contains("build_pane_group_chip(&input.tile.pane_groups)")
             && TILE_CHROME_RS.contains("pane_groups.join(\", \")")
             && TILE_CHROME_RS
                 .contains("set_tooltip_text(Some(&format!(\"Pane groups: {pane_groups}\")))"),
-        "Windows GTK workspace preview headers should carry pane-group chips like the Linux GTK workspace headers"
+        "Windows GTK workspace preview headers should carry pane-group chips through the same helper as Linux GTK workspace headers"
     );
     assert!(
         UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
@@ -620,10 +634,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("tile-recovery-action")
             && WORKSPACE_PREVIEW_RS.contains("tile-snippet-action")
             && WORKSPACE_PREVIEW_RS.contains("\"Edit URL and refresh settings\"")
-            && source_contains(
-                WORKSPACE_PREVIEW_RS,
-                "actions.append(&status);\n    match tile.tile_kind",
-            )
+            && source_contains(TILE_CHROME_RS, "actions.append(&status_label);",)
+            && WORKSPACE_PREVIEW_RS.contains("let actions = header.actions.clone();")
             && source_contains(
                 WORKSPACE_PREVIEW_RS,
                 "actions.append(&recovery_button);\n            actions.append(&snippet_button);"
@@ -633,7 +645,11 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK preview tile headers should share the Linux header action order and controls for terminal and web tiles"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("configure_dynamic_header_label")
+        WORKSPACE_PREVIEW_RS.contains("build_tile_header_chrome")
+            && TILE_VIEW_RS.contains("build_tile_header_chrome")
+            && WEB_TILE_RS.contains("build_tile_header_chrome")
+            && TILE_CHROME_RS.contains("configure_dynamic_header_label")
+            && TILE_CHROME_RS.contains("TileHeaderInput")
             && TILE_CHROME_RS.contains("HEADER_STATUS_MAX_CHARS")
             && TILE_CHROME_RS.contains("HEADER_TITLE_MAX_CHARS")
             && TILE_CHROME_RS.contains("HEADER_GROUP_MAX_CHARS")
@@ -980,15 +996,10 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
     );
 
     for (source_name, source) in [("terminal tile", TILE_VIEW_RS), ("web tile", WEB_TILE_RS)] {
-        for label in ["&title", "&status", "&badge"] {
-            assert!(
-                source_contains(
-                    source,
-                    &format!("configure_dynamic_header_label(\n        {label},"),
-                ),
-                "{source_name} should constrain dynamic header label {label} through the shared helper"
-            );
-        }
+        assert!(
+            source.contains("build_tile_header_chrome(TileHeaderInput"),
+            "{source_name} should build visible header labels through the shared tile header helper"
+        );
         assert!(
             source.contains("set_tooltip_text(Some(&new_title))"),
             "{source_name} should preserve updated title text in tooltips"
@@ -996,7 +1007,7 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
     }
 
     assert!(
-        TILE_VIEW_RS.contains("build_pane_group_chip(&tile.pane_groups)")
+        TILE_CHROME_RS.contains("build_pane_group_chip(&input.tile.pane_groups)")
             && TILE_CHROME_RS.contains("HEADER_GROUP_MAX_CHARS")
             && TILE_CHROME_RS
                 .contains("set_tooltip_text(Some(&format!(\"Pane groups: {pane_groups}\")))")

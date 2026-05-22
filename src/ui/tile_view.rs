@@ -19,8 +19,8 @@ use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
-    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, TERMINAL_HEADER_BADGE_MAX_CHARS,
-    build_header_icon_button, build_pane_group_chip, configure_dynamic_header_label,
+    TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, build_header_icon_button, build_tile_frame,
+    build_tile_header_chrome, build_tile_shell, make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
 
@@ -53,76 +53,25 @@ pub fn build(
         zoom_steps,
     );
 
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes(["terminal-card", tile.accent_class.as_str()])
-        .build();
-    make_shrinkable(&shell);
-
-    let header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .css_classes(["terminal-header"])
-        .build();
-    make_shrinkable(&header);
-
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .hexpand(true)
-        .valign(gtk::Align::Center)
-        .build();
-    make_shrinkable(&left);
-    left.set_tooltip_text(Some("Drag this header to swap terminal positions"));
-
-    let badge = gtk::Label::builder()
-        .label(&tile.agent_label)
-        .halign(gtk::Align::Start)
-        .css_classes(["agent-badge"])
-        .build();
-    let title = gtk::Label::builder()
-        .label(&tile.title)
-        .halign(gtk::Align::Start)
-        .css_classes(["tile-title"])
-        .build();
-    configure_dynamic_header_label(
-        &badge,
-        &tile.agent_label,
-        TERMINAL_HEADER_BADGE_MAX_CHARS,
-        gtk::pango::EllipsizeMode::End,
-    );
-    configure_dynamic_header_label(
-        &title,
-        &tile.title,
-        HEADER_TITLE_MAX_CHARS,
-        gtk::pango::EllipsizeMode::End,
-    );
-    title.set_hexpand(true);
-
-    left.append(&badge);
-    left.append(&title);
-    if let Some(pane_group_label) = build_pane_group_chip(&tile.pane_groups) {
-        left.append(&pane_group_label);
-    }
-
     let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
     let initial_status_line = initial_status_snapshot(tile, workspace_root, assets)
         .to_line()
         .trim()
         .to_string();
-    let status = gtk::Label::builder()
-        .label(&initial_status_line)
-        .css_classes(["status-chip"])
-        .build();
-    configure_dynamic_header_label(
-        &status,
-        &initial_status_line,
-        HEADER_STATUS_MAX_CHARS,
-        gtk::pango::EllipsizeMode::Start,
-    );
+    let shell = build_tile_shell(tile);
+    let header = build_tile_header_chrome(TileHeaderInput {
+        tile,
+        badge_text: &tile.agent_label,
+        badge_tooltip: &tile.agent_label,
+        badge_max_chars: TERMINAL_HEADER_BADGE_MAX_CHARS,
+        status_text: &initial_status_line,
+        status_tooltip: &initial_status_line,
+        status_ellipsize: gtk::pango::EllipsizeMode::Start,
+        drag_tooltip: "Drag this header to swap terminal positions",
+    });
+    let left = header.drag_handle.clone();
+    let title = header.title_label.clone();
+    let status = header.status_label.clone();
 
     let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
     recovery_button.add_css_class("tile-recovery-action");
@@ -149,28 +98,14 @@ pub fn build(
         });
     }
 
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .valign(gtk::Align::Center)
-        .build();
-    actions.append(&status);
+    let actions = header.actions.clone();
     actions.append(&recovery_button);
     actions.append(&snippet_button);
     actions.append(&close_button);
 
-    header.append(&left);
-    header.append(&actions);
-    shell.append(&header);
+    shell.append(&header.widget);
 
-    let terminal_frame = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes(["terminal-frame"])
-        .build();
-    make_shrinkable(&terminal_frame);
+    let terminal_frame = build_tile_frame("terminal-frame");
 
     let terminal = session.widget();
     terminal.add_css_class("terminal-surface");
@@ -363,11 +298,6 @@ pub fn build(
         tile: tile.clone(),
         close_button,
     }
-}
-
-fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
-    widget.set_size_request(0, 0);
-    widget.set_overflow(gtk::Overflow::Hidden);
 }
 
 fn install_dropped_file_target(

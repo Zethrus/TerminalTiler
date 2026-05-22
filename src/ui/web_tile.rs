@@ -14,8 +14,8 @@ use crate::model::preset::ApplicationDensity;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
-    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, WEB_HEADER_BADGE_MAX_CHARS,
-    build_header_icon_button, configure_dynamic_header_label, domain_from_url,
+    TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS, build_header_icon_button, build_tile_frame,
+    build_tile_header_chrome, build_tile_shell, domain_from_url, make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
 
@@ -52,69 +52,21 @@ pub fn build(
 
     let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
 
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes(["terminal-card", tile.accent_class.as_str()])
-        .build();
-    make_shrinkable(&shell);
-
-    let header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .css_classes(["terminal-header"])
-        .build();
-    make_shrinkable(&header);
-
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .hexpand(true)
-        .valign(gtk::Align::Center)
-        .build();
-    make_shrinkable(&left);
-    left.set_tooltip_text(Some("Drag this header to swap tile positions"));
-
-    let badge = gtk::Label::builder()
-        .label("🌐")
-        .halign(gtk::Align::Start)
-        .css_classes(["agent-badge"])
-        .build();
-    let title = gtk::Label::builder()
-        .label(&tile.title)
-        .halign(gtk::Align::Start)
-        .css_classes(["tile-title"])
-        .build();
-    configure_dynamic_header_label(
-        &badge,
-        "Web tile",
-        WEB_HEADER_BADGE_MAX_CHARS,
-        gtk::pango::EllipsizeMode::End,
-    );
-    configure_dynamic_header_label(
-        &title,
-        &tile.title,
-        HEADER_TITLE_MAX_CHARS,
-        gtk::pango::EllipsizeMode::End,
-    );
-    title.set_hexpand(true);
-
-    left.append(&badge);
-    left.append(&title);
-
     let initial_domain = domain_from_url(&url);
-    let status = gtk::Label::builder()
-        .label(&initial_domain)
-        .css_classes(["status-chip"])
-        .build();
-    configure_dynamic_header_label(
-        &status,
-        &url,
-        HEADER_STATUS_MAX_CHARS,
-        gtk::pango::EllipsizeMode::End,
-    );
+    let shell = build_tile_shell(tile);
+    let header = build_tile_header_chrome(TileHeaderInput {
+        tile,
+        badge_text: "🌐",
+        badge_tooltip: "Web tile",
+        badge_max_chars: WEB_HEADER_BADGE_MAX_CHARS,
+        status_text: &initial_domain,
+        status_tooltip: &url,
+        status_ellipsize: gtk::pango::EllipsizeMode::End,
+        drag_tooltip: "Drag this header to swap tile positions",
+    });
+    let left = header.drag_handle.clone();
+    let title = header.title_label.clone();
+    let status = header.status_label.clone();
 
     let settings_button =
         build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
@@ -252,18 +204,11 @@ pub fn build(
         });
     }
 
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .valign(gtk::Align::Center)
-        .build();
-    actions.append(&status);
+    let actions = header.actions.clone();
     actions.append(&settings_button);
     actions.append(&close_button);
 
-    header.append(&left);
-    header.append(&actions);
-    shell.append(&header);
+    shell.append(&header.widget);
 
     {
         let title_label = title.clone();
@@ -362,14 +307,7 @@ pub fn build(
         });
     }
 
-    let web_frame = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes(["web-tile-frame"])
-        .build();
-    make_shrinkable(&web_frame);
+    let web_frame = build_tile_frame("web-tile-frame");
     web_view.set_hexpand(true);
     web_view.set_vexpand(true);
     make_shrinkable(&web_view);
@@ -454,11 +392,6 @@ pub fn build(
         shutdown_flag,
         close_button,
     }
-}
-
-fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
-    widget.set_size_request(0, 0);
-    widget.set_overflow(gtk::Overflow::Hidden);
 }
 
 fn defer_initial_navigation_until_mapped(web_view: &webkit6::WebView, url: &str, tile_id: &str) {

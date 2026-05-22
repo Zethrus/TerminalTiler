@@ -1,13 +1,13 @@
+use gtk::pango;
 use gtk::prelude::*;
-use gtk::{glib, pango};
 
 use crate::model::layout::{LayoutNode, TileKind, TileSpec, normalize_web_url};
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
-    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, TERMINAL_HEADER_BADGE_MAX_CHARS,
-    WEB_HEADER_BADGE_MAX_CHARS, build_header_icon_button, build_pane_group_chip,
-    configure_dynamic_header_label, domain_from_url,
+    TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS,
+    build_header_icon_button, build_tile_frame, build_tile_header_chrome, build_tile_shell,
+    domain_from_url, make_shrinkable,
 };
 use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary_chrome};
 
@@ -173,74 +173,13 @@ fn build_layout(layout: &LayoutNode) -> gtk::Widget {
 }
 
 fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes(["terminal-card", tile.accent_class.as_str()])
-        .build();
+    let shell = build_tile_shell(tile);
     if active {
         shell.add_css_class("is-active-tile");
     }
-    make_shrinkable(&shell);
-
-    let header = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .css_classes(["terminal-header"])
-        .build();
-    make_shrinkable(&header);
-
-    let left = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .hexpand(true)
-        .valign(gtk::Align::Center)
-        .build();
-    make_shrinkable(&left);
-    left.set_tooltip_text(Some(match tile.tile_kind {
-        TileKind::Terminal => "Drag this header to swap terminal positions",
-        TileKind::WebView => "Drag this header to swap tile positions",
-    }));
 
     let badge_text = tile_badge_text(tile);
     let badge_tooltip = tile_badge_tooltip(tile);
-    let badge = gtk::Label::builder()
-        .label(&badge_text)
-        .halign(gtk::Align::Start)
-        .css_classes(["agent-badge"])
-        .build();
-    configure_dynamic_header_label(
-        &badge,
-        &badge_tooltip,
-        match tile.tile_kind {
-            TileKind::Terminal => TERMINAL_HEADER_BADGE_MAX_CHARS,
-            TileKind::WebView => WEB_HEADER_BADGE_MAX_CHARS,
-        },
-        pango::EllipsizeMode::End,
-    );
-    left.append(&badge);
-
-    let title = gtk::Label::builder()
-        .label(&tile.title)
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .css_classes(["tile-title"])
-        .build();
-    configure_dynamic_header_label(
-        &title,
-        &tile.title,
-        HEADER_TITLE_MAX_CHARS,
-        pango::EllipsizeMode::End,
-    );
-    left.append(&title);
-
-    if let Some(pane_group_label) = build_pane_group_chip(&tile.pane_groups) {
-        left.append(&pane_group_label);
-    }
-    header.append(&left);
-
     let (status_text, status_tooltip) = match tile.tile_kind {
         TileKind::Terminal => {
             let label = tile.working_directory.short_label();
@@ -251,27 +190,27 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
             (domain_from_url(&url), url)
         }
     };
-    let status = gtk::Label::builder()
-        .label(&status_text)
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip"])
-        .build();
-    configure_dynamic_header_label(
-        &status,
-        &status_tooltip,
-        HEADER_STATUS_MAX_CHARS,
-        match tile.tile_kind {
+    let header = build_tile_header_chrome(TileHeaderInput {
+        tile,
+        badge_text: &badge_text,
+        badge_tooltip: &badge_tooltip,
+        badge_max_chars: match tile.tile_kind {
+            TileKind::Terminal => TERMINAL_HEADER_BADGE_MAX_CHARS,
+            TileKind::WebView => WEB_HEADER_BADGE_MAX_CHARS,
+        },
+        status_text: &status_text,
+        status_tooltip: &status_tooltip,
+        status_ellipsize: match tile.tile_kind {
             TileKind::Terminal => pango::EllipsizeMode::Start,
             TileKind::WebView => pango::EllipsizeMode::End,
         },
-    );
+        drag_tooltip: match tile.tile_kind {
+            TileKind::Terminal => "Drag this header to swap terminal positions",
+            TileKind::WebView => "Drag this header to swap tile positions",
+        },
+    });
 
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .valign(gtk::Align::Center)
-        .build();
-    actions.append(&status);
+    let actions = header.actions.clone();
     match tile.tile_kind {
         TileKind::Terminal => {
             let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
@@ -294,21 +233,13 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     let close_button = build_header_icon_button(icon_name::CLOSE, "Close tile");
     close_button.set_sensitive(false);
     actions.append(&close_button);
-    header.append(&actions);
-    shell.append(&header);
+    shell.append(&header.widget);
 
     let frame_class = match tile.tile_kind {
         TileKind::Terminal => "terminal-frame",
         TileKind::WebView => "web-tile-frame",
     };
-    let frame = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .css_classes([frame_class])
-        .build();
-    make_shrinkable(&frame);
+    let frame = build_tile_frame(frame_class);
 
     let surface = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -372,9 +303,4 @@ fn build_empty_state() -> gtk::Widget {
         .css_classes(["workspace-summary-subtitle"])
         .build()
         .upcast()
-}
-
-fn make_shrinkable<W: glib::object::IsA<gtk::Widget>>(widget: &W) {
-    widget.set_size_request(0, 0);
-    widget.set_overflow(gtk::Overflow::Hidden);
 }
