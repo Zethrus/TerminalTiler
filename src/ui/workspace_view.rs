@@ -94,6 +94,22 @@ impl WorkspaceRuntime {
         }
     }
 
+    pub fn reflow_layout(&self) {
+        let layout = self.inner.layout.borrow().clone();
+        {
+            let tiles = self.inner.tiles.borrow();
+            detach_tile_widgets(tiles.iter());
+        }
+        self.replace_layout_shell(&layout);
+        {
+            let tiles = self.inner.tiles.borrow();
+            remount_tiles(&self.inner.slots.borrow(), &tiles);
+        }
+        self.sync_active_tile_styles();
+        self.refresh_navigation_controls();
+        self.inner.layout_host.queue_resize();
+    }
+
     pub fn terminate_all(&self, reason: &str) {
         let resources = {
             let tiles = self.inner.tiles.borrow();

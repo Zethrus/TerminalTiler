@@ -4017,6 +4017,10 @@ fn attach_workspace_tab_to_main_window(
     mut tab: WorkspaceTab,
 ) {
     let page_shell = tab.page_shell.clone();
+    let runtime = match &tab.content {
+        TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
+        TabContent::LaunchDeck => None,
+    };
     if let Some(parent) = page_shell.parent()
         && let Ok(parent_box) = parent.downcast::<gtk::Box>()
     {
@@ -4053,6 +4057,9 @@ fn attach_workspace_tab_to_main_window(
         select(tab_id);
     } else {
         active_tab_id.set(tab_id);
+    }
+    if let Some(runtime) = runtime {
+        runtime.reflow_layout();
     }
     note_linux_main_attach_target_active(window_id);
     save_application_window_session_state(window_id, tabs, active_tab_id.get(), session_store);
@@ -5442,6 +5449,7 @@ fn present_detached_workspace_window(
         preset.density,
         payload.saved_tab.terminal_zoom_steps,
     );
+    runtime.reflow_layout();
 
     let detached_tabs = Rc::new(RefCell::new(vec![payload.tab]));
     {

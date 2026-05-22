@@ -292,6 +292,29 @@ fn web_tile_initial_navigation_waits_until_mapped() {
 }
 
 #[test]
+fn linux_workspace_reattach_reflows_existing_layout_tree() {
+    assert!(
+        WORKSPACE_VIEW_RS.contains("pub fn reflow_layout(&self)")
+            && WORKSPACE_VIEW_RS.contains("detach_tile_widgets(tiles.iter())")
+            && WORKSPACE_VIEW_RS.contains("self.replace_layout_shell(&layout)")
+            && WORKSPACE_VIEW_RS.contains("remount_tiles(&self.inner.slots.borrow(), &tiles)")
+            && WORKSPACE_VIEW_RS.contains("self.inner.layout_host.queue_resize()"),
+        "workspace reflow should rebuild only the layout shell, then remount existing live tile widgets"
+    );
+    assert!(
+        WINDOW_RS.matches("runtime.reflow_layout();").count() >= 2,
+        "Linux detach and reattach paths should reflow GTK paned layouts after reparenting workspaces"
+    );
+    assert!(
+        LAYOUT_TREE_RS.contains("suppress_position_notify")
+            && LAYOUT_TREE_RS.contains("apply_saved_ratio_when_allocated")
+            && LAYOUT_TREE_RS.contains("add_tick_callback")
+            && LAYOUT_TREE_RS.contains("glib::ControlFlow::Continue"),
+        "programmatic split-ratio application should wait for allocation and must not persist as user drag changes"
+    );
+}
+
+#[test]
 fn voice_pack_install_uses_inline_progress_replacement() {
     assert!(
         SETTINGS_DIALOG_RS.contains("fn build_voice_pack_install_row")

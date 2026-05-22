@@ -67,30 +67,27 @@ fn build_with_path(
 
             let ratio = *ratio;
             let applied = Rc::new(Cell::new(false));
+            let suppress_position_notify = Rc::new(Cell::new(false));
+            let suppress_saved_ratio_notify = suppress_position_notify.clone();
             paned.connect_map(move |paned| {
                 if applied.get() {
                     return;
                 }
-                let applied = applied.clone();
-                let paned = paned.clone();
-                glib::idle_add_local_once(move || {
-                    if applied.get() {
-                        return;
-                    }
-                    applied.set(true);
-                    let total = match paned.orientation() {
-                        gtk::Orientation::Horizontal => paned.allocated_width(),
-                        _ => paned.allocated_height(),
-                    };
-                    if total > 1 {
-                        paned.set_position((ratio * total as f32) as i32);
-                    }
-                });
+                apply_saved_ratio_when_allocated(
+                    paned,
+                    ratio,
+                    applied.clone(),
+                    suppress_saved_ratio_notify.clone(),
+                );
             });
 
             if let Some(on_ratio_changed) = on_ratio_changed {
                 let path = split_path.to_vec();
+                let suppress_position_notify = suppress_position_notify.clone();
                 paned.connect_position_notify(move |paned| {
+                    if suppress_position_notify.get() {
+                        return;
+                    }
                     let total = match paned.orientation() {
                         gtk::Orientation::Horizontal => paned.allocated_width(),
                         _ => paned.allocated_height(),
@@ -111,6 +108,38 @@ fn build_with_path(
             }
         }
     }
+}
+
+fn apply_saved_ratio_when_allocated(
+    paned: &gtk::Paned,
+    ratio: f32,
+    applied: Rc<Cell<bool>>,
+    suppress_position_notify: Rc<Cell<bool>>,
+) {
+    paned.add_tick_callback(move |paned, _| {
+        if applied.get() {
+            return glib::ControlFlow::Break;
+        }
+
+        let total = match paned.orientation() {
+            gtk::Orientation::Horizontal => paned.allocated_width(),
+            _ => paned.allocated_height(),
+        };
+
+        if total > 1 {
+            applied.set(true);
+            suppress_position_notify.set(true);
+            paned.set_position((ratio * total as f32) as i32);
+
+            let suppress_position_notify = suppress_position_notify.clone();
+            glib::idle_add_local_once(move || {
+                suppress_position_notify.set(false);
+            });
+            return glib::ControlFlow::Break;
+        }
+
+        glib::ControlFlow::Continue
+    });
 }
 
 fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
