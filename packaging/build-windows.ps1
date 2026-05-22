@@ -384,6 +384,7 @@ if ($Candle -and $Light -and $Heat) {
         "-srd" `
         "-sreg" `
         "-scom" `
+        "-ke" `
         "-gg" `
         "-var" "var.StageDir" `
         "-out" $WixHarvestedSourcePath

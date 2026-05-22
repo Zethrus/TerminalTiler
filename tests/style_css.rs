@@ -1000,6 +1000,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_BUILD_PS1.contains("Assert-GtkRuntimeResource -Path $source")
             && WINDOWS_BUILD_PS1
                 .contains("Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative)")
+            && WINDOWS_BUILD_PS1.contains("\"-ke\"")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gio\"; AllowEmpty = $true }")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gtk-4.0\"; AllowEmpty = $true }")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"share\\themes\"; AllowEmpty = $true }")
