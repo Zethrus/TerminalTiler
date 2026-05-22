@@ -9,8 +9,9 @@ use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS,
-    build_header_icon_button, build_tile_frame, build_tile_header_chrome, build_tile_shell,
-    domain_from_url, make_shrinkable,
+    append_terminal_tile_action_chrome, append_web_tile_action_chrome,
+    build_terminal_tile_action_chrome, build_tile_frame, build_tile_header_chrome,
+    build_tile_shell, build_web_tile_action_chrome, domain_from_url, make_shrinkable,
 };
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
@@ -275,26 +276,16 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     let actions = header.actions.clone();
     match tile.tile_kind {
         TileKind::Terminal => {
-            let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
-            recovery_button.add_css_class("tile-recovery-action");
-            recovery_button.set_sensitive(false);
-            let snippet_button = build_header_icon_button(icon_name::SNIPPET, "Run CLI snippet");
-            snippet_button.add_css_class("tile-snippet-action");
-            snippet_button.set_sensitive(false);
-            actions.append(&recovery_button);
-            actions.append(&snippet_button);
+            let tile_actions = build_terminal_tile_action_chrome(false);
+            tile_actions.snippet_button.set_sensitive(false);
+            append_terminal_tile_action_chrome(&actions, &tile_actions);
         }
         TileKind::WebView => {
-            let settings_button =
-                build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
-            settings_button.set_sensitive(false);
-            actions.append(&settings_button);
+            let tile_actions = build_web_tile_action_chrome(false);
+            tile_actions.settings_button.set_sensitive(false);
+            append_web_tile_action_chrome(&actions, &tile_actions);
         }
     }
-
-    let close_button = build_header_icon_button(icon_name::CLOSE, "Close tile");
-    close_button.set_sensitive(false);
-    actions.append(&close_button);
     shell.append(&header.widget);
 
     let frame_class = match tile.tile_kind {

@@ -759,18 +759,28 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
             && UI_MOD_RS.contains("mod tile_chrome;")
-            && WORKSPACE_PREVIEW_RS.contains("build_header_icon_button")
-            && WORKSPACE_PREVIEW_RS.contains("tile-recovery-action")
-            && WORKSPACE_PREVIEW_RS.contains("tile-snippet-action")
-            && WORKSPACE_PREVIEW_RS.contains("\"Edit URL and refresh settings\"")
+            && TILE_CHROME_RS.contains("pub(crate) struct TerminalTileActionChrome")
+            && TILE_CHROME_RS.contains("pub(crate) struct WebTileActionChrome")
+            && TILE_CHROME_RS.contains("pub(crate) fn build_terminal_tile_action_chrome")
+            && TILE_CHROME_RS.contains("pub(crate) fn build_web_tile_action_chrome")
+            && TILE_CHROME_RS.contains("pub(crate) fn append_terminal_tile_action_chrome")
+            && TILE_CHROME_RS.contains("pub(crate) fn append_web_tile_action_chrome")
+            && TILE_CHROME_RS.contains("tile-recovery-action")
+            && TILE_CHROME_RS.contains("tile-snippet-action")
+            && TILE_CHROME_RS.contains("\"Edit URL and refresh settings\"")
             && source_contains(TILE_CHROME_RS, "actions.append(&status_label);",)
-            && WORKSPACE_PREVIEW_RS.contains("let actions = header.actions.clone();")
+            && WORKSPACE_PREVIEW_RS.contains("build_terminal_tile_action_chrome(false)")
+            && WORKSPACE_PREVIEW_RS.contains("build_web_tile_action_chrome(false)")
+            && TILE_VIEW_RS.contains("build_terminal_tile_action_chrome(can_close)")
+            && WEB_TILE_RS.contains("build_web_tile_action_chrome(can_close)")
             && source_contains(
-                WORKSPACE_PREVIEW_RS,
-                "actions.append(&recovery_button);\n            actions.append(&snippet_button);"
+                TILE_CHROME_RS,
+                "actions.append(&chrome.recovery_button);\n    actions.append(&chrome.snippet_button);\n    actions.append(&chrome.close_button);"
             )
-            && source_contains(WORKSPACE_PREVIEW_RS, "actions.append(&settings_button);")
-            && source_contains(WORKSPACE_PREVIEW_RS, "actions.append(&close_button);"),
+            && source_contains(
+                TILE_CHROME_RS,
+                "actions.append(&chrome.settings_button);\n    actions.append(&chrome.close_button);"
+            ),
         "Windows GTK preview tile headers should share the Linux header action order and controls for terminal and web tiles"
     );
     assert!(

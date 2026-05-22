@@ -1,5 +1,5 @@
 use crate::model::layout::TileSpec;
-use crate::ui::icons;
+use crate::ui::icons::{self, name as icon_name};
 use gtk::prelude::*;
 
 pub(crate) const TERMINAL_HEADER_BADGE_MAX_CHARS: i32 = 12;
@@ -33,6 +33,73 @@ pub(crate) struct TileHeaderChrome {
     pub(crate) actions: gtk::Box,
     pub(crate) title_label: gtk::Label,
     pub(crate) status_label: gtk::Label,
+}
+
+pub(crate) struct TerminalTileActionChrome {
+    pub(crate) recovery_button: gtk::Button,
+    pub(crate) snippet_button: gtk::Button,
+    pub(crate) close_button: gtk::Button,
+}
+
+pub(crate) struct WebTileActionChrome {
+    pub(crate) settings_button: gtk::Button,
+    pub(crate) close_button: gtk::Button,
+}
+
+pub(crate) fn build_terminal_tile_action_chrome(can_close: bool) -> TerminalTileActionChrome {
+    let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
+    recovery_button.add_css_class("tile-recovery-action");
+    recovery_button.set_visible(false);
+    recovery_button.set_sensitive(false);
+
+    let snippet_button = build_header_icon_button(icon_name::SNIPPET, "Run CLI snippet");
+    snippet_button.add_css_class("tile-snippet-action");
+
+    let close_button = build_tile_close_button(can_close);
+
+    TerminalTileActionChrome {
+        recovery_button,
+        snippet_button,
+        close_button,
+    }
+}
+
+pub(crate) fn build_web_tile_action_chrome(can_close: bool) -> WebTileActionChrome {
+    let settings_button =
+        build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
+    let close_button = build_tile_close_button(can_close);
+
+    WebTileActionChrome {
+        settings_button,
+        close_button,
+    }
+}
+
+pub(crate) fn append_terminal_tile_action_chrome(
+    actions: &gtk::Box,
+    chrome: &TerminalTileActionChrome,
+) {
+    actions.append(&chrome.recovery_button);
+    actions.append(&chrome.snippet_button);
+    actions.append(&chrome.close_button);
+}
+
+pub(crate) fn append_web_tile_action_chrome(actions: &gtk::Box, chrome: &WebTileActionChrome) {
+    actions.append(&chrome.settings_button);
+    actions.append(&chrome.close_button);
+}
+
+fn build_tile_close_button(can_close: bool) -> gtk::Button {
+    let close_button = build_header_icon_button(
+        icon_name::CLOSE,
+        if can_close {
+            "Close tile"
+        } else {
+            "Cannot close the last tile"
+        },
+    );
+    close_button.set_sensitive(can_close);
+    close_button
 }
 
 pub(crate) fn build_tile_shell(tile: &TileSpec) -> gtk::Box {

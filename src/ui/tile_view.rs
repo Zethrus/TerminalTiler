@@ -19,8 +19,9 @@ use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
-    TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, build_header_icon_button, build_tile_frame,
-    build_tile_header_chrome, build_tile_shell, make_shrinkable,
+    TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, append_terminal_tile_action_chrome,
+    build_terminal_tile_action_chrome, build_tile_frame, build_tile_header_chrome,
+    build_tile_shell, make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
 
@@ -73,23 +74,10 @@ pub fn build(
     let title = header.title_label.clone();
     let status = header.status_label.clone();
 
-    let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
-    recovery_button.add_css_class("tile-recovery-action");
-    recovery_button.set_visible(false);
-    recovery_button.set_sensitive(false);
-
-    let snippet_button = build_header_icon_button(icon_name::SNIPPET, "Run CLI snippet");
-    snippet_button.add_css_class("tile-snippet-action");
-
-    let close_button = build_header_icon_button(
-        icon_name::CLOSE,
-        if can_close {
-            "Close tile"
-        } else {
-            "Cannot close the last tile"
-        },
-    );
-    close_button.set_sensitive(can_close);
+    let tile_actions = build_terminal_tile_action_chrome(can_close);
+    let recovery_button = tile_actions.recovery_button.clone();
+    let snippet_button = tile_actions.snippet_button.clone();
+    let close_button = tile_actions.close_button.clone();
     {
         let tile_id = tile.id.clone();
         let on_close = on_close.clone();
@@ -99,9 +87,7 @@ pub fn build(
     }
 
     let actions = header.actions.clone();
-    actions.append(&recovery_button);
-    actions.append(&snippet_button);
-    actions.append(&close_button);
+    append_terminal_tile_action_chrome(&actions, &tile_actions);
 
     shell.append(&header.widget);
 

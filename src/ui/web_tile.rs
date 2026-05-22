@@ -14,8 +14,9 @@ use crate::model::preset::ApplicationDensity;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
-    TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS, build_header_icon_button, build_tile_frame,
-    build_tile_header_chrome, build_tile_shell, domain_from_url, make_shrinkable,
+    TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS, append_web_tile_action_chrome, build_tile_frame,
+    build_tile_header_chrome, build_tile_shell, build_web_tile_action_chrome, domain_from_url,
+    make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
 
@@ -68,8 +69,8 @@ pub fn build(
     let title = header.title_label.clone();
     let status = header.status_label.clone();
 
-    let settings_button =
-        build_header_icon_button(icon_name::SETTINGS, "Edit URL and refresh settings");
+    let tile_actions = build_web_tile_action_chrome(can_close);
+    let settings_button = tile_actions.settings_button.clone();
     let settings_popover = gtk::Popover::new();
     settings_popover.add_css_class("web-tile-settings-popover");
     settings_popover.set_autohide(true);
@@ -187,15 +188,7 @@ pub fn build(
         });
     }
 
-    let close_button = build_header_icon_button(
-        icon_name::CLOSE,
-        if can_close {
-            "Close tile"
-        } else {
-            "Cannot close the last tile"
-        },
-    );
-    close_button.set_sensitive(can_close);
+    let close_button = tile_actions.close_button.clone();
     {
         let tile_id = tile.id.clone();
         let on_close = on_close.clone();
@@ -205,8 +198,7 @@ pub fn build(
     }
 
     let actions = header.actions.clone();
-    actions.append(&settings_button);
-    actions.append(&close_button);
+    append_web_tile_action_chrome(&actions, &tile_actions);
 
     shell.append(&header.widget);
 
