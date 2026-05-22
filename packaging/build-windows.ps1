@@ -98,6 +98,17 @@ function Copy-WindowsGtkResources {
     Copy-Item -Path (Join-Path $RootDir "resources\hover-icons\*.svg") -Destination $HoverIconRoot -Force
 }
 
+function Assert-DirectoryHasFiles {
+    param([string]$Path, [string]$Description)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "$Description was not found at $Path"
+    }
+    if (-not (Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "$Description did not contain any files at $Path"
+    }
+}
+
 function Copy-WindowsGtkRuntime {
     param(
         [string]$RuntimeRoot,
@@ -113,8 +124,13 @@ function Copy-WindowsGtkRuntime {
 
     Write-Host "==> bundling GTK/libadwaita runtime from $RuntimeRoot"
     $RuntimeBin = Join-Path $RuntimeRoot "bin"
-    if (Test-Path $RuntimeBin) {
-        Copy-Item -Path (Join-Path $RuntimeBin "*.dll") -Destination $PortableRoot -Force
+    Assert-DirectoryHasFiles -Path $RuntimeBin -Description "GTK runtime bin directory"
+    Copy-Item -Path (Join-Path $RuntimeBin "*.dll") -Destination $PortableRoot -Force
+    if (-not (Get-ChildItem -Path $PortableRoot -Filter "*gtk-4*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "GTK4 runtime DLL was not copied from $RuntimeBin"
+    }
+    if (-not (Get-ChildItem -Path $PortableRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        throw "libadwaita runtime DLL was not copied from $RuntimeBin"
     }
 
     foreach ($relative in @(
@@ -128,21 +144,10 @@ function Copy-WindowsGtkRuntime {
     )) {
         $source = Join-Path $RuntimeRoot $relative
         $destination = Join-Path $PortableRoot $relative
+        Assert-DirectoryHasFiles -Path $source -Description "GTK runtime resource source $relative"
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
-        if (Test-Path $source) {
-            Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        else {
-            Write-Host "==> GTK runtime path $relative was not present in $RuntimeRoot; staging placeholder directory"
-            Set-Content -Path (Join-Path $destination "terminaltiler-keep.txt") -Value "GTK runtime did not provide this optional directory." -Encoding ASCII
-        }
-        # WiX harvests files, not empty directories. Keep a tiny sentinel in
-        # every required GTK resource root so the MSI installs the same
-        # directory contract that the portable zip and NSIS installer preserve.
-        $sentinel = Join-Path $destination "terminaltiler-keep.txt"
-        if (-not (Test-Path $sentinel)) {
-            Set-Content -Path $sentinel -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
-        }
+        Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
+        Assert-DirectoryHasFiles -Path $destination -Description "Staged GTK runtime resource $relative"
     }
 }
 
@@ -184,6 +189,7 @@ function Assert-WindowsStagedPayload {
             "share\themes"
         )) {
             Assert-Path -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
+            Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
         }
     }
 }

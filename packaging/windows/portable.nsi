@@ -29,5 +29,7 @@ Section "Run"
   IfErrors 0 +2
     StrCpy $0 1
 
+  SetOutPath "$TEMP"
+  RMDir /r "$PLUGINSDIR"
   SetErrorLevel $0
 SectionEnd

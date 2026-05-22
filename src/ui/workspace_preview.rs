@@ -1,7 +1,7 @@
 use gtk::pango;
 use gtk::prelude::*;
 
-use crate::model::layout::{LayoutNode, TileKind, TileSpec, normalize_web_url};
+use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, TileKind, TileSpec, normalize_web_url};
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::tile_chrome::{
@@ -241,6 +241,14 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     };
     let frame = build_tile_frame(frame_class);
 
+    let surface = build_tile_surface(tile);
+    frame.append(&surface);
+    shell.append(&frame);
+
+    shell.upcast()
+}
+
+fn build_tile_surface(tile: &TileSpec) -> gtk::Box {
     let surface = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
@@ -251,12 +259,11 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
         .css_classes(["terminal-surface"])
         .build();
     make_shrinkable(&surface);
+
+    let primary = tile_surface_primary(tile);
     surface.append(
         &gtk::Label::builder()
-            .label(match tile.tile_kind {
-                TileKind::Terminal => "$ terminal runtime adapter",
-                TileKind::WebView => "web runtime adapter",
-            })
+            .label(&primary)
             .halign(gtk::Align::Start)
             .valign(gtk::Align::Start)
             .margin_top(12)
@@ -264,19 +271,42 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
             .css_classes(["tile-directory"])
             .build(),
     );
+
+    let detail = tile_surface_detail(tile);
     surface.append(
         &gtk::Label::builder()
-            .label("Windows GTK shell is using the shared Linux workspace layout contract.")
+            .label(&detail)
             .halign(gtk::Align::Start)
             .margin_start(12)
             .wrap(true)
             .css_classes(["tile-meta"])
             .build(),
     );
-    frame.append(&surface);
-    shell.append(&frame);
 
-    shell.upcast()
+    surface
+}
+
+fn tile_surface_primary(tile: &TileSpec) -> String {
+    match tile.tile_kind {
+        TileKind::Terminal => tile
+            .startup_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(|command| format!("$ {command}"))
+            .unwrap_or_else(|| "$ ready".into()),
+        TileKind::WebView => {
+            let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
+            domain_from_url(&url)
+        }
+    }
+}
+
+fn tile_surface_detail(tile: &TileSpec) -> String {
+    match tile.tile_kind {
+        TileKind::Terminal => format!("{} • {}", tile.title, tile.working_directory.short_label()),
+        TileKind::WebView => normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL)),
+    }
 }
 
 fn tile_badge_text(tile: &TileSpec) -> String {

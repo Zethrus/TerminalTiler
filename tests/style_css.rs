@@ -688,6 +688,18 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && !WORKSPACE_PREVIEW_RS.contains("tab.preset.density.label"),
         "Windows GTK workspace preview summary should not keep preview-only description/density chips that are absent from the Linux GTK workspace toolbar"
     );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("fn build_tile_surface(tile: &TileSpec) -> gtk::Box")
+            && WORKSPACE_PREVIEW_RS.contains("fn tile_surface_primary(tile: &TileSpec) -> String")
+            && WORKSPACE_PREVIEW_RS.contains("fn tile_surface_detail(tile: &TileSpec) -> String")
+            && WORKSPACE_PREVIEW_RS.contains("startup_command")
+            && WORKSPACE_PREVIEW_RS.contains("working_directory.short_label()")
+            && WORKSPACE_PREVIEW_RS.contains("DEFAULT_WEB_URL")
+            && !WORKSPACE_PREVIEW_RS.contains("$ terminal runtime adapter")
+            && !WORKSPACE_PREVIEW_RS.contains("web runtime adapter")
+            && !WORKSPACE_PREVIEW_RS.contains("Windows GTK shell is using"),
+        "Windows GTK workspace surfaces should avoid preview-only explanatory copy and instead render pane-specific content with the same terminal-surface classes"
+    );
 
     assert!(
         WINDOW_RS.contains("gtk_shell::DEFAULT_WINDOW_WIDTH")
@@ -733,6 +745,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "TERMINALTILER_GTK_RUNTIME_ROOT",
         "[switch]$UseWin32Shell",
         "$BuildGtkShell = -not $UseWin32Shell",
+        "Assert-DirectoryHasFiles",
         "Assert-WindowsStagedPayload",
         "portable.nsi",
     ] {
@@ -745,16 +758,19 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_BUILD_PS1
             .contains("GTK runtime root is required for the canonical Windows GTK payload")
-            && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build"),
-        "Windows packaging should require a bundled GTK runtime unless the explicit Win32 fallback is selected"
+            && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build")
+            && !WINDOWS_BUILD_PS1.contains("terminaltiler-keep.txt")
+            && !WINDOWS_BUILD_PS1.contains("staging placeholder directory"),
+        "Windows packaging should require a real bundled GTK runtime unless the explicit Win32 fallback is selected"
     );
 
     assert!(
         WINDOWS_PORTABLE_NSI.contains("InitPluginsDir")
             && WINDOWS_PORTABLE_NSI.contains(r#"File /r "${STAGE_DIR}\*""#)
             && WINDOWS_PORTABLE_NSI.contains(r#"ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0"#)
+            && WINDOWS_PORTABLE_NSI.contains(r#"RMDir /r "$PLUGINSDIR""#)
             && WINDOWS_PORTABLE_NSI.contains("SetErrorLevel $0"),
-        "direct portable exe should be a self-extracting launcher for the full staged payload"
+        "direct portable exe should be a self-extracting launcher for the full staged payload and clean its temp extraction root"
     );
 
     assert!(
@@ -790,6 +806,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
             && WINDOWS_SMOKE_PS1.contains("Windows GTK shell restored GTK workspace preview with")
             && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
+            && WINDOWS_SMOKE_PS1.contains("Assert-DirectoryHasFiles")
             && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow")
             && WINDOWS_SMOKE_PS1
                 .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }"),
