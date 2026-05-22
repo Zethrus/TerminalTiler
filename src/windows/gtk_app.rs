@@ -76,6 +76,7 @@ mod imp {
         let asset_store = AssetStore::new();
         asset_store.ensure_seeded();
         let asset_outcome = asset_store.load_assets_with_status();
+        let workspace_assets = asset_outcome.assets.clone();
         let session_store = SessionStore::new();
         let session_outcome = session_store.load_with_status();
         let load_warning = combine_warnings(
@@ -161,6 +162,7 @@ mod imp {
         let launch_preferences = preferences.clone();
         let launch_overlay = overlay.clone();
         let launch_title = title.clone();
+        let launch_assets = workspace_assets.clone();
         let actions = LaunchScreenActions {
             on_theme_preview: Rc::new({
                 let window = window.clone();
@@ -175,6 +177,7 @@ mod imp {
                     &launch_overlay,
                     &launch_title,
                     &launch_preferences,
+                    launch_assets.clone(),
                     preset,
                     workspace_root,
                 );
@@ -211,8 +214,15 @@ mod imp {
             let overlay = overlay.clone();
             let title = title.clone();
             let preferences = preferences.clone();
+            let workspace_assets = workspace_assets.clone();
             gtk::glib::idle_add_local_once(move || {
-                present_workspace_preview_from_restore(&overlay, &title, &preferences, session);
+                present_workspace_preview_from_restore(
+                    &overlay,
+                    &title,
+                    &preferences,
+                    workspace_assets,
+                    session,
+                );
             });
         }
     }
@@ -221,9 +231,10 @@ mod imp {
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
+        assets: crate::model::assets::WorkspaceAssets,
         session: SavedSession,
     ) {
-        present_workspace_preview(overlay, title, session, "restored");
+        present_workspace_preview(overlay, title, session, assets, "restored");
     }
 
     fn present_settings_dialog(
@@ -660,6 +671,7 @@ mod imp {
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
+        assets: crate::model::assets::WorkspaceAssets,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
     ) {
@@ -673,17 +685,19 @@ mod imp {
             active_tab_index: 0,
         };
 
-        present_workspace_preview(overlay, title, session, "opened");
+        present_workspace_preview(overlay, title, session, assets, "opened");
     }
 
     fn present_workspace_preview(
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         session: SavedSession,
+        assets: crate::model::assets::WorkspaceAssets,
         action: &str,
     ) {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
-        let preview = crate::ui::workspace_preview::SessionPreview::new(&session, false);
+        let preview =
+            crate::ui::workspace_preview::SessionPreview::with_assets(&session, false, assets);
         sync_title_tabs_for_session(title, &session, &preview);
         overlay.set_child(Some(&preview.widget()));
         logging::info(format!(

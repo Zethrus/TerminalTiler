@@ -12,12 +12,12 @@ use crate::model::assets::{
 };
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
-use crate::services::launch_resolution::resolve_tile_launch;
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::pane_status::initial_status_snapshot;
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, append_terminal_tile_action_chrome,
     build_terminal_tile_action_chrome, build_tile_frame, build_tile_header_chrome,
@@ -773,23 +773,6 @@ fn execute_snippet(
 fn clear_box(container: &gtk::Box) {
     while let Some(child) = container.first_child() {
         container.remove(&child);
-    }
-}
-
-fn initial_status_snapshot(
-    tile: &TileSpec,
-    workspace_root: &Path,
-    assets: &WorkspaceAssets,
-) -> PaneStatusSnapshot {
-    let connection_label = resolve_tile_launch(tile, workspace_root, assets)
-        .map(|resolved| resolved.connection_label)
-        .unwrap_or_else(|_| "launch-error".into());
-    PaneStatusSnapshot {
-        connection_label,
-        location_label: tile.working_directory.short_label(),
-        shell_label: tile.agent_label.clone(),
-        helper_label: String::new(),
-        helper_severity: None,
     }
 }
 

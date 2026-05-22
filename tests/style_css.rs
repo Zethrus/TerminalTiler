@@ -19,6 +19,7 @@ const PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH: &str =
     include_str!("../packaging/capture-linux-gtk-visuals.sh");
 const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-gtk-visuals.sh");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
+const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
@@ -657,7 +658,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
-            && WINDOWS_GTK_APP_RS.contains("crate::ui::workspace_preview::SessionPreview::new")
+            && WINDOWS_GTK_APP_RS
+                .contains("crate::ui::workspace_preview::SessionPreview::with_assets")
             && WINDOWS_GTK_APP_RS.contains("sync_title_tabs_for_session")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
             && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
@@ -725,16 +727,29 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOW_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
-            && WINDOWS_GTK_APP_RS.contains("SessionPreview::new(&session, false)")
+            && WINDOWS_GTK_APP_RS.contains("SessionPreview::with_assets(&session, false, assets)")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
         "Linux and Windows GTK shells should share the same titlebar tab chrome builder while Windows drives workspace-preview tab switching from the titlebar"
     );
     assert!(
+        UI_MOD_RS.contains("pub(crate) mod pane_status;")
+            && PANE_STATUS_RS.contains("pub(crate) fn initial_status_snapshot")
+            && PANE_STATUS_RS.contains("resolve_tile_launch(tile, workspace_root, assets)")
+            && TILE_VIEW_RS.contains("use crate::ui::pane_status::initial_status_snapshot")
+            && WORKSPACE_PREVIEW_RS.contains("use crate::ui::pane_status::initial_status_snapshot")
+            && WORKSPACE_PREVIEW_RS
+                .contains("initial_status_snapshot(tile, &tab.workspace_root, assets).to_line()")
+            && WINDOWS_GTK_APP_RS.contains("let workspace_assets = asset_outcome.assets.clone()")
+            && WINDOWS_GTK_APP_RS.contains("launch_assets.clone()"),
+        "Windows GTK preview headers should share Linux launch-resolution status text instead of reducing terminal status to only the working-directory label"
+    );
+    assert!(
         WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")
             && WORKSPACE_PREVIEW_RS
                 .contains("for (index, tile) in layout.tile_specs().iter().enumerate()")
-            && WORKSPACE_PREVIEW_RS.contains("slot.append(&build_tile(tile, index == 0))")
+            && WORKSPACE_PREVIEW_RS
+                .contains("slot.append(&build_tile(tile, tab, assets, index == 0))")
             && !source_contains(
                 WORKSPACE_PREVIEW_RS,
                 "LayoutNode::Split {\n            axis,"

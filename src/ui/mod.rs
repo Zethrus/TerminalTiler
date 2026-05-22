@@ -37,6 +37,11 @@ pub mod layout_tree;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod pane_status;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod settings_dialog;
 #[cfg(any(
     target_os = "linux",

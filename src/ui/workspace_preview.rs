@@ -4,9 +4,11 @@ use std::rc::Rc;
 use gtk::pango;
 use gtk::prelude::*;
 
-use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, TileKind, TileSpec, normalize_web_url};
+use crate::model::assets::WorkspaceAssets;
+use crate::model::layout::{DEFAULT_WEB_URL, TileKind, TileSpec, normalize_web_url};
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::pane_status::initial_status_snapshot;
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS,
     append_terminal_tile_action_chrome, append_web_tile_action_chrome,
@@ -36,13 +38,23 @@ pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
 pub struct SessionPreview {
     shell: gtk::Box,
     session: Rc<SavedSession>,
+    assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
 }
 
 impl SessionPreview {
     pub fn new(session: &SavedSession, show_inline_tab_strip: bool) -> Self {
+        Self::with_assets(session, show_inline_tab_strip, WorkspaceAssets::default())
+    }
+
+    pub fn with_assets(
+        session: &SavedSession,
+        show_inline_tab_strip: bool,
+        assets: WorkspaceAssets,
+    ) -> Self {
         let session = Rc::new(session.clone());
+        let assets = Rc::new(assets);
         let active_index = Rc::new(Cell::new(
             session
                 .active_tab_index
@@ -54,6 +66,7 @@ impl SessionPreview {
         let preview = Self {
             shell,
             session,
+            assets,
             active_index,
             show_inline_tab_strip,
         };
@@ -79,6 +92,7 @@ impl SessionPreview {
         render_session_preview(
             &self.shell,
             &self.session,
+            &self.assets,
             &self.active_index,
             self.show_inline_tab_strip,
         );
@@ -88,6 +102,7 @@ impl SessionPreview {
 fn render_session_preview(
     shell: &gtk::Box,
     session: &Rc<SavedSession>,
+    assets: &Rc<WorkspaceAssets>,
     active_index: &Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
 ) {
@@ -103,10 +118,11 @@ fn render_session_preview(
         let on_select = {
             let shell = shell.clone();
             let session = session.clone();
+            let assets = assets.clone();
             let active_index = active_index.clone();
             Rc::new(move |next_index: usize| {
                 active_index.set(next_index.min(session.tabs.len().saturating_sub(1)));
-                render_session_preview(&shell, &session, &active_index, true);
+                render_session_preview(&shell, &session, &assets, &active_index, true);
             })
         };
         shell.append(&build_tab_strip(session, current_index, on_select));
@@ -114,7 +130,7 @@ fn render_session_preview(
 
     if let Some(tab) = active_tab {
         shell.append(&build_workspace_summary(tab));
-        let layout = build_layout(&tab.preset.layout);
+        let layout = build_layout(tab, assets);
         let alert_sidebar = build_workspace_alert_sidebar_chrome(false);
         let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
         shell.append(&build_workspace_content_chrome(&layout, &alert_revealer));
@@ -224,18 +240,24 @@ fn saved_groups(tab: &SavedTab) -> Vec<String> {
     groups
 }
 
-fn build_layout(layout: &LayoutNode) -> gtk::Widget {
+fn build_layout(tab: &SavedTab, assets: &WorkspaceAssets) -> gtk::Widget {
+    let layout = &tab.preset.layout;
     let shell = crate::ui::layout_tree::build(layout, None);
     for (index, tile) in layout.tile_specs().iter().enumerate() {
         let Some(slot) = shell.slots.get(index) else {
             continue;
         };
-        slot.append(&build_tile(tile, index == 0));
+        slot.append(&build_tile(tile, tab, assets, index == 0));
     }
     shell.widget
 }
 
-fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
+fn build_tile(
+    tile: &TileSpec,
+    tab: &SavedTab,
+    assets: &WorkspaceAssets,
+    active: bool,
+) -> gtk::Widget {
     let shell = build_tile_shell(tile);
     if active {
         shell.add_css_class("is-active-tile");
@@ -245,7 +267,7 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     let badge_tooltip = tile_badge_tooltip(tile);
     let (status_text, status_tooltip) = match tile.tile_kind {
         TileKind::Terminal => {
-            let label = tile.working_directory.short_label();
+            let label = initial_status_snapshot(tile, &tab.workspace_root, assets).to_line();
             (label.clone(), label)
         }
         TileKind::WebView => {
