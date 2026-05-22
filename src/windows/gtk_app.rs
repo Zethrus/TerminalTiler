@@ -87,7 +87,6 @@ mod imp {
         let app_header = build_app_header_chrome();
         let header = app_header.header;
         let title = app_header.title;
-        title.add_button.set_sensitive(false);
 
         let overlay = adw::ToastOverlay::new();
         let titlebar_actions = build_main_titlebar_actions(&header, false);
@@ -150,15 +149,7 @@ mod imp {
             });
         }
 
-        sync_windows_title_tabs(
-            &title,
-            vec![WindowsTitleTab {
-                label: "Workspace 1".into(),
-                tooltip: "Launch deck".into(),
-                active: true,
-                on_select: None,
-            }],
-        );
+        sync_windows_title_tabs(&title, launch_deck_title_tabs());
 
         let launch_preferences = preferences.clone();
         let launch_overlay = overlay.clone();
@@ -211,19 +202,20 @@ mod imp {
             let title = title.clone();
             let launch = launch.clone();
             let back_button_for_click = back_button.clone();
-            back_button.connect_clicked(move |_| {
-                sync_windows_title_tabs(
-                    &title,
-                    vec![WindowsTitleTab {
-                        label: "Workspace 1".into(),
-                        tooltip: "Launch deck".into(),
-                        active: true,
-                        on_select: None,
-                    }],
-                );
+            let show_launch_deck = Rc::new(move || {
+                sync_windows_title_tabs(&title, launch_deck_title_tabs());
                 overlay.set_child(Some(&launch));
                 back_button_for_click.set_visible(false);
                 logging::info("Windows GTK shell returned to launch deck");
+            });
+            {
+                let show_launch_deck = show_launch_deck.clone();
+                back_button.connect_clicked(move |_| {
+                    show_launch_deck();
+                });
+            }
+            title.add_button.connect_clicked(move |_| {
+                show_launch_deck();
             });
         }
         overlay.set_child(Some(&launch));
@@ -742,6 +734,15 @@ mod imp {
         tooltip: String,
         active: bool,
         on_select: Option<Rc<dyn Fn()>>,
+    }
+
+    fn launch_deck_title_tabs() -> Vec<WindowsTitleTab> {
+        vec![WindowsTitleTab {
+            label: "Workspace 1".into(),
+            tooltip: "Launch deck".into(),
+            active: true,
+            on_select: None,
+        }]
     }
 
     fn sync_title_tabs_for_session(
