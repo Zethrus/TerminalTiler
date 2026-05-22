@@ -25,6 +25,21 @@ pub(crate) struct WorkspaceSummaryChrome {
     pub(crate) path_label: gtk::Label,
 }
 
+pub(crate) fn build_workspace_shell_chrome() -> gtk::Box {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(4)
+        .margin_end(4)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    make_shrinkable(&shell);
+    shell
+}
+
 pub(crate) fn build_workspace_content_chrome(
     layout_host: &impl glib::object::IsA<gtk::Widget>,
     alert_revealer: &impl glib::object::IsA<gtk::Widget>,

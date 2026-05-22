@@ -743,15 +743,19 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
     assert!(
         WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_content_chrome")
+            && WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_shell_chrome")
             && WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_alert_revealer")
             && WORKSPACE_CHROME_RS.contains("gtk::Orientation::Horizontal")
             && WORKSPACE_CHROME_RS.contains("gtk::RevealerTransitionType::SlideLeft")
+            && WORKSPACE_CHROME_RS.contains(".margin_top(4)")
+            && WORKSPACE_VIEW_RS.contains("build_workspace_shell_chrome")
             && WORKSPACE_VIEW_RS.contains("build_workspace_content_chrome")
             && WORKSPACE_VIEW_RS.contains("build_workspace_alert_revealer")
+            && WORKSPACE_PREVIEW_RS.contains("build_workspace_shell_chrome")
             && WORKSPACE_PREVIEW_RS.contains("build_workspace_content_chrome")
             && WORKSPACE_PREVIEW_RS.contains("build_workspace_alert_revealer")
             && WORKSPACE_PREVIEW_RS.contains("build_preview_alert_sidebar"),
-        "Windows GTK workspace preview should share the Linux workspace content/alert revealer structure instead of appending layout directly"
+        "Windows GTK workspace preview should share the Linux workspace shell/content/alert revealer structure instead of appending layout directly"
     );
     assert!(
         !WORKSPACE_PREVIEW_RS.contains("tab.preset.description")

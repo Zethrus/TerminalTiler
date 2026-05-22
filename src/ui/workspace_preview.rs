@@ -15,7 +15,7 @@ use crate::ui::tile_chrome::{
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
-    build_workspace_summary_chrome,
+    build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
@@ -48,17 +48,7 @@ impl SessionPreview {
                 .min(session.tabs.len().saturating_sub(1)),
         ));
 
-        let shell = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
-            .hexpand(true)
-            .vexpand(true)
-            .build();
-        make_shrinkable(&shell);
+        let shell = build_workspace_shell_chrome();
 
         let preview = Self {
             shell,

@@ -23,7 +23,7 @@ use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
-    build_workspace_summary_chrome,
+    build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 use crate::ui::{layout_tree, tile_view, web_tile};
 
@@ -932,14 +932,7 @@ pub fn build_with_layout_change_handler(
 ) -> WorkspaceView {
     let layout_state = Rc::new(RefCell::new(preset.layout.clone()));
 
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
-        .build();
+    let shell = build_workspace_shell_chrome();
 
     let summary = build_workspace_summary_chrome(WorkspaceSummaryInput {
         name: &preset.name,
