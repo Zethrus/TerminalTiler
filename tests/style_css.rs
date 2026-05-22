@@ -803,8 +803,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && TILE_CHROME_RS.contains("tile-snippet-action")
             && TILE_CHROME_RS.contains("\"Edit URL and refresh settings\"")
             && source_contains(TILE_CHROME_RS, "actions.append(&status_label);",)
-            && WORKSPACE_PREVIEW_RS.contains("build_terminal_tile_action_chrome(false)")
-            && WORKSPACE_PREVIEW_RS.contains("build_web_tile_action_chrome(false)")
+            && WORKSPACE_PREVIEW_RS.contains("build_terminal_tile_action_chrome(true)")
+            && WORKSPACE_PREVIEW_RS.contains("build_web_tile_action_chrome(true)")
             && TILE_VIEW_RS.contains("build_terminal_tile_action_chrome(can_close)")
             && WEB_TILE_RS.contains("build_web_tile_action_chrome(can_close)")
             && source_contains(
@@ -816,6 +816,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
                 "actions.append(&chrome.settings_button);\n    actions.append(&chrome.close_button);"
             ),
         "Windows GTK preview tile headers should share the Linux header action order and controls for terminal and web tiles"
+    );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("close_tab_in_preview_state")
+            && WORKSPACE_PREVIEW_RS.contains("chrome.close_button.connect_clicked")
+            && !WORKSPACE_PREVIEW_RS.contains("chrome.close_button.set_sensitive(false)")
+            && !WORKSPACE_PREVIEW_RS.contains("add_button.set_sensitive(false)")
+            && !WORKSPACE_PREVIEW_RS.contains("tile_actions.snippet_button.set_sensitive(false)")
+            && !WORKSPACE_PREVIEW_RS.contains("tile_actions.settings_button.set_sensitive(false)"),
+        "Windows GTK preview should keep shared controls visually live and wire tab close through preview state instead of rendering disabled chrome"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("build_tile_header_chrome")
@@ -852,7 +861,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         source_contains(
             WORKSPACE_CHROME_RS,
             "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
-        ) && WORKSPACE_PREVIEW_RS.contains("controls_sensitive: false")
+        ) && WORKSPACE_PREVIEW_RS.contains("controls_sensitive: true")
             && WORKSPACE_VIEW_RS.contains("controls_sensitive: true"),
         "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces via shared chrome"
     );
@@ -872,7 +881,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_VIEW_RS.contains("build_workspace_content_chrome")
             && WORKSPACE_VIEW_RS.contains("build_workspace_alert_revealer")
             && WORKSPACE_PREVIEW_RS.contains("build_workspace_shell_chrome")
-            && WORKSPACE_PREVIEW_RS.contains("build_workspace_alert_sidebar_chrome(false)")
+            && WORKSPACE_PREVIEW_RS.contains("build_workspace_alert_sidebar_chrome(true)")
             && WORKSPACE_PREVIEW_RS.contains("build_workspace_content_chrome")
             && WORKSPACE_PREVIEW_RS.contains("build_workspace_alert_revealer"),
         "Windows GTK workspace preview should share the Linux workspace shell/content/alert sidebar/revealer structure instead of appending layout directly"
@@ -1015,6 +1024,10 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
                 && workflow.contains("windows-smoke-test.ps1")
                 && workflow.contains("-UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild"),
             "release/package workflows should publish only GTK/libadwaita parity Windows artifacts by default"
+        );
+        assert!(
+            !workflow.contains("-UseWin32Shell"),
+            "release/package workflows must not publish the explicit Win32 fallback path"
         );
     }
 

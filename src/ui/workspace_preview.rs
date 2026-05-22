@@ -99,31 +99,12 @@ impl SessionPreview {
     }
 
     pub fn close_tab(&self, index: usize) -> bool {
-        let mut session = self.session.borrow_mut();
-        if session.tabs.is_empty() {
-            return false;
-        }
-
-        let removed_index = index.min(session.tabs.len() - 1);
-        session.tabs.remove(removed_index);
-        let next_index = if session.tabs.is_empty() {
-            0
+        if close_tab_in_preview_state(&self.session, &self.active_index, index) {
+            self.render();
+            true
         } else {
-            let active_index = self.active_index.get();
-            if active_index == removed_index {
-                removed_index.min(session.tabs.len() - 1)
-            } else if active_index > removed_index {
-                active_index - 1
-            } else {
-                active_index.min(session.tabs.len() - 1)
-            }
-        };
-        session.active_tab_index = next_index;
-        self.active_index.set(next_index);
-        drop(session);
-
-        self.render();
-        true
+            false
+        }
     }
 
     fn render(&self) {
@@ -135,6 +116,35 @@ impl SessionPreview {
             self.show_inline_tab_strip,
         );
     }
+}
+
+fn close_tab_in_preview_state(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    index: usize,
+) -> bool {
+    let mut session = session.borrow_mut();
+    if session.tabs.is_empty() {
+        return false;
+    }
+
+    let removed_index = index.min(session.tabs.len() - 1);
+    session.tabs.remove(removed_index);
+    let next_index = if session.tabs.is_empty() {
+        0
+    } else {
+        let current_active_index = active_index.get();
+        if current_active_index == removed_index {
+            removed_index.min(session.tabs.len() - 1)
+        } else if current_active_index > removed_index {
+            current_active_index - 1
+        } else {
+            current_active_index.min(session.tabs.len() - 1)
+        }
+    };
+    session.active_tab_index = next_index;
+    active_index.set(next_index);
+    true
 }
 
 fn render_session_preview(
@@ -155,6 +165,17 @@ fn render_session_preview(
     active_index.set(current_index);
 
     if show_inline_tab_strip && !session_ref.tabs.is_empty() {
+        let on_close = {
+            let shell = shell.clone();
+            let session = session.clone();
+            let assets = assets.clone();
+            let active_index = active_index.clone();
+            Rc::new(move |index: usize| {
+                if close_tab_in_preview_state(&session, &active_index, index) {
+                    render_session_preview(&shell, &session, &assets, &active_index, true);
+                }
+            })
+        };
         let on_select = {
             let shell = shell.clone();
             let session = session.clone();
@@ -170,13 +191,18 @@ fn render_session_preview(
                 render_session_preview(&shell, &session, &assets, &active_index, true);
             })
         };
-        shell.append(&build_tab_strip(&session_ref, current_index, on_select));
+        shell.append(&build_tab_strip(
+            &session_ref,
+            current_index,
+            on_select,
+            on_close,
+        ));
     }
 
     if let Some(tab) = session_ref.tabs.get(current_index) {
         shell.append(&build_workspace_summary(tab));
         let layout = build_layout(tab, assets);
-        let alert_sidebar = build_workspace_alert_sidebar_chrome(false);
+        let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
         let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
         shell.append(&build_workspace_content_chrome(&layout, &alert_revealer));
     } else {
@@ -197,6 +223,7 @@ fn build_tab_strip(
     session: &SavedSession,
     active_index: usize,
     on_select: Rc<dyn Fn(usize)>,
+    on_close: Rc<dyn Fn(usize)>,
 ) -> gtk::Widget {
     let strip = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -212,6 +239,7 @@ fn build_tab_strip(
             index,
             index == active_index,
             on_select.clone(),
+            on_close.clone(),
         ));
     }
 
@@ -220,7 +248,6 @@ fn build_tab_strip(
         "New workspace tab",
         &["flat", "app-tab-add"],
     );
-    add_button.set_sensitive(false);
     strip.append(&add_button);
 
     strip.upcast()
@@ -231,6 +258,7 @@ fn build_tab_chip(
     index: usize,
     active: bool,
     on_select: Rc<dyn Fn(usize)>,
+    on_close: Rc<dyn Fn(usize)>,
 ) -> gtk::Widget {
     let chrome = build_title_tab_chrome();
     let shell = chrome.shell;
@@ -252,7 +280,9 @@ fn build_tab_chip(
         });
     }
 
-    chrome.close_button.set_sensitive(false);
+    chrome.close_button.connect_clicked(move |_| {
+        on_close(index);
+    });
 
     shell.upcast()
 }
@@ -262,7 +292,7 @@ fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
         name: &tab.preset.name,
         path: tab.workspace_root.display().to_string(),
         pane_groups: saved_groups(tab),
-        controls_sensitive: false,
+        controls_sensitive: true,
     })
     .widget
 }
@@ -339,13 +369,11 @@ fn build_tile(
     let actions = header.actions.clone();
     match tile.tile_kind {
         TileKind::Terminal => {
-            let tile_actions = build_terminal_tile_action_chrome(false);
-            tile_actions.snippet_button.set_sensitive(false);
+            let tile_actions = build_terminal_tile_action_chrome(true);
             append_terminal_tile_action_chrome(&actions, &tile_actions);
         }
         TileKind::WebView => {
-            let tile_actions = build_web_tile_action_chrome(false);
-            tile_actions.settings_button.set_sensitive(false);
+            let tile_actions = build_web_tile_action_chrome(true);
             append_web_tile_action_chrome(&actions, &tile_actions);
         }
     }
