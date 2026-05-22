@@ -12,6 +12,7 @@ use crate::ui::tile_chrome::{
     build_header_icon_button, build_tile_frame, build_tile_header_chrome, build_tile_shell,
     domain_from_url, make_shrinkable,
 };
+use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
     build_workspace_summary_chrome,
@@ -178,58 +179,31 @@ fn build_tab_chip(
     active: bool,
     on_select: Rc<dyn Fn(usize)>,
 ) -> gtk::Widget {
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .valign(gtk::Align::End)
-        .css_classes(["app-tab-shell"])
-        .build();
+    let chrome = build_title_tab_chrome();
+    let shell = chrome.shell;
+    shell.set_valign(gtk::Align::End);
+    shell.remove_css_class("is-inactive");
+    shell.remove_css_class("is-active");
     shell.add_css_class(if active { "is-active" } else { "is-inactive" });
 
-    let select = gtk::Button::builder()
-        .css_classes(["app-tab-select"])
-        .focus_on_click(false)
-        .build();
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .valign(gtk::Align::Center)
-        .build();
-    content.append(
-        &gtk::Image::builder()
-            .icon_name(icon_name::TERMINAL)
-            .css_classes(["app-tab-icon"])
-            .build(),
-    );
     let title = tab
         .custom_title
         .as_deref()
         .unwrap_or(tab.preset.name.as_str());
-    let title_label = gtk::Label::builder()
-        .label(title)
-        .ellipsize(pango::EllipsizeMode::End)
-        .css_classes(["app-tab-title"])
-        .build();
-    title_label.set_tooltip_text(Some(title));
-    content.append(&title_label);
-    content.append(
-        &gtk::Label::builder()
-            .label(tab.preset.layout.tile_specs().len().to_string())
-            .css_classes(["app-tab-badge"])
-            .build(),
-    );
-    select.set_child(Some(&content));
+    chrome.title_label.set_label(title);
+    chrome.title_label.set_tooltip_text(Some(title));
+    chrome
+        .badge_label
+        .set_label(&tab.preset.layout.tile_specs().len().to_string());
+    chrome.badge_label.set_visible(true);
     {
         let on_select = on_select.clone();
-        select.connect_clicked(move |_| {
+        chrome.select_button.connect_clicked(move |_| {
             on_select(index);
         });
     }
-    shell.append(&select);
 
-    let close = icons::icon_button(icon_name::CLOSE, "Close tab", &["flat", "app-tab-close"]);
-    close.set_sensitive(false);
-    shell.append(&close);
+    chrome.close_button.set_sensitive(false);
 
     shell.upcast()
 }

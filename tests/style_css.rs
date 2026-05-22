@@ -615,7 +615,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         WORKSPACE_PREVIEW_RS.contains("workspace-summary")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-strip")
-            && WORKSPACE_PREVIEW_RS.contains("app-tab-shell")
+            && TITLE_CHROME_RS.contains("app-tab-shell")
             && WORKSPACE_PREVIEW_RS.contains("fn render_session_preview")
             && WORKSPACE_PREVIEW_RS.contains("Rc<Cell<usize>>")
             && WORKSPACE_PREVIEW_RS.contains("build_tile_shell")
@@ -629,14 +629,16 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview should reuse the same visible workspace classes as the Linux GTK workspace shell"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("select.connect_clicked")
+        WORKSPACE_PREVIEW_RS.contains("build_title_tab_chrome")
+            && WORKSPACE_PREVIEW_RS.contains("chrome.select_button.connect_clicked")
+            && WORKSPACE_PREVIEW_RS.contains("chrome.badge_label.set_visible(true)")
             && WORKSPACE_PREVIEW_RS.contains("pub struct SessionPreview")
             && WORKSPACE_PREVIEW_RS.contains("pub fn select_tab(&self, next_index: usize)")
             && WORKSPACE_PREVIEW_RS.contains("show_inline_tab_strip")
             && WORKSPACE_PREVIEW_RS.contains("while let Some(child) = shell.first_child()")
             && WORKSPACE_PREVIEW_RS.contains("shell.remove(&child)")
             && !WORKSPACE_PREVIEW_RS.contains("select.set_sensitive(false)"),
-        "Windows GTK workspace preview tabs should switch active restored tabs instead of rendering the Linux-style tab selector as disabled chrome"
+        "Windows GTK workspace preview tabs should switch active restored tabs through the shared title tab chrome instead of rendering disabled or duplicated tab chrome"
     );
     assert!(
         TITLE_CHROME_RS.contains("app-tab-strip")
