@@ -129,7 +129,8 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
         WINDOW_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOW_RS.contains("build_main_titlebar_actions(&header")
-            && WINDOWS_GTK_APP_RS.contains("build_main_titlebar_actions(&header, false)")
+            && WINDOWS_GTK_APP_RS
+                .contains("build_main_titlebar_actions(&header, options.companion.is_some())")
             && WINDOW_RS.contains("build_window_shell()")
             && WINDOWS_GTK_APP_RS.contains("build_window_shell()")
             && !WINDOWS_GTK_APP_RS.contains("HeaderBar::builder()")
@@ -138,6 +139,14 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && !WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
             && !WINDOWS_GTK_APP_RS.contains("title.root.add_css_class(\"app-title-handle\")"),
         "Windows GTK should reuse the same main shell chrome/actions as Linux rather than carrying parallel titlebar construction"
+    );
+    assert!(
+        UI_MOD_RS.contains("pub mod companion_dialog;")
+            && UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
+            && WINDOWS_GTK_APP_RS.contains("companion_button = titlebar_actions.companion_button")
+            && WINDOWS_GTK_APP_RS.contains("options.companion.as_ref()")
+            && WINDOWS_GTK_APP_RS.contains("companion_dialog::present(&window, companion.clone())"),
+        "Windows GTK should expose the same shared Account / Sync companion titlebar action as Linux when an integration is provided"
     );
 }
 

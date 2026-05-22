@@ -22,7 +22,7 @@ mod imp {
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, build_title_tab_chrome};
-    use crate::ui::{assets_manager, settings_dialog};
+    use crate::ui::{assets_manager, companion_dialog, settings_dialog};
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
@@ -89,9 +89,10 @@ mod imp {
         let title = app_header.title;
 
         let overlay = adw::ToastOverlay::new();
-        let titlebar_actions = build_main_titlebar_actions(&header, false);
+        let titlebar_actions = build_main_titlebar_actions(&header, options.companion.is_some());
         let back_button = titlebar_actions.back_button;
         let settings_button = titlebar_actions.settings_button;
+        let companion_button = titlebar_actions.companion_button;
         let assets_button = titlebar_actions.assets_button;
 
         let window_shell = build_window_shell();
@@ -146,6 +147,16 @@ mod imp {
             let asset_store = asset_store.clone();
             assets_button.connect_clicked(move |_| {
                 present_assets_manager(&window, &overlay, asset_store.clone());
+            });
+        }
+
+        if let (Some(button), Some(companion)) =
+            (companion_button.as_ref(), options.companion.as_ref())
+        {
+            let window = window.clone();
+            let companion = companion.clone();
+            button.connect_clicked(move |_| {
+                companion_dialog::present(&window, companion.clone());
             });
         }
 

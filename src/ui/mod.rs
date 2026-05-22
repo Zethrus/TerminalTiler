@@ -17,7 +17,10 @@ pub(crate) mod appearance;
 pub mod assets_manager;
 #[cfg(target_os = "linux")]
 pub mod command_palette;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod companion_dialog;
 #[cfg(target_os = "linux")]
 pub(crate) mod context_menu;
