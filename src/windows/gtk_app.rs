@@ -3,6 +3,8 @@ mod imp {
     use std::path::PathBuf;
     use std::process::ExitCode;
     use std::rc::Rc;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use adw::prelude::*;
     use gtk::gio;
@@ -22,6 +24,8 @@ mod imp {
     use crate::ui::{assets_manager, settings_dialog};
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
+    use crate::voice::engine::{self, VoiceEngineEvent};
+    use crate::voice::pack::{self, VoicePackHealth};
 
     const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
 
@@ -124,12 +128,24 @@ mod imp {
         apply_theme_mode(&window, preferences.default_theme);
         apply_window_density(&window, preferences.default_density);
 
+        let (voice_toast_tx, voice_toast_rx) = mpsc::channel::<String>();
+        {
+            let overlay = overlay.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(120), move || {
+                while let Ok(message) = voice_toast_rx.try_recv() {
+                    overlay.add_toast(adw::Toast::new(&message));
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+
         {
             let window = window.clone();
             let overlay = overlay.clone();
             let preference_store = preference_store.clone();
             let preset_store = preset_store.clone();
             let options = options.clone();
+            let voice_toast_tx = voice_toast_tx.clone();
             settings_button.connect_clicked(move |_| {
                 present_settings_dialog(
                     &window,
@@ -137,6 +153,7 @@ mod imp {
                     preference_store.clone(),
                     preset_store.clone(),
                     options.clone(),
+                    voice_toast_tx.clone(),
                 );
             });
         }
@@ -234,6 +251,7 @@ mod imp {
         preference_store: PreferenceStore,
         preset_store: PresetStore,
         options: RuntimeOptions,
+        voice_toast_tx: mpsc::Sender<String>,
     ) {
         let preferences = preference_store.load();
         settings_dialog::present(
@@ -326,10 +344,15 @@ mod imp {
                 }),
                 on_voice_pack_install_requested: Rc::new({
                     let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    let voice_toast_tx = voice_toast_tx.clone();
                     move || {
-                        overlay.add_toast(adw::Toast::new(
-                            "Windows GTK voice pack installation will be enabled after runtime parity work",
-                        ));
+                        overlay
+                            .add_toast(adw::Toast::new("Installing NVIDIA Parakeet voice pack…"));
+                        install_windows_voice_pack(
+                            preference_store.clone(),
+                            voice_toast_tx.clone(),
+                        );
                     }
                 }),
                 voice_pack_status_provider: Rc::new({
@@ -338,18 +361,23 @@ mod imp {
                 }),
                 on_voice_pack_delete_requested: Rc::new({
                     let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    let voice_toast_tx = voice_toast_tx.clone();
                     move || {
-                        overlay.add_toast(adw::Toast::new(
-                            "Windows GTK voice pack deletion will be enabled after runtime parity work",
-                        ));
+                        overlay.add_toast(adw::Toast::new("Deleting NVIDIA Parakeet voice pack…"));
+                        delete_windows_voice_pack(preference_store.clone(), voice_toast_tx.clone());
                     }
                 }),
                 on_voice_pack_health_check_requested: Rc::new({
                     let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    let voice_toast_tx = voice_toast_tx.clone();
                     move || {
-                        overlay.add_toast(adw::Toast::new(
-                            "Windows GTK voice pack health checks will be enabled after runtime parity work",
-                        ));
+                        overlay.add_toast(adw::Toast::new("Checking NVIDIA Parakeet runtime…"));
+                        check_windows_voice_pack_health(
+                            preference_store.clone(),
+                            voice_toast_tx.clone(),
+                        );
                     }
                 }),
                 on_open_logs_folder: Rc::new({
@@ -391,6 +419,205 @@ mod imp {
                 }),
             },
         );
+    }
+
+    fn install_windows_voice_pack(
+        preference_store: PreferenceStore,
+        voice_toast_tx: mpsc::Sender<String>,
+    ) {
+        let Some(root) = pack::default_voice_pack_dir() else {
+            let _ = voice_toast_tx.send("Could not resolve application data directory".into());
+            return;
+        };
+
+        let mut preferences = preference_store.load();
+        preferences.voice.pack_status = VoicePackStatus::Downloading { percent: 1 };
+        preference_store.save(&preferences);
+
+        std::thread::spawn(move || match pack::install_builtin_parakeet_pack(&root) {
+            Ok(manifest) => {
+                save_voice_pack_download_progress(&preference_store, 40);
+                match pack::prepare_python_environment_with_progress(&root, &manifest, |percent| {
+                    save_voice_pack_download_progress(&preference_store, percent)
+                }) {
+                    Ok(_) => {
+                        save_voice_pack_download_progress(&preference_store, 80);
+                        match verify_voice_pack_runtime(&preference_store, &root, &manifest) {
+                            Ok(detail) => {
+                                let mut preferences = preference_store.load();
+                                preferences.voice.pack_status = VoicePackStatus::Installed {
+                                    version: manifest.version.clone(),
+                                };
+                                preference_store.save(&preferences);
+                                logging::info(format!(
+                                    "installed bundled NVIDIA Parakeet voice pack id={} version={} root={} health={}",
+                                    manifest.id,
+                                    manifest.version,
+                                    root.display(),
+                                    detail
+                                ));
+                                let _ = voice_toast_tx
+                                    .send("NVIDIA Parakeet voice pack installed".into());
+                            }
+                            Err(message) => {
+                                save_voice_pack_error(&preference_store, &message);
+                                let _ = voice_toast_tx
+                                    .send("Voice pack installed, but verification failed".into());
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let message = format!("{error:?}");
+                        save_voice_pack_error(&preference_store, &message);
+                        logging::error(format!(
+                            "failed to prepare NVIDIA Parakeet Python environment: {error:?}"
+                        ));
+                        let _ = voice_toast_tx
+                            .send("Voice pack installed, but Python dependencies failed".into());
+                    }
+                }
+            }
+            Err(error) => {
+                let message = format!("{error:?}");
+                save_voice_pack_error(&preference_store, &message);
+                logging::error(format!(
+                    "failed to install bundled NVIDIA Parakeet voice pack: {error:?}"
+                ));
+                let _ = voice_toast_tx.send("Failed to install NVIDIA Parakeet voice pack".into());
+            }
+        });
+    }
+
+    fn delete_windows_voice_pack(
+        preference_store: PreferenceStore,
+        voice_toast_tx: mpsc::Sender<String>,
+    ) {
+        let Some(root) = pack::default_voice_pack_dir() else {
+            let _ = voice_toast_tx.send("Could not resolve application data directory".into());
+            return;
+        };
+        let manifest = pack::builtin_parakeet_manifest();
+
+        std::thread::spawn(move || match pack::delete_pack(&root, &manifest) {
+            Ok(_) => {
+                let mut preferences = preference_store.load();
+                preferences.voice.pack_status = VoicePackStatus::NotInstalled;
+                preference_store.save(&preferences);
+                logging::info(format!(
+                    "deleted NVIDIA Parakeet voice pack id={} version={} root={}",
+                    manifest.id,
+                    manifest.version,
+                    root.display()
+                ));
+                let _ = voice_toast_tx.send("NVIDIA Parakeet voice pack deleted".into());
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "failed to delete NVIDIA Parakeet voice pack: {error:?}"
+                ));
+                let _ = voice_toast_tx.send("Failed to delete NVIDIA Parakeet voice pack".into());
+            }
+        });
+    }
+
+    fn check_windows_voice_pack_health(
+        preference_store: PreferenceStore,
+        voice_toast_tx: mpsc::Sender<String>,
+    ) {
+        let Some(root) = pack::default_voice_pack_dir() else {
+            let _ = voice_toast_tx.send("Could not resolve application data directory".into());
+            return;
+        };
+        let manifest = pack::builtin_parakeet_manifest();
+
+        std::thread::spawn(move || {
+            let toast = match refresh_builtin_voice_pack_assets_for_runtime(&root) {
+                Ok(()) => match verify_voice_pack_runtime(&preference_store, &root, &manifest) {
+                    Ok(detail) => {
+                        logging::info(format!(
+                            "NVIDIA Parakeet runtime health check passed id={} version={} root={} detail={}",
+                            manifest.id,
+                            manifest.version,
+                            root.display(),
+                            detail
+                        ));
+                        "NVIDIA Parakeet runtime is healthy".to_string()
+                    }
+                    Err(message) => {
+                        logging::error(format!(
+                            "NVIDIA Parakeet runtime health check failed: {message}"
+                        ));
+                        message
+                    }
+                },
+                Err(detail) => {
+                    logging::error(format!(
+                        "NVIDIA Parakeet voice pack refresh failed before health check: {detail}"
+                    ));
+                    "NVIDIA Parakeet voice pack refresh failed".to_string()
+                }
+            };
+            let _ = voice_toast_tx.send(toast);
+        });
+    }
+
+    fn verify_voice_pack_runtime(
+        preference_store: &PreferenceStore,
+        root: &std::path::Path,
+        manifest: &pack::VoicePackManifest,
+    ) -> Result<String, String> {
+        match pack::health_check(root, manifest) {
+            health @ VoicePackHealth::Ready { .. } => {
+                let engine_mode = preference_store.load().voice.engine_mode;
+                match engine::run_voice_engine_health_check(manifest, health, engine_mode) {
+                    Ok(VoiceEngineEvent::Health { ok: true, detail }) => Ok(detail),
+                    Ok(VoiceEngineEvent::Health { detail, .. })
+                    | Ok(VoiceEngineEvent::Error(detail)) => Err(detail),
+                    Ok(other) => Err(format!("inconclusive health check: {other:?}")),
+                    Err(error) => Err(format!("failed to run health check: {error}")),
+                }
+            }
+            VoicePackHealth::Missing => Err("NVIDIA Parakeet voice pack is not installed".into()),
+            VoicePackHealth::Broken(message) => Err(format!(
+                "NVIDIA Parakeet voice pack is incomplete: {message}"
+            )),
+        }
+    }
+
+    fn refresh_builtin_voice_pack_assets_for_runtime(root: &std::path::Path) -> Result<(), String> {
+        match pack::refresh_builtin_parakeet_pack_assets(root) {
+            Ok(Some(manifest)) => {
+                logging::info(format!(
+                    "refreshed bundled NVIDIA Parakeet voice pack assets id={} version={}",
+                    manifest.id, manifest.version
+                ));
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(format!("{error:?}")),
+        }
+    }
+
+    fn save_voice_pack_download_progress(preference_store: &PreferenceStore, percent: u8) {
+        let mut preferences = preference_store.load();
+        if matches!(
+            preferences.voice.pack_status,
+            VoicePackStatus::Installed { .. } | VoicePackStatus::Error { .. }
+        ) {
+            return;
+        }
+        preferences.voice.pack_status = VoicePackStatus::Downloading {
+            percent: percent.clamp(1, 99),
+        };
+        preference_store.save(&preferences);
+    }
+
+    fn save_voice_pack_error(preference_store: &PreferenceStore, message: &str) {
+        let mut preferences = preference_store.load();
+        preferences.voice.pack_status = VoicePackStatus::Error {
+            message: message.to_string(),
+        };
+        preference_store.save(&preferences);
     }
 
     fn present_assets_manager(
