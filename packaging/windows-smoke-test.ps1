@@ -76,7 +76,6 @@ function Assert-WindowsGtkRuntimePayload {
     foreach ($relative in @(
         "etc",
         "lib\gdk-pixbuf-2.0",
-        "lib\gtk-4.0",
         "share\glib-2.0",
         "share\icons",
         "share\themes"
@@ -84,6 +83,7 @@ function Assert-WindowsGtkRuntimePayload {
         Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative) -Description "GTK runtime resource $relative"
     }
     Assert-Path -Path (Join-Path $PayloadRoot "lib\gio") -Description "GTK runtime resource lib\gio"
+    Assert-Path -Path (Join-Path $PayloadRoot "lib\gtk-4.0") -Description "GTK runtime resource lib\gtk-4.0"
 }
 
 function Convert-ToTomlPath {

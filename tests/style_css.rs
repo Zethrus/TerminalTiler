@@ -1001,11 +1001,16 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_BUILD_PS1
                 .contains("Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative)")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gio\"; AllowEmpty = $true }")
+            && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gtk-4.0\"; AllowEmpty = $true }")
+            && WINDOWS_BUILD_PS1.contains("retaining empty payload directory")
             && WINDOWS_BUILD_PS1
                 .contains("Assert-DirectoryExists -Path (Join-Path $PortableRoot \"lib\\gio\")")
+            && WINDOWS_BUILD_PS1.contains(
+                "Assert-DirectoryExists -Path (Join-Path $PortableRoot \"lib\\gtk-4.0\")"
+            )
             && !WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
             && !WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
-        "Windows packaging should require real GTK runtime/resource payload directories before building release artifacts while allowing legitimately empty GIO module dirs"
+        "Windows packaging should require real GTK runtime/resource payload directories before building release artifacts while allowing legitimately empty/missing optional module dirs"
     );
 
     assert!(
@@ -1050,8 +1055,10 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1
                 .contains("Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative)")
             && WINDOWS_SMOKE_PS1
-                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gio\")"),
-        "Windows smoke test should verify GTK runtime/resource directories are populated where gvsbuild ships files and present for optional GIO modules"
+                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gio\")")
+            && WINDOWS_SMOKE_PS1
+                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gtk-4.0\")"),
+        "Windows smoke test should verify GTK runtime/resource directories are populated where gvsbuild ships files and present for optional module dirs"
     );
 
     assert!(
