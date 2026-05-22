@@ -719,7 +719,7 @@ mod imp {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
         let preview =
             crate::ui::workspace_preview::SessionPreview::with_assets(&session, false, assets);
-        sync_title_tabs_for_session(title, &session, &preview);
+        sync_title_tabs_for_preview(title, &preview, back_button);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
         logging::info(format!(
@@ -735,6 +735,7 @@ mod imp {
         tooltip: String,
         active: bool,
         on_select: Option<Rc<dyn Fn()>>,
+        on_close: Option<Rc<dyn Fn()>>,
     }
 
     fn launch_deck_title_tabs() -> Vec<WindowsTitleTab> {
@@ -743,15 +744,16 @@ mod imp {
             tooltip: "Launch deck".into(),
             active: true,
             on_select: None,
+            on_close: None,
         }]
     }
 
-    fn sync_title_tabs_for_session(
+    fn sync_title_tabs_for_preview(
         title: &TitleChrome,
-        session: &SavedSession,
         preview: &crate::ui::workspace_preview::SessionPreview,
+        back_button: &gtk::Button,
     ) {
-        let session = Rc::new(session.clone());
+        let session = Rc::new(preview.snapshot());
         let active_index = preview.active_index();
         let tabs = session
             .tabs
@@ -766,14 +768,31 @@ mod imp {
                 let tooltip = tab.workspace_root.display().to_string();
                 let preview = preview.clone();
                 let title = title.clone();
-                let session = session.clone();
+                let back_button = back_button.clone();
+                let on_close_preview = preview.clone();
+                let on_close_title = title.clone();
+                let on_close_back_button = back_button.clone();
                 WindowsTitleTab {
                     label,
                     tooltip,
                     active: index == active_index,
                     on_select: Some(Rc::new(move || {
                         preview.select_tab(index);
-                        sync_title_tabs_for_session(&title, &session, &preview);
+                        sync_title_tabs_for_preview(&title, &preview, &back_button);
+                    })),
+                    on_close: Some(Rc::new(move || {
+                        if !on_close_preview.close_tab(index) {
+                            return;
+                        }
+                        if on_close_preview.snapshot().tabs.is_empty() {
+                            on_close_back_button.emit_clicked();
+                        } else {
+                            sync_title_tabs_for_preview(
+                                &on_close_title,
+                                &on_close_preview,
+                                &on_close_back_button,
+                            );
+                        }
                     })),
                 }
             })
@@ -809,7 +828,11 @@ mod imp {
             chrome.select_button.connect_clicked(move |_| on_select());
         }
 
-        chrome.close_button.set_sensitive(false);
+        if let Some(on_close) = tab.on_close {
+            chrome.close_button.connect_clicked(move |_| on_close());
+        } else {
+            chrome.close_button.set_sensitive(false);
+        }
 
         shell.upcast()
     }

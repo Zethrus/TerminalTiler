@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::pango;
@@ -37,7 +37,7 @@ pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
 #[derive(Clone)]
 pub struct SessionPreview {
     shell: gtk::Box,
-    session: Rc<SavedSession>,
+    session: Rc<RefCell<SavedSession>>,
     assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
@@ -53,13 +53,15 @@ impl SessionPreview {
         show_inline_tab_strip: bool,
         assets: WorkspaceAssets,
     ) -> Self {
-        let session = Rc::new(session.clone());
+        let session = Rc::new(RefCell::new(session.clone()));
         let assets = Rc::new(assets);
-        let active_index = Rc::new(Cell::new(
+        let initial_active_index = {
+            let session = session.borrow();
             session
                 .active_tab_index
-                .min(session.tabs.len().saturating_sub(1)),
-        ));
+                .min(session.tabs.len().saturating_sub(1))
+        };
+        let active_index = Rc::new(Cell::new(initial_active_index));
 
         let shell = build_workspace_shell_chrome();
 
@@ -79,13 +81,49 @@ impl SessionPreview {
     }
 
     pub fn select_tab(&self, next_index: usize) {
-        self.active_index
-            .set(next_index.min(self.session.tabs.len().saturating_sub(1)));
+        let next_index = {
+            let session = self.session.borrow();
+            next_index.min(session.tabs.len().saturating_sub(1))
+        };
+        self.active_index.set(next_index);
+        self.session.borrow_mut().active_tab_index = next_index;
         self.render();
     }
 
     pub fn active_index(&self) -> usize {
         self.active_index.get()
+    }
+
+    pub fn snapshot(&self) -> SavedSession {
+        self.session.borrow().clone()
+    }
+
+    pub fn close_tab(&self, index: usize) -> bool {
+        let mut session = self.session.borrow_mut();
+        if session.tabs.is_empty() {
+            return false;
+        }
+
+        let removed_index = index.min(session.tabs.len() - 1);
+        session.tabs.remove(removed_index);
+        let next_index = if session.tabs.is_empty() {
+            0
+        } else {
+            let active_index = self.active_index.get();
+            if active_index == removed_index {
+                removed_index.min(session.tabs.len() - 1)
+            } else if active_index > removed_index {
+                active_index - 1
+            } else {
+                active_index.min(session.tabs.len() - 1)
+            }
+        };
+        session.active_tab_index = next_index;
+        self.active_index.set(next_index);
+        drop(session);
+
+        self.render();
+        true
     }
 
     fn render(&self) {
@@ -101,7 +139,7 @@ impl SessionPreview {
 
 fn render_session_preview(
     shell: &gtk::Box,
-    session: &Rc<SavedSession>,
+    session: &Rc<RefCell<SavedSession>>,
     assets: &Rc<WorkspaceAssets>,
     active_index: &Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
@@ -110,25 +148,32 @@ fn render_session_preview(
         shell.remove(&child);
     }
 
-    let current_index = active_index.get().min(session.tabs.len().saturating_sub(1));
+    let session_ref = session.borrow();
+    let current_index = active_index
+        .get()
+        .min(session_ref.tabs.len().saturating_sub(1));
     active_index.set(current_index);
-    let active_tab = session.tabs.get(current_index);
 
-    if show_inline_tab_strip && !session.tabs.is_empty() {
+    if show_inline_tab_strip && !session_ref.tabs.is_empty() {
         let on_select = {
             let shell = shell.clone();
             let session = session.clone();
             let assets = assets.clone();
             let active_index = active_index.clone();
             Rc::new(move |next_index: usize| {
-                active_index.set(next_index.min(session.tabs.len().saturating_sub(1)));
+                let next_index = {
+                    let session = session.borrow();
+                    next_index.min(session.tabs.len().saturating_sub(1))
+                };
+                active_index.set(next_index);
+                session.borrow_mut().active_tab_index = next_index;
                 render_session_preview(&shell, &session, &assets, &active_index, true);
             })
         };
-        shell.append(&build_tab_strip(session, current_index, on_select));
+        shell.append(&build_tab_strip(&session_ref, current_index, on_select));
     }
 
-    if let Some(tab) = active_tab {
+    if let Some(tab) = session_ref.tabs.get(current_index) {
         shell.append(&build_workspace_summary(tab));
         let layout = build_layout(tab, assets);
         let alert_sidebar = build_workspace_alert_sidebar_chrome(false);

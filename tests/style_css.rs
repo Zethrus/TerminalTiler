@@ -667,7 +667,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
             && WINDOWS_GTK_APP_RS
                 .contains("crate::ui::workspace_preview::SessionPreview::with_assets")
-            && WINDOWS_GTK_APP_RS.contains("sync_title_tabs_for_session")
+            && WINDOWS_GTK_APP_RS.contains("sync_title_tabs_for_preview")
+            && WINDOWS_GTK_APP_RS.contains("on_close: Some(Rc::new")
+            && WINDOWS_GTK_APP_RS.contains("on_close_preview.close_tab(index)")
+            && WINDOWS_GTK_APP_RS.contains("on_close_back_button.emit_clicked()")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
             && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
             && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
@@ -718,6 +721,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("chrome.select_button.connect_clicked")
             && WORKSPACE_PREVIEW_RS.contains("pub struct SessionPreview")
             && WORKSPACE_PREVIEW_RS.contains("pub fn select_tab(&self, next_index: usize)")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn close_tab(&self, index: usize) -> bool")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn snapshot(&self) -> SavedSession")
+            && WORKSPACE_PREVIEW_RS.contains("Rc<RefCell<SavedSession>>")
             && WORKSPACE_PREVIEW_RS.contains("show_inline_tab_strip")
             && WORKSPACE_PREVIEW_RS.contains("while let Some(child) = shell.first_child()")
             && WORKSPACE_PREVIEW_RS.contains("shell.remove(&child)")
