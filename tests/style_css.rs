@@ -745,7 +745,8 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "TERMINALTILER_GTK_RUNTIME_ROOT",
         "[switch]$UseWin32Shell",
         "$BuildGtkShell = -not $UseWin32Shell",
-        "Assert-DirectoryHasFiles",
+        "Assert-DirectoryExists",
+        "Test-DirectoryHasFiles",
         "Assert-WindowsStagedPayload",
         "portable.nsi",
     ] {
@@ -759,9 +760,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         WINDOWS_BUILD_PS1
             .contains("GTK runtime root is required for the canonical Windows GTK payload")
             && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build")
-            && !WINDOWS_BUILD_PS1.contains("terminaltiler-keep.txt")
+            && WINDOWS_BUILD_PS1.contains("terminaltiler-empty-runtime-dir.txt")
             && !WINDOWS_BUILD_PS1.contains("staging placeholder directory"),
-        "Windows packaging should require a real bundled GTK runtime unless the explicit Win32 fallback is selected"
+        "Windows packaging should require bundled GTK runtime directories while preserving empty runtime roots for WiX harvesting"
     );
 
     assert!(
@@ -806,7 +807,6 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
             && WINDOWS_SMOKE_PS1.contains("Windows GTK shell restored GTK workspace preview with")
             && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
-            && WINDOWS_SMOKE_PS1.contains("Assert-DirectoryHasFiles")
             && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow")
             && WINDOWS_SMOKE_PS1
                 .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }"),

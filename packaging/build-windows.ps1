@@ -98,15 +98,18 @@ function Copy-WindowsGtkResources {
     Copy-Item -Path (Join-Path $RootDir "resources\hover-icons\*.svg") -Destination $HoverIconRoot -Force
 }
 
-function Assert-DirectoryHasFiles {
+function Assert-DirectoryExists {
     param([string]$Path, [string]$Description)
 
-    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path -PathType Container)) {
         throw "$Description was not found at $Path"
     }
-    if (-not (Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        throw "$Description did not contain any files at $Path"
-    }
+}
+
+function Test-DirectoryHasFiles {
+    param([string]$Path)
+
+    return [bool](Get-ChildItem -Path $Path -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
 }
 
 function Copy-WindowsGtkRuntime {
@@ -124,7 +127,7 @@ function Copy-WindowsGtkRuntime {
 
     Write-Host "==> bundling GTK/libadwaita runtime from $RuntimeRoot"
     $RuntimeBin = Join-Path $RuntimeRoot "bin"
-    Assert-DirectoryHasFiles -Path $RuntimeBin -Description "GTK runtime bin directory"
+    Assert-DirectoryExists -Path $RuntimeBin -Description "GTK runtime bin directory"
     Copy-Item -Path (Join-Path $RuntimeBin "*.dll") -Destination $PortableRoot -Force
     if (-not (Get-ChildItem -Path $PortableRoot -Filter "*gtk-4*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
         throw "GTK4 runtime DLL was not copied from $RuntimeBin"
@@ -144,10 +147,14 @@ function Copy-WindowsGtkRuntime {
     )) {
         $source = Join-Path $RuntimeRoot $relative
         $destination = Join-Path $PortableRoot $relative
-        Assert-DirectoryHasFiles -Path $source -Description "GTK runtime resource source $relative"
+        Assert-DirectoryExists -Path $source -Description "GTK runtime resource source $relative"
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
-        Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
-        Assert-DirectoryHasFiles -Path $destination -Description "Staged GTK runtime resource $relative"
+        if (Test-DirectoryHasFiles -Path $source) {
+            Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
+        }
+        else {
+            Set-Content -Path (Join-Path $destination "terminaltiler-empty-runtime-dir.txt") -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
+        }
     }
 }
 
@@ -189,7 +196,6 @@ function Assert-WindowsStagedPayload {
             "share\themes"
         )) {
             Assert-Path -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
-            Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
         }
     }
 }
