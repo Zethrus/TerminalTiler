@@ -1002,11 +1002,15 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
                 .contains("Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative)")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gio\"; AllowEmpty = $true }")
             && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gtk-4.0\"; AllowEmpty = $true }")
+            && WINDOWS_BUILD_PS1.contains("@{ Path = \"share\\themes\"; AllowEmpty = $true }")
             && WINDOWS_BUILD_PS1.contains("retaining empty payload directory")
             && WINDOWS_BUILD_PS1
                 .contains("Assert-DirectoryExists -Path (Join-Path $PortableRoot \"lib\\gio\")")
             && WINDOWS_BUILD_PS1.contains(
                 "Assert-DirectoryExists -Path (Join-Path $PortableRoot \"lib\\gtk-4.0\")"
+            )
+            && WINDOWS_BUILD_PS1.contains(
+                "Assert-DirectoryExists -Path (Join-Path $PortableRoot \"share\\themes\")"
             )
             && !WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
             && !WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
@@ -1057,7 +1061,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1
                 .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gio\")")
             && WINDOWS_SMOKE_PS1
-                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gtk-4.0\")"),
+                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gtk-4.0\")")
+            && WINDOWS_SMOKE_PS1
+                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"share\\themes\")"),
         "Windows smoke test should verify GTK runtime/resource directories are populated where gvsbuild ships files and present for optional module dirs"
     );
 

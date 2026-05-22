@@ -77,13 +77,13 @@ function Assert-WindowsGtkRuntimePayload {
         "etc",
         "lib\gdk-pixbuf-2.0",
         "share\glib-2.0",
-        "share\icons",
-        "share\themes"
+        "share\icons"
     )) {
         Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative) -Description "GTK runtime resource $relative"
     }
     Assert-Path -Path (Join-Path $PayloadRoot "lib\gio") -Description "GTK runtime resource lib\gio"
     Assert-Path -Path (Join-Path $PayloadRoot "lib\gtk-4.0") -Description "GTK runtime resource lib\gtk-4.0"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\themes") -Description "GTK runtime resource share\themes"
 }
 
 function Convert-ToTomlPath {

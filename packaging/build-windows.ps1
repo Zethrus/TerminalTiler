@@ -171,7 +171,7 @@ function Copy-WindowsGtkRuntime {
         @{ Path = "lib\gtk-4.0"; AllowEmpty = $true },
         @{ Path = "share\glib-2.0"; AllowEmpty = $false },
         @{ Path = "share\icons"; AllowEmpty = $false },
-        @{ Path = "share\themes"; AllowEmpty = $false }
+        @{ Path = "share\themes"; AllowEmpty = $true }
     )
 
     foreach ($resource in $runtimeResources) {
@@ -216,11 +216,12 @@ function Assert-WindowsStagedPayload {
         if (-not (Get-ChildItem -Path $PortableRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
             throw "Staged libadwaita runtime DLL was not found in $PortableRoot"
         }
-        foreach ($relative in @("etc", "lib\gdk-pixbuf-2.0", "share\glib-2.0", "share\icons", "share\themes")) {
+        foreach ($relative in @("etc", "lib\gdk-pixbuf-2.0", "share\glib-2.0", "share\icons")) {
             Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
         }
         Assert-DirectoryExists -Path (Join-Path $PortableRoot "lib\gio") -Description "Staged GTK runtime resource lib\gio"
         Assert-DirectoryExists -Path (Join-Path $PortableRoot "lib\gtk-4.0") -Description "Staged GTK runtime resource lib\gtk-4.0"
+        Assert-DirectoryExists -Path (Join-Path $PortableRoot "share\themes") -Description "Staged GTK runtime resource share\themes"
     }
 }
 
