@@ -807,7 +807,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("apply_title_tab_state(")
-            && WINDOWS_GTK_APP_RS.contains(
+            && source_contains(
+                WINDOWS_GTK_APP_RS,
                 "SessionPreview::with_runtime_assets(
             &session,"
             )
@@ -862,7 +863,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
     assert!(
         UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
-            && UI_MOD_RS.contains("mod tile_chrome;")
+            && UI_MOD_RS.contains("pub(crate) mod tile_chrome;")
             && TILE_CHROME_RS.contains("pub(crate) struct TerminalTileActionChrome")
             && TILE_CHROME_RS.contains("pub(crate) struct WebTileActionChrome")
             && TILE_CHROME_RS.contains("pub(crate) fn build_terminal_tile_action_chrome")

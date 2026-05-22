@@ -50,7 +50,7 @@ pub mod settings_dialog;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
-mod tile_chrome;
+pub(crate) mod tile_chrome;
 #[cfg(target_os = "linux")]
 pub(crate) mod tile_drag;
 #[cfg(target_os = "linux")]
