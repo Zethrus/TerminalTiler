@@ -17,6 +17,7 @@ const PACKAGE_APPIMAGE_SH: &str = include_str!("../packaging/build-appimage.sh")
 const PACKAGE_ARTIFACTS_YML: &str = include_str!("../.github/workflows/package-artifacts.yml");
 const PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH: &str =
     include_str!("../packaging/capture-linux-gtk-visuals.sh");
+const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-gtk-visuals.sh");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
@@ -1030,7 +1031,9 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             .contains("Ubuntu/Linux GTK shell as the canonical visual baseline")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-linux-gtk-visuals.sh")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-windows-gtk-visuals.ps1")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("compare-gtk-visuals.sh")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("packaging/.build/linux-gtk-visuals/")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("packaging/.build/gtk-visual-diffs/report.tsv")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Launch dashboard")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Saved workspace cards")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("New/edit wizard")
@@ -1071,6 +1074,24 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("gnome-screenshot")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Linux GTK visual captures written"),
         "Linux visual capture helper should seed matching baseline profiles and capture comparable GTK reference windows"
+    );
+
+    assert!(
+        PACKAGE_COMPARE_GTK_VISUALS_SH.contains("normalized RMSE")
+            || PACKAGE_COMPARE_GTK_VISUALS_SH.contains("normalized_rmse"),
+        "GTK visual comparison helper should report normalized RMSE for screenshot pairs"
+    );
+    assert!(
+        PACKAGE_COMPARE_GTK_VISUALS_SH.contains("launch-dashboard")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("restored-workspace")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("compare -metric RMSE")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("identify -format '%wx%h'")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("fail-dimensions")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("fail-missing-windows")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("fail-threshold")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("report.tsv")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("GTK visual comparison passed."),
+        "GTK visual comparison helper should pair Linux/Windows captures and fail on missing, dimension-mismatched, or over-threshold screenshots"
     );
 }
 

@@ -52,6 +52,25 @@ published self-extracting portable `.exe` as well as an unpacked
 
 Repeat with `-Theme light` and each density (`comfortable`, `standard`, `compact`) when preparing a complete review bundle.
 
+## Automated screenshot comparison
+
+After both capture helpers have produced matching Linux and Windows PNGs, run:
+
+```bash
+./packaging/compare-gtk-visuals.sh \
+  --linux-dir ./packaging/.build/linux-gtk-visuals \
+  --windows-dir ./packaging/.build/windows-gtk-visuals \
+  --theme dark \
+  --threshold 0.035
+```
+
+The comparison helper pairs captures by scenario, index, and theme; writes diff
+PNGs under `packaging/.build/gtk-visual-diffs/`; and emits
+`packaging/.build/gtk-visual-diffs/report.tsv`. It fails when dimensions differ,
+when a matching capture is missing, or when normalized RMSE exceeds the chosen
+threshold. Use the TSV plus diff PNGs as the objective evidence for parity
+bugs before marking a screenshot pair `pass`, `minor`, or `fail`.
+
 ## Manual screenshot checklist
 
 Capture these Windows GTK screens and pair each with the current Ubuntu reference at the same app size:
