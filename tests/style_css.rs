@@ -110,6 +110,7 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && APP_CHROME_RS.contains("pub(crate) struct MainTitlebarActions")
             && APP_CHROME_RS.contains("pub(crate) fn build_app_header_chrome")
             && APP_CHROME_RS.contains("pub(crate) fn build_main_titlebar_actions")
+            && APP_CHROME_RS.contains("pub(crate) fn sync_workspace_fullscreen_chrome")
             && APP_CHROME_RS.contains("pub(crate) fn build_window_shell")
             && APP_CHROME_RS.contains("show_start_title_buttons(true)")
             && APP_CHROME_RS.contains("show_end_title_buttons(true)")
@@ -147,6 +148,19 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("options.companion.as_ref()")
             && WINDOWS_GTK_APP_RS.contains("companion_dialog::present(&window, companion.clone())"),
         "Windows GTK should expose the same shared Account / Sync companion titlebar action as Linux when an integration is provided"
+    );
+    assert!(
+        WINDOW_RS.contains("sync_workspace_fullscreen_chrome(")
+            && WINDOWS_GTK_APP_RS.contains("sync_workspace_fullscreen_chrome(")
+            && WINDOWS_GTK_APP_RS
+                .contains("let fullscreen_button = titlebar_actions.fullscreen_button")
+            && WINDOWS_GTK_APP_RS.contains("fullscreen_button.connect_clicked")
+            && WINDOWS_GTK_APP_RS.contains("window.connect_fullscreened_notify")
+            && WINDOWS_GTK_APP_RS.contains("sync_windows_fullscreen_chrome(window")
+            && WINDOWS_GTK_APP_RS.contains("fullscreen_button, true")
+            && WINDOWS_GTK_APP_RS.contains("&fullscreen_button, false")
+            && WINDOWS_GTK_APP_RS.contains("&fullscreen_for_click,\n                    false"),
+        "Windows GTK should use the same shared workspace fullscreen chrome behavior as Linux for workspace previews and hide it on the launch deck"
     );
 }
 

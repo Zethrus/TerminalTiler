@@ -32,6 +32,35 @@ pub(crate) fn build_app_header_chrome() -> AppHeaderChrome {
     AppHeaderChrome { header, title }
 }
 
+pub(crate) fn sync_workspace_fullscreen_chrome(
+    window: &adw::ApplicationWindow,
+    title_widget: &gtk::Widget,
+    fullscreen_button: &gtk::Button,
+    is_workspace: bool,
+    enter_tooltip: &str,
+    exit_tooltip: &str,
+) {
+    if !is_workspace {
+        title_widget.set_visible(true);
+        fullscreen_button.set_visible(false);
+        if window.is_fullscreen() {
+            window.set_fullscreened(false);
+        }
+        return;
+    }
+
+    let is_fullscreen = window.is_fullscreen();
+    title_widget.set_visible(!is_fullscreen);
+    fullscreen_button.set_visible(true);
+    if is_fullscreen {
+        icons::set_button_icon_label(fullscreen_button, "Exit Fullscreen", icon_name::RESTORE);
+        fullscreen_button.set_tooltip_text(Some(exit_tooltip));
+    } else {
+        icons::set_button_icon_label(fullscreen_button, "Fullscreen", icon_name::FULLSCREEN);
+        fullscreen_button.set_tooltip_text(Some(enter_tooltip));
+    }
+}
+
 pub(crate) fn build_main_titlebar_actions(
     header: &adw::HeaderBar,
     include_companion: bool,

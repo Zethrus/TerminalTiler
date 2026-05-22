@@ -18,6 +18,7 @@ mod imp {
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::ui::app_chrome::{
         build_app_header_chrome, build_main_titlebar_actions, build_window_shell,
+        sync_workspace_fullscreen_chrome,
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
@@ -91,6 +92,7 @@ mod imp {
         let overlay = adw::ToastOverlay::new();
         let titlebar_actions = build_main_titlebar_actions(&header, options.companion.is_some());
         let back_button = titlebar_actions.back_button;
+        let fullscreen_button = titlebar_actions.fullscreen_button;
         let settings_button = titlebar_actions.settings_button;
         let companion_button = titlebar_actions.companion_button;
         let assets_button = titlebar_actions.assets_button;
@@ -160,6 +162,30 @@ mod imp {
             });
         }
 
+        {
+            let window = window.clone();
+            fullscreen_button.connect_clicked(move |_| {
+                window.set_fullscreened(!window.is_fullscreen());
+            });
+        }
+
+        {
+            let window_for_notify = window.clone();
+            let title_root_for_notify = title.root.clone();
+            let fullscreen_for_notify = fullscreen_button.clone();
+            let back_for_notify = back_button.clone();
+            window.connect_fullscreened_notify(move |_| {
+                sync_windows_fullscreen_chrome(
+                    &window_for_notify,
+                    title_root_for_notify.upcast_ref(),
+                    &fullscreen_for_notify,
+                    back_for_notify.is_visible(),
+                );
+            });
+        }
+
+        sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
+
         sync_windows_title_tabs(&title, launch_deck_title_tabs());
 
         let launch_preferences = preferences.clone();
@@ -167,6 +193,8 @@ mod imp {
         let launch_title = title.clone();
         let launch_assets = workspace_assets.clone();
         let launch_back_button = back_button.clone();
+        let launch_fullscreen_button = fullscreen_button.clone();
+        let launch_window = window.clone();
         let actions = LaunchScreenActions {
             on_theme_preview: Rc::new({
                 let window = window.clone();
@@ -178,10 +206,12 @@ mod imp {
             }),
             on_launch: Rc::new(move |preset, workspace_root| {
                 present_workspace_preview_from_launch(
+                    &launch_window,
                     &launch_overlay,
                     &launch_title,
                     &launch_preferences,
                     &launch_back_button,
+                    &launch_fullscreen_button,
                     launch_assets.clone(),
                     preset,
                     workspace_root,
@@ -213,11 +243,19 @@ mod imp {
             let title = title.clone();
             let launch = launch.clone();
             let back_button_for_click = back_button.clone();
+            let fullscreen_for_click = fullscreen_button.clone();
+            let window_for_click = window.clone();
             let title_add_button = title.add_button.clone();
             let show_launch_deck = Rc::new(move || {
                 sync_windows_title_tabs(&title, launch_deck_title_tabs());
                 overlay.set_child(Some(&launch));
                 back_button_for_click.set_visible(false);
+                sync_windows_fullscreen_chrome(
+                    &window_for_click,
+                    title.root.upcast_ref(),
+                    &fullscreen_for_click,
+                    false,
+                );
                 logging::info("Windows GTK shell returned to launch deck");
             });
             {
@@ -240,15 +278,19 @@ mod imp {
         {
             let overlay = overlay.clone();
             let title = title.clone();
+            let window = window.clone();
             let back_button = back_button.clone();
+            let fullscreen_button = fullscreen_button.clone();
             let preferences = preferences.clone();
             let workspace_assets = workspace_assets.clone();
             gtk::glib::idle_add_local_once(move || {
                 present_workspace_preview_from_restore(
+                    &window,
                     &overlay,
                     &title,
                     &preferences,
                     &back_button,
+                    &fullscreen_button,
                     workspace_assets,
                     session,
                 );
@@ -257,14 +299,25 @@ mod imp {
     }
 
     fn present_workspace_preview_from_restore(
+        window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
         back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
         assets: crate::model::assets::WorkspaceAssets,
         session: SavedSession,
     ) {
-        present_workspace_preview(overlay, title, back_button, session, assets, "restored");
+        present_workspace_preview(
+            window,
+            overlay,
+            title,
+            back_button,
+            fullscreen_button,
+            session,
+            assets,
+            "restored",
+        );
     }
 
     fn present_settings_dialog(
@@ -697,11 +750,29 @@ mod imp {
             .find_map(|window| window.downcast::<adw::ApplicationWindow>().ok())
     }
 
+    fn sync_windows_fullscreen_chrome(
+        window: &adw::ApplicationWindow,
+        title_widget: &gtk::Widget,
+        fullscreen_button: &gtk::Button,
+        is_workspace: bool,
+    ) {
+        sync_workspace_fullscreen_chrome(
+            window,
+            title_widget,
+            fullscreen_button,
+            is_workspace,
+            "Enter fullscreen",
+            "Exit fullscreen",
+        );
+    }
+
     fn present_workspace_preview_from_launch(
+        window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         _preferences: &AppPreferences,
         back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
         assets: crate::model::assets::WorkspaceAssets,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
@@ -716,13 +787,24 @@ mod imp {
             active_tab_index: 0,
         };
 
-        present_workspace_preview(overlay, title, back_button, session, assets, "opened");
+        present_workspace_preview(
+            window,
+            overlay,
+            title,
+            back_button,
+            fullscreen_button,
+            session,
+            assets,
+            "opened",
+        );
     }
 
     fn present_workspace_preview(
+        window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
         title: &TitleChrome,
         back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
         session: SavedSession,
         assets: crate::model::assets::WorkspaceAssets,
         action: &str,
@@ -733,6 +815,7 @@ mod imp {
         sync_title_tabs_for_preview(title, &preview, back_button);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
+        sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, true);
         logging::info(format!(
             "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
         ));

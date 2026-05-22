@@ -27,6 +27,7 @@ use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
 use crate::ui::app_chrome::{
     build_app_header_chrome, build_main_titlebar_actions, build_window_shell,
+    sync_workspace_fullscreen_chrome,
 };
 use crate::ui::appearance::{
     apply_optional_window_density, apply_theme_mode, resolved_theme_uses_dark_palette,
@@ -5063,39 +5064,19 @@ fn sync_fullscreen_chrome(
     is_workspace: bool,
     fullscreen_shortcut: &str,
 ) {
-    if !is_workspace {
-        title_widget.set_visible(true);
-        fullscreen_button.set_visible(false);
-        if window.is_fullscreen() {
-            window.set_fullscreened(false);
-        }
-        return;
-    }
-
-    let is_fullscreen = window.is_fullscreen();
-    title_widget.set_visible(!is_fullscreen);
-    fullscreen_button.set_visible(true);
-    if is_fullscreen {
-        icons::set_button_icon_label(fullscreen_button, "Exit Fullscreen", icon_name::RESTORE);
-        fullscreen_button.set_tooltip_text(Some(&format!(
-            "Exit fullscreen ({})",
-            shortcut_display_label(
-                window,
-                fullscreen_shortcut,
-                DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT
-            )
-        )));
-    } else {
-        icons::set_button_icon_label(fullscreen_button, "Fullscreen", icon_name::FULLSCREEN);
-        fullscreen_button.set_tooltip_text(Some(&format!(
-            "Enter fullscreen ({})",
-            shortcut_display_label(
-                window,
-                fullscreen_shortcut,
-                DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT
-            )
-        )));
-    }
+    let shortcut = shortcut_display_label(
+        window,
+        fullscreen_shortcut,
+        DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT,
+    );
+    sync_workspace_fullscreen_chrome(
+        window,
+        title_widget,
+        fullscreen_button,
+        is_workspace,
+        &format!("Enter fullscreen ({shortcut})"),
+        &format!("Exit fullscreen ({shortcut})"),
+    );
 }
 
 fn show_toast(overlay: &adw::ToastOverlay, title: &str) {
