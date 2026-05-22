@@ -576,7 +576,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
             && WINDOWS_GTK_APP_RS.contains("window_shell.append(&header)")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
-            && WINDOW_RS.contains("title_chrome::TitleChrome")
+            && WINDOW_RS.contains("title_chrome::{TitleChrome, build_title_tab_chrome}")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
@@ -641,12 +641,16 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         TITLE_CHROME_RS.contains("app-tab-strip")
             && TITLE_CHROME_RS.contains("app-tab-add")
+            && TITLE_CHROME_RS.contains("pub(crate) fn build_title_tab_chrome")
+            && TITLE_CHROME_RS.contains("pub(crate) struct TitleTabChrome")
             && WINDOW_RS.contains("let title = TitleChrome::new();")
+            && WINDOW_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("let title = TitleChrome::new();")
+            && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("SessionPreview::new(&session, false)")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
-        "Linux and Windows GTK shells should share the same titlebar tab chrome while Windows drives workspace-preview tab switching from the titlebar"
+        "Linux and Windows GTK shells should share the same titlebar tab chrome builder while Windows drives workspace-preview tab switching from the titlebar"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")

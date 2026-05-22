@@ -28,7 +28,9 @@ use crate::tray::TrayController;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
-    launch_screen, settings_dialog, title_chrome::TitleChrome, workspace_view,
+    launch_screen, settings_dialog,
+    title_chrome::{TitleChrome, build_title_tab_chrome},
+    workspace_view,
 };
 use crate::voice::audio::AudioCapture;
 use crate::voice::engine::{self, VoiceEngineEvent};
@@ -3508,38 +3510,11 @@ impl TabStripController {
     }
 
     fn build_item(&self, controller: &TabStripControllerHandle, tab_id: usize) -> TabStripItem {
-        let shell = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(0)
-            .build();
-        shell.add_css_class("app-tab-shell");
-        shell.add_css_class("is-inactive");
-
-        let select_button = gtk::Button::new();
-        select_button.add_css_class("app-tab-select");
-        select_button.set_hexpand(true);
-        select_button.set_focus_on_click(false);
-
-        let select_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .hexpand(true)
-            .build();
-        let icon = gtk::Image::from_icon_name("utilities-terminal-symbolic");
-        icon.set_valign(gtk::Align::Center);
-        icon.add_css_class("app-tab-icon");
-        let title_label = gtk::Label::builder()
-            .xalign(0.0)
-            .hexpand(true)
-            .single_line_mode(true)
-            .ellipsize(pango::EllipsizeMode::End)
-            .width_chars(14)
-            .max_width_chars(14)
-            .build();
-        title_label.add_css_class("app-tab-title");
-        select_row.append(&icon);
-        select_row.append(&title_label);
-        select_button.set_child(Some(&select_row));
+        let chrome = build_title_tab_chrome();
+        let shell = chrome.shell;
+        let select_button = chrome.select_button;
+        let close_button = chrome.close_button;
+        let title_label = chrome.title_label;
 
         let select_handle = self.select_tab.clone();
         select_button.connect_clicked(move |_| {
@@ -3563,13 +3538,7 @@ impl TabStripController {
             }
         });
         select_button.add_controller(rename_click);
-        shell.append(&select_button);
 
-        let close_button = gtk::Button::from_icon_name("window-close-symbolic");
-        if let Some(img) = close_button.first_child() {
-            let _ = img.pango_context();
-        }
-        close_button.add_css_class("app-tab-close");
         close_button.set_focus_on_click(false);
         let close_handle = self.close_tab.clone();
         close_button.connect_clicked(move |_| {
@@ -3577,7 +3546,6 @@ impl TabStripController {
                 close(tab_id);
             }
         });
-        shell.append(&close_button);
 
         let middle_close = gtk::GestureClick::builder()
             .button(2)

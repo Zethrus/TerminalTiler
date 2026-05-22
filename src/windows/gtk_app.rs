@@ -8,7 +8,6 @@ mod imp {
 
     use adw::prelude::*;
     use gtk::gio;
-    use gtk::pango;
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
@@ -20,7 +19,7 @@ mod imp {
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
-    use crate::ui::title_chrome::TitleChrome;
+    use crate::ui::title_chrome::{TitleChrome, build_title_tab_chrome};
     use crate::ui::{assets_manager, settings_dialog};
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
@@ -791,57 +790,23 @@ mod imp {
     }
 
     fn build_windows_title_tab(tab: WindowsTitleTab) -> gtk::Widget {
-        let shell = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(0)
-            .css_classes(["app-tab-shell"])
-            .build();
+        let chrome = build_title_tab_chrome();
+        let shell = chrome.shell;
+        shell.remove_css_class("is-inactive");
+        shell.remove_css_class("is-active");
         shell.add_css_class(if tab.active {
             "is-active"
         } else {
             "is-inactive"
         });
         shell.set_tooltip_text(Some(&tab.tooltip));
+        chrome.title_label.set_label(&tab.label);
 
-        let select_button = gtk::Button::builder()
-            .css_classes(["app-tab-select"])
-            .hexpand(true)
-            .focus_on_click(false)
-            .build();
-        let select_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .hexpand(true)
-            .build();
-        select_row.append(
-            &gtk::Image::builder()
-                .icon_name(icon_name::TERMINAL)
-                .valign(gtk::Align::Center)
-                .css_classes(["app-tab-icon"])
-                .build(),
-        );
-        select_row.append(
-            &gtk::Label::builder()
-                .label(&tab.label)
-                .xalign(0.0)
-                .hexpand(true)
-                .single_line_mode(true)
-                .ellipsize(pango::EllipsizeMode::End)
-                .width_chars(14)
-                .max_width_chars(14)
-                .css_classes(["app-tab-title"])
-                .build(),
-        );
-        select_button.set_child(Some(&select_row));
         if let Some(on_select) = tab.on_select {
-            select_button.connect_clicked(move |_| on_select());
+            chrome.select_button.connect_clicked(move |_| on_select());
         }
-        shell.append(&select_button);
 
-        let close_button =
-            icons::icon_button(icon_name::CLOSE, "Close tab", &["flat", "app-tab-close"]);
-        close_button.set_sensitive(false);
-        shell.append(&close_button);
+        chrome.close_button.set_sensitive(false);
 
         shell.upcast()
     }
