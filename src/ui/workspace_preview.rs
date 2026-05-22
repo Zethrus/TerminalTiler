@@ -1,3 +1,6 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gtk::pango;
 use gtk::prelude::*;
 
@@ -21,10 +24,12 @@ use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary
 /// `web-tile-frame`) and the shared `layout_tree` split renderer instead of
 /// opening the legacy Win32 workspace host.
 pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
-    let active_index = session
-        .active_tab_index
-        .min(session.tabs.len().saturating_sub(1));
-    let active_tab = session.tabs.get(active_index);
+    let session = Rc::new(session.clone());
+    let active_index = Rc::new(Cell::new(
+        session
+            .active_tab_index
+            .min(session.tabs.len().saturating_sub(1)),
+    ));
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -38,8 +43,35 @@ pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
         .build();
     make_shrinkable(&shell);
 
+    render_session_preview(&shell, &session, &active_index);
+
+    shell.upcast()
+}
+
+fn render_session_preview(
+    shell: &gtk::Box,
+    session: &Rc<SavedSession>,
+    active_index: &Rc<Cell<usize>>,
+) {
+    while let Some(child) = shell.first_child() {
+        shell.remove(&child);
+    }
+
+    let current_index = active_index.get().min(session.tabs.len().saturating_sub(1));
+    active_index.set(current_index);
+    let active_tab = session.tabs.get(current_index);
+
     if !session.tabs.is_empty() {
-        shell.append(&build_tab_strip(session, active_index));
+        let on_select = {
+            let shell = shell.clone();
+            let session = session.clone();
+            let active_index = active_index.clone();
+            Rc::new(move |next_index: usize| {
+                active_index.set(next_index.min(session.tabs.len().saturating_sub(1)));
+                render_session_preview(&shell, &session, &active_index);
+            })
+        };
+        shell.append(&build_tab_strip(session, current_index, on_select));
     }
 
     if let Some(tab) = active_tab {
@@ -49,8 +81,6 @@ pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
     } else {
         shell.append(&build_empty_state());
     }
-
-    shell.upcast()
 }
 
 pub fn session_shape(session: &SavedSession) -> (usize, usize) {
@@ -62,7 +92,11 @@ pub fn session_shape(session: &SavedSession) -> (usize, usize) {
     (session.tabs.len(), pane_count)
 }
 
-fn build_tab_strip(session: &SavedSession, active_index: usize) -> gtk::Widget {
+fn build_tab_strip(
+    session: &SavedSession,
+    active_index: usize,
+    on_select: Rc<dyn Fn(usize)>,
+) -> gtk::Widget {
     let strip = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
@@ -72,7 +106,12 @@ fn build_tab_strip(session: &SavedSession, active_index: usize) -> gtk::Widget {
     make_shrinkable(&strip);
 
     for (index, tab) in session.tabs.iter().enumerate() {
-        strip.append(&build_tab_chip(tab, index == active_index));
+        strip.append(&build_tab_chip(
+            tab,
+            index,
+            index == active_index,
+            on_select.clone(),
+        ));
     }
 
     let add_button = icons::icon_button(
@@ -86,7 +125,12 @@ fn build_tab_strip(session: &SavedSession, active_index: usize) -> gtk::Widget {
     strip.upcast()
 }
 
-fn build_tab_chip(tab: &SavedTab, active: bool) -> gtk::Widget {
+fn build_tab_chip(
+    tab: &SavedTab,
+    index: usize,
+    active: bool,
+    on_select: Rc<dyn Fn(usize)>,
+) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(0)
@@ -97,8 +141,8 @@ fn build_tab_chip(tab: &SavedTab, active: bool) -> gtk::Widget {
 
     let select = gtk::Button::builder()
         .css_classes(["app-tab-select"])
+        .focus_on_click(false)
         .build();
-    select.set_sensitive(false);
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
@@ -128,6 +172,12 @@ fn build_tab_chip(tab: &SavedTab, active: bool) -> gtk::Widget {
             .build(),
     );
     select.set_child(Some(&content));
+    {
+        let on_select = on_select.clone();
+        select.connect_clicked(move |_| {
+            on_select(index);
+        });
+    }
     shell.append(&select);
 
     let close = icons::icon_button(icon_name::CLOSE, "Close tab", &["flat", "app-tab-close"]);

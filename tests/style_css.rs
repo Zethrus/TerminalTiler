@@ -586,6 +586,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         WORKSPACE_PREVIEW_RS.contains("workspace-summary")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-strip")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-shell")
+            && WORKSPACE_PREVIEW_RS.contains("fn render_session_preview")
+            && WORKSPACE_PREVIEW_RS.contains("Rc<Cell<usize>>")
             && WORKSPACE_PREVIEW_RS.contains("build_tile_shell")
             && TILE_CHROME_RS.contains("terminal-card")
             && TILE_CHROME_RS.contains("terminal-header")
@@ -595,6 +597,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("build_session_preview")
             && WORKSPACE_PREVIEW_RS.contains("session_shape"),
         "Windows GTK workspace preview should reuse the same visible workspace classes as the Linux GTK workspace shell"
+    );
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("select.connect_clicked")
+            && WORKSPACE_PREVIEW_RS
+                .contains("render_session_preview(&shell, &session, &active_index)")
+            && WORKSPACE_PREVIEW_RS.contains("while let Some(child) = shell.first_child()")
+            && WORKSPACE_PREVIEW_RS.contains("shell.remove(&child)")
+            && !WORKSPACE_PREVIEW_RS.contains("select.set_sensitive(false)"),
+        "Windows GTK workspace preview tabs should switch active restored tabs instead of rendering the Linux-style tab selector as disabled chrome"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")
