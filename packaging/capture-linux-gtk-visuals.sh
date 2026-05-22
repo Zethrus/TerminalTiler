@@ -311,7 +311,7 @@ capture_scenario() {
     [[ -n "$window_id" ]] || continue
     title="$(xdotool getwindowname "$window_id" 2>/dev/null || printf 'window')"
     safe_title="$(safe_name "$title")"
-    path="$capture_root/$(printf '%02d-%s-%s-%s.png' "$index" "$scenario" "$THEME" "$safe_title")"
+    path="$capture_root/$(printf '%02d-%s-%s-%s-%s.png' "$index" "$scenario" "$THEME" "$DENSITY" "$safe_title")"
     capture_window "$window_id" "$path"
     echo "Captured $path"
     index=$((index + 1))

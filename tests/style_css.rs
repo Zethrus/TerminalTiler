@@ -1053,6 +1053,9 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("PrintWindow")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains(
+                "\"{0:D2}-{1}-{2}-{3}-{4}.png\" -f $index, $Scenario, $Theme, $Density, $safeTitle"
+            )
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Restore")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("return ($Path -replace '\\\\', '\\\\\\\\')")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessTreeIds")
@@ -1067,6 +1070,7 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("restored-workspace")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_theme")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_density")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("'%02d-%s-%s-%s-%s.png'")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Restore")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("TERMINALTILER_PROFILE_ROOT")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("xdotool search --onlyvisible --pid")
@@ -1084,6 +1088,12 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
     assert!(
         PACKAGE_COMPARE_GTK_VISUALS_SH.contains("launch-dashboard")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("restored-workspace")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH
+                .contains("<index>-<scenario>-<theme>-<density>-*.png")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("--density comfortable|standard|compact")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH
+                .contains("scenario\\tindex\\ttheme\\tdensity\\tstatus\\tnormalized_rmse")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("$index-$scenario-$THEME-$DENSITY-")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("compare -metric RMSE")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("identify -format '%wx%h'")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("fail-dimensions")

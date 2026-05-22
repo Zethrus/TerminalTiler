@@ -320,7 +320,7 @@ function Invoke-VisualCaptureScenario {
         foreach ($window in $windows) {
             $safeTitle = ($window.Title -replace '[^A-Za-z0-9._-]+', '-').Trim('-')
             if ([string]::IsNullOrWhiteSpace($safeTitle)) { $safeTitle = "window" }
-            $path = Join-Path $captureRoot ("{0:D2}-{1}-{2}-{3}.png" -f $index, $Scenario, $Theme, $safeTitle)
+            $path = Join-Path $captureRoot ("{0:D2}-{1}-{2}-{3}-{4}.png" -f $index, $Scenario, $Theme, $Density, $safeTitle)
             Save-WindowPng -Window $window -Path $path
             Write-Host "Captured $path"
             $index++

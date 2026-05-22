@@ -61,14 +61,15 @@ After both capture helpers have produced matching Linux and Windows PNGs, run:
   --linux-dir ./packaging/.build/linux-gtk-visuals \
   --windows-dir ./packaging/.build/windows-gtk-visuals \
   --theme dark \
+  --density compact \
   --threshold 0.035
 ```
 
-The comparison helper pairs captures by scenario, index, and theme; writes diff
+The comparison helper pairs captures by scenario, index, theme, and density; writes diff
 PNGs under `packaging/.build/gtk-visual-diffs/`; and emits
 `packaging/.build/gtk-visual-diffs/report.tsv`. It fails when dimensions differ,
-when a matching capture is missing, or when normalized RMSE exceeds the chosen
-threshold. Use the TSV plus diff PNGs as the objective evidence for parity
+when a matching capture for the same theme/density is missing, or when
+normalized RMSE exceeds the chosen threshold. Use the TSV plus diff PNGs as the objective evidence for parity
 bugs before marking a screenshot pair `pass`, `minor`, or `fail`.
 
 ## Manual screenshot checklist
