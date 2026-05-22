@@ -15,6 +15,8 @@ const LAYOUT_TREE_RS: &str = include_str!("../src/ui/layout_tree.rs");
 const LAUNCH_SCREEN_RS: &str = include_str!("../src/ui/launch_screen.rs");
 const PACKAGE_APPIMAGE_SH: &str = include_str!("../packaging/build-appimage.sh");
 const PACKAGE_ARTIFACTS_YML: &str = include_str!("../.github/workflows/package-artifacts.yml");
+const PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH: &str =
+    include_str!("../packaging/capture-linux-gtk-visuals.sh");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
@@ -1026,7 +1028,9 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
     assert!(
         DOC_WINDOWS_GTK_VISUAL_QA
             .contains("Ubuntu/Linux GTK shell as the canonical visual baseline")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-linux-gtk-visuals.sh")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("capture-windows-gtk-visuals.ps1")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("packaging/.build/linux-gtk-visuals/")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Launch dashboard")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Saved workspace cards")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("New/edit wizard")
@@ -1053,6 +1057,20 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Stop-ProcessTree")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Get-ProcessWindows -ProcessIds $processIds"),
         "visual capture helper should seed isolated profiles and capture launcher/workspace windows, including self-extracting launcher child processes"
+    );
+
+    assert!(
+        PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("launch-dashboard")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("restored-workspace")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_theme")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_density")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Restore")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("TERMINALTILER_PROFILE_ROOT")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("xdotool search --onlyvisible --pid")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("import -window")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("gnome-screenshot")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Linux GTK visual captures written"),
+        "Linux visual capture helper should seed matching baseline profiles and capture comparable GTK reference windows"
     );
 }
 

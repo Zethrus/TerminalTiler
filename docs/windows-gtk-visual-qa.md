@@ -15,7 +15,22 @@ cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-sh
 
 `setup-windows-gtk.ps1` accepts `TERMINALTILER_GTK_RUNTIME_ROOT` if you already have a GTK runtime, and otherwise can build one with gvsbuild. The script exports `PATH`, `LIB`, `INCLUDE`, and `PKG_CONFIG_PATH` for gtk-rs/MSVC builds.
 
-## Capture helper
+## Capture helpers
+
+Capture the Ubuntu/Linux GTK reference first with the same seeded profiles:
+
+```bash
+cargo build --release --features voice-cpal
+./packaging/capture-linux-gtk-visuals.sh \
+  --exe ./target/release/terminaltiler \
+  --theme dark \
+  --density compact
+```
+
+The Linux helper writes PNGs under
+`packaging/.build/linux-gtk-visuals/`. It uses the same scenario names,
+profile seed data, theme values, and density values as the Windows helper so
+review bundles can compare matching windows directly.
 
 After building a GTK package, capture starter screenshots with:
 
