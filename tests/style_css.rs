@@ -159,7 +159,10 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("sync_windows_fullscreen_chrome(window")
             && WINDOWS_GTK_APP_RS.contains("fullscreen_button, true")
             && WINDOWS_GTK_APP_RS.contains("&fullscreen_button, false")
-            && WINDOWS_GTK_APP_RS.contains("&fullscreen_for_click,\n                    false"),
+            && source_contains(
+                WINDOWS_GTK_APP_RS,
+                "&fullscreen_for_click,\n                    false"
+            ),
         "Windows GTK should use the same shared workspace fullscreen chrome behavior as Linux for workspace previews and hide it on the launch deck"
     );
 }
@@ -980,6 +983,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "Assert-DirectoryExists",
         "Test-DirectoryHasFiles",
         "Assert-DirectoryHasFiles",
+        "Assert-GtkRuntimeResource",
         "Assert-WindowsStagedPayload",
         "portable.nsi",
     ] {
@@ -993,12 +997,15 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         WINDOWS_BUILD_PS1
             .contains("GTK runtime root is required for the canonical Windows GTK payload")
             && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build")
-            && WINDOWS_BUILD_PS1.contains("Assert-DirectoryHasFiles -Path $source")
+            && WINDOWS_BUILD_PS1.contains("Assert-GtkRuntimeResource -Path $source")
             && WINDOWS_BUILD_PS1
                 .contains("Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative)")
+            && WINDOWS_BUILD_PS1.contains("@{ Path = \"lib\\gio\"; AllowEmpty = $true }")
+            && WINDOWS_BUILD_PS1
+                .contains("Assert-DirectoryExists -Path (Join-Path $PortableRoot \"lib\\gio\")")
             && !WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
             && !WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
-        "Windows packaging should require a complete GTK runtime/resource payload before building release artifacts"
+        "Windows packaging should require real GTK runtime/resource payload directories before building release artifacts while allowing legitimately empty GIO module dirs"
     );
 
     assert!(
@@ -1041,8 +1048,10 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         WINDOWS_SMOKE_PS1.contains("function Assert-DirectoryHasFiles")
             && WINDOWS_SMOKE_PS1.contains("did not contain any files")
             && WINDOWS_SMOKE_PS1
-                .contains("Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative)"),
-        "Windows smoke test should verify GTK runtime/resource directories are populated, not just present"
+                .contains("Assert-DirectoryHasFiles -Path (Join-Path $PayloadRoot $relative)")
+            && WINDOWS_SMOKE_PS1
+                .contains("Assert-Path -Path (Join-Path $PayloadRoot \"lib\\gio\")"),
+        "Windows smoke test should verify GTK runtime/resource directories are populated where gvsbuild ships files and present for optional GIO modules"
     );
 
     assert!(

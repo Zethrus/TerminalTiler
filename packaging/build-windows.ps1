@@ -121,6 +121,21 @@ function Assert-DirectoryHasFiles {
     }
 }
 
+function Assert-GtkRuntimeResource {
+    param(
+        [string]$Path,
+        [string]$RelativePath,
+        [switch]$AllowEmpty
+    )
+
+    if ($AllowEmpty) {
+        Assert-DirectoryExists -Path $Path -Description "GTK runtime resource $RelativePath"
+    }
+    else {
+        Assert-DirectoryHasFiles -Path $Path -Description "GTK runtime resource $RelativePath"
+    }
+}
+
 function Copy-WindowsGtkRuntime {
     param(
         [string]$RuntimeRoot,
@@ -145,18 +160,25 @@ function Copy-WindowsGtkRuntime {
         throw "libadwaita runtime DLL was not copied from $RuntimeBin"
     }
 
-    foreach ($relative in @(
-        "etc",
-        "lib\gdk-pixbuf-2.0",
-        "lib\gio",
-        "lib\gtk-4.0",
-        "share\glib-2.0",
-        "share\icons",
-        "share\themes"
-    )) {
+    $runtimeResources = @(
+        @{ Path = "etc"; AllowEmpty = $false },
+        @{ Path = "lib\gdk-pixbuf-2.0"; AllowEmpty = $false },
+        # gvsbuild can legitimately produce an empty gio module directory while
+        # still shipping the required GIO DLLs. Keep the directory in the
+        # canonical payload for loader search parity without inventing sentinel
+        # files that would make MSI/zip validation meaningless.
+        @{ Path = "lib\gio"; AllowEmpty = $true },
+        @{ Path = "lib\gtk-4.0"; AllowEmpty = $false },
+        @{ Path = "share\glib-2.0"; AllowEmpty = $false },
+        @{ Path = "share\icons"; AllowEmpty = $false },
+        @{ Path = "share\themes"; AllowEmpty = $false }
+    )
+
+    foreach ($resource in $runtimeResources) {
+        $relative = $resource.Path
         $source = Join-Path $RuntimeRoot $relative
         $destination = Join-Path $PortableRoot $relative
-        Assert-DirectoryHasFiles -Path $source -Description "GTK runtime resource $relative"
+        Assert-GtkRuntimeResource -Path $source -RelativePath $relative -AllowEmpty:$resource.AllowEmpty
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
         Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
     }
@@ -190,17 +212,10 @@ function Assert-WindowsStagedPayload {
         if (-not (Get-ChildItem -Path $PortableRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
             throw "Staged libadwaita runtime DLL was not found in $PortableRoot"
         }
-        foreach ($relative in @(
-            "etc",
-            "lib\gdk-pixbuf-2.0",
-            "lib\gio",
-            "lib\gtk-4.0",
-            "share\glib-2.0",
-            "share\icons",
-            "share\themes"
-        )) {
+        foreach ($relative in @("etc", "lib\gdk-pixbuf-2.0", "lib\gtk-4.0", "share\glib-2.0", "share\icons", "share\themes")) {
             Assert-DirectoryHasFiles -Path (Join-Path $PortableRoot $relative) -Description "Staged GTK runtime resource $relative"
         }
+        Assert-DirectoryExists -Path (Join-Path $PortableRoot "lib\gio") -Description "Staged GTK runtime resource lib\gio"
     }
 }
 
