@@ -17,6 +17,7 @@ const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
+const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
@@ -605,14 +606,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview should only mark the active tile with the same header-local active styling as Linux"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("tile.pane_groups.join(\", \")")
-            && WORKSPACE_PREVIEW_RS
-                .contains("tooltip_text(format!(\"Pane groups: {pane_groups}\"))"),
+        WORKSPACE_PREVIEW_RS.contains("build_pane_group_chip(&tile.pane_groups)")
+            && TILE_CHROME_RS.contains("pane_groups.join(\", \")")
+            && TILE_CHROME_RS
+                .contains("set_tooltip_text(Some(&format!(\"Pane groups: {pane_groups}\")))"),
         "Windows GTK workspace preview headers should carry pane-group chips like the Linux GTK workspace headers"
     );
     assert!(
         UI_MOD_RS.contains("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
-            && UI_MOD_RS.contains("mod header_actions;")
+            && UI_MOD_RS.contains("mod tile_chrome;")
             && WORKSPACE_PREVIEW_RS.contains("build_header_icon_button")
             && WORKSPACE_PREVIEW_RS.contains("tile-recovery-action")
             && WORKSPACE_PREVIEW_RS.contains("tile-snippet-action")
@@ -631,9 +633,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("configure_dynamic_header_label")
-            && WORKSPACE_PREVIEW_RS.contains("HEADER_STATUS_MAX_CHARS")
-            && WORKSPACE_PREVIEW_RS.contains("HEADER_TITLE_MAX_CHARS")
-            && WORKSPACE_PREVIEW_RS.contains("HEADER_GROUP_MAX_CHARS")
+            && TILE_CHROME_RS.contains("HEADER_STATUS_MAX_CHARS")
+            && TILE_CHROME_RS.contains("HEADER_TITLE_MAX_CHARS")
+            && TILE_CHROME_RS.contains("HEADER_GROUP_MAX_CHARS")
+            && TILE_CHROME_RS.contains("fn domain_from_url")
             && WORKSPACE_PREVIEW_RS.contains("domain_from_url(&url)")
             && WORKSPACE_PREVIEW_RS.contains("pango::EllipsizeMode::Start")
             && WORKSPACE_PREVIEW_RS.contains("pango::EllipsizeMode::End"),
@@ -751,6 +754,10 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         "share\\hover-icons\\terminal.svg",
         "share\\hover-icons\\layout-dashboard.svg",
         "share\\hover-icons\\save.svg",
+        "etc",
+        "lib\\gdk-pixbuf-2.0",
+        "lib\\gio",
+        "lib\\gtk-4.0",
         "share\\icons",
         "share\\themes",
         "share\\glib-2.0",
@@ -962,25 +969,23 @@ fn workspace_tab_drag_stays_left_button_and_uses_title_drop_surface() {
 
 #[test]
 fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
+    assert!(
+        TILE_CHROME_RS.contains("fn configure_dynamic_header_label")
+            && TILE_CHROME_RS.contains("set_ellipsize(ellipsize)")
+            && TILE_CHROME_RS.contains("set_max_width_chars(max_width_chars)")
+            && TILE_CHROME_RS.contains("set_single_line_mode(true)")
+            && TILE_CHROME_RS.contains("set_tooltip_text(Some(full_text))"),
+        "shared tile chrome helper should ellipsize, cap width, stay single-line, and keep full values in tooltips"
+    );
+
     for (source_name, source) in [("terminal tile", TILE_VIEW_RS), ("web tile", WEB_TILE_RS)] {
-        assert!(
-            source.contains("fn configure_dynamic_header_label"),
-            "{source_name} should centralize dynamic header label constraints"
-        );
-        assert!(
-            source.contains("set_ellipsize(ellipsize)")
-                && source.contains("set_max_width_chars(max_width_chars)")
-                && source.contains("set_single_line_mode(true)")
-                && source.contains("set_tooltip_text(Some(full_text))"),
-            "{source_name} dynamic header labels should ellipsize, cap width, stay single-line, and keep full values in tooltips"
-        );
         for label in ["&title", "&status", "&badge"] {
             assert!(
                 source_contains(
                     source,
                     &format!("configure_dynamic_header_label(\n        {label},"),
                 ),
-                "{source_name} should constrain dynamic header label {label}"
+                "{source_name} should constrain dynamic header label {label} through the shared helper"
             );
         }
         assert!(
@@ -990,8 +995,10 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
     }
 
     assert!(
-        TILE_VIEW_RS.contains("&pane_group_label")
-            && TILE_VIEW_RS.contains("HEADER_GROUP_MAX_CHARS")
+        TILE_VIEW_RS.contains("build_pane_group_chip(&tile.pane_groups)")
+            && TILE_CHROME_RS.contains("HEADER_GROUP_MAX_CHARS")
+            && TILE_CHROME_RS
+                .contains("set_tooltip_text(Some(&format!(\"Pane groups: {pane_groups}\")))")
             && TILE_VIEW_RS.contains("set_tooltip_text(Some(&status_line))"),
         "terminal tile pane-group and status chips should truncate text while keeping full tooltip values"
     );

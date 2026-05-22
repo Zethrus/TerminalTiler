@@ -12,13 +12,12 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::ui::context_menu;
-use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::tile_chrome::{
+    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, WEB_HEADER_BADGE_MAX_CHARS,
+    build_header_icon_button, configure_dynamic_header_label, domain_from_url,
+};
 use crate::ui::tile_drag::TileDragPayload;
-
-const HEADER_BADGE_MAX_CHARS: i32 = 4;
-const HEADER_STATUS_MAX_CHARS: i32 = 28;
-const HEADER_TITLE_MAX_CHARS: i32 = 28;
 
 type GetWebTileSettings = Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>;
 
@@ -91,7 +90,7 @@ pub fn build(
     configure_dynamic_header_label(
         &badge,
         "Web tile",
-        HEADER_BADGE_MAX_CHARS,
+        WEB_HEADER_BADGE_MAX_CHARS,
         gtk::pango::EllipsizeMode::End,
     );
     configure_dynamic_header_label(
@@ -484,32 +483,12 @@ fn defer_initial_navigation_until_mapped(web_view: &webkit6::WebView, url: &str,
     });
 }
 
-fn configure_dynamic_header_label(
-    label: &gtk::Label,
-    full_text: &str,
-    max_width_chars: i32,
-    ellipsize: gtk::pango::EllipsizeMode,
-) {
-    label.set_ellipsize(ellipsize);
-    label.set_max_width_chars(max_width_chars);
-    label.set_single_line_mode(true);
-    label.set_tooltip_text(Some(full_text));
-}
-
 fn build_settings_label(label: &str) -> gtk::Label {
     gtk::Label::builder()
         .label(label)
         .halign(gtk::Align::Start)
         .css_classes(["tile-header-popover-label"])
         .build()
-}
-
-fn domain_from_url(url: &str) -> String {
-    url.split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or(url)
-        .to_string()
 }
 
 fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {

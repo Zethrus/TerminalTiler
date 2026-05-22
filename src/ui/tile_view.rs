@@ -17,14 +17,12 @@ use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
-use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::tile_chrome::{
+    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, TERMINAL_HEADER_BADGE_MAX_CHARS,
+    build_header_icon_button, build_pane_group_chip, configure_dynamic_header_label,
+};
 use crate::ui::tile_drag::TileDragPayload;
-
-const HEADER_BADGE_MAX_CHARS: i32 = 12;
-const HEADER_GROUP_MAX_CHARS: i32 = 16;
-const HEADER_STATUS_MAX_CHARS: i32 = 28;
-const HEADER_TITLE_MAX_CHARS: i32 = 28;
 
 pub struct TileView {
     pub widget: gtk::Widget,
@@ -93,7 +91,7 @@ pub fn build(
     configure_dynamic_header_label(
         &badge,
         &tile.agent_label,
-        HEADER_BADGE_MAX_CHARS,
+        TERMINAL_HEADER_BADGE_MAX_CHARS,
         gtk::pango::EllipsizeMode::End,
     );
     configure_dynamic_header_label(
@@ -106,21 +104,7 @@ pub fn build(
 
     left.append(&badge);
     left.append(&title);
-    if !tile.pane_groups.is_empty() {
-        let pane_groups = tile.pane_groups.join(", ");
-        let pane_group_label = gtk::Label::builder()
-            .label(&pane_groups)
-            .halign(gtk::Align::Start)
-            .tooltip_text(format!("Pane groups: {pane_groups}"))
-            .css_classes(["status-chip", "muted-chip"])
-            .build();
-        configure_dynamic_header_label(
-            &pane_group_label,
-            &pane_groups,
-            HEADER_GROUP_MAX_CHARS,
-            gtk::pango::EllipsizeMode::End,
-        );
-        pane_group_label.set_tooltip_text(Some(&format!("Pane groups: {pane_groups}")));
+    if let Some(pane_group_label) = build_pane_group_chip(&tile.pane_groups) {
         left.append(&pane_group_label);
     }
 
@@ -384,18 +368,6 @@ pub fn build(
 fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
     widget.set_size_request(0, 0);
     widget.set_overflow(gtk::Overflow::Hidden);
-}
-
-fn configure_dynamic_header_label(
-    label: &gtk::Label,
-    full_text: &str,
-    max_width_chars: i32,
-    ellipsize: gtk::pango::EllipsizeMode,
-) {
-    label.set_ellipsize(ellipsize);
-    label.set_max_width_chars(max_width_chars);
-    label.set_single_line_mode(true);
-    label.set_tooltip_text(Some(full_text));
 }
 
 fn install_dropped_file_target(

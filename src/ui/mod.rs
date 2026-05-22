@@ -10,11 +10,6 @@ pub mod companion_dialog;
 pub(crate) mod context_menu;
 #[cfg(target_os = "linux")]
 pub(crate) mod dialog_smoke;
-#[cfg(any(
-    target_os = "linux",
-    all(target_os = "windows", feature = "windows-gtk-shell")
-))]
-mod header_actions;
 pub(crate) mod icons;
 pub mod launch_screen;
 #[cfg(any(
@@ -24,6 +19,11 @@ pub mod launch_screen;
 pub mod layout_tree;
 #[cfg(target_os = "linux")]
 pub mod settings_dialog;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+mod tile_chrome;
 #[cfg(target_os = "linux")]
 pub(crate) mod tile_drag;
 #[cfg(target_os = "linux")]

@@ -62,9 +62,17 @@ function Assert-WindowsGtkRuntimePayload {
     if (-not (Get-ChildItem -Path $PayloadRoot -Filter "*adwaita*.dll" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
         throw "libadwaita runtime DLL was not found in $PayloadRoot"
     }
-    Assert-Path -Path (Join-Path $PayloadRoot "share\glib-2.0") -Description "GTK GLib shared data"
-    Assert-Path -Path (Join-Path $PayloadRoot "share\icons") -Description "GTK icon theme data"
-    Assert-Path -Path (Join-Path $PayloadRoot "share\themes") -Description "GTK theme data"
+    foreach ($relative in @(
+        "etc",
+        "lib\gdk-pixbuf-2.0",
+        "lib\gio",
+        "lib\gtk-4.0",
+        "share\glib-2.0",
+        "share\icons",
+        "share\themes"
+    )) {
+        Assert-Path -Path (Join-Path $PayloadRoot $relative) -Description "GTK runtime resource $relative"
+    }
 }
 
 function Convert-ToTomlPath {

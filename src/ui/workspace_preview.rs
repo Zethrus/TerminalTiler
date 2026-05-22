@@ -3,14 +3,12 @@ use gtk::{glib, pango};
 
 use crate::model::layout::{LayoutNode, TileKind, TileSpec, normalize_web_url};
 use crate::storage::session_store::{SavedSession, SavedTab};
-use crate::ui::header_actions::build_header_icon_button;
 use crate::ui::icons::{self, name as icon_name};
-
-const TERMINAL_HEADER_BADGE_MAX_CHARS: i32 = 12;
-const WEB_HEADER_BADGE_MAX_CHARS: i32 = 4;
-const HEADER_GROUP_MAX_CHARS: i32 = 16;
-const HEADER_STATUS_MAX_CHARS: i32 = 28;
-const HEADER_TITLE_MAX_CHARS: i32 = 28;
+use crate::ui::tile_chrome::{
+    HEADER_STATUS_MAX_CHARS, HEADER_TITLE_MAX_CHARS, TERMINAL_HEADER_BADGE_MAX_CHARS,
+    WEB_HEADER_BADGE_MAX_CHARS, build_header_icon_button, build_pane_group_chip,
+    configure_dynamic_header_label, domain_from_url,
+};
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
@@ -324,21 +322,7 @@ fn build_tile(tile: &TileSpec, active: bool) -> gtk::Widget {
     );
     left.append(&title);
 
-    if !tile.pane_groups.is_empty() {
-        let pane_groups = tile.pane_groups.join(", ");
-        let pane_group_label = gtk::Label::builder()
-            .label(&pane_groups)
-            .halign(gtk::Align::Start)
-            .tooltip_text(format!("Pane groups: {pane_groups}"))
-            .css_classes(["status-chip", "muted-chip"])
-            .build();
-        configure_dynamic_header_label(
-            &pane_group_label,
-            &pane_groups,
-            HEADER_GROUP_MAX_CHARS,
-            pango::EllipsizeMode::End,
-        );
-        pane_group_label.set_tooltip_text(Some(&format!("Pane groups: {pane_groups}")));
+    if let Some(pane_group_label) = build_pane_group_chip(&tile.pane_groups) {
         left.append(&pane_group_label);
     }
     header.append(&left);
@@ -462,26 +446,6 @@ fn tile_badge_tooltip(tile: &TileSpec) -> String {
         TileKind::Terminal => tile.agent_label.clone(),
         TileKind::WebView => "Web tile".into(),
     }
-}
-
-fn configure_dynamic_header_label(
-    label: &gtk::Label,
-    full_text: &str,
-    max_width_chars: i32,
-    ellipsize: pango::EllipsizeMode,
-) {
-    label.set_ellipsize(ellipsize);
-    label.set_max_width_chars(max_width_chars);
-    label.set_single_line_mode(true);
-    label.set_tooltip_text(Some(full_text));
-}
-
-fn domain_from_url(url: &str) -> String {
-    url.split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or(url)
-        .to_string()
 }
 
 fn build_empty_state() -> gtk::Widget {

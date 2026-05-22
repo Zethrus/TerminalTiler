@@ -136,8 +136,12 @@ function Copy-WindowsGtkRuntime {
             Write-Host "==> GTK runtime path $relative was not present in $RuntimeRoot; staging placeholder directory"
             Set-Content -Path (Join-Path $destination "terminaltiler-keep.txt") -Value "GTK runtime did not provide this optional directory." -Encoding ASCII
         }
-        if (-not (Get-ChildItem -Path $destination -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-            Set-Content -Path (Join-Path $destination "terminaltiler-keep.txt") -Value "GTK runtime provided an empty optional directory." -Encoding ASCII
+        # WiX harvests files, not empty directories. Keep a tiny sentinel in
+        # every required GTK resource root so the MSI installs the same
+        # directory contract that the portable zip and NSIS installer preserve.
+        $sentinel = Join-Path $destination "terminaltiler-keep.txt"
+        if (-not (Test-Path $sentinel)) {
+            Set-Content -Path $sentinel -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
         }
     }
 }
