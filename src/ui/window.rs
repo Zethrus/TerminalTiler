@@ -18,7 +18,9 @@ use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::product;
-use crate::services::session_restore::{session_for_restore_mode, shell_only_session};
+use crate::services::session_restore::{
+    flatten_window_sessions, session_for_restore_mode, shell_only_session,
+};
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
@@ -123,6 +125,83 @@ struct WorkspaceState {
     runtime: workspace_view::WorkspaceRuntime,
     terminal_zoom_steps: i32,
     layout_target: WorkspaceLayoutTargetHandle,
+}
+
+#[derive(Clone)]
+struct SessionPersistence {
+    window_id: usize,
+    tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: Rc<Cell<usize>>,
+    session_store: Rc<SessionStore>,
+    suppression_depth: Rc<Cell<usize>>,
+    pending_save: Rc<Cell<bool>>,
+}
+
+struct SessionSaveGuard {
+    suppression_depth: Rc<Cell<usize>>,
+}
+
+impl Drop for SessionSaveGuard {
+    fn drop(&mut self) {
+        self.suppression_depth
+            .set(self.suppression_depth.get().saturating_sub(1));
+    }
+}
+
+impl SessionPersistence {
+    fn new(
+        window_id: usize,
+        tabs: Rc<RefCell<Vec<WorkspaceTab>>>,
+        active_tab_id: Rc<Cell<usize>>,
+        session_store: Rc<SessionStore>,
+    ) -> Self {
+        Self {
+            window_id,
+            tabs,
+            active_tab_id,
+            session_store,
+            suppression_depth: Rc::new(Cell::new(0)),
+            pending_save: Rc::new(Cell::new(false)),
+        }
+    }
+
+    fn suppress(&self) -> SessionSaveGuard {
+        self.suppression_depth
+            .set(self.suppression_depth.get().saturating_add(1));
+        SessionSaveGuard {
+            suppression_depth: self.suppression_depth.clone(),
+        }
+    }
+
+    fn save_now(&self, reason: &str) {
+        self.pending_save.set(false);
+        if self.suppression_depth.get() > 0 {
+            logging::info(format!(
+                "deferred workspace session save while suppressed reason='{}'",
+                reason
+            ));
+            return;
+        }
+
+        logging::info(format!("saving workspace session state reason='{reason}'"));
+        save_application_window_session_state(
+            self.window_id,
+            &self.tabs,
+            self.active_tab_id.get(),
+            &self.session_store,
+        );
+    }
+
+    fn save_soon(&self, reason: &'static str) {
+        if self.suppression_depth.get() > 0 || self.pending_save.replace(true) {
+            return;
+        }
+
+        let persistence = self.clone();
+        glib::idle_add_local_once(move || {
+            persistence.save_now(reason);
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -608,6 +687,7 @@ struct RestoreSessionContext {
     suppress_empty_replacement: Rc<Cell<bool>>,
     asset_store: Rc<AssetStore>,
     preference_store: Rc<PreferenceStore>,
+    session_persistence: SessionPersistence,
 }
 
 impl Clone for RestoreSessionContext {
@@ -622,6 +702,7 @@ impl Clone for RestoreSessionContext {
             suppress_empty_replacement: self.suppress_empty_replacement.clone(),
             asset_store: self.asset_store.clone(),
             preference_store: self.preference_store.clone(),
+            session_persistence: self.session_persistence.clone(),
         }
     }
 }
@@ -839,6 +920,17 @@ fn present_with_initial_workspace(
     let (voice_event_tx, voice_event_rx) = mpsc::channel::<VoiceUiEvent>();
     let quit_requested = Rc::new(Cell::new(false));
     let force_quit_requested = Rc::new(Cell::new(false));
+    let session_persistence = SessionPersistence::new(
+        window_id,
+        tabs.clone(),
+        active_tab_id.clone(),
+        session_store.clone(),
+    );
+    let startup_restore_suppression = Rc::new(RefCell::new(
+        saved_session
+            .as_ref()
+            .map(|_| session_persistence.suppress()),
+    ));
     let tab_strip_controller = create_tab_strip_controller(
         &title.tabs_box,
         &title.root,
@@ -1147,6 +1239,7 @@ fn present_with_initial_workspace(
         let preference_store_for_select = preference_store.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let refresh_tab_strip_for_select = refresh_tab_strip.clone();
+        let session_persistence_for_select = session_persistence.clone();
         let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
             note_linux_main_attach_target_active(window_id);
             let (is_workspace, workspace_profile) = {
@@ -1194,6 +1287,7 @@ fn present_with_initial_workspace(
                 current_fullscreen_shortcut.borrow().as_str(),
             );
             refresh_tab_strip_for_select();
+            session_persistence_for_select.save_soon("active workspace tab changed");
         });
         {
             let sync_selected_tab = sync_selected_tab.clone();
@@ -1238,6 +1332,7 @@ fn present_with_initial_workspace(
         let active_for_rename = active_tab_id.clone();
         let select_for_rename = select_tab.clone();
         let refresh_tab_strip_for_rename = refresh_tab_strip.clone();
+        let session_persistence_for_rename = session_persistence.clone();
 
         *apply_tab_rename.borrow_mut() = Some(Box::new(move |tab_id, requested_title| {
             let requested_title = requested_title
@@ -1274,6 +1369,7 @@ fn present_with_initial_workspace(
             {
                 select(target_id);
             }
+            session_persistence_for_rename.save_soon("workspace tab renamed");
         }));
     }
 
@@ -1321,6 +1417,7 @@ fn present_with_initial_workspace(
         let active_for_reorder = active_tab_id.clone();
         let select_for_reorder = select_tab.clone();
         let refresh_tab_strip_for_reorder = refresh_tab_strip.clone();
+        let session_persistence_for_reorder = session_persistence.clone();
         tab_view.connect_page_reordered(move |_, page, position| {
             let moved_id = {
                 let tabs = tabs_for_reorder.borrow();
@@ -1350,6 +1447,7 @@ fn present_with_initial_workspace(
                 select(active_id);
             }
             refresh_tab_strip_for_reorder();
+            session_persistence_for_reorder.save_soon("workspace tabs reordered");
         });
     }
 
@@ -1372,6 +1470,7 @@ fn present_with_initial_workspace(
         let refresh_tab_strip_for_workspace = refresh_tab_strip.clone();
         let asset_store = asset_store.clone();
         let preference_store_for_workspace = preference_store.clone();
+        let session_persistence_for_workspace = session_persistence.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -1389,8 +1488,10 @@ fn present_with_initial_workspace(
                     preference_store_for_workspace.load().max_reconnect_attempts,
                     {
                         let layout_target = layout_target.clone();
+                        let session_persistence = session_persistence_for_workspace.clone();
                         Rc::new(move |next_layout| {
                             apply_workspace_layout_change(&layout_target, next_layout);
+                            session_persistence.save_soon("workspace layout changed");
                         })
                     },
                 );
@@ -1439,6 +1540,7 @@ fn present_with_initial_workspace(
                 if let Some(select) = select_for_workspace.borrow().as_ref() {
                     select(tab_id);
                 }
+                session_persistence_for_workspace.save_now("workspace tab launched");
             }));
     }
 
@@ -1495,6 +1597,7 @@ fn present_with_initial_workspace(
         let window_for_close = window.clone();
         let forced_tab_closes_for_signal = forced_tab_closes.clone();
         let suppress_empty_replacement_for_signal = suppress_empty_replacement.clone();
+        let session_persistence_for_close = session_persistence.clone();
         tab_view.connect_close_page(move |view, page| {
             let tab_id = {
                 let tabs = tabs_for_close.borrow();
@@ -1522,6 +1625,7 @@ fn present_with_initial_workspace(
                 let select_tab = select_for_close.clone();
                 let add_workspace_tab = add_for_close.clone();
                 let suppress_empty_replacement = suppress_empty_replacement_for_signal.clone();
+                let session_persistence = session_persistence_for_close.clone();
                 confirm_tab_close(
                     &window_for_close,
                     "Close Workspace?",
@@ -1538,6 +1642,7 @@ fn present_with_initial_workspace(
                                 &select_tab,
                                 &add_workspace_tab,
                                 &suppress_empty_replacement,
+                                &session_persistence,
                             );
                         } else {
                             view.close_page_finish(&page, false);
@@ -1556,6 +1661,7 @@ fn present_with_initial_workspace(
                 &select_for_close,
                 &add_for_close,
                 &suppress_empty_replacement_for_signal,
+                &session_persistence_for_close,
             );
             glib::Propagation::Stop
         });
@@ -1653,6 +1759,7 @@ fn present_with_initial_workspace(
         &density_shortcut_controller,
         &tabs,
         &active_tab_id,
+        &session_persistence,
         current_density_shortcut.borrow().as_str(),
     );
 
@@ -1661,6 +1768,7 @@ fn present_with_initial_workspace(
         &zoom_in_shortcut_controller,
         &tabs,
         &active_tab_id,
+        &session_persistence,
         current_zoom_in_shortcut.borrow().as_str(),
     );
 
@@ -1669,6 +1777,7 @@ fn present_with_initial_workspace(
         &zoom_out_shortcut_controller,
         &tabs,
         &active_tab_id,
+        &session_persistence,
         current_zoom_out_shortcut.borrow().as_str(),
     );
 
@@ -1794,6 +1903,7 @@ fn present_with_initial_workspace(
         let voice_warm_state_for_settings = voice_warm_state.clone();
         let voice_warm_generation_for_settings = voice_warm_generation.clone();
         let voice_warm_error_for_settings = voice_warm_error.clone();
+        let session_persistence_for_settings = session_persistence.clone();
 
         Rc::new(move || {
             let preferences = preference_store_for_settings.load();
@@ -1937,6 +2047,7 @@ fn present_with_initial_workspace(
                         let window = window_for_settings.clone();
                         let controller_handle = density_shortcut_controller.clone();
                         let current_shortcut = current_density_shortcut.clone();
+                        let session_persistence = session_persistence_for_settings.clone();
                         move |shortcut| {
                             preference_store.save_workspace_density_shortcut(&shortcut);
                             current_shortcut.replace(shortcut.clone());
@@ -1945,6 +2056,7 @@ fn present_with_initial_workspace(
                                 &controller_handle,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &shortcut,
                             );
                             logging::info(format!(
@@ -1972,6 +2084,7 @@ fn present_with_initial_workspace(
                         let window = window_for_settings.clone();
                         let controller_handle = zoom_in_shortcut_controller.clone();
                         let current_shortcut = current_zoom_in_shortcut.clone();
+                        let session_persistence = session_persistence_for_settings.clone();
                         move |shortcut| {
                             preference_store.save_workspace_zoom_in_shortcut(&shortcut);
                             current_shortcut.replace(shortcut.clone());
@@ -1980,6 +2093,7 @@ fn present_with_initial_workspace(
                                 &controller_handle,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &shortcut,
                             );
                             logging::info(format!(
@@ -2007,6 +2121,7 @@ fn present_with_initial_workspace(
                         let window = window_for_settings.clone();
                         let controller_handle = zoom_out_shortcut_controller.clone();
                         let current_shortcut = current_zoom_out_shortcut.clone();
+                        let session_persistence = session_persistence_for_settings.clone();
                         move |shortcut| {
                             preference_store.save_workspace_zoom_out_shortcut(&shortcut);
                             current_shortcut.replace(shortcut.clone());
@@ -2015,6 +2130,7 @@ fn present_with_initial_workspace(
                                 &controller_handle,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &shortcut,
                             );
                             logging::info(format!(
@@ -2529,6 +2645,7 @@ fn present_with_initial_workspace(
                             current_command_palette_shortcut.clone();
                         let sync_close_to_background_notice =
                             sync_close_to_background_notice.clone();
+                        let session_persistence = session_persistence_for_settings.clone();
                         move || {
                             let defaults = AppPreferences::default();
                             preference_store.save(&defaults);
@@ -2556,6 +2673,7 @@ fn present_with_initial_workspace(
                                 &density_controller,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &defaults.workspace_density_shortcut,
                             );
                             install_workspace_zoom_in_shortcut(
@@ -2563,6 +2681,7 @@ fn present_with_initial_workspace(
                                 &zoom_in_controller,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &defaults.workspace_zoom_in_shortcut,
                             );
                             install_workspace_zoom_out_shortcut(
@@ -2570,6 +2689,7 @@ fn present_with_initial_workspace(
                                 &zoom_out_controller,
                                 &tabs,
                                 &active_tab_id,
+                                &session_persistence,
                                 &defaults.workspace_zoom_out_shortcut,
                             );
                             install_command_palette_shortcut(
@@ -2983,6 +3103,7 @@ fn present_with_initial_workspace(
     let refresh_for_back = refresh_launch_tabs.clone();
     let select_for_back = select_tab.clone();
     let active_for_back = active_tab_id.clone();
+    let session_persistence_for_back = session_persistence.clone();
     back_button.connect_clicked(move |_| {
         let tab_id = active_for_back.get();
         if tab_id == 0 {
@@ -3007,6 +3128,7 @@ fn present_with_initial_workspace(
             let close_tab_for_back = close_tab_for_back.clone();
             let refresh_for_back = refresh_for_back.clone();
             let select_for_back = select_for_back.clone();
+            let session_persistence_for_back = session_persistence_for_back.clone();
 
             move || {
                 let runtime = {
@@ -3046,6 +3168,7 @@ fn present_with_initial_workspace(
                 if let Some(select) = select_for_back.borrow().as_ref() {
                     select(tab_id);
                 }
+                session_persistence_for_back.save_now("workspace tab returned to launch deck");
             }
         };
 
@@ -3066,6 +3189,7 @@ fn present_with_initial_workspace(
         let tabs_for_save = tabs.clone();
         let active_for_save = active_tab_id.clone();
         let session_store = session_store.clone();
+        let session_persistence_for_window_close = session_persistence.clone();
         let current_close_to_background = current_close_to_background.clone();
         let quit_requested = quit_requested.clone();
         let force_quit_requested = force_quit_requested.clone();
@@ -3117,12 +3241,7 @@ fn present_with_initial_workspace(
             tray_controller.set_window_hidden(false);
             voice_transcriber.shutdown();
             let runtimes = workspace_runtimes(&tabs_for_save);
-            save_application_window_session_state(
-                window_id,
-                &tabs_for_save,
-                active_for_save.get(),
-                &session_store,
-            );
+            session_persistence_for_window_close.save_now("closing application window");
             unregister_linux_main_attach_target(window_id);
 
             for runtime in runtimes {
@@ -3159,6 +3278,8 @@ fn present_with_initial_workspace(
         let window_for_restore = window.clone();
         let warning = startup_warning.clone();
         let restore_mode = preference_store.load().default_restore_mode;
+        let session_persistence_for_restore = session_persistence.clone();
+        let startup_restore_suppression_for_restore = startup_restore_suppression.clone();
 
         glib::idle_add_local_once(move || {
             let restore_context = RestoreSessionContext {
@@ -3171,6 +3292,7 @@ fn present_with_initial_workspace(
                 suppress_empty_replacement: suppress_empty_replacement.clone(),
                 asset_store: asset_store.clone(),
                 preference_store: preference_store.clone(),
+                session_persistence: session_persistence_for_restore.clone(),
             };
             match restore_mode {
                 RestoreLaunchMode::Prompt => prompt_session_resume(
@@ -3180,22 +3302,30 @@ fn present_with_initial_workspace(
                     {
                         let restore_context = restore_context.clone();
                         let resume_session = resume_session.clone();
+                        let startup_restore_suppression =
+                            startup_restore_suppression_for_restore.clone();
                         move || {
+                            startup_restore_suppression.borrow_mut().take();
                             restore_saved_session(&restore_context, resume_session.clone(), true);
                         }
                     },
                     {
                         let restore_context = restore_context.clone();
                         let shell_session = shell_only_session(&resume_session);
+                        let startup_restore_suppression =
+                            startup_restore_suppression_for_restore.clone();
                         move || {
+                            startup_restore_suppression.borrow_mut().take();
                             restore_saved_session(&restore_context, shell_session.clone(), true);
                         }
                     },
                     move || {
+                        startup_restore_suppression_for_restore.borrow_mut().take();
                         session_store_for_restore.clear();
                     },
                 ),
                 RestoreLaunchMode::RerunStartupCommands => {
+                    startup_restore_suppression_for_restore.borrow_mut().take();
                     if let Some(session) = session_for_restore_mode(
                         &resume_session,
                         RestoreLaunchMode::RerunStartupCommands,
@@ -3204,6 +3334,7 @@ fn present_with_initial_workspace(
                     }
                 }
                 RestoreLaunchMode::ShellOnly => {
+                    startup_restore_suppression_for_restore.borrow_mut().take();
                     if let Some(session) =
                         session_for_restore_mode(&resume_session, RestoreLaunchMode::ShellOnly)
                     {
@@ -4030,6 +4161,7 @@ fn restore_saved_session(
     saved_session: SavedSession,
     replace_existing: bool,
 ) {
+    let save_guard = context.session_persistence.suppress();
     if replace_existing {
         clear_all_tabs(
             &context.tabs,
@@ -4064,8 +4196,10 @@ fn restore_saved_session(
             context.preference_store.load().max_reconnect_attempts,
             {
                 let layout_target = layout_target.clone();
+                let session_persistence = context.session_persistence.clone();
                 Rc::new(move |next_layout| {
                     apply_workspace_layout_change(&layout_target, next_layout);
+                    session_persistence.save_soon("workspace layout changed");
                 })
             },
         );
@@ -4114,6 +4248,10 @@ fn restore_saved_session(
     {
         select(active_id);
     }
+    drop(save_guard);
+    context
+        .session_persistence
+        .save_now("saved workspace session restored");
 }
 
 fn prompt_tab_rename<F>(window: &adw::ApplicationWindow, current_title: &str, on_submit: F)
@@ -4963,11 +5101,13 @@ fn install_workspace_density_shortcut(
     controller_handle: &ShortcutControllerHandle,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: &Rc<Cell<usize>>,
+    session_persistence: &SessionPersistence,
     shortcut: &str,
 ) {
     let window_for_shortcut = window.clone();
     let tabs_for_shortcut = tabs.clone();
     let active_for_shortcut = active_tab_id.clone();
+    let session_persistence = session_persistence.clone();
     install_shortcut_controller(
         window,
         controller_handle,
@@ -4984,6 +5124,7 @@ fn install_workspace_density_shortcut(
             )
             .is_some()
             {
+                session_persistence.save_soon("workspace density changed");
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -4997,11 +5138,13 @@ fn install_workspace_zoom_in_shortcut(
     controller_handle: &ShortcutControllerHandle,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: &Rc<Cell<usize>>,
+    session_persistence: &SessionPersistence,
     shortcut: &str,
 ) {
     let tabs_for_shortcut = tabs.clone();
     let active_for_shortcut = active_tab_id.clone();
     let window_for_shortcut = window.clone();
+    let session_persistence = session_persistence.clone();
     install_shortcut_controller(
         window,
         controller_handle,
@@ -5016,6 +5159,7 @@ fn install_workspace_zoom_in_shortcut(
             )
             .is_some()
             {
+                session_persistence.save_soon("workspace zoom changed");
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -5029,11 +5173,13 @@ fn install_workspace_zoom_out_shortcut(
     controller_handle: &ShortcutControllerHandle,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: &Rc<Cell<usize>>,
+    session_persistence: &SessionPersistence,
     shortcut: &str,
 ) {
     let tabs_for_shortcut = tabs.clone();
     let active_for_shortcut = active_tab_id.clone();
     let window_for_shortcut = window.clone();
+    let session_persistence = session_persistence.clone();
     install_shortcut_controller(
         window,
         controller_handle,
@@ -5048,6 +5194,7 @@ fn install_workspace_zoom_out_shortcut(
             )
             .is_some()
             {
+                session_persistence.save_soon("workspace zoom changed");
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -5494,6 +5641,7 @@ fn finish_tab_close(
     select_tab: &SelectTabHandle,
     add_workspace_tab: &VoidHandle,
     suppress_empty_replacement: &Cell<bool>,
+    session_persistence: &SessionPersistence,
 ) {
     let (runtime, next_active_id, should_create_replacement) = {
         let mut tabs = tabs.borrow_mut();
@@ -5531,6 +5679,7 @@ fn finish_tab_close(
         {
             add_tab();
         }
+        session_persistence.save_now("last workspace tab closed");
         return;
     }
 
@@ -5539,6 +5688,7 @@ fn finish_tab_close(
     {
         select(next_active_id);
     }
+    session_persistence.save_now("workspace tab closed");
 }
 
 fn has_active_workspace_processes(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> bool {
@@ -5553,34 +5703,18 @@ fn linux_session_registry() -> &'static Mutex<LinuxSessionRegistry> {
 }
 
 fn persist_linux_session_registry(registry: &LinuxSessionRegistry, session_store: &SessionStore) {
-    if registry.windows.is_empty() {
+    let Some(session) = flatten_window_sessions(
+        registry
+            .windows
+            .iter()
+            .map(|(window_id, session)| (*window_id, session)),
+        registry.active_window_id,
+    ) else {
         session_store.clear();
         return;
-    }
+    };
 
-    let active_window_id = registry
-        .active_window_id
-        .filter(|id| registry.windows.contains_key(id))
-        .or_else(|| registry.windows.keys().next().copied());
-    let mut tabs = Vec::new();
-    let mut active_tab_index = 0usize;
-    let mut current_offset = 0usize;
-
-    for (window_id, session) in &registry.windows {
-        if Some(*window_id) == active_window_id {
-            active_tab_index = current_offset
-                + session
-                    .active_tab_index
-                    .min(session.tabs.len().saturating_sub(1));
-        }
-        current_offset += session.tabs.len();
-        tabs.extend(session.tabs.clone());
-    }
-
-    session_store.save(&SavedSession {
-        tabs,
-        active_tab_index,
-    });
+    session_store.save(&session);
 }
 
 fn save_application_window_session_state(

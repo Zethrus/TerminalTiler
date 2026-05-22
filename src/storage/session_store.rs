@@ -406,4 +406,52 @@ type = "workspace-root"
         assert_eq!(tiles[1].tile_kind, crate::model::layout::TileKind::WebView);
         assert_eq!(tiles[1].url.as_deref(), Some("https://example.com"));
     }
+
+    #[test]
+    fn saves_and_loads_multiple_workspace_tabs() {
+        let dir = temp_dir("multi-tab-session");
+        let first_root = dir.join("first");
+        let second_root = dir.join("second");
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(&second_root).unwrap();
+        let path = dir.join("session.toml");
+        let store = SessionStore::from_path(path);
+
+        let mut first_preset = sample_preset();
+        first_preset.name = "First Workspace".into();
+        let mut second_preset = sample_preset();
+        second_preset.name = "Second Workspace".into();
+        store.save(&super::SavedSession {
+            tabs: vec![
+                SavedTab {
+                    preset: first_preset,
+                    workspace_root: first_root.clone(),
+                    custom_title: Some("first".into()),
+                    terminal_zoom_steps: 1,
+                },
+                SavedTab {
+                    preset: second_preset,
+                    workspace_root: second_root.clone(),
+                    custom_title: Some("second".into()),
+                    terminal_zoom_steps: -2,
+                },
+            ],
+            active_tab_index: 1,
+        });
+
+        let outcome = store.load_with_status();
+        let session = outcome.session.expect("saved session should load");
+
+        assert!(outcome.warning.is_none());
+        assert_eq!(session.tabs.len(), 2);
+        assert_eq!(session.active_tab_index, 1);
+        assert_eq!(session.tabs[0].preset.name, "First Workspace");
+        assert_eq!(session.tabs[1].preset.name, "Second Workspace");
+        assert_eq!(session.tabs[0].custom_title.as_deref(), Some("first"));
+        assert_eq!(session.tabs[1].custom_title.as_deref(), Some("second"));
+        assert_eq!(session.tabs[0].terminal_zoom_steps, 1);
+        assert_eq!(session.tabs[1].terminal_zoom_steps, -2);
+        assert_eq!(session.tabs[0].workspace_root, first_root);
+        assert_eq!(session.tabs[1].workspace_root, second_root);
+    }
 }

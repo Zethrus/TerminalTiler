@@ -97,6 +97,7 @@ mod imp {
     use crate::services::layout_editor::{plan_tile_reconciliation, split_web_tile};
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::services::runbooks::resolve_runbook;
+    use crate::services::session_restore::flatten_window_sessions;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::PreferenceStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
@@ -3545,35 +3546,18 @@ mod imp {
         registry: &WorkspaceSessionRegistry,
         session_store: &SessionStore,
     ) {
-        if registry.windows.is_empty() {
+        let Some(session) = flatten_window_sessions(
+            registry
+                .windows
+                .iter()
+                .map(|(window_id, session)| (*window_id, session)),
+            registry.active_window_id,
+        ) else {
             session_store.clear();
             return;
-        }
+        };
 
-        let active_window_id = registry
-            .active_window_id
-            .filter(|id| registry.windows.contains_key(id))
-            .or_else(|| registry.windows.keys().next().copied());
-
-        let mut tabs = Vec::new();
-        let mut active_tab_index = 0usize;
-        let mut current_offset = 0usize;
-
-        for (window_id, session) in &registry.windows {
-            if Some(*window_id) == active_window_id {
-                active_tab_index = current_offset
-                    + session
-                        .active_tab_index
-                        .min(session.tabs.len().saturating_sub(1));
-            }
-            current_offset += session.tabs.len();
-            tabs.extend(session.tabs.clone());
-        }
-
-        session_store.save(&SavedSession {
-            tabs,
-            active_tab_index,
-        });
+        session_store.save(&session);
     }
 
     fn save_workspace_session_state(state: &WorkspaceWindowState) {
