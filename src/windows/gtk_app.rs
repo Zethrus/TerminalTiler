@@ -11,12 +11,12 @@ mod imp {
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
-    use crate::model::preset::{ApplicationDensity, ThemeMode};
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+    use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, build_title_tab_chrome};
@@ -672,30 +672,6 @@ mod imp {
         app.windows()
             .into_iter()
             .find_map(|window| window.downcast::<adw::ApplicationWindow>().ok())
-    }
-
-    fn apply_theme_mode(window: &adw::ApplicationWindow, theme: ThemeMode) {
-        let manager = adw::StyleManager::default();
-        manager.set_color_scheme(match theme {
-            ThemeMode::System => adw::ColorScheme::Default,
-            ThemeMode::Light => adw::ColorScheme::ForceLight,
-            ThemeMode::Dark => adw::ColorScheme::ForceDark,
-        });
-
-        window.remove_css_class("theme-light");
-        window.remove_css_class("theme-dark");
-        window.add_css_class(if manager.is_dark() {
-            "theme-dark"
-        } else {
-            "theme-light"
-        });
-    }
-
-    fn apply_window_density(window: &adw::ApplicationWindow, density: ApplicationDensity) {
-        window.remove_css_class("profile-comfortable");
-        window.remove_css_class("profile-standard");
-        window.remove_css_class("profile-compact");
-        window.add_css_class(density.css_class());
     }
 
     fn present_workspace_preview_from_launch(

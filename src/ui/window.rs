@@ -16,7 +16,7 @@ use crate::extension::RuntimeOptions;
 use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
-use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::product;
 use crate::services::session_restore::{session_for_restore_mode, shell_only_session};
 use crate::storage::asset_store::AssetStore;
@@ -25,6 +25,10 @@ use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
+use crate::ui::appearance::{
+    apply_optional_window_density, apply_theme_mode, resolved_theme_uses_dark_palette,
+    window_uses_dark_theme,
+};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
@@ -63,45 +67,6 @@ static LINUX_SESSION_REGISTRY: OnceLock<Mutex<LinuxSessionRegistry>> = OnceLock:
 
 thread_local! {
     static LINUX_MAIN_ATTACH_TARGETS: RefCell<Vec<LinuxMainAttachTarget>> = const { RefCell::new(Vec::new()) };
-}
-
-fn apply_theme_mode(window: &adw::ApplicationWindow, theme: &ThemeMode) {
-    let manager = adw::StyleManager::default();
-    manager.set_color_scheme(match theme {
-        ThemeMode::System => adw::ColorScheme::Default,
-        ThemeMode::Light => adw::ColorScheme::ForceLight,
-        ThemeMode::Dark => adw::ColorScheme::ForceDark,
-    });
-
-    window.remove_css_class("theme-light");
-    window.remove_css_class("theme-dark");
-    window.add_css_class(if manager.is_dark() {
-        "theme-dark"
-    } else {
-        "theme-light"
-    });
-}
-
-fn apply_window_density(window: &adw::ApplicationWindow, density: Option<ApplicationDensity>) {
-    window.remove_css_class("profile-comfortable");
-    window.remove_css_class("profile-standard");
-    window.remove_css_class("profile-compact");
-
-    if let Some(density) = density {
-        window.add_css_class(density.css_class());
-    }
-}
-
-fn resolved_theme_uses_dark_palette(theme: ThemeMode) -> bool {
-    match theme {
-        ThemeMode::System => adw::StyleManager::default().is_dark(),
-        ThemeMode::Light => false,
-        ThemeMode::Dark => true,
-    }
-}
-
-fn window_uses_dark_theme(window: &adw::ApplicationWindow) -> bool {
-    window.has_css_class("theme-dark")
 }
 
 fn shortcut_display_label(
@@ -4046,11 +4011,11 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
         },
         launch_screen::LaunchScreenActions {
             on_theme_preview: Rc::new(move |theme| {
-                apply_theme_mode(&theme_preview_window, &theme);
+                apply_theme_mode(&theme_preview_window, theme);
             }),
             on_density_preview: Rc::new({
                 move |density| {
-                    apply_window_density(&density_preview_window, Some(density));
+                    apply_optional_window_density(&density_preview_window, Some(density));
                 }
             }),
             on_launch: Rc::new(move |preset, workspace_root| {
@@ -4281,9 +4246,9 @@ fn apply_shell_profile(
         preset.density.label()
     ));
 
-    apply_theme_mode(window, &preset.theme);
+    apply_theme_mode(window, preset.theme);
 
-    apply_window_density(window, Some(preset.density));
+    apply_optional_window_density(window, Some(preset.density));
 }
 
 fn apply_launch_profile(
@@ -4297,8 +4262,8 @@ fn apply_launch_profile(
         preferences.default_theme.label(),
         preferences.default_density.label()
     ));
-    apply_theme_mode(window, &preferences.default_theme);
-    apply_window_density(window, Some(preferences.default_density));
+    apply_theme_mode(window, preferences.default_theme);
+    apply_optional_window_density(window, Some(preferences.default_density));
 }
 
 fn active_tab_is_workspace(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>, active_tab_id: usize) -> bool {
@@ -4350,7 +4315,7 @@ fn cycle_active_workspace_density(
         next_density,
         terminal_zoom_steps,
     );
-    apply_window_density(window, Some(next_density));
+    apply_optional_window_density(window, Some(next_density));
     logging::info(format!(
         "cycled workspace density preset='{}' density={}",
         workspace_name,

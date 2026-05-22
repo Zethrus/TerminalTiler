@@ -1,5 +1,6 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
 const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
+const APPEARANCE_RS: &str = include_str!("../src/ui/appearance.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
@@ -60,6 +61,37 @@ fn main_header_icon_buttons_have_clear_tooltips() {
             "icon_name::ASSETS,\n        \"Open assets manager\"",
         ),
         "main app header icon-only actions should explain their purpose on hover"
+    );
+}
+
+#[test]
+fn linux_and_windows_gtk_shells_share_appearance_chrome() {
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod appearance;")
+            && APPEARANCE_RS.contains("pub(crate) fn apply_theme_mode")
+            && APPEARANCE_RS.contains("pub(crate) fn apply_window_density")
+            && APPEARANCE_RS.contains("pub(crate) fn apply_optional_window_density")
+            && APPEARANCE_RS.contains("pub(crate) fn resolved_theme_uses_dark_palette")
+            && APPEARANCE_RS.contains("pub(crate) fn window_uses_dark_theme"),
+        "GTK appearance helpers should live in one shared module so Windows and Linux cannot drift"
+    );
+    assert!(
+        APPEARANCE_RS.contains("window.remove_css_class(\"theme-light\")")
+            && APPEARANCE_RS.contains("window.remove_css_class(\"theme-dark\")")
+            && APPEARANCE_RS.contains("window.add_css_class(if manager.is_dark()")
+            && APPEARANCE_RS.contains("window.remove_css_class(\"profile-comfortable\")")
+            && APPEARANCE_RS.contains("window.remove_css_class(\"profile-standard\")")
+            && APPEARANCE_RS.contains("window.remove_css_class(\"profile-compact\")"),
+        "shared GTK appearance should own the exact theme/density CSS class contract"
+    );
+    assert!(
+        WINDOW_RS.contains("use crate::ui::appearance::{")
+            && WINDOWS_GTK_APP_RS.contains("use crate::ui::appearance::{")
+            && !WINDOW_RS.contains("fn apply_theme_mode(window:")
+            && !WINDOWS_GTK_APP_RS.contains("fn apply_theme_mode(window:")
+            && !WINDOW_RS.contains("fn apply_window_density(window:")
+            && !WINDOWS_GTK_APP_RS.contains("fn apply_window_density(window:"),
+        "Linux and Windows GTK shells should call the same appearance helpers instead of carrying duplicate theme/density implementations"
     );
 }
 
