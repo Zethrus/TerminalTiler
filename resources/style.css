@@ -129,13 +129,6 @@ window.profile-comfortable .app-tab-title {
   font-size: 12px;
 }
 
-window.profile-comfortable .app-tab-badge {
-  min-width: 15px;
-  min-height: 15px;
-  padding: 0 5px;
-  font-size: 9px;
-}
-
 window.profile-comfortable button.app-tab-close {
   min-width: 20px;
   min-height: 20px;
@@ -286,13 +279,6 @@ window.profile-compact .app-tab-icon {
 
 window.profile-compact .app-tab-title {
   font-size: 10px;
-}
-
-window.profile-compact .app-tab-badge {
-  min-width: 12px;
-  min-height: 12px;
-  padding: 0 3px;
-  font-size: 8px;
 }
 
 window.profile-compact button.app-tab-close {
@@ -684,17 +670,6 @@ button.app-tab-select {
 
 .app-tab-shell.is-inactive .app-tab-icon {
   color: rgba(255, 255, 255, 0.52);
-}
-
-.app-tab-badge {
-  min-width: 16px;
-  min-height: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 10px;
-  font-weight: 700;
 }
 
 button.app-tab-close {
@@ -2682,11 +2657,6 @@ window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:checked image,
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:selected label,
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:checked label {
   color: #ffffff;
-}
-
-window.window-shell.theme-light .app-tab-badge {
-  background: rgba(25, 35, 50, 0.10);
-  color: rgba(25, 35, 50, 0.84);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab button.close,

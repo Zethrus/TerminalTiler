@@ -200,10 +200,6 @@ fn build_tab_chip(
         .unwrap_or(tab.preset.name.as_str());
     chrome.title_label.set_label(title);
     chrome.title_label.set_tooltip_text(Some(title));
-    chrome
-        .badge_label
-        .set_label(&tab.preset.layout.tile_specs().len().to_string());
-    chrome.badge_label.set_visible(true);
     {
         let on_select = on_select.clone();
         chrome.select_button.connect_clicked(move |_| {

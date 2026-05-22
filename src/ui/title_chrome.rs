@@ -7,8 +7,6 @@ pub(crate) struct TitleTabChrome {
     pub(crate) select_button: gtk::Button,
     pub(crate) close_button: gtk::Button,
     pub(crate) title_label: gtk::Label,
-    #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
-    pub(crate) badge_label: gtk::Label,
 }
 
 #[derive(Clone)]
@@ -86,16 +84,6 @@ pub(crate) fn build_title_tab_chrome() -> TitleTabChrome {
         .build();
     select_row.append(&title_label);
 
-    #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
-    let badge_label = {
-        let badge_label = gtk::Label::builder()
-            .visible(false)
-            .css_classes(["app-tab-badge"])
-            .build();
-        select_row.append(&badge_label);
-        badge_label
-    };
-
     select_button.set_child(Some(&select_row));
     shell.append(&select_button);
 
@@ -108,7 +96,5 @@ pub(crate) fn build_title_tab_chrome() -> TitleTabChrome {
         select_button,
         close_button,
         title_label,
-        #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
-        badge_label,
     }
 }

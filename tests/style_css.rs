@@ -709,14 +709,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         WORKSPACE_PREVIEW_RS.contains("build_title_tab_chrome")
             && WORKSPACE_PREVIEW_RS.contains("chrome.select_button.connect_clicked")
-            && WORKSPACE_PREVIEW_RS.contains("chrome.badge_label.set_visible(true)")
             && WORKSPACE_PREVIEW_RS.contains("pub struct SessionPreview")
             && WORKSPACE_PREVIEW_RS.contains("pub fn select_tab(&self, next_index: usize)")
             && WORKSPACE_PREVIEW_RS.contains("show_inline_tab_strip")
             && WORKSPACE_PREVIEW_RS.contains("while let Some(child) = shell.first_child()")
             && WORKSPACE_PREVIEW_RS.contains("shell.remove(&child)")
+            && !TITLE_CHROME_RS.contains("badge_label")
+            && !STYLE_CSS.contains("app-tab-badge")
             && !WORKSPACE_PREVIEW_RS.contains("select.set_sensitive(false)"),
-        "Windows GTK workspace preview tabs should switch active restored tabs through the shared title tab chrome instead of rendering disabled or duplicated tab chrome"
+        "Windows GTK workspace preview tabs should switch active restored tabs through the shared title tab chrome without adding Windows-only badge chips"
     );
     assert!(
         TITLE_CHROME_RS.contains("app-tab-strip")
