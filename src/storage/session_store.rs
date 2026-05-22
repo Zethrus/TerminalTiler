@@ -213,6 +213,7 @@ mod tests {
     use super::{SESSION_VERSION, SavedTab, SessionDocument, SessionStore};
     use crate::model::layout::{WorkingDirectory, tile};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+    use crate::platform::resolve_workspace_root;
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -451,7 +452,14 @@ type = "workspace-root"
         assert_eq!(session.tabs[1].custom_title.as_deref(), Some("second"));
         assert_eq!(session.tabs[0].terminal_zoom_steps, 1);
         assert_eq!(session.tabs[1].terminal_zoom_steps, -2);
-        assert_eq!(session.tabs[0].workspace_root, first_root);
-        assert_eq!(session.tabs[1].workspace_root, second_root);
+        // Session load intentionally resolves existing workspace roots before returning them.
+        assert_eq!(
+            session.tabs[0].workspace_root,
+            resolve_workspace_root(&first_root).unwrap()
+        );
+        assert_eq!(
+            session.tabs[1].workspace_root,
+            resolve_workspace_root(&second_root).unwrap()
+        );
     }
 }
