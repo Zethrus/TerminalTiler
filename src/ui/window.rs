@@ -28,7 +28,7 @@ use crate::tray::TrayController;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
-    launch_screen, settings_dialog, workspace_view,
+    launch_screen, settings_dialog, title_chrome::TitleChrome, workspace_view,
 };
 use crate::voice::audio::AudioCapture;
 use crate::voice::engine::{self, VoiceEngineEvent};
@@ -757,7 +757,7 @@ fn present_with_initial_workspace(
     header.add_css_class("app-headerbar");
 
     let tab_view = adw::TabView::builder().hexpand(true).vexpand(true).build();
-    let title = TitleChrome::new(&tab_view);
+    let title = TitleChrome::new();
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
 
@@ -4223,44 +4223,6 @@ fn restore_saved_session(
         && let Some(select) = context.select_tab.borrow().as_ref()
     {
         select(active_id);
-    }
-}
-
-#[derive(Clone)]
-struct TitleChrome {
-    root: gtk::Box,
-    tabs_box: gtk::Box,
-    add_button: gtk::Button,
-}
-
-impl TitleChrome {
-    fn new(_tab_view: &adw::TabView) -> Self {
-        let root = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .halign(gtk::Align::Center)
-            .build();
-
-        let tabs_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .halign(gtk::Align::Center)
-            .build();
-        tabs_box.add_css_class("app-tab-strip");
-
-        let add_button = icons::icon_button(
-            icon_name::ADD,
-            "New workspace tab",
-            &["flat", "app-tab-add"],
-        );
-        root.append(&tabs_box);
-        root.append(&add_button);
-
-        Self {
-            root,
-            tabs_box,
-            add_button,
-        }
     }
 }
 

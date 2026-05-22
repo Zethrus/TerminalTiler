@@ -28,6 +28,11 @@ mod tile_chrome;
 pub(crate) mod tile_drag;
 #[cfg(target_os = "linux")]
 pub mod tile_view;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub(crate) mod title_chrome;
 #[cfg(target_os = "linux")]
 pub mod web_tile;
 #[cfg(target_os = "linux")]

@@ -18,6 +18,7 @@ const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
+const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
@@ -571,15 +572,21 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
             && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_WIDTH")
             && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_HEIGHT")
+            && WINDOWS_GTK_APP_RS.contains("TitleChrome::new")
+            && WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
+            && WINDOWS_GTK_APP_RS.contains("window_shell.append(&header)")
+            && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
+            && WINDOW_RS.contains("title_chrome::TitleChrome")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
-            && WINDOWS_GTK_APP_RS.contains("crate::ui::workspace_preview::build_session_preview")
+            && WINDOWS_GTK_APP_RS.contains("crate::ui::workspace_preview::SessionPreview::new")
+            && WINDOWS_GTK_APP_RS.contains("sync_title_tabs_for_session")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
             && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
             && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),
-        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, and restore/open workspaces inside the shared GTK visual shell instead of the legacy Win32 host"
+        "Windows GTK shell should load canonical CSS, reuse the GTK launch deck, share the Linux header/tab chrome, and restore/open workspaces inside the shared GTK visual shell instead of the legacy Win32 host"
     );
 
     assert!(
@@ -600,12 +607,23 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("select.connect_clicked")
-            && WORKSPACE_PREVIEW_RS
-                .contains("render_session_preview(&shell, &session, &active_index)")
+            && WORKSPACE_PREVIEW_RS.contains("pub struct SessionPreview")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn select_tab(&self, next_index: usize)")
+            && WORKSPACE_PREVIEW_RS.contains("show_inline_tab_strip")
             && WORKSPACE_PREVIEW_RS.contains("while let Some(child) = shell.first_child()")
             && WORKSPACE_PREVIEW_RS.contains("shell.remove(&child)")
             && !WORKSPACE_PREVIEW_RS.contains("select.set_sensitive(false)"),
         "Windows GTK workspace preview tabs should switch active restored tabs instead of rendering the Linux-style tab selector as disabled chrome"
+    );
+    assert!(
+        TITLE_CHROME_RS.contains("app-tab-strip")
+            && TITLE_CHROME_RS.contains("app-tab-add")
+            && WINDOW_RS.contains("let title = TitleChrome::new();")
+            && WINDOWS_GTK_APP_RS.contains("let title = TitleChrome::new();")
+            && WINDOWS_GTK_APP_RS.contains("SessionPreview::new(&session, false)")
+            && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
+            && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
+        "Linux and Windows GTK shells should share the same titlebar tab chrome while Windows drives workspace-preview tab switching from the titlebar"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")

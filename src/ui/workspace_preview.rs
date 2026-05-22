@@ -24,34 +24,77 @@ use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary
 /// `web-tile-frame`) and the shared `layout_tree` split renderer instead of
 /// opening the legacy Win32 workspace host.
 pub fn build_session_preview(session: &SavedSession) -> gtk::Widget {
-    let session = Rc::new(session.clone());
-    let active_index = Rc::new(Cell::new(
-        session
-            .active_tab_index
-            .min(session.tabs.len().saturating_sub(1)),
-    ));
+    SessionPreview::new(session, true).widget()
+}
 
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-    make_shrinkable(&shell);
+#[derive(Clone)]
+pub struct SessionPreview {
+    shell: gtk::Box,
+    session: Rc<SavedSession>,
+    active_index: Rc<Cell<usize>>,
+    show_inline_tab_strip: bool,
+}
 
-    render_session_preview(&shell, &session, &active_index);
+impl SessionPreview {
+    pub fn new(session: &SavedSession, show_inline_tab_strip: bool) -> Self {
+        let session = Rc::new(session.clone());
+        let active_index = Rc::new(Cell::new(
+            session
+                .active_tab_index
+                .min(session.tabs.len().saturating_sub(1)),
+        ));
 
-    shell.upcast()
+        let shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(0)
+            .margin_top(4)
+            .margin_bottom(4)
+            .margin_start(4)
+            .margin_end(4)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        make_shrinkable(&shell);
+
+        let preview = Self {
+            shell,
+            session,
+            active_index,
+            show_inline_tab_strip,
+        };
+        preview.render();
+        preview
+    }
+
+    pub fn widget(&self) -> gtk::Widget {
+        self.shell.clone().upcast()
+    }
+
+    pub fn select_tab(&self, next_index: usize) {
+        self.active_index
+            .set(next_index.min(self.session.tabs.len().saturating_sub(1)));
+        self.render();
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active_index.get()
+    }
+
+    fn render(&self) {
+        render_session_preview(
+            &self.shell,
+            &self.session,
+            &self.active_index,
+            self.show_inline_tab_strip,
+        );
+    }
 }
 
 fn render_session_preview(
     shell: &gtk::Box,
     session: &Rc<SavedSession>,
     active_index: &Rc<Cell<usize>>,
+    show_inline_tab_strip: bool,
 ) {
     while let Some(child) = shell.first_child() {
         shell.remove(&child);
@@ -61,14 +104,14 @@ fn render_session_preview(
     active_index.set(current_index);
     let active_tab = session.tabs.get(current_index);
 
-    if !session.tabs.is_empty() {
+    if show_inline_tab_strip && !session.tabs.is_empty() {
         let on_select = {
             let shell = shell.clone();
             let session = session.clone();
             let active_index = active_index.clone();
             Rc::new(move |next_index: usize| {
                 active_index.set(next_index.min(session.tabs.len().saturating_sub(1)));
-                render_session_preview(&shell, &session, &active_index);
+                render_session_preview(&shell, &session, &active_index, true);
             })
         };
         shell.append(&build_tab_strip(session, current_index, on_select));

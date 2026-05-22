@@ -5,6 +5,7 @@ mod imp {
     use std::rc::Rc;
 
     use adw::prelude::*;
+    use gtk::pango;
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
@@ -14,7 +15,9 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+    use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
+    use crate::ui::title_chrome::TitleChrome;
 
     const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
 
@@ -71,20 +74,81 @@ mod imp {
             session_outcome.warning,
         );
 
+        let header = adw::HeaderBar::builder()
+            .show_start_title_buttons(true)
+            .show_end_title_buttons(true)
+            .build();
+        header.set_centering_policy(adw::CenteringPolicy::Loose);
+        header.add_css_class("app-headerbar");
+
+        let title = TitleChrome::new();
+        title.root.add_css_class("app-title-handle");
+        title.add_button.set_sensitive(false);
+        header.set_title_widget(Some(&title.root));
+
+        let overlay = adw::ToastOverlay::new();
+        let settings_button = icons::icon_button(
+            icon_name::SETTINGS,
+            "Open application settings",
+            &["flat", "titlebar-action-button", "titlebar-icon-button"],
+        );
+        {
+            let overlay = overlay.clone();
+            settings_button.connect_clicked(move |_| {
+                overlay.add_toast(adw::Toast::new(
+                    "GTK settings will open here once Windows settings are migrated",
+                ));
+            });
+        }
+        header.pack_end(&settings_button);
+
+        let assets_button = icons::icon_button(
+            icon_name::ASSETS,
+            "Open assets manager",
+            &["flat", "titlebar-action-button", "titlebar-icon-button"],
+        );
+        {
+            let overlay = overlay.clone();
+            assets_button.connect_clicked(move |_| {
+                overlay.add_toast(adw::Toast::new(
+                    "GTK assets manager will open here once Windows assets are migrated",
+                ));
+            });
+        }
+        header.pack_end(&assets_button);
+
+        let window_shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(0)
+            .build();
+        window_shell.append(&header);
+        window_shell.append(&overlay);
+
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(&options.product.app_title)
             .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
             .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
+            .content(&window_shell)
             .build();
         window.add_css_class("window-shell");
         window.add_css_class("windows-gtk-shell");
         apply_theme_mode(&window, preferences.default_theme);
         apply_window_density(&window, preferences.default_density);
 
-        let overlay = adw::ToastOverlay::new();
+        sync_windows_title_tabs(
+            &title,
+            vec![WindowsTitleTab {
+                label: "Workspace 1".into(),
+                tooltip: "Launch deck".into(),
+                active: true,
+                on_select: None,
+            }],
+        );
+
         let launch_preferences = preferences.clone();
         let launch_overlay = overlay.clone();
+        let launch_title = title.clone();
         let actions = LaunchScreenActions {
             on_theme_preview: Rc::new({
                 let window = window.clone();
@@ -97,6 +161,7 @@ mod imp {
             on_launch: Rc::new(move |preset, workspace_root| {
                 present_workspace_preview_from_launch(
                     &launch_overlay,
+                    &launch_title,
                     &launch_preferences,
                     preset,
                     workspace_root,
@@ -124,7 +189,6 @@ mod imp {
             actions,
         );
         overlay.set_child(Some(&launch));
-        window.set_content(Some(&overlay));
         window.present();
 
         if let Some(session) = session_outcome
@@ -133,19 +197,21 @@ mod imp {
             .and_then(|session| session_for_restore_mode(session, preferences.default_restore_mode))
         {
             let overlay = overlay.clone();
+            let title = title.clone();
             let preferences = preferences.clone();
             gtk::glib::idle_add_local_once(move || {
-                present_workspace_preview_from_restore(&overlay, &preferences, session);
+                present_workspace_preview_from_restore(&overlay, &title, &preferences, session);
             });
         }
     }
 
     fn present_workspace_preview_from_restore(
         overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
         _preferences: &AppPreferences,
         session: SavedSession,
     ) {
-        present_workspace_preview(overlay, session, "restored");
+        present_workspace_preview(overlay, title, session, "restored");
     }
 
     fn primary_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {
@@ -180,6 +246,7 @@ mod imp {
 
     fn present_workspace_preview_from_launch(
         overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
         _preferences: &AppPreferences,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
@@ -194,19 +261,134 @@ mod imp {
             active_tab_index: 0,
         };
 
-        present_workspace_preview(overlay, session, "opened");
+        present_workspace_preview(overlay, title, session, "opened");
     }
 
-    fn present_workspace_preview(overlay: &adw::ToastOverlay, session: SavedSession, action: &str) {
+    fn present_workspace_preview(
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        session: SavedSession,
+        action: &str,
+    ) {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
-        let preview = crate::ui::workspace_preview::build_session_preview(&session);
-        overlay.set_child(Some(&preview));
+        let preview = crate::ui::workspace_preview::SessionPreview::new(&session, false);
+        sync_title_tabs_for_session(title, &session, &preview);
+        overlay.set_child(Some(&preview.widget()));
         logging::info(format!(
             "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
         ));
         overlay.add_toast(adw::Toast::new(
             "Workspace opened in the shared GTK visual shell",
         ));
+    }
+
+    struct WindowsTitleTab {
+        label: String,
+        tooltip: String,
+        active: bool,
+        on_select: Option<Rc<dyn Fn()>>,
+    }
+
+    fn sync_title_tabs_for_session(
+        title: &TitleChrome,
+        session: &SavedSession,
+        preview: &crate::ui::workspace_preview::SessionPreview,
+    ) {
+        let session = Rc::new(session.clone());
+        let active_index = preview.active_index();
+        let tabs = session
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                let label = tab
+                    .custom_title
+                    .as_deref()
+                    .unwrap_or(tab.preset.name.as_str())
+                    .to_string();
+                let tooltip = tab.workspace_root.display().to_string();
+                let preview = preview.clone();
+                let title = title.clone();
+                let session = session.clone();
+                WindowsTitleTab {
+                    label,
+                    tooltip,
+                    active: index == active_index,
+                    on_select: Some(Rc::new(move || {
+                        preview.select_tab(index);
+                        sync_title_tabs_for_session(&title, &session, &preview);
+                    })),
+                }
+            })
+            .collect();
+
+        sync_windows_title_tabs(title, tabs);
+    }
+
+    fn sync_windows_title_tabs(title: &TitleChrome, tabs: Vec<WindowsTitleTab>) {
+        while let Some(child) = title.tabs_box.first_child() {
+            title.tabs_box.remove(&child);
+        }
+
+        for tab in tabs {
+            title.tabs_box.append(&build_windows_title_tab(tab));
+        }
+    }
+
+    fn build_windows_title_tab(tab: WindowsTitleTab) -> gtk::Widget {
+        let shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(0)
+            .css_classes(["app-tab-shell"])
+            .build();
+        shell.add_css_class(if tab.active {
+            "is-active"
+        } else {
+            "is-inactive"
+        });
+        shell.set_tooltip_text(Some(&tab.tooltip));
+
+        let select_button = gtk::Button::builder()
+            .css_classes(["app-tab-select"])
+            .hexpand(true)
+            .focus_on_click(false)
+            .build();
+        let select_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .hexpand(true)
+            .build();
+        select_row.append(
+            &gtk::Image::builder()
+                .icon_name(icon_name::TERMINAL)
+                .valign(gtk::Align::Center)
+                .css_classes(["app-tab-icon"])
+                .build(),
+        );
+        select_row.append(
+            &gtk::Label::builder()
+                .label(&tab.label)
+                .xalign(0.0)
+                .hexpand(true)
+                .single_line_mode(true)
+                .ellipsize(pango::EllipsizeMode::End)
+                .width_chars(14)
+                .max_width_chars(14)
+                .css_classes(["app-tab-title"])
+                .build(),
+        );
+        select_button.set_child(Some(&select_row));
+        if let Some(on_select) = tab.on_select {
+            select_button.connect_clicked(move |_| on_select());
+        }
+        shell.append(&select_button);
+
+        let close_button =
+            icons::icon_button(icon_name::CLOSE, "Close tab", &["flat", "app-tab-close"]);
+        close_button.set_sensitive(false);
+        shell.append(&close_button);
+
+        shell.upcast()
     }
 
     fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {
