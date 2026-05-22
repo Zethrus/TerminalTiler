@@ -1,6 +1,9 @@
 #[cfg(target_os = "linux")]
 pub mod about_dialog;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod assets_manager;
 #[cfg(target_os = "linux")]
 pub mod command_palette;
@@ -8,7 +11,10 @@ pub mod command_palette;
 pub mod companion_dialog;
 #[cfg(target_os = "linux")]
 pub(crate) mod context_menu;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod dialog_smoke;
 pub(crate) mod icons;
 pub mod launch_screen;
@@ -17,7 +23,10 @@ pub mod launch_screen;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod layout_tree;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod settings_dialog;
 #[cfg(any(
     target_os = "linux",

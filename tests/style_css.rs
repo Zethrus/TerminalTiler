@@ -590,6 +590,24 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
 
     assert!(
+        UI_MOD_RS.contains("pub mod settings_dialog;")
+            && UI_MOD_RS.contains("pub mod assets_manager;")
+            && UI_MOD_RS.contains("pub(crate) mod dialog_smoke;")
+            && WINDOWS_GTK_APP_RS.contains("settings_dialog::present")
+            && WINDOWS_GTK_APP_RS.contains("assets_manager::present")
+            && WINDOWS_GTK_APP_RS.contains("SettingsDialogInput")
+            && WINDOWS_GTK_APP_RS.contains("SettingsDialogActions")
+            && WINDOWS_GTK_APP_RS.contains("save_default_theme")
+            && WINDOWS_GTK_APP_RS.contains("save_default_density")
+            && WINDOWS_GTK_APP_RS.contains("reset_builtin_presets")
+            && !WINDOWS_GTK_APP_RS
+                .contains("GTK settings will open here once Windows settings are migrated")
+            && !WINDOWS_GTK_APP_RS
+                .contains("GTK assets manager will open here once Windows assets are migrated"),
+        "Windows GTK titlebar actions should open the shared GTK settings/assets dialogs instead of placeholder toasts"
+    );
+
+    assert!(
         WORKSPACE_PREVIEW_RS.contains("workspace-summary")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-strip")
             && WORKSPACE_PREVIEW_RS.contains("app-tab-shell")

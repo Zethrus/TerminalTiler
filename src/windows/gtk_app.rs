@@ -5,6 +5,7 @@ mod imp {
     use std::rc::Rc;
 
     use adw::prelude::*;
+    use gtk::gio;
     use gtk::pango;
 
     use crate::extension::RuntimeOptions;
@@ -18,6 +19,9 @@ mod imp {
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::TitleChrome;
+    use crate::ui::{assets_manager, settings_dialog};
+    use crate::voice::VoicePackStatus;
+    use crate::voice::audio::AudioCapture;
 
     const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
 
@@ -92,14 +96,6 @@ mod imp {
             "Open application settings",
             &["flat", "titlebar-action-button", "titlebar-icon-button"],
         );
-        {
-            let overlay = overlay.clone();
-            settings_button.connect_clicked(move |_| {
-                overlay.add_toast(adw::Toast::new(
-                    "GTK settings will open here once Windows settings are migrated",
-                ));
-            });
-        }
         header.pack_end(&settings_button);
 
         let assets_button = icons::icon_button(
@@ -107,14 +103,6 @@ mod imp {
             "Open assets manager",
             &["flat", "titlebar-action-button", "titlebar-icon-button"],
         );
-        {
-            let overlay = overlay.clone();
-            assets_button.connect_clicked(move |_| {
-                overlay.add_toast(adw::Toast::new(
-                    "GTK assets manager will open here once Windows assets are migrated",
-                ));
-            });
-        }
         header.pack_end(&assets_button);
 
         let window_shell = gtk::Box::builder()
@@ -135,6 +123,32 @@ mod imp {
         window.add_css_class("windows-gtk-shell");
         apply_theme_mode(&window, preferences.default_theme);
         apply_window_density(&window, preferences.default_density);
+
+        {
+            let window = window.clone();
+            let overlay = overlay.clone();
+            let preference_store = preference_store.clone();
+            let preset_store = preset_store.clone();
+            let options = options.clone();
+            settings_button.connect_clicked(move |_| {
+                present_settings_dialog(
+                    &window,
+                    &overlay,
+                    preference_store.clone(),
+                    preset_store.clone(),
+                    options.clone(),
+                );
+            });
+        }
+
+        {
+            let window = window.clone();
+            let overlay = overlay.clone();
+            let asset_store = asset_store.clone();
+            assets_button.connect_clicked(move |_| {
+                present_assets_manager(&window, &overlay, asset_store.clone());
+            });
+        }
 
         sync_windows_title_tabs(
             &title,
@@ -212,6 +226,220 @@ mod imp {
         session: SavedSession,
     ) {
         present_workspace_preview(overlay, title, session, "restored");
+    }
+
+    fn present_settings_dialog(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        preference_store: PreferenceStore,
+        preset_store: PresetStore,
+        options: RuntimeOptions,
+    ) {
+        let preferences = preference_store.load();
+        settings_dialog::present(
+            window,
+            settings_dialog::SettingsDialogInput {
+                default_theme: preferences.default_theme,
+                default_density: preferences.default_density,
+                close_to_background: preferences.close_to_background,
+                workspace_fullscreen_shortcut: preferences.workspace_fullscreen_shortcut,
+                workspace_density_shortcut: preferences.workspace_density_shortcut,
+                workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut,
+                workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut,
+                command_palette_shortcut: preferences.command_palette_shortcut,
+                settings_dialog_width: preferences.settings_dialog_width,
+                settings_dialog_height: preferences.settings_dialog_height,
+                max_reconnect_attempts: preferences.max_reconnect_attempts,
+                voice: preferences.voice,
+                microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
+                product_display_name: options.product.display_name.clone(),
+                settings_title: options.product.settings_title.clone(),
+                settings_summary: options.product.settings_summary.clone(),
+            },
+            settings_dialog::SettingsDialogActions {
+                on_theme_changed: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    move |theme| {
+                        preference_store.save_default_theme(theme);
+                        apply_theme_mode(&window, theme);
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Default theme set to {}",
+                            theme.label()
+                        )));
+                    }
+                }),
+                on_density_changed: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    move |density| {
+                        preference_store.save_default_density(density);
+                        apply_window_density(&window, density);
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Default density set to {}",
+                            density.label()
+                        )));
+                    }
+                }),
+                on_close_to_background_changed: Rc::new({
+                    let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    move |close_to_background| {
+                        preference_store.save_close_to_background(close_to_background);
+                        let message = if close_to_background {
+                            "Close-to-background preference enabled"
+                        } else {
+                            "Close-to-background preference disabled"
+                        };
+                        overlay.add_toast(adw::Toast::new(message));
+                    }
+                }),
+                on_fullscreen_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |shortcut| preference_store.save_workspace_fullscreen_shortcut(&shortcut)
+                }),
+                on_density_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |shortcut| preference_store.save_workspace_density_shortcut(&shortcut)
+                }),
+                on_zoom_in_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |shortcut| preference_store.save_workspace_zoom_in_shortcut(&shortcut)
+                }),
+                on_zoom_out_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |shortcut| preference_store.save_workspace_zoom_out_shortcut(&shortcut)
+                }),
+                on_command_palette_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |shortcut| preference_store.save_command_palette_shortcut(&shortcut)
+                }),
+                on_max_reconnect_attempts_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |attempts| preference_store.save_max_reconnect_attempts(attempts)
+                }),
+                on_voice_preferences_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |voice| preference_store.save_voice_preferences(voice)
+                }),
+                on_voice_pack_install_requested: Rc::new({
+                    let overlay = overlay.clone();
+                    move || {
+                        overlay.add_toast(adw::Toast::new(
+                            "Windows GTK voice pack installation will be enabled after runtime parity work",
+                        ));
+                    }
+                }),
+                voice_pack_status_provider: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move || -> VoicePackStatus { preference_store.load().voice.pack_status.clone() }
+                }),
+                on_voice_pack_delete_requested: Rc::new({
+                    let overlay = overlay.clone();
+                    move || {
+                        overlay.add_toast(adw::Toast::new(
+                            "Windows GTK voice pack deletion will be enabled after runtime parity work",
+                        ));
+                    }
+                }),
+                on_voice_pack_health_check_requested: Rc::new({
+                    let overlay = overlay.clone();
+                    move || {
+                        overlay.add_toast(adw::Toast::new(
+                            "Windows GTK voice pack health checks will be enabled after runtime parity work",
+                        ));
+                    }
+                }),
+                on_open_logs_folder: Rc::new({
+                    let overlay = overlay.clone();
+                    move || open_logs_folder(&overlay)
+                }),
+                on_reset_defaults: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    move || {
+                        let defaults = AppPreferences::default();
+                        preference_store.save(&defaults);
+                        apply_theme_mode(&window, defaults.default_theme);
+                        apply_window_density(&window, defaults.default_density);
+                        overlay.add_toast(adw::Toast::new("Application defaults reset"));
+                    }
+                }),
+                on_reset_builtin_presets: Rc::new({
+                    let overlay = overlay.clone();
+                    move || match preset_store.reset_builtin_presets() {
+                        Ok(()) => {
+                            logging::info("reset builtin saved presets to factory defaults");
+                            overlay.add_toast(adw::Toast::new("Default saved presets restored"));
+                        }
+                        Err(error) => {
+                            logging::error(format!(
+                                "failed to reset builtin saved presets: {error}"
+                            ));
+                            overlay.add_toast(adw::Toast::new(
+                                "Failed to restore default saved presets",
+                            ));
+                        }
+                    }
+                }),
+                on_size_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |width, height| preference_store.save_settings_dialog_size(width, height)
+                }),
+            },
+        );
+    }
+
+    fn present_assets_manager(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        asset_store: AssetStore,
+    ) {
+        let workspace_root = std::env::current_dir().ok();
+        assets_manager::present(
+            window,
+            Rc::new(asset_store),
+            workspace_root,
+            Rc::new({
+                let overlay = overlay.clone();
+                move || {
+                    logging::info("Windows GTK assets manager saved assets");
+                    overlay.add_toast(adw::Toast::new("Assets saved"));
+                }
+            }),
+        );
+    }
+
+    fn open_logs_folder(overlay: &adw::ToastOverlay) {
+        match logging::ensure_log_directory() {
+            Ok(path) => {
+                let uri = gio::File::for_path(&path).uri();
+                match gio::AppInfo::launch_default_for_uri(
+                    uri.as_str(),
+                    None::<&gio::AppLaunchContext>,
+                ) {
+                    Ok(()) => {
+                        logging::info(format!("opened application logs folder {}", path.display()));
+                        overlay.add_toast(adw::Toast::new("Opened logs folder"));
+                    }
+                    Err(error) => {
+                        logging::error(format!(
+                            "failed to open application logs folder '{}': {}",
+                            path.display(),
+                            error
+                        ));
+                        overlay.add_toast(adw::Toast::new("Failed to open logs folder"));
+                    }
+                }
+            }
+            Err(error) => {
+                logging::error(format!("failed to prepare logs folder: {error}"));
+                overlay.add_toast(adw::Toast::new("Could not resolve logs folder"));
+            }
+        }
     }
 
     fn primary_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {
