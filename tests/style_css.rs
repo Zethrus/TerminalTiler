@@ -740,6 +740,18 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces via shared chrome"
     );
     assert!(
+        WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_content_chrome")
+            && WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_alert_revealer")
+            && WORKSPACE_CHROME_RS.contains("gtk::Orientation::Horizontal")
+            && WORKSPACE_CHROME_RS.contains("gtk::RevealerTransitionType::SlideLeft")
+            && WORKSPACE_VIEW_RS.contains("build_workspace_content_chrome")
+            && WORKSPACE_VIEW_RS.contains("build_workspace_alert_revealer")
+            && WORKSPACE_PREVIEW_RS.contains("build_workspace_content_chrome")
+            && WORKSPACE_PREVIEW_RS.contains("build_workspace_alert_revealer")
+            && WORKSPACE_PREVIEW_RS.contains("build_preview_alert_sidebar"),
+        "Windows GTK workspace preview should share the Linux workspace content/alert revealer structure instead of appending layout directly"
+    );
+    assert!(
         !WORKSPACE_PREVIEW_RS.contains("tab.preset.description")
             && !WORKSPACE_PREVIEW_RS.contains("tab.preset.density.label"),
         "Windows GTK workspace preview summary should not keep preview-only description/density chips that are absent from the Linux GTK workspace toolbar"

@@ -25,6 +25,32 @@ pub(crate) struct WorkspaceSummaryChrome {
     pub(crate) path_label: gtk::Label,
 }
 
+pub(crate) fn build_workspace_content_chrome(
+    layout_host: &impl glib::object::IsA<gtk::Widget>,
+    alert_revealer: &impl glib::object::IsA<gtk::Widget>,
+) -> gtk::Widget {
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    content.append(layout_host);
+    content.append(alert_revealer);
+    content.upcast()
+}
+
+pub(crate) fn build_workspace_alert_revealer(
+    alert_sidebar: &impl glib::object::IsA<gtk::Widget>,
+) -> gtk::Revealer {
+    let alert_revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideLeft)
+        .reveal_child(false)
+        .build();
+    alert_revealer.set_child(Some(alert_sidebar));
+    alert_revealer
+}
+
 pub(crate) fn build_workspace_summary_chrome(
     input: WorkspaceSummaryInput<'_>,
 ) -> WorkspaceSummaryChrome {

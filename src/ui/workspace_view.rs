@@ -21,7 +21,10 @@ use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
-use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary_chrome};
+use crate::ui::workspace_chrome::{
+    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_content_chrome,
+    build_workspace_summary_chrome,
+};
 use crate::ui::{layout_tree, tile_view, web_tile};
 
 const ACTIVE_TILE_CLASS: &str = "is-active-tile";
@@ -1122,11 +1125,7 @@ pub fn build_with_layout_change_handler(
     );
     alert_sidebar.append(&mark_all_read_button);
     alert_sidebar.append(&alert_scroller);
-    let alert_revealer = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideLeft)
-        .reveal_child(false)
-        .build();
-    alert_revealer.set_child(Some(&alert_sidebar));
+    let alert_revealer = build_workspace_alert_revealer(&alert_sidebar);
     {
         let alert_revealer = alert_revealer.clone();
         alert_button.connect_clicked(move |_| {
@@ -1142,16 +1141,10 @@ pub fn build_with_layout_change_handler(
     bind_alert_ui(&runtime, &alert_store, &alert_button, &alert_list);
 
     shell.append(&summary.widget);
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(0)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-    content.append(&layout_host);
-    content.append(&alert_revealer);
-    shell.append(&content);
+    shell.append(&build_workspace_content_chrome(
+        &layout_host,
+        &alert_revealer,
+    ));
 
     WorkspaceView {
         widget: shell.upcast(),
