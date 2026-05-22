@@ -617,7 +617,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("tile-recovery-action")
             && WORKSPACE_PREVIEW_RS.contains("tile-snippet-action")
             && WORKSPACE_PREVIEW_RS.contains("\"Edit URL and refresh settings\"")
-            && WORKSPACE_PREVIEW_RS.contains("actions.append(&status);\n    match tile.tile_kind")
+            && source_contains(
+                WORKSPACE_PREVIEW_RS,
+                "actions.append(&status);\n    match tile.tile_kind",
+            )
             && source_contains(
                 WORKSPACE_PREVIEW_RS,
                 "actions.append(&recovery_button);\n            actions.append(&snippet_button);"
