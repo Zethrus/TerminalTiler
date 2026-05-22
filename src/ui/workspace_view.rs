@@ -21,6 +21,7 @@ use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary_chrome};
 use crate::ui::{layout_tree, tile_view, web_tile};
 
 const ACTIVE_TILE_CLASS: &str = "is-active-tile";
@@ -126,17 +127,6 @@ impl WorkspaceRuntime {
             .iter()
             .filter_map(|tile| tile.session.as_ref())
             .any(TerminalSession::has_active_process)
-    }
-
-    pub fn saved_groups(&self) -> Vec<String> {
-        let tiles = self
-            .inner
-            .tiles
-            .borrow()
-            .iter()
-            .map(|tile| tile.tile.clone())
-            .collect::<Vec<_>>();
-        saved_groups_for_tiles(&tiles)
     }
 
     pub fn tile_specs(&self) -> Vec<crate::model::layout::TileSpec> {
@@ -948,41 +938,23 @@ pub fn build_with_layout_change_handler(
         .margin_end(4)
         .build();
 
-    let summary = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .css_classes(["workspace-summary"])
-        .build();
-
-    let name_label = gtk::Label::builder()
-        .label(&preset.name)
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .css_classes(["workspace-summary-name"])
-        .build();
-
-    let path_label = gtk::Label::builder()
-        .label(workspace_root.display().to_string())
-        .halign(gtk::Align::End)
-        .valign(gtk::Align::Center)
-        .hexpand(true)
-        .ellipsize(gtk::pango::EllipsizeMode::Start)
-        .css_classes(["workspace-summary-path"])
-        .build();
-
-    let url_entry = gtk::Entry::builder()
-        .placeholder_text("URL")
-        .width_chars(30)
-        .hexpand(false)
-        .css_classes(["workspace-url-entry"])
-        .build();
-    let url_reload_button =
-        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
-    let runbook_selector = gtk::ComboBoxText::new();
-    runbook_selector.add_css_class("surface-select-control");
-    let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
-    runbook_button.set_sensitive(false);
+    let summary = build_workspace_summary_chrome(WorkspaceSummaryInput {
+        name: &preset.name,
+        path: workspace_root.display().to_string(),
+        pane_groups: saved_groups_for_tiles(&preset.layout.tile_specs()),
+        controls_sensitive: true,
+    });
+    let url_entry = summary.url_entry.clone();
+    let url_reload_button = summary.url_reload_button.clone();
+    let runbook_selector = summary.runbook_selector.clone();
+    let runbook_button = summary.runbook_button.clone();
+    let add_web_tile_button = summary.add_web_tile_button.clone();
+    let broadcast_state = summary.broadcast_state.clone();
+    let broadcast_selector = summary.broadcast_selector.clone();
+    let broadcast_entry = summary.broadcast_entry.clone();
+    let broadcast_button = summary.broadcast_button.clone();
+    let alert_button = summary.alert_button.clone();
+    let path_label = summary.path_label.clone();
     let layout_host = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
@@ -1041,8 +1013,6 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let add_web_tile_button =
-        icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
     {
         let runtime = runtime.clone();
         add_web_tile_button.connect_clicked(move |_| {
@@ -1051,28 +1021,6 @@ pub fn build_with_layout_change_handler(
     }
 
     let broadcast_target = Rc::new(RefCell::new(BroadcastTarget::Off));
-    let broadcast_state = gtk::Label::builder()
-        .label(BroadcastTarget::Off.label())
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "muted-chip"])
-        .build();
-    let broadcast_selector = gtk::ComboBoxText::new();
-    broadcast_selector.add_css_class("surface-select-control");
-    broadcast_selector.append(Some("off"), "Broadcast Off");
-    broadcast_selector.append(Some("all"), "Broadcast All");
-    for group in runtime.saved_groups() {
-        let id = format!("group:{group}");
-        broadcast_selector.append(Some(&id), &format!("Group: {group}"));
-    }
-    broadcast_selector.set_active_id(Some("off"));
-
-    let broadcast_entry = gtk::Entry::builder()
-        .placeholder_text("Quick send command")
-        .width_chars(18)
-        .css_classes(["workspace-broadcast-entry"])
-        .build();
-    let broadcast_button =
-        icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
 
     {
         let broadcast_target = broadcast_target.clone();
@@ -1144,8 +1092,6 @@ pub fn build_with_layout_change_handler(
         });
     }
 
-    let alert_button =
-        icons::labeled_button("Alerts (0)", icon_name::ALERTS, &["flat", "surface-button"]);
     let mark_all_read_button = icons::labeled_button(
         "Mark All Read",
         icon_name::APPLY,
@@ -1195,19 +1141,7 @@ pub fn build_with_layout_change_handler(
     }
     bind_alert_ui(&runtime, &alert_store, &alert_button, &alert_list);
 
-    summary.append(&name_label);
-    summary.append(&alert_button);
-    summary.append(&broadcast_state);
-    summary.append(&broadcast_selector);
-    summary.append(&broadcast_entry);
-    summary.append(&broadcast_button);
-    summary.append(&add_web_tile_button);
-    summary.append(&url_entry);
-    summary.append(&url_reload_button);
-    summary.append(&runbook_selector);
-    summary.append(&runbook_button);
-    summary.append(&path_label);
-    shell.append(&summary);
+    shell.append(&summary.widget);
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)

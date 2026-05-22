@@ -34,6 +34,7 @@ const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
 const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.nsi");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
+const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 
@@ -643,28 +644,28 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK preview header labels should use the same bounded ellipsized status/title/group behavior as Linux tile headers"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("\"Alerts (0)\"")
-            && WORKSPACE_PREVIEW_RS.contains("\"Broadcast Off\"")
-            && WORKSPACE_PREVIEW_RS.contains("\"Quick send command\"")
-            && WORKSPACE_PREVIEW_RS.contains("workspace-broadcast-entry")
-            && WORKSPACE_PREVIEW_RS.contains("\"Add Web Tile\"")
-            && WORKSPACE_PREVIEW_RS.contains("workspace-url-entry")
-            && WORKSPACE_PREVIEW_RS.contains("\"Reload\"")
-            && WORKSPACE_PREVIEW_RS.contains("surface-select-control")
-            && WORKSPACE_PREVIEW_RS.contains("\"Runbook\"")
-            && WORKSPACE_PREVIEW_RS.contains("\"Run\"")
+        WORKSPACE_PREVIEW_RS.contains("build_workspace_summary_chrome")
+            && WORKSPACE_VIEW_RS.contains("build_workspace_summary_chrome")
+            && WORKSPACE_CHROME_RS.contains("\"Alerts (0)\"")
+            && WORKSPACE_CHROME_RS.contains("\"Broadcast Off\"")
+            && WORKSPACE_CHROME_RS.contains("\"Quick send command\"")
+            && WORKSPACE_CHROME_RS.contains("workspace-broadcast-entry")
+            && WORKSPACE_CHROME_RS.contains("\"Add Web Tile\"")
+            && WORKSPACE_CHROME_RS.contains("workspace-url-entry")
+            && WORKSPACE_CHROME_RS.contains("\"Reload\"")
+            && WORKSPACE_CHROME_RS.contains("surface-select-control")
+            && WORKSPACE_CHROME_RS.contains("\"Runbook\"")
+            && WORKSPACE_CHROME_RS.contains("\"Run\"")
             && WORKSPACE_PREVIEW_RS.contains("fn saved_groups(tab: &SavedTab) -> Vec<String>"),
-        "Windows GTK workspace preview summary should mirror the Linux GTK workspace toolbar controls and classes"
+        "Windows GTK workspace preview summary should mirror the Linux GTK workspace toolbar controls and classes through the shared workspace chrome helper"
     );
     assert!(
         source_contains(
-            WORKSPACE_PREVIEW_RS,
+            WORKSPACE_CHROME_RS,
             "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
-        ) && source_contains(
-            WORKSPACE_VIEW_RS,
-            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
-        ),
-        "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces"
+        ) && WORKSPACE_PREVIEW_RS.contains("controls_sensitive: false")
+            && WORKSPACE_VIEW_RS.contains("controls_sensitive: true"),
+        "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces via shared chrome"
     );
     assert!(
         !WORKSPACE_PREVIEW_RS.contains("tab.preset.description")

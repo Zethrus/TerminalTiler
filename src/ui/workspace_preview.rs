@@ -9,6 +9,7 @@ use crate::ui::tile_chrome::{
     WEB_HEADER_BADGE_MAX_CHARS, build_header_icon_button, build_pane_group_chip,
     configure_dynamic_header_label, domain_from_url,
 };
+use crate::ui::workspace_chrome::{WorkspaceSummaryInput, build_workspace_summary_chrome};
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
@@ -137,100 +138,13 @@ fn build_tab_chip(tab: &SavedTab, active: bool) -> gtk::Widget {
 }
 
 fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
-    let summary = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .css_classes(["workspace-summary"])
-        .build();
-    make_shrinkable(&summary);
-
-    let name_label = gtk::Label::builder()
-        .label(&tab.preset.name)
-        .halign(gtk::Align::Start)
-        .hexpand(true)
-        .ellipsize(pango::EllipsizeMode::End)
-        .css_classes(["workspace-summary-name"])
-        .build();
-    make_shrinkable(&name_label);
-
-    let alert_button =
-        icons::labeled_button("Alerts (0)", icon_name::ALERTS, &["flat", "surface-button"]);
-    alert_button.set_sensitive(false);
-
-    let broadcast_state = gtk::Label::builder()
-        .label("Broadcast Off")
-        .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "muted-chip"])
-        .build();
-
-    let broadcast_selector = gtk::ComboBoxText::new();
-    broadcast_selector.add_css_class("surface-select-control");
-    broadcast_selector.append(Some("off"), "Broadcast Off");
-    broadcast_selector.append(Some("all"), "Broadcast All");
-    for group in saved_groups(tab) {
-        let id = format!("group:{group}");
-        broadcast_selector.append(Some(&id), &format!("Group: {group}"));
-    }
-    broadcast_selector.set_active_id(Some("off"));
-    broadcast_selector.set_sensitive(false);
-
-    let broadcast_entry = gtk::Entry::builder()
-        .placeholder_text("Quick send command")
-        .width_chars(18)
-        .css_classes(["workspace-broadcast-entry"])
-        .sensitive(false)
-        .build();
-    let broadcast_button =
-        icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
-    broadcast_button.set_sensitive(false);
-
-    let add_web_tile_button =
-        icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
-    add_web_tile_button.set_sensitive(false);
-
-    let url_entry = gtk::Entry::builder()
-        .placeholder_text("URL")
-        .width_chars(30)
-        .hexpand(false)
-        .css_classes(["workspace-url-entry"])
-        .sensitive(false)
-        .build();
-    let url_reload_button =
-        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
-    url_reload_button.set_sensitive(false);
-
-    let runbook_selector = gtk::ComboBoxText::new();
-    runbook_selector.add_css_class("surface-select-control");
-    runbook_selector.append(Some(""), "Runbook");
-    runbook_selector.set_active_id(Some(""));
-    runbook_selector.set_sensitive(false);
-    let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
-    runbook_button.set_sensitive(false);
-
-    summary.append(&name_label);
-    summary.append(&alert_button);
-    summary.append(&broadcast_state);
-    summary.append(&broadcast_selector);
-    summary.append(&broadcast_entry);
-    summary.append(&broadcast_button);
-    summary.append(&add_web_tile_button);
-    summary.append(&url_entry);
-    summary.append(&url_reload_button);
-    summary.append(&runbook_selector);
-    summary.append(&runbook_button);
-
-    summary.append(
-        &gtk::Label::builder()
-            .label(tab.workspace_root.display().to_string())
-            .halign(gtk::Align::End)
-            .valign(gtk::Align::Center)
-            .hexpand(true)
-            .ellipsize(pango::EllipsizeMode::Start)
-            .css_classes(["workspace-summary-path"])
-            .build(),
-    );
-
-    summary.upcast()
+    build_workspace_summary_chrome(WorkspaceSummaryInput {
+        name: &tab.preset.name,
+        path: tab.workspace_root.display().to_string(),
+        pane_groups: saved_groups(tab),
+        controls_sensitive: false,
+    })
+    .widget
 }
 
 fn saved_groups(tab: &SavedTab) -> Vec<String> {
