@@ -16,9 +16,10 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
-    use crate::ui::app_chrome::{build_app_header_chrome, build_window_shell};
+    use crate::ui::app_chrome::{
+        build_app_header_chrome, build_main_titlebar_actions, build_window_shell,
+    };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
-    use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, build_title_tab_chrome};
     use crate::ui::{assets_manager, settings_dialog};
@@ -88,19 +89,9 @@ mod imp {
         title.add_button.set_sensitive(false);
 
         let overlay = adw::ToastOverlay::new();
-        let settings_button = icons::icon_button(
-            icon_name::SETTINGS,
-            "Open application settings",
-            &["flat", "titlebar-action-button", "titlebar-icon-button"],
-        );
-        header.pack_end(&settings_button);
-
-        let assets_button = icons::icon_button(
-            icon_name::ASSETS,
-            "Open assets manager",
-            &["flat", "titlebar-action-button", "titlebar-icon-button"],
-        );
-        header.pack_end(&assets_button);
+        let titlebar_actions = build_main_titlebar_actions(&header, false);
+        let settings_button = titlebar_actions.settings_button;
+        let assets_button = titlebar_actions.assets_button;
 
         let window_shell = build_window_shell();
         window_shell.append(&header);

@@ -55,10 +55,10 @@ fn main_header_icon_buttons_have_clear_tooltips() {
     );
     assert!(
         source_contains(
-            WINDOW_RS,
+            APP_CHROME_RS,
             "icon_name::SETTINGS,\n        \"Open application settings\"",
         ) && source_contains(
-            WINDOW_RS,
+            APP_CHROME_RS,
             "icon_name::ASSETS,\n        \"Open assets manager\"",
         ),
         "main app header icon-only actions should explain their purpose on hover"
@@ -101,7 +101,9 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
     assert!(
         UI_MOD_RS.contains("pub(crate) mod app_chrome;")
             && APP_CHROME_RS.contains("pub(crate) struct AppHeaderChrome")
+            && APP_CHROME_RS.contains("pub(crate) struct MainTitlebarActions")
             && APP_CHROME_RS.contains("pub(crate) fn build_app_header_chrome")
+            && APP_CHROME_RS.contains("pub(crate) fn build_main_titlebar_actions")
             && APP_CHROME_RS.contains("pub(crate) fn build_window_shell")
             && APP_CHROME_RS.contains("show_start_title_buttons(true)")
             && APP_CHROME_RS.contains("show_end_title_buttons(true)")
@@ -109,18 +111,27 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && APP_CHROME_RS.contains("header.add_css_class(\"app-headerbar\")")
             && APP_CHROME_RS.contains("TitleChrome::new()")
             && APP_CHROME_RS.contains("title.root.add_css_class(\"app-title-handle\")")
-            && APP_CHROME_RS.contains("header.set_title_widget(Some(&title.root))"),
-        "main GTK shell header/window chrome should have one shared builder for Linux and Windows"
+            && APP_CHROME_RS.contains("header.set_title_widget(Some(&title.root))")
+            && APP_CHROME_RS.contains("\"Templates\"")
+            && APP_CHROME_RS.contains("\"Fullscreen\"")
+            && APP_CHROME_RS.contains("\"Open application settings\"")
+            && APP_CHROME_RS.contains("\"Account / Sync\"")
+            && APP_CHROME_RS.contains("\"Open assets manager\""),
+        "main GTK shell header/window chrome and titlebar actions should have one shared builder for Linux and Windows"
     );
     assert!(
         WINDOW_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
+            && WINDOW_RS.contains("build_main_titlebar_actions(&header")
+            && WINDOWS_GTK_APP_RS.contains("build_main_titlebar_actions(&header, false)")
             && WINDOW_RS.contains("build_window_shell()")
             && WINDOWS_GTK_APP_RS.contains("build_window_shell()")
             && !WINDOWS_GTK_APP_RS.contains("HeaderBar::builder()")
+            && !WINDOWS_GTK_APP_RS.contains("icons::icon_button(")
+            && !WINDOWS_GTK_APP_RS.contains("titlebar-action-button")
             && !WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
             && !WINDOWS_GTK_APP_RS.contains("title.root.add_css_class(\"app-title-handle\")"),
-        "Windows GTK should reuse the same main shell chrome as Linux rather than carrying a parallel header/window-shell construction"
+        "Windows GTK should reuse the same main shell chrome/actions as Linux rather than carrying parallel titlebar construction"
     );
 }
 

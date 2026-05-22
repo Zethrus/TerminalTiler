@@ -25,7 +25,9 @@ use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
-use crate::ui::app_chrome::{build_app_header_chrome, build_window_shell};
+use crate::ui::app_chrome::{
+    build_app_header_chrome, build_main_titlebar_actions, build_window_shell,
+};
 use crate::ui::appearance::{
     apply_optional_window_density, apply_theme_mode, resolved_theme_uses_dark_palette,
     window_uses_dark_theme,
@@ -782,46 +784,12 @@ fn present_with_initial_workspace(
         .build();
     window.add_css_class("window-shell");
 
-    let back_button = icons::labeled_button(
-        "Templates",
-        icon_name::LAYOUT,
-        &["flat", "titlebar-action-button"],
-    );
-    back_button.set_visible(false);
-    header.pack_start(&back_button);
-
-    let fullscreen_button = icons::labeled_button(
-        "Fullscreen",
-        icon_name::FULLSCREEN,
-        &["flat", "titlebar-action-button"],
-    );
-    fullscreen_button.set_tooltip_text(Some("Enter fullscreen"));
-    fullscreen_button.set_visible(false);
-    header.pack_end(&fullscreen_button);
-
-    let settings_button = icons::icon_button(
-        icon_name::SETTINGS,
-        "Open application settings",
-        &["flat", "titlebar-action-button", "titlebar-icon-button"],
-    );
-    header.pack_end(&settings_button);
-
-    let companion_button = options.companion.as_ref().map(|_| {
-        let button = icons::labeled_button(
-            "Account / Sync",
-            icon_name::WEB,
-            &["flat", "titlebar-action-button"],
-        );
-        header.pack_end(&button);
-        button
-    });
-
-    let assets_button = icons::icon_button(
-        icon_name::ASSETS,
-        "Open assets manager",
-        &["flat", "titlebar-action-button", "titlebar-icon-button"],
-    );
-    header.pack_end(&assets_button);
+    let titlebar_actions = build_main_titlebar_actions(&header, options.companion.is_some());
+    let back_button = titlebar_actions.back_button;
+    let fullscreen_button = titlebar_actions.fullscreen_button;
+    let settings_button = titlebar_actions.settings_button;
+    let companion_button = titlebar_actions.companion_button;
+    let assets_button = titlebar_actions.assets_button;
 
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
     let next_tab_id = Rc::new(Cell::new(1usize));
