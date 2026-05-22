@@ -1,5 +1,6 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
 const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
+const APP_CHROME_RS: &str = include_str!("../src/ui/app_chrome.rs");
 const APPEARANCE_RS: &str = include_str!("../src/ui/appearance.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
@@ -92,6 +93,34 @@ fn linux_and_windows_gtk_shells_share_appearance_chrome() {
             && !WINDOW_RS.contains("fn apply_window_density(window:")
             && !WINDOWS_GTK_APP_RS.contains("fn apply_window_density(window:"),
         "Linux and Windows GTK shells should call the same appearance helpers instead of carrying duplicate theme/density implementations"
+    );
+}
+
+#[test]
+fn linux_and_windows_gtk_shells_share_main_window_chrome() {
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod app_chrome;")
+            && APP_CHROME_RS.contains("pub(crate) struct AppHeaderChrome")
+            && APP_CHROME_RS.contains("pub(crate) fn build_app_header_chrome")
+            && APP_CHROME_RS.contains("pub(crate) fn build_window_shell")
+            && APP_CHROME_RS.contains("show_start_title_buttons(true)")
+            && APP_CHROME_RS.contains("show_end_title_buttons(true)")
+            && APP_CHROME_RS.contains("header.set_centering_policy(adw::CenteringPolicy::Loose)")
+            && APP_CHROME_RS.contains("header.add_css_class(\"app-headerbar\")")
+            && APP_CHROME_RS.contains("TitleChrome::new()")
+            && APP_CHROME_RS.contains("title.root.add_css_class(\"app-title-handle\")")
+            && APP_CHROME_RS.contains("header.set_title_widget(Some(&title.root))"),
+        "main GTK shell header/window chrome should have one shared builder for Linux and Windows"
+    );
+    assert!(
+        WINDOW_RS.contains("build_app_header_chrome()")
+            && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
+            && WINDOW_RS.contains("build_window_shell()")
+            && WINDOWS_GTK_APP_RS.contains("build_window_shell()")
+            && !WINDOWS_GTK_APP_RS.contains("HeaderBar::builder()")
+            && !WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
+            && !WINDOWS_GTK_APP_RS.contains("title.root.add_css_class(\"app-title-handle\")"),
+        "Windows GTK should reuse the same main shell chrome as Linux rather than carrying a parallel header/window-shell construction"
     );
 }
 
@@ -604,11 +633,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("load_css_for_default_display")
             && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_WIDTH")
             && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::DEFAULT_WINDOW_HEIGHT")
-            && WINDOWS_GTK_APP_RS.contains("TitleChrome::new")
-            && WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
+            && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("window_shell.append(&header)")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
-            && WINDOW_RS.contains("title_chrome::{TitleChrome, build_title_tab_chrome}")
+            && WINDOW_RS.contains("title_chrome::build_title_tab_chrome")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
@@ -677,9 +705,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && TITLE_CHROME_RS.contains("app-tab-add")
             && TITLE_CHROME_RS.contains("pub(crate) fn build_title_tab_chrome")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleTabChrome")
-            && WINDOW_RS.contains("let title = TitleChrome::new();")
+            && APP_CHROME_RS.contains("let title = TitleChrome::new();")
             && WINDOW_RS.contains("build_title_tab_chrome()")
-            && WINDOWS_GTK_APP_RS.contains("let title = TitleChrome::new();")
+            && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("SessionPreview::new(&session, false)")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
@@ -1071,7 +1099,8 @@ fn workspace_tab_context_menu_reuses_terminal_context_styles() {
             && WINDOW_RS.contains("context_menu::action_button(\"Reattach\", None)")
             && WINDOW_RS.contains("context_menu::popover(&shell)")
             && WINDOW_RS.contains("context_menu::popover(&title_shell)")
-            && WINDOW_RS.matches("window_shell.append(&header)").count() >= 2
+            && WINDOW_RS.contains("build_window_shell()")
+            && WINDOW_RS.contains("window_shell.append(&header)")
             && CONTEXT_MENU_RS.contains("terminal-context-popover")
             && CONTEXT_MENU_RS.contains("terminal-context-menu")
             && CONTEXT_MENU_RS.contains("terminal-context-action")

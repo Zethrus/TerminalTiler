@@ -4,6 +4,11 @@ pub mod about_dialog;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod app_chrome;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod appearance;
 #[cfg(any(
     target_os = "linux",

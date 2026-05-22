@@ -25,6 +25,7 @@ use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
+use crate::ui::app_chrome::{build_app_header_chrome, build_window_shell};
 use crate::ui::appearance::{
     apply_optional_window_density, apply_theme_mode, resolved_theme_uses_dark_palette,
     window_uses_dark_theme,
@@ -32,9 +33,7 @@ use crate::ui::appearance::{
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
-    launch_screen, settings_dialog,
-    title_chrome::{TitleChrome, build_title_tab_chrome},
-    workspace_view,
+    launch_screen, settings_dialog, title_chrome::build_title_tab_chrome, workspace_view,
 };
 use crate::voice::audio::AudioCapture;
 use crate::voice::engine::{self, VoiceEngineEvent};
@@ -716,17 +715,10 @@ fn present_with_initial_workspace(
     let asset_store = Rc::new(asset_store);
     let session_store = Rc::new(session_store);
 
-    let header = adw::HeaderBar::builder()
-        .show_start_title_buttons(true)
-        .show_end_title_buttons(true)
-        .build();
-    header.set_centering_policy(adw::CenteringPolicy::Loose);
-    header.add_css_class("app-headerbar");
-
+    let app_header = build_app_header_chrome();
+    let header = app_header.header;
     let tab_view = adw::TabView::builder().hexpand(true).vexpand(true).build();
-    let title = TitleChrome::new();
-    title.root.add_css_class("app-title-handle");
-    header.set_title_widget(Some(&title.root));
+    let title = app_header.title;
 
     let voice_hud = VoiceHud::new();
     let workspace_overlay = gtk::Overlay::new();
@@ -774,10 +766,7 @@ fn present_with_initial_workspace(
     close_to_background_notice_row.append(&close_to_background_notice_button);
     close_to_background_notice.set_child(Some(&close_to_background_notice_row));
 
-    let window_shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(0)
-        .build();
+    let window_shell = build_window_shell();
     window_shell.append(&header);
     window_shell.append(&close_to_background_notice);
     window_shell.append(&toast_overlay);

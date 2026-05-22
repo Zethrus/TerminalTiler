@@ -16,6 +16,7 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+    use crate::ui::app_chrome::{build_app_header_chrome, build_window_shell};
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
@@ -81,17 +82,10 @@ mod imp {
             session_outcome.warning,
         );
 
-        let header = adw::HeaderBar::builder()
-            .show_start_title_buttons(true)
-            .show_end_title_buttons(true)
-            .build();
-        header.set_centering_policy(adw::CenteringPolicy::Loose);
-        header.add_css_class("app-headerbar");
-
-        let title = TitleChrome::new();
-        title.root.add_css_class("app-title-handle");
+        let app_header = build_app_header_chrome();
+        let header = app_header.header;
+        let title = app_header.title;
         title.add_button.set_sensitive(false);
-        header.set_title_widget(Some(&title.root));
 
         let overlay = adw::ToastOverlay::new();
         let settings_button = icons::icon_button(
@@ -108,10 +102,7 @@ mod imp {
         );
         header.pack_end(&assets_button);
 
-        let window_shell = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(0)
-            .build();
+        let window_shell = build_window_shell();
         window_shell.append(&header);
         window_shell.append(&overlay);
 
