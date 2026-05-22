@@ -202,6 +202,7 @@ mod imp {
             let title = title.clone();
             let launch = launch.clone();
             let back_button_for_click = back_button.clone();
+            let title_add_button = title.add_button.clone();
             let show_launch_deck = Rc::new(move || {
                 sync_windows_title_tabs(&title, launch_deck_title_tabs());
                 overlay.set_child(Some(&launch));
@@ -214,7 +215,7 @@ mod imp {
                     show_launch_deck();
                 });
             }
-            title.add_button.connect_clicked(move |_| {
+            title_add_button.connect_clicked(move |_| {
                 show_launch_deck();
             });
         }
