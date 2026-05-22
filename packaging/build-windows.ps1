@@ -147,13 +147,13 @@ function Copy-WindowsGtkRuntime {
     )) {
         $source = Join-Path $RuntimeRoot $relative
         $destination = Join-Path $PortableRoot $relative
-        Assert-DirectoryExists -Path $source -Description "GTK runtime resource source $relative"
         New-Item -ItemType Directory -Force -Path $destination | Out-Null
-        if (Test-DirectoryHasFiles -Path $source) {
+        if ((Test-Path $source -PathType Container) -and (Test-DirectoryHasFiles -Path $source)) {
             Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force -ErrorAction Stop
         }
         else {
-            Set-Content -Path (Join-Path $destination "terminaltiler-empty-runtime-dir.txt") -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
+            Write-Host "==> GTK runtime path $relative was not present or was empty in $RuntimeRoot; staging directory sentinel"
+            Set-Content -Path (Join-Path $destination "terminaltiler-runtime-dir.txt") -Value "GTK runtime resource directory retained for TerminalTiler packaging." -Encoding ASCII
         }
     }
 }

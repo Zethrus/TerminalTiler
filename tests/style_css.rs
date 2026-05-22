@@ -760,9 +760,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         WINDOWS_BUILD_PS1
             .contains("GTK runtime root is required for the canonical Windows GTK payload")
             && WINDOWS_BUILD_PS1.contains("Use -UseWin32Shell only for an explicit fallback build")
-            && WINDOWS_BUILD_PS1.contains("terminaltiler-empty-runtime-dir.txt")
-            && !WINDOWS_BUILD_PS1.contains("staging placeholder directory"),
-        "Windows packaging should require bundled GTK runtime directories while preserving empty runtime roots for WiX harvesting"
+            && WINDOWS_BUILD_PS1.contains("terminaltiler-runtime-dir.txt")
+            && WINDOWS_BUILD_PS1.contains("staging directory sentinel"),
+        "Windows packaging should preserve optional GTK runtime roots for WiX harvesting even when gvsbuild leaves them absent or empty"
     );
 
     assert!(
