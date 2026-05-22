@@ -1,5 +1,6 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
+    use std::cell::{Cell, RefCell};
     use std::path::PathBuf;
     use std::process::ExitCode;
     use std::rc::Rc;
@@ -186,7 +187,9 @@ mod imp {
 
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
-        sync_windows_title_tabs(&title, launch_deck_title_tabs());
+        let shell_state = WindowsGtkShellState::default();
+        shell_state.launch_deck_active.set(true);
+        let launch_widget_handle: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
 
         let launch_preferences = preferences.clone();
         let launch_overlay = overlay.clone();
@@ -195,6 +198,15 @@ mod imp {
         let launch_back_button = back_button.clone();
         let launch_fullscreen_button = fullscreen_button.clone();
         let launch_window = window.clone();
+        let launch_shell_state = shell_state.clone();
+        let launch_widget_for_action = launch_widget_handle.clone();
+        let cancel_shell_state = shell_state.clone();
+        let cancel_launch_widget = launch_widget_handle.clone();
+        let cancel_window = window.clone();
+        let cancel_overlay = overlay.clone();
+        let cancel_title = title.clone();
+        let cancel_back_button = back_button.clone();
+        let cancel_fullscreen_button = fullscreen_button.clone();
         let actions = LaunchScreenActions {
             on_theme_preview: Rc::new({
                 let window = window.clone();
@@ -205,21 +217,48 @@ mod imp {
                 move |density| apply_window_density(&window, density)
             }),
             on_launch: Rc::new(move |preset, workspace_root| {
-                present_workspace_preview_from_launch(
-                    &launch_window,
-                    &launch_overlay,
-                    &launch_title,
-                    &launch_preferences,
-                    &launch_back_button,
-                    &launch_fullscreen_button,
-                    launch_assets.clone(),
-                    preset,
-                    workspace_root,
-                );
+                if let Some(launch_widget) = launch_widget_for_action.borrow().as_ref() {
+                    present_workspace_preview_from_launch(
+                        &launch_window,
+                        &launch_overlay,
+                        &launch_title,
+                        &launch_preferences,
+                        &launch_back_button,
+                        &launch_fullscreen_button,
+                        &launch_shell_state,
+                        launch_widget,
+                        launch_assets.clone(),
+                        preset,
+                        workspace_root,
+                    );
+                }
             }),
             on_cancel: Rc::new({
                 let app = app.clone();
-                move || app.quit()
+                move || {
+                    if cancel_shell_state.has_workspace_tabs()
+                        && let Some(launch_widget) = cancel_launch_widget.borrow().as_ref()
+                    {
+                        let active_index = cancel_shell_state
+                            .preview
+                            .borrow()
+                            .as_ref()
+                            .map(|preview| preview.active_index())
+                            .unwrap_or(0);
+                        show_workspace_preview_tab(
+                            &cancel_window,
+                            &cancel_overlay,
+                            &cancel_title,
+                            launch_widget,
+                            &cancel_back_button,
+                            &cancel_fullscreen_button,
+                            &cancel_shell_state,
+                            active_index,
+                        );
+                    } else {
+                        app.quit();
+                    }
+                }
             }),
             on_presets_changed: Rc::new(|| {
                 logging::info("Windows GTK shell preset list changed; relaunch to refresh deck");
@@ -238,6 +277,7 @@ mod imp {
             },
             actions,
         );
+        *launch_widget_handle.borrow_mut() = Some(launch.clone());
         {
             let overlay = overlay.clone();
             let title = title.clone();
@@ -246,17 +286,17 @@ mod imp {
             let fullscreen_for_click = fullscreen_button.clone();
             let window_for_click = window.clone();
             let title_add_button = title.add_button.clone();
+            let shell_state_for_launch = shell_state.clone();
             let show_launch_deck = Rc::new(move || {
-                sync_windows_title_tabs(&title, launch_deck_title_tabs());
-                overlay.set_child(Some(&launch));
-                back_button_for_click.set_visible(false);
-                sync_windows_fullscreen_chrome(
+                show_launch_deck_tab(
                     &window_for_click,
-                    title.root.upcast_ref(),
+                    &overlay,
+                    &title,
+                    &launch,
+                    &back_button_for_click,
                     &fullscreen_for_click,
-                    false,
+                    &shell_state_for_launch,
                 );
-                logging::info("Windows GTK shell returned to launch deck");
             });
             {
                 let show_launch_deck = show_launch_deck.clone();
@@ -269,6 +309,15 @@ mod imp {
             });
         }
         overlay.set_child(Some(&launch));
+        sync_windows_shell_title_tabs(
+            &window,
+            &overlay,
+            &title,
+            &launch,
+            &back_button,
+            &fullscreen_button,
+            &shell_state,
+        );
         window.present();
 
         if let Some(session) = session_outcome
@@ -283,6 +332,8 @@ mod imp {
             let fullscreen_button = fullscreen_button.clone();
             let preferences = preferences.clone();
             let workspace_assets = workspace_assets.clone();
+            let shell_state = shell_state.clone();
+            let launch = launch.clone();
             gtk::glib::idle_add_local_once(move || {
                 present_workspace_preview_from_restore(
                     &window,
@@ -291,6 +342,8 @@ mod imp {
                     &preferences,
                     &back_button,
                     &fullscreen_button,
+                    &shell_state,
+                    &launch,
                     workspace_assets,
                     session,
                 );
@@ -305,6 +358,8 @@ mod imp {
         _preferences: &AppPreferences,
         back_button: &gtk::Button,
         fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        launch: &gtk::Widget,
         assets: crate::model::assets::WorkspaceAssets,
         session: SavedSession,
     ) {
@@ -314,6 +369,8 @@ mod imp {
             title,
             back_button,
             fullscreen_button,
+            shell_state,
+            launch,
             session,
             assets,
             "restored",
@@ -766,6 +823,223 @@ mod imp {
         );
     }
 
+    #[derive(Clone, Default)]
+    struct WindowsGtkShellState {
+        preview: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
+        launch_deck_active: Rc<Cell<bool>>,
+    }
+
+    impl WindowsGtkShellState {
+        fn has_workspace_tabs(&self) -> bool {
+            self.preview
+                .borrow()
+                .as_ref()
+                .is_some_and(|preview| !preview.snapshot().tabs.is_empty())
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn show_launch_deck_tab(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+    ) {
+        shell_state.launch_deck_active.set(true);
+        overlay.set_child(Some(launch));
+        back_button.set_visible(shell_state.has_workspace_tabs());
+        sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, false);
+        sync_windows_shell_title_tabs(
+            window,
+            overlay,
+            title,
+            launch,
+            back_button,
+            fullscreen_button,
+            shell_state,
+        );
+        logging::info("Windows GTK shell selected launch deck tab");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn show_workspace_preview_tab(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        index: usize,
+    ) {
+        let preview = shell_state.preview.borrow().clone();
+        let Some(preview) = preview else {
+            show_launch_deck_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+            return;
+        };
+
+        shell_state.launch_deck_active.set(false);
+        preview.select_tab(index);
+        overlay.set_child(Some(&preview.widget()));
+        back_button.set_visible(true);
+        sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, true);
+        sync_windows_shell_title_tabs(
+            window,
+            overlay,
+            title,
+            launch,
+            back_button,
+            fullscreen_button,
+            shell_state,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sync_windows_shell_title_tabs(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+    ) {
+        let mut tabs = Vec::new();
+        let launch_active =
+            shell_state.launch_deck_active.get() || !shell_state.has_workspace_tabs();
+
+        tabs.push(WindowsTitleTab {
+            label: "Templates".into(),
+            tooltip: "Workspace launch deck".into(),
+            active: launch_active,
+            on_select: Some(Rc::new({
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let title = title.clone();
+                let launch = launch.clone();
+                let back_button = back_button.clone();
+                let fullscreen_button = fullscreen_button.clone();
+                let shell_state = shell_state.clone();
+                move || {
+                    show_launch_deck_tab(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                    );
+                }
+            })),
+            on_close: None,
+        });
+
+        if let Some(preview) = shell_state.preview.borrow().as_ref() {
+            let session = preview.snapshot();
+            let active_index = preview.active_index();
+            for (index, tab) in session.tabs.iter().enumerate() {
+                let label = tab
+                    .custom_title
+                    .as_deref()
+                    .unwrap_or(tab.preset.name.as_str())
+                    .to_string();
+                let tooltip = tab.workspace_root.display().to_string();
+
+                tabs.push(WindowsTitleTab {
+                    label,
+                    tooltip,
+                    active: !launch_active && index == active_index,
+                    on_select: Some(Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            show_workspace_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                index,
+                            );
+                        }
+                    })),
+                    on_close: Some(Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            let preview = shell_state.preview.borrow().clone();
+                            let Some(preview) = preview else {
+                                return;
+                            };
+                            if !preview.close_tab(index) {
+                                return;
+                            }
+                            if preview.snapshot().tabs.is_empty() {
+                                *shell_state.preview.borrow_mut() = None;
+                                show_launch_deck_tab(
+                                    &window,
+                                    &overlay,
+                                    &title,
+                                    &launch,
+                                    &back_button,
+                                    &fullscreen_button,
+                                    &shell_state,
+                                );
+                            } else if shell_state.launch_deck_active.get() {
+                                show_launch_deck_tab(
+                                    &window,
+                                    &overlay,
+                                    &title,
+                                    &launch,
+                                    &back_button,
+                                    &fullscreen_button,
+                                    &shell_state,
+                                );
+                            } else {
+                                show_workspace_preview_tab(
+                                    &window,
+                                    &overlay,
+                                    &title,
+                                    &launch,
+                                    &back_button,
+                                    &fullscreen_button,
+                                    &shell_state,
+                                    preview.active_index(),
+                                );
+                            }
+                        }
+                    })),
+                });
+            }
+        }
+
+        sync_windows_title_tabs(title, tabs);
+    }
+
     fn present_workspace_preview_from_launch(
         window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
@@ -773,30 +1047,64 @@ mod imp {
         _preferences: &AppPreferences,
         back_button: &gtk::Button,
         fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        launch: &gtk::Widget,
         assets: crate::model::assets::WorkspaceAssets,
         preset: crate::model::preset::WorkspacePreset,
         workspace_root: PathBuf,
     ) {
-        let session = SavedSession {
-            tabs: vec![SavedTab {
-                preset,
-                workspace_root,
-                custom_title: None,
-                terminal_zoom_steps: 0,
-            }],
-            active_tab_index: 0,
+        let saved_tab = SavedTab {
+            preset,
+            workspace_root,
+            custom_title: None,
+            terminal_zoom_steps: 0,
         };
 
-        present_workspace_preview(
-            window,
-            overlay,
-            title,
-            back_button,
-            fullscreen_button,
-            session,
-            assets,
-            "opened",
-        );
+        if let Some(preview) = shell_state.preview.borrow().as_ref().cloned() {
+            preview.push_tab(saved_tab);
+            shell_state.launch_deck_active.set(false);
+            overlay.set_child(Some(&preview.widget()));
+            back_button.set_visible(true);
+            sync_windows_fullscreen_chrome(
+                window,
+                title.root.upcast_ref(),
+                fullscreen_button,
+                true,
+            );
+            sync_windows_shell_title_tabs(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+            let snapshot = preview.snapshot();
+            let (tabs, panes) = crate::ui::workspace_preview::session_shape(&snapshot);
+            logging::info(format!(
+                "Windows GTK shell opened GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
+            ));
+            overlay.add_toast(adw::Toast::new("Workspace opened as a new GTK tab"));
+        } else {
+            let session = SavedSession {
+                tabs: vec![saved_tab],
+                active_tab_index: 0,
+            };
+
+            present_workspace_preview(
+                window,
+                overlay,
+                title,
+                back_button,
+                fullscreen_button,
+                shell_state,
+                launch,
+                session,
+                assets,
+                "opened",
+            );
+        }
     }
 
     fn present_workspace_preview(
@@ -805,6 +1113,8 @@ mod imp {
         title: &TitleChrome,
         back_button: &gtk::Button,
         fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        launch: &gtk::Widget,
         session: SavedSession,
         assets: crate::model::assets::WorkspaceAssets,
         action: &str,
@@ -812,10 +1122,20 @@ mod imp {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
         let preview =
             crate::ui::workspace_preview::SessionPreview::with_assets(&session, false, assets);
-        sync_title_tabs_for_preview(title, &preview, back_button);
+        *shell_state.preview.borrow_mut() = Some(preview.clone());
+        shell_state.launch_deck_active.set(false);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
         sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, true);
+        sync_windows_shell_title_tabs(
+            window,
+            overlay,
+            title,
+            launch,
+            back_button,
+            fullscreen_button,
+            shell_state,
+        );
         logging::info(format!(
             "Windows GTK shell {action} GTK workspace preview with {tabs} tab(s) and {panes} pane(s)"
         ));
@@ -830,69 +1150,6 @@ mod imp {
         active: bool,
         on_select: Option<Rc<dyn Fn()>>,
         on_close: Option<Rc<dyn Fn()>>,
-    }
-
-    fn launch_deck_title_tabs() -> Vec<WindowsTitleTab> {
-        vec![WindowsTitleTab {
-            label: "Workspace 1".into(),
-            tooltip: "Launch deck".into(),
-            active: true,
-            on_select: None,
-            on_close: None,
-        }]
-    }
-
-    fn sync_title_tabs_for_preview(
-        title: &TitleChrome,
-        preview: &crate::ui::workspace_preview::SessionPreview,
-        back_button: &gtk::Button,
-    ) {
-        let session = Rc::new(preview.snapshot());
-        let active_index = preview.active_index();
-        let tabs = session
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(index, tab)| {
-                let label = tab
-                    .custom_title
-                    .as_deref()
-                    .unwrap_or(tab.preset.name.as_str())
-                    .to_string();
-                let tooltip = tab.workspace_root.display().to_string();
-                let preview = preview.clone();
-                let title = title.clone();
-                let back_button = back_button.clone();
-                let on_close_preview = preview.clone();
-                let on_close_title = title.clone();
-                let on_close_back_button = back_button.clone();
-                WindowsTitleTab {
-                    label,
-                    tooltip,
-                    active: index == active_index,
-                    on_select: Some(Rc::new(move || {
-                        preview.select_tab(index);
-                        sync_title_tabs_for_preview(&title, &preview, &back_button);
-                    })),
-                    on_close: Some(Rc::new(move || {
-                        if !on_close_preview.close_tab(index) {
-                            return;
-                        }
-                        if on_close_preview.snapshot().tabs.is_empty() {
-                            on_close_back_button.emit_clicked();
-                        } else {
-                            sync_title_tabs_for_preview(
-                                &on_close_title,
-                                &on_close_preview,
-                                &on_close_back_button,
-                            );
-                        }
-                    })),
-                }
-            })
-            .collect();
-
-        sync_windows_title_tabs(title, tabs);
     }
 
     fn sync_windows_title_tabs(title: &TitleChrome, tabs: Vec<WindowsTitleTab>) {

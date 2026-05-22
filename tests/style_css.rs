@@ -161,7 +161,7 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("&fullscreen_button, false")
             && source_contains(
                 WINDOWS_GTK_APP_RS,
-                "&fullscreen_for_click,\n                    false"
+                "&fullscreen_for_click,\n                    &shell_state_for_launch"
             ),
         "Windows GTK should use the same shared workspace fullscreen chrome behavior as Linux for workspace previews and hide it on the launch deck"
     );
@@ -703,11 +703,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("window_shell.append(&header)")
             && WINDOWS_GTK_APP_RS.contains("let back_button = titlebar_actions.back_button")
             && WINDOWS_GTK_APP_RS.contains("back_button.set_visible(true)")
-            && WINDOWS_GTK_APP_RS.contains("fn launch_deck_title_tabs()")
             && WINDOWS_GTK_APP_RS.contains("let title_add_button = title.add_button.clone()")
             && WINDOWS_GTK_APP_RS.contains("title_add_button.connect_clicked")
             && !WINDOWS_GTK_APP_RS.contains("title.add_button.set_sensitive(false)")
-            && WINDOWS_GTK_APP_RS.contains("Windows GTK shell returned to launch deck")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK shell selected launch deck tab")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
             && WINDOW_RS.contains("build_title_tab_chrome")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
@@ -716,10 +715,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
             && WINDOWS_GTK_APP_RS
                 .contains("crate::ui::workspace_preview::SessionPreview::with_assets")
-            && WINDOWS_GTK_APP_RS.contains("sync_title_tabs_for_preview")
+            && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState")
+            && WINDOWS_GTK_APP_RS.contains("show_launch_deck_tab")
+            && WINDOWS_GTK_APP_RS.contains("show_workspace_preview_tab")
+            && WINDOWS_GTK_APP_RS.contains("sync_windows_shell_title_tabs")
+            && WINDOWS_GTK_APP_RS.contains("preview.push_tab(saved_tab)")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn push_tab(&self, tab: SavedTab)")
             && WINDOWS_GTK_APP_RS.contains("on_close: Some(Rc::new")
-            && WINDOWS_GTK_APP_RS.contains("on_close_preview.close_tab(index)")
-            && WINDOWS_GTK_APP_RS.contains("on_close_back_button.emit_clicked()")
+            && WINDOWS_GTK_APP_RS.contains("preview.close_tab(index)")
+            && WINDOWS_GTK_APP_RS.contains("Workspace opened as a new GTK tab")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell {action} GTK workspace preview")
             && !WINDOWS_GTK_APP_RS.contains("workspace::open_saved_workspaces")
             && !WINDOWS_GTK_APP_RS.contains("wsl::probe_runtime"),

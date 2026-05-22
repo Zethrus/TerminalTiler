@@ -98,6 +98,19 @@ impl SessionPreview {
         self.session.borrow().clone()
     }
 
+    pub fn push_tab(&self, tab: SavedTab) -> usize {
+        let next_index = {
+            let mut session = self.session.borrow_mut();
+            session.tabs.push(tab);
+            let next_index = session.tabs.len() - 1;
+            session.active_tab_index = next_index;
+            next_index
+        };
+        self.active_index.set(next_index);
+        self.render();
+        next_index
+    }
+
     pub fn close_tab(&self, index: usize) -> bool {
         if close_tab_in_preview_state(&self.session, &self.active_index, index) {
             self.render();
