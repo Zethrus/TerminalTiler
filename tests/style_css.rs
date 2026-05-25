@@ -1104,6 +1104,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     for token in [
         "pub struct TileRuntimeSurface",
         "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
+        "pub type DroppedPathsSender",
         "web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>",
         "shutdown: Option<Rc<dyn Fn(&str)>>",
         "active_process_checker: Option<Rc<dyn Fn() -> bool>>",
@@ -1128,7 +1129,9 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "swap_active_session_tiles",
         "swap_tile_positions(dragged_id, target_id)",
         "workspace preview tile order changed",
-        "dropped_paths_sender: Option<Rc<dyn Fn(&[PathBuf]) -> bool>>",
+        "dropped_paths_sender: Option<DroppedPathsSender>",
+        "Option<&dyn Fn()>",
+        "show_recovery_prompt",
         "install_preview_dropped_file_target",
         "gtk::gdk::FileList::static_type()",
         "gtk::gio::File::static_type()",
@@ -1241,6 +1244,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("dropped_paths::serialize_for_target")
             && WINDOWS_GTK_RUNTIME_RS.contains("paste_dropped_paths_into_terminal_runtime")
             && WINDOWS_GTK_RUNTIME_RS.contains("launch_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("show_recovery_prompt();")
             && WINDOWS_GTK_RUNTIME_RS.contains("dropped_paths_sender: Some(dropped_paths_sender)")
             && WINDOWS_GTK_RUNTIME_RS.contains("DroppedPathTarget::Wsl")
             && WINDOWS_GTK_RUNTIME_RS.contains("DroppedPathTarget::PowerShell")

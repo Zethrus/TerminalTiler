@@ -39,7 +39,7 @@ use crate::ui::workspace_chrome::{
 pub struct TileRuntimeSurface {
     pub widget: gtk::Widget,
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
-    pub dropped_paths_sender: Option<Rc<dyn Fn(&[PathBuf]) -> bool>>,
+    pub dropped_paths_sender: Option<DroppedPathsSender>,
     pub appearance_applier: Option<Rc<dyn Fn(bool, ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
     pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
@@ -50,8 +50,10 @@ pub struct TileRuntimeSurface {
 
 #[derive(Clone)]
 pub struct TileRuntimeRecoveryBinder {
-    pub bind: Rc<dyn Fn(&gtk::Box, &gtk::Label, &gtk::Button, &gtk::Label)>,
+    pub bind: Rc<dyn Fn(&gtk::Box, &gtk::Label, &gtk::Button, &gtk::Label) -> Option<Rc<dyn Fn()>>>,
 }
+
+pub type DroppedPathsSender = Rc<dyn Fn(&[PathBuf], Option<&dyn Fn()>) -> bool>;
 
 impl TileRuntimeSurface {
     pub fn widget(widget: gtk::Widget) -> Self {
@@ -1793,7 +1795,8 @@ fn install_preview_tile_drag_and_drop(
 
 fn install_preview_dropped_file_target(
     shell: &gtk::Box,
-    dropped_paths_sender: Rc<dyn Fn(&[PathBuf]) -> bool>,
+    dropped_paths_sender: DroppedPathsSender,
+    show_recovery_prompt: Option<Rc<dyn Fn()>>,
 ) {
     let file_list_drop_target = gtk::DropTarget::new(
         gtk::gdk::FileList::static_type(),
@@ -1821,7 +1824,7 @@ fn install_preview_dropped_file_target(
                 return false;
             };
             let paths = local_paths_from_gio_files(files.files());
-            dropped_paths_sender(&paths)
+            dropped_paths_sender(&paths, show_recovery_prompt.as_deref())
         });
     }
     shell.add_controller(file_list_drop_target);
@@ -1850,7 +1853,7 @@ fn install_preview_dropped_file_target(
                 return false;
             };
             let paths = local_paths_from_gio_files([file]);
-            dropped_paths_sender(&paths)
+            dropped_paths_sender(&paths, show_recovery_prompt.as_deref())
         });
     }
     shell.add_controller(single_file_drop_target);
@@ -1879,6 +1882,7 @@ fn install_preview_dropped_file_target(
         uri_list_drop_target.connect_drop(move |_, drop, _, _| {
             let shell = shell.clone();
             let dropped_paths_sender = dropped_paths_sender.clone();
+            let show_recovery_prompt = show_recovery_prompt.clone();
             let drop = drop.clone();
             let drop_for_finish = drop.clone();
             drop.read_async(
@@ -1897,7 +1901,8 @@ fn install_preview_dropped_file_target(
                             return;
                         };
                         let paths = local_paths_from_uri_list_text(&text);
-                        let accepted = dropped_paths_sender(&paths);
+                        let accepted =
+                            dropped_paths_sender(&paths, show_recovery_prompt.as_deref());
                         drop_for_finish.finish(if accepted {
                             gtk::gdk::DragAction::COPY
                         } else {
@@ -2111,7 +2116,7 @@ fn build_tile(
     match tile.tile_kind {
         TileKind::Terminal => {
             let tile_actions = build_terminal_tile_action_chrome(can_close);
-            if let Some(recovery_binder) = runtime_surface
+            let show_recovery_prompt = if let Some(recovery_binder) = runtime_surface
                 .as_ref()
                 .and_then(|surface| surface.recovery_binder.as_ref())
             {
@@ -2120,13 +2125,19 @@ fn build_tile(
                     &header.status_label,
                     &tile_actions.recovery_button,
                     &header.title_label,
-                );
-            }
+                )
+            } else {
+                None
+            };
             if let Some(dropped_paths_sender) = runtime_surface
                 .as_ref()
                 .and_then(|surface| surface.dropped_paths_sender.as_ref())
             {
-                install_preview_dropped_file_target(&shell, dropped_paths_sender.clone());
+                install_preview_dropped_file_target(
+                    &shell,
+                    dropped_paths_sender.clone(),
+                    show_recovery_prompt,
+                );
             }
             bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
             connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());

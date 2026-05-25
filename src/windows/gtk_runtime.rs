@@ -401,7 +401,9 @@ mod imp {
         });
         let dropped_paths_sender = Rc::new({
             let state = state.clone();
-            move |paths: &[PathBuf]| paste_dropped_paths_into_terminal_runtime(&state, paths)
+            move |paths: &[PathBuf], show_recovery_prompt: Option<&dyn Fn()>| {
+                paste_dropped_paths_into_terminal_runtime(&state, paths, show_recovery_prompt)
+            }
         });
         let shutdown = Rc::new({
             let state = state.clone();
@@ -464,7 +466,7 @@ mod imp {
                             open_local_shell.clone(),
                             recovery_bind_generation.clone(),
                             chrome_context.clone(),
-                        );
+                        )
                     }
                 }),
             }),
@@ -975,6 +977,7 @@ mod imp {
     fn paste_dropped_paths_into_terminal_runtime(
         state: &Rc<RefCell<TerminalRuntimeState>>,
         paths: &[PathBuf],
+        show_recovery_prompt: Option<&dyn Fn()>,
     ) -> bool {
         if paths.is_empty() {
             return false;
@@ -983,6 +986,10 @@ mod imp {
         let launch_runtime = {
             let state = state.borrow();
             if !state.active {
+                if let Some(show_recovery_prompt) = show_recovery_prompt {
+                    show_recovery_prompt();
+                    return true;
+                }
                 return false;
             }
             state.launch_runtime.clone()
@@ -1262,7 +1269,7 @@ mod imp {
         open_local_shell: Rc<dyn Fn()>,
         bind_generation: Rc<Cell<u64>>,
         chrome_context: TerminalRuntimeChromeContext,
-    ) {
+    ) -> Option<Rc<dyn Fn()>> {
         let current_generation = bind_generation.get().saturating_add(1);
         bind_generation.set(current_generation);
 
@@ -1319,6 +1326,9 @@ mod imp {
             );
             gtk::glib::ControlFlow::Continue
         });
+        Some(Rc::new(move || {
+            popover.popup();
+        }))
     }
 
     fn sync_terminal_recovery_state(
