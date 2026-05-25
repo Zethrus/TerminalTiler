@@ -131,25 +131,6 @@ mod imp {
         {
             let window = window.clone();
             let overlay = overlay.clone();
-            let preference_store = preference_store.clone();
-            let preset_store = preset_store.clone();
-            let options = options.clone();
-            let voice_toast_tx = voice_toast_tx.clone();
-            settings_button.connect_clicked(move |_| {
-                present_settings_dialog(
-                    &window,
-                    &overlay,
-                    preference_store.clone(),
-                    preset_store.clone(),
-                    options.clone(),
-                    voice_toast_tx.clone(),
-                );
-            });
-        }
-
-        {
-            let window = window.clone();
-            let overlay = overlay.clone();
             let asset_store = asset_store.clone();
             assets_button.connect_clicked(move |_| {
                 present_assets_manager(&window, &overlay, asset_store.clone());
@@ -193,6 +174,8 @@ mod imp {
         let shell_state = WindowsGtkShellState::default();
         shell_state.launch_deck_active.set(true);
         let command_palette_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
+        let open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
             Rc::new(RefCell::new(None));
         let launch_widget_handle: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
 
@@ -325,6 +308,9 @@ mod imp {
                 let asset_store = asset_store.clone();
                 let options = options.clone();
                 let voice_toast_tx = voice_toast_tx.clone();
+                let command_palette_shortcut_controller =
+                    command_palette_shortcut_controller.clone();
+                let open_command_palette_handle = open_command_palette_handle.clone();
                 move || {
                     present_command_palette(
                         &window,
@@ -339,15 +325,41 @@ mod imp {
                         asset_store.clone(),
                         options.clone(),
                         voice_toast_tx.clone(),
+                        command_palette_shortcut_controller.clone(),
+                        open_command_palette_handle.clone(),
                     );
                 }
             });
+            *open_command_palette_handle.borrow_mut() = Some(open_command_palette.clone());
             install_command_palette_shortcut(
                 &window,
                 &command_palette_shortcut_controller,
                 &preferences.command_palette_shortcut,
                 open_command_palette.clone(),
             );
+            {
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let preference_store = preference_store.clone();
+                let preset_store = preset_store.clone();
+                let options = options.clone();
+                let voice_toast_tx = voice_toast_tx.clone();
+                let command_palette_shortcut_controller =
+                    command_palette_shortcut_controller.clone();
+                let open_command_palette_handle = open_command_palette_handle.clone();
+                settings_button.connect_clicked(move |_| {
+                    present_settings_dialog(
+                        &window,
+                        &overlay,
+                        preference_store.clone(),
+                        preset_store.clone(),
+                        options.clone(),
+                        voice_toast_tx.clone(),
+                        command_palette_shortcut_controller.clone(),
+                        open_command_palette_handle.clone(),
+                    );
+                });
+            }
         }
         overlay.set_child(Some(&launch));
         sync_windows_shell_title_tabs(
@@ -425,6 +437,8 @@ mod imp {
         preset_store: PresetStore,
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
+        command_palette_shortcut_controller: ShortcutControllerHandle,
+        open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
         let preferences = preference_store.load();
         settings_dialog::present(
@@ -505,7 +519,27 @@ mod imp {
                 }),
                 on_command_palette_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |shortcut| preference_store.save_command_palette_shortcut(&shortcut)
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let command_palette_shortcut_controller =
+                        command_palette_shortcut_controller.clone();
+                    let open_command_palette_handle = open_command_palette_handle.clone();
+                    move |shortcut| {
+                        preference_store.save_command_palette_shortcut(&shortcut);
+                        if let Some(open_command_palette) =
+                            open_command_palette_handle.borrow().as_ref().cloned()
+                        {
+                            install_command_palette_shortcut(
+                                &window,
+                                &command_palette_shortcut_controller,
+                                &shortcut,
+                                open_command_palette,
+                            );
+                        }
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Command palette shortcut set to {shortcut}"
+                        )));
+                    }
                 }),
                 on_max_reconnect_attempts_changed: Rc::new({
                     let preference_store = preference_store.clone();
@@ -561,11 +595,24 @@ mod imp {
                     let window = window.clone();
                     let overlay = overlay.clone();
                     let preference_store = preference_store.clone();
+                    let command_palette_shortcut_controller =
+                        command_palette_shortcut_controller.clone();
+                    let open_command_palette_handle = open_command_palette_handle.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
                         apply_theme_mode(&window, defaults.default_theme);
                         apply_window_density(&window, defaults.default_density);
+                        if let Some(open_command_palette) =
+                            open_command_palette_handle.borrow().as_ref().cloned()
+                        {
+                            install_command_palette_shortcut(
+                                &window,
+                                &command_palette_shortcut_controller,
+                                &defaults.command_palette_shortcut,
+                                open_command_palette,
+                            );
+                        }
                         overlay.add_toast(adw::Toast::new("Application defaults reset"));
                     }
                 }),
@@ -1248,6 +1295,8 @@ mod imp {
         asset_store: AssetStore,
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
+        command_palette_shortcut_controller: ShortcutControllerHandle,
+        open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
         let mut actions = vec![
             command_palette::PaletteAction {
@@ -1284,6 +1333,9 @@ mod imp {
                     let preset_store = preset_store.clone();
                     let options = options.clone();
                     let voice_toast_tx = voice_toast_tx.clone();
+                    let command_palette_shortcut_controller =
+                        command_palette_shortcut_controller.clone();
+                    let open_command_palette_handle = open_command_palette_handle.clone();
                     move || {
                         present_settings_dialog(
                             &window,
@@ -1292,6 +1344,8 @@ mod imp {
                             preset_store.clone(),
                             options.clone(),
                             voice_toast_tx.clone(),
+                            command_palette_shortcut_controller.clone(),
+                            open_command_palette_handle.clone(),
                         );
                     }
                 }),
