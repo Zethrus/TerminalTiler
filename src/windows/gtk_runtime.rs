@@ -138,6 +138,7 @@ mod imp {
         let terminal_output = gtk::TextView::builder()
             .buffer(&buffer)
             .editable(false)
+            .focusable(true)
             .monospace(true)
             .cursor_visible(false)
             .hexpand(true)
@@ -280,6 +281,8 @@ mod imp {
             restart_runtime.clone(),
         );
         install_terminal_output_shortcuts(&terminal_output, &input, &state);
+        install_terminal_input_key_controller(&terminal_output, &state, terminal_buffer.clone());
+        install_terminal_focus_reporting(&terminal_output, &state, terminal_buffer.clone());
 
         let command_sender = Rc::new({
             let state = state.clone();
@@ -541,6 +544,153 @@ mod imp {
 
         if let Some(clipboard_text) = terminal.take_pending_clipboard_write() {
             output.clipboard().set_text(&clipboard_text);
+        }
+    }
+
+    fn install_terminal_input_key_controller(
+        output: &gtk::TextView,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        terminal_buffer: Rc<RefCell<VtBuffer>>,
+    ) {
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let state = state.clone();
+            key_controller.connect_key_pressed(move |_, key, _, key_state| {
+                let terminal_buffer = terminal_buffer.borrow();
+                let Some(payload) = terminal_runtime_key_payload(key, key_state, &terminal_buffer)
+                else {
+                    return gtk::glib::Propagation::Proceed;
+                };
+                if send_terminal_runtime_payload(&state, payload) {
+                    gtk::glib::Propagation::Stop
+                } else {
+                    gtk::glib::Propagation::Proceed
+                }
+            });
+        }
+        output.add_controller(key_controller);
+
+        let focus_click = gtk::GestureClick::builder().button(1).build();
+        {
+            let output = output.clone();
+            focus_click.connect_pressed(move |_, _, _, _| {
+                output.grab_focus();
+            });
+        }
+        output.add_controller(focus_click);
+    }
+
+    fn install_terminal_focus_reporting(
+        output: &gtk::TextView,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        terminal_buffer: Rc<RefCell<VtBuffer>>,
+    ) {
+        let focus_controller = gtk::EventControllerFocus::new();
+        {
+            let state = state.clone();
+            let terminal_buffer = terminal_buffer.clone();
+            focus_controller.connect_enter(move |_| {
+                if terminal_buffer.borrow().focus_reporting() {
+                    let _ = send_terminal_runtime_payload(&state, "\u{1b}[I".into());
+                }
+            });
+        }
+        {
+            let state = state.clone();
+            focus_controller.connect_leave(move |_| {
+                if terminal_buffer.borrow().focus_reporting() {
+                    let _ = send_terminal_runtime_payload(&state, "\u{1b}[O".into());
+                }
+            });
+        }
+        output.add_controller(focus_controller);
+    }
+
+    fn terminal_runtime_key_payload(
+        key: gtk::gdk::Key,
+        state: gtk::gdk::ModifierType,
+        terminal: &VtBuffer,
+    ) -> Option<String> {
+        let modifiers = state & gtk::accelerator_get_default_mod_mask();
+        let ctrl = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+        let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+        let alt = modifiers.contains(gtk::gdk::ModifierType::ALT_MASK)
+            || modifiers.contains(gtk::gdk::ModifierType::META_MASK);
+
+        if ctrl
+            && shift
+            && key.to_unicode().is_some_and(|value| {
+                value.eq_ignore_ascii_case(&'c') || value.eq_ignore_ascii_case(&'v')
+            })
+        {
+            return None;
+        }
+
+        let special = match key {
+            gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => Some("\r"),
+            gtk::gdk::Key::BackSpace => Some("\u{7f}"),
+            gtk::gdk::Key::Tab | gtk::gdk::Key::ISO_Left_Tab => Some("\t"),
+            gtk::gdk::Key::Escape => Some("\u{1b}"),
+            gtk::gdk::Key::Left => Some(terminal_key_sequence(terminal, "\u{1b}[D", "\u{1b}OD")),
+            gtk::gdk::Key::Right => Some(terminal_key_sequence(terminal, "\u{1b}[C", "\u{1b}OC")),
+            gtk::gdk::Key::Up => Some(terminal_key_sequence(terminal, "\u{1b}[A", "\u{1b}OA")),
+            gtk::gdk::Key::Down => Some(terminal_key_sequence(terminal, "\u{1b}[B", "\u{1b}OB")),
+            gtk::gdk::Key::Home => Some(terminal_key_sequence(terminal, "\u{1b}[H", "\u{1b}OH")),
+            gtk::gdk::Key::End => Some(terminal_key_sequence(terminal, "\u{1b}[F", "\u{1b}OF")),
+            gtk::gdk::Key::Insert => Some("\u{1b}[2~"),
+            gtk::gdk::Key::Delete => Some("\u{1b}[3~"),
+            gtk::gdk::Key::Page_Up => Some("\u{1b}[5~"),
+            gtk::gdk::Key::Page_Down => Some("\u{1b}[6~"),
+            _ => None,
+        };
+        if let Some(sequence) = special {
+            return Some(sequence.to_string());
+        }
+
+        let character = key.to_unicode()?;
+        if ctrl {
+            return control_character_payload(character);
+        }
+
+        if alt && !character.is_control() {
+            return Some(format!("\u{1b}{character}"));
+        }
+
+        if modifiers == gtk::gdk::ModifierType::empty()
+            || modifiers == gtk::gdk::ModifierType::SHIFT_MASK
+        {
+            return (!character.is_control()).then(|| character.to_string());
+        }
+
+        None
+    }
+
+    fn control_character_payload(character: char) -> Option<String> {
+        let upper = character.to_ascii_uppercase();
+        let byte = match upper {
+            '@' | ' ' => 0x00,
+            'A'..='Z' => upper as u8 - b'A' + 1,
+            '[' => 0x1b,
+            '\\' => 0x1c,
+            ']' => 0x1d,
+            '^' => 0x1e,
+            '_' => 0x1f,
+            '?' => 0x7f,
+            _ => return None,
+        };
+        Some(char::from(byte).to_string())
+    }
+
+    fn terminal_key_sequence<'a>(
+        terminal: &VtBuffer,
+        normal_sequence: &'a str,
+        application_sequence: &'a str,
+    ) -> &'a str {
+        if terminal.application_cursor_keys() {
+            application_sequence
+        } else {
+            normal_sequence
         }
     }
 
