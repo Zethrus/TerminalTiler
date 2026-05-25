@@ -1583,7 +1583,10 @@ mod imp {
         }
 
         if let Some(on_rename) = tab.on_rename {
-            let rename_click = gtk::GestureClick::builder().button(1).build();
+            let rename_click = gtk::GestureClick::builder()
+                .button(1)
+                .propagation_phase(gtk::PropagationPhase::Capture)
+                .build();
             rename_click.connect_pressed(move |gesture, n_press, _, _| {
                 if n_press != 2 {
                     return;
