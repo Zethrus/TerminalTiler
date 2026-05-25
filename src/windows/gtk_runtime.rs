@@ -43,6 +43,7 @@ mod imp {
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::storage::session_store::SavedTab;
     use crate::terminal_palette::{TerminalPalette, terminal_palette};
+    use crate::transcript::TranscriptBuffer;
     use crate::ui::appearance::resolved_theme_uses_dark_palette;
     use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
@@ -70,6 +71,7 @@ mod imp {
         active: bool,
         process_handle: Option<isize>,
         launch_runtime: Option<wsl::WindowsLaunchRuntime>,
+        transcript: TranscriptBuffer,
         next_generation: u64,
         active_generation: u64,
     }
@@ -292,6 +294,7 @@ mod imp {
                     while let Ok(event) = event_rx.try_recv() {
                         match event {
                             TerminalRuntimeEvent::Output(chunk) => {
+                                state.borrow_mut().transcript.push_output(&chunk);
                                 let mut terminal_buffer = terminal_buffer.borrow_mut();
                                 terminal_buffer.process(&chunk);
                                 flush_terminal_runtime_responses(
@@ -965,13 +968,16 @@ mod imp {
             state.stdin_tx.clone()
         };
 
-        if stdin_tx.is_some_and(|stdin_tx| stdin_tx.send(payload).is_ok()) {
-            true
-        } else {
-            let mut state = state.borrow_mut();
-            state.stdin_tx = None;
-            false
+        if let Some(stdin_tx) = stdin_tx {
+            if stdin_tx.send(payload.clone()).is_ok() {
+                state.borrow_mut().transcript.push_input(&payload);
+                return true;
+            }
+
+            state.borrow_mut().stdin_tx = None;
         }
+
+        false
     }
 
     fn paste_dropped_paths_into_terminal_runtime(
@@ -1107,6 +1113,19 @@ mod imp {
         }
         menu.append(&local_shell_button);
 
+        let transcript_button = context_menu::action_button("Show Transcript", None);
+        {
+            let output = output.clone();
+            let state = state.clone();
+            let popover = popover.clone();
+            transcript_button.connect_clicked(move |_| {
+                let transcript = state.borrow().transcript.recent_transcript(240);
+                popover.popdown();
+                present_transcript_dialog(&output, &transcript);
+            });
+        }
+        menu.append(&transcript_button);
+
         let focus_input_button = context_menu::action_button("Focus Command Input", None);
         {
             let input = input.clone();
@@ -1144,6 +1163,63 @@ mod imp {
             });
         }
         output.add_controller(right_click);
+    }
+
+    fn present_transcript_dialog(output: &gtk::TextView, transcript: &str) {
+        let Some(window) = output
+            .root()
+            .and_then(|root| root.downcast::<gtk::Window>().ok())
+        else {
+            return;
+        };
+
+        let dialog = adw::Dialog::new();
+        dialog.set_title("Recent Transcript");
+        dialog.set_follows_content_size(false);
+        dialog.set_content_width(820);
+        dialog.set_content_height(480);
+
+        let area = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .margin_top(16)
+            .margin_bottom(16)
+            .margin_start(16)
+            .margin_end(16)
+            .build();
+        let scroller = gtk::ScrolledWindow::builder()
+            .hexpand(true)
+            .vexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .build();
+        let text = gtk::TextView::builder()
+            .editable(false)
+            .cursor_visible(false)
+            .monospace(true)
+            .wrap_mode(gtk::WrapMode::WordChar)
+            .build();
+        text.buffer().set_text(if transcript.trim().is_empty() {
+            "No transcript is available yet."
+        } else {
+            transcript
+        });
+        scroller.set_child(Some(&text));
+        area.append(&scroller);
+
+        let close_button =
+            icons::labeled_button("Close", icon_name::CLOSE, &["pill-button", "flat"]);
+        close_button.set_halign(gtk::Align::End);
+        area.append(&close_button);
+        dialog.set_child(Some(&area));
+        dialog.set_default_widget(Some(&close_button));
+        {
+            let dialog = dialog.clone();
+            close_button.connect_clicked(move |_| {
+                dialog.close();
+            });
+        }
+        dialog.present(Some(&window));
     }
 
     fn install_terminal_output_shortcuts(
