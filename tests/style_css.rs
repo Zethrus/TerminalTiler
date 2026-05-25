@@ -1123,6 +1123,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "execute_preview_snippet",
         "resolve_snippet(snippet, &variables)",
         "active_tab_tile_specs",
+        "format!(\"{command}\\n\")",
     ] {
         assert!(
             WORKSPACE_PREVIEW_RS.contains(token),
@@ -1134,6 +1135,8 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         WINDOWS_GTK_RUNTIME_RS.contains("TileRuntimeSurface")
             && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
             && WINDOWS_GTK_RUNTIME_RS.contains("stdin_tx.send(command.to_string())")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("stdin.write_all(b\"\\r\\n\")")
+            && WINDOWS_GTK_RUNTIME_RS.contains("format!(\"{text}\\r\\n\")")
             && WINDOWS_GTK_RUNTIME_RS
                 .contains("TileKind::WebView => build_web_runtime_surface(tile)")
             && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)"),

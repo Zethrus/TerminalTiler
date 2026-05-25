@@ -142,10 +142,7 @@ mod imp {
 
         let command_sender = Rc::new({
             let stdin_tx = stdin_tx.clone();
-            move |command: &str| {
-                let command = command.trim();
-                !command.is_empty() && stdin_tx.send(command.to_string()).is_ok()
-            }
+            move |command: &str| !command.is_empty() && stdin_tx.send(command.to_string()).is_ok()
         });
 
         let appearance_applier = Rc::new({
@@ -247,9 +244,6 @@ mod imp {
                         if stdin.write_all(line.as_bytes()).is_err() {
                             break;
                         }
-                        if stdin.write_all(b"\r\n").is_err() {
-                            break;
-                        }
                         let _ = stdin.flush();
                     }
                 });
@@ -307,7 +301,12 @@ mod imp {
         if text.is_empty() {
             return;
         }
-        if stdin_tx.send(text).is_ok() {
+        let payload = if text.ends_with('\n') {
+            text
+        } else {
+            format!("{text}\r\n")
+        };
+        if stdin_tx.send(payload).is_ok() {
             entry.set_text("");
         }
     }

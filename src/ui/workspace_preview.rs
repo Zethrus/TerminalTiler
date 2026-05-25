@@ -596,13 +596,18 @@ fn build_workspace_summary(
             if command.is_empty() {
                 return;
             }
+            let payload = if command.ends_with('\n') {
+                command
+            } else {
+                format!("{command}\n")
+            };
             let target = broadcast_target.borrow().clone();
             let sent = send_command_to_active_runtime_surfaces(
                 &session,
                 &active_index,
                 &runtime_surfaces,
                 &target,
-                &command,
+                &payload,
             );
             broadcast_state.set_text(&format!("{}  •  sent to {}", target.label(), sent));
             if sent > 0 {
