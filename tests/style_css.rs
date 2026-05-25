@@ -1188,6 +1188,15 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("controller.SetBounds(bounds)")
             && WINDOWS_GTK_RUNTIME_RS.contains("webview.Navigate(&HSTRING::from")
             && WINDOWS_GTK_RUNTIME_RS.contains("webview.Reload()")
+            && WINDOWS_GTK_RUNTIME_RS.contains("build_web_runtime_context_menu")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains(r#"context_menu::action_button("Reload", Some("F5"))"#)
+            && WINDOWS_GTK_RUNTIME_RS.contains(r#"context_menu::action_button("Copy URL", None)"#)
+            && WINDOWS_GTK_RUNTIME_RS.contains("ContextMenuRequestedEventHandler")
+            && WINDOWS_GTK_RUNTIME_RS.contains("NewWindowRequestedEventHandler")
+            && WINDOWS_GTK_RUNTIME_RS.contains("handle_gtk_webview_new_window_request")
+            && WINDOWS_GTK_RUNTIME_RS.contains("remove_NewWindowRequested")
+            && WINDOWS_GTK_RUNTIME_RS.contains("remove_ContextMenuRequested")
             && WINDOWS_GTK_RUNTIME_RS.contains("controller.Close()"),
         "Windows GTK terminal/runtime surfaces should expose shared command controls and embed WebView2-backed web panes instead of leaving browser tiles as external placeholders"
     );

@@ -15,18 +15,20 @@ mod imp {
     use gtk::glib::translate::ToGlibPtr;
     use gtk::{gio, glib};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-        ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, ICoreWebView2Environment,
+        CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2_11,
+        ICoreWebView2Controller, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
+        ICoreWebView2Environment, ICoreWebView2NewWindowRequestedEventArgs,
     };
     use webview2_com::{
-        CreateCoreWebView2ControllerCompletedHandler,
+        ContextMenuRequestedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
         CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
-        NavigationCompletedEventHandler, take_pwstr, wait_with_pump,
+        NavigationCompletedEventHandler, NewWindowRequestedEventHandler, take_pwstr,
+        wait_with_pump,
     };
     use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::System::WinRT::EventRegistrationToken;
-    use windows::core::{Error as WindowsError, HSTRING, PCWSTR, PWSTR};
+    use windows::core::{Error as WindowsError, HSTRING, Interface, PCWSTR, PWSTR};
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_sys::Win32::System::Threading::TerminateProcess;
 
@@ -80,6 +82,8 @@ mod imp {
         webview: Option<ICoreWebView2>,
         document_title_token: Option<EventRegistrationToken>,
         navigation_completed_token: Option<EventRegistrationToken>,
+        new_window_token: Option<EventRegistrationToken>,
+        context_menu_token: Option<EventRegistrationToken>,
         current_url: String,
         auto_refresh_seconds: Option<u32>,
         refresh_tick: u32,
@@ -956,6 +960,8 @@ mod imp {
         make_shrinkable(&web_host);
         surface.append(&web_host);
 
+        let context_popover = build_web_runtime_context_menu(&web_host, state.clone());
+
         let open_button = icons::labeled_button(
             "Open Externally",
             icon_name::WEB,
@@ -1023,6 +1029,7 @@ mod imp {
             runtime_status.clone(),
             title.clone(),
             detail_label.clone(),
+            context_popover,
         );
 
         TileRuntimeSurface {
@@ -1035,6 +1042,68 @@ mod imp {
             active_process_checker: None,
             recovery_binder: None,
         }
+    }
+
+    fn build_web_runtime_context_menu(
+        parent: &gtk::Box,
+        state: Rc<RefCell<WebRuntimeState>>,
+    ) -> gtk::Popover {
+        let popover = context_menu::popover(parent);
+        let menu = context_menu::menu_box();
+
+        let reload_button = context_menu::action_button("Reload", Some("F5"));
+        {
+            let state = state.clone();
+            let popover = popover.clone();
+            reload_button.connect_clicked(move |_| {
+                if let Some(webview) = state.borrow().webview.clone()
+                    && let Err(error) = unsafe { webview.Reload() }
+                {
+                    logging::error(format!(
+                        "Windows GTK WebView2 context reload failed: {error}"
+                    ));
+                }
+                popover.popdown();
+            });
+        }
+        menu.append(&reload_button);
+
+        let copy_url_button = context_menu::action_button("Copy URL", None);
+        {
+            let state = state.clone();
+            let popover = popover.clone();
+            let parent = parent.clone();
+            copy_url_button.connect_clicked(move |_| {
+                let url = state.borrow().current_url.clone();
+                if !url.trim().is_empty() {
+                    parent.display().clipboard().set_text(&url);
+                }
+                popover.popdown();
+            });
+        }
+        menu.append(&copy_url_button);
+
+        let open_external_button = context_menu::action_button("Open in Browser", None);
+        {
+            let state = state.clone();
+            let popover = popover.clone();
+            open_external_button.connect_clicked(move |_| {
+                let url = state.borrow().current_url.clone();
+                if !url.trim().is_empty()
+                    && let Err(error) =
+                        gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
+                {
+                    logging::error(format!(
+                        "Windows GTK WebView2 context open failed for '{url}': {error}"
+                    ));
+                }
+                popover.popdown();
+            });
+        }
+        menu.append(&open_external_button);
+
+        popover.set_child(Some(&menu));
+        popover
     }
 
     fn apply_web_runtime_settings(
@@ -1079,6 +1148,7 @@ mod imp {
         runtime_status: String,
         title: gtk::Label,
         detail_label: gtk::Label,
+        context_popover: gtk::Popover,
     ) {
         let host = host.clone();
         glib::timeout_add_local(Duration::from_millis(WEBVIEW_RUNTIME_POLL_MS), move || {
@@ -1095,6 +1165,7 @@ mod imp {
                         &runtime_status,
                         &title,
                         &detail_label,
+                        &context_popover,
                     );
                 }
             }
@@ -1112,6 +1183,7 @@ mod imp {
         runtime_status: &str,
         title: &gtk::Label,
         detail_label: &gtk::Label,
+        context_popover: &gtk::Popover,
     ) {
         {
             let mut state = state.borrow_mut();
@@ -1174,6 +1246,7 @@ mod imp {
             title.clone(),
             detail_label.clone(),
         );
+        bind_gtk_webview_interactions(&webview, state.clone(), context_popover.clone());
 
         let (url, auto_refresh_seconds) = {
             let state = state.borrow();
@@ -1201,6 +1274,98 @@ mod imp {
             let _ = settings.SetIsStatusBarEnabled(false);
             let _ = settings.SetIsZoomControlEnabled(false);
         }
+    }
+
+    fn bind_gtk_webview_interactions(
+        webview: &ICoreWebView2,
+        state: Rc<RefCell<WebRuntimeState>>,
+        context_popover: gtk::Popover,
+    ) {
+        let mut new_window_token = EventRegistrationToken::default();
+        let new_window_registration = unsafe {
+            webview.add_NewWindowRequested(
+                &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    handle_gtk_webview_new_window_request(&args)
+                })),
+                &mut new_window_token,
+            )
+        };
+
+        let mut context_menu_token = EventRegistrationToken::default();
+        let context_menu_registration = match webview.cast::<ICoreWebView2_11>() {
+            Ok(webview11) => Some(unsafe {
+                webview11.add_ContextMenuRequested(
+                    &ContextMenuRequestedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else {
+                            return Ok(());
+                        };
+                        let mut point = windows::Win32::Foundation::POINT::default();
+                        args.Location(&mut point)?;
+                        args.SetHandled(true)?;
+                        context_menu::popup_at(&context_popover, point.x as f64, point.y as f64);
+                        Ok(())
+                    })),
+                    &mut context_menu_token,
+                )
+            }),
+            Err(error) => {
+                logging::info(format!(
+                    "Windows GTK WebView2 context menu hook unavailable: {error}"
+                ));
+                None
+            }
+        };
+
+        let mut state = state.borrow_mut();
+        if let Err(error) = new_window_registration {
+            logging::error(format!(
+                "Registering Windows GTK WebView2 popup handler failed: {error}"
+            ));
+        } else {
+            state.new_window_token = Some(new_window_token);
+        }
+        if let Some(context_menu_registration) = context_menu_registration {
+            if let Err(error) = context_menu_registration {
+                logging::error(format!(
+                    "Registering Windows GTK WebView2 context menu handler failed: {error}"
+                ));
+            } else {
+                state.context_menu_token = Some(context_menu_token);
+            }
+        }
+    }
+
+    fn handle_gtk_webview_new_window_request(
+        args: &ICoreWebView2NewWindowRequestedEventArgs,
+    ) -> windows::core::Result<()> {
+        let mut requested_uri = PWSTR::null();
+        unsafe {
+            args.Uri(&mut requested_uri)?;
+        }
+        let requested_uri = take_pwstr(requested_uri);
+
+        let mut is_user_initiated = windows::Win32::Foundation::BOOL::default();
+        unsafe {
+            args.IsUserInitiated(&mut is_user_initiated)?;
+            args.SetHandled(true)?;
+        }
+
+        if !is_user_initiated.as_bool() || requested_uri.trim().is_empty() {
+            return Ok(());
+        }
+
+        if let Err(error) =
+            gio::AppInfo::launch_default_for_uri(&requested_uri, None::<&gio::AppLaunchContext>)
+        {
+            logging::error(format!(
+                "Windows GTK WebView2 popup open failed for '{requested_uri}': {error}"
+            ));
+        }
+
+        Ok(())
     }
 
     fn bind_gtk_webview_status(
@@ -1325,7 +1490,14 @@ mod imp {
     }
 
     fn shutdown_web_runtime(state: &Rc<RefCell<WebRuntimeState>>, reason: &str) {
-        let (webview, title_token, navigation_token, controller) = {
+        let (
+            webview,
+            title_token,
+            navigation_token,
+            new_window_token,
+            context_menu_token,
+            controller,
+        ) = {
             let mut state = state.borrow_mut();
             if state.shutdown {
                 return;
@@ -1337,9 +1509,18 @@ mod imp {
             let webview = state.webview.take();
             let title_token = state.document_title_token.take();
             let navigation_token = state.navigation_completed_token.take();
+            let new_window_token = state.new_window_token.take();
+            let context_menu_token = state.context_menu_token.take();
             let controller = state.controller.take();
             state.environment = None;
-            (webview, title_token, navigation_token, controller)
+            (
+                webview,
+                title_token,
+                navigation_token,
+                new_window_token,
+                context_menu_token,
+                controller,
+            )
         };
         if let Some(webview) = webview {
             if let Some(token) = title_token {
@@ -1347,6 +1528,14 @@ mod imp {
             }
             if let Some(token) = navigation_token {
                 let _ = unsafe { webview.remove_NavigationCompleted(token) };
+            }
+            if let Some(token) = new_window_token {
+                let _ = unsafe { webview.remove_NewWindowRequested(token) };
+            }
+            if let Some(token) = context_menu_token
+                && let Ok(webview11) = webview.cast::<ICoreWebView2_11>()
+            {
+                let _ = unsafe { webview11.remove_ContextMenuRequested(token) };
             }
         }
         if let Some(controller) = controller
