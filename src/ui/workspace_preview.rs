@@ -5,9 +5,10 @@ use std::rc::Rc;
 use gtk::pango;
 use gtk::prelude::*;
 
-use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
+use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
+use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
 use crate::services::layout_editor::{close_tile, split_web_tile};
 use crate::services::runbooks::resolve_runbook;
@@ -23,9 +24,9 @@ use crate::ui::tile_chrome::{
 };
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
-    WorkspaceSummaryChrome, WorkspaceSummaryInput, build_workspace_alert_revealer,
-    build_workspace_alert_sidebar_chrome, build_workspace_content_chrome,
-    build_workspace_shell_chrome, build_workspace_summary_chrome,
+    WorkspaceAlertSidebarChrome, WorkspaceSummaryChrome, WorkspaceSummaryInput,
+    build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
+    build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 
 #[derive(Clone)]
@@ -75,6 +76,7 @@ pub struct SessionPreview {
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    alert_store: AlertStore,
 }
 
 #[derive(Clone)]
@@ -86,6 +88,7 @@ struct PreviewRenderContext {
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    alert_store: AlertStore,
 }
 
 impl PreviewRenderContext {
@@ -98,6 +101,7 @@ impl PreviewRenderContext {
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
+            self.alert_store.clone(),
         );
     }
 
@@ -146,6 +150,7 @@ impl SessionPreview {
             show_inline_tab_strip,
             runtime_factory,
             runtime_surfaces: Rc::new(RefCell::new(HashMap::new())),
+            alert_store: AlertStore::default(),
         };
         preview.render();
         preview
@@ -245,6 +250,7 @@ impl SessionPreview {
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
+            self.alert_store.clone(),
         );
     }
 
@@ -299,6 +305,7 @@ fn render_session_preview(
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    alert_store: AlertStore,
 ) {
     while let Some(child) = shell.first_child() {
         shell.remove(&child);
@@ -318,6 +325,7 @@ fn render_session_preview(
             let active_index = active_index.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
+            let alert_store = alert_store.clone();
             Rc::new(move |index: usize| {
                 if close_tab_in_preview_state(&session, &active_index, index) {
                     let live_keys = runtime_surface_keys(&session.borrow());
@@ -332,6 +340,7 @@ fn render_session_preview(
                         true,
                         runtime_factory.clone(),
                         runtime_surfaces.clone(),
+                        alert_store.clone(),
                     );
                 }
             })
@@ -343,6 +352,7 @@ fn render_session_preview(
             let active_index = active_index.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
+            let alert_store = alert_store.clone();
             Rc::new(move |next_index: usize| {
                 let next_index = {
                     let session = session.borrow();
@@ -358,6 +368,7 @@ fn render_session_preview(
                     true,
                     runtime_factory.clone(),
                     runtime_surfaces.clone(),
+                    alert_store.clone(),
                 );
             })
         };
@@ -378,8 +389,10 @@ fn render_session_preview(
             show_inline_tab_strip,
             runtime_factory: runtime_factory.clone(),
             runtime_surfaces: runtime_surfaces.clone(),
+            alert_store: alert_store.clone(),
         };
-        shell.append(&build_workspace_summary(tab, &render_context));
+        let summary = build_workspace_summary(tab, &render_context);
+        shell.append(&summary.widget);
         let on_close_tile = {
             let render_context = render_context.clone();
             Rc::new(move |tile_id: String| {
@@ -401,9 +414,10 @@ fn render_session_preview(
             &runtime_surfaces,
             on_close_tile,
         );
-        let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
-        let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
-        shell.append(&build_workspace_content_chrome(&layout, &alert_revealer));
+        shell.append(&build_workspace_content_chrome(
+            &layout,
+            &summary.alert_revealer,
+        ));
     } else {
         shell.append(&build_empty_state());
     }
@@ -520,7 +534,15 @@ fn build_tab_chip(
     shell.upcast()
 }
 
-fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext) -> gtk::Widget {
+struct PreviewSummaryChrome {
+    widget: gtk::Widget,
+    alert_revealer: gtk::Revealer,
+}
+
+fn build_workspace_summary(
+    tab: &SavedTab,
+    render_context: &PreviewRenderContext,
+) -> PreviewSummaryChrome {
     let summary = build_workspace_summary_chrome(WorkspaceSummaryInput {
         name: &tab.preset.name,
         path: tab.workspace_root.display().to_string(),
@@ -541,6 +563,7 @@ fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext
         summary.url_entry.set_text(&url);
     }
 
+    let alert_store = render_context.alert_store.clone();
     let broadcast_target = Rc::new(RefCell::new(BroadcastTarget::Off));
     {
         let broadcast_target = broadcast_target.clone();
@@ -565,6 +588,7 @@ fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext
         let broadcast_target = broadcast_target.clone();
         let broadcast_entry = summary.broadcast_entry.clone();
         let broadcast_state = summary.broadcast_state.clone();
+        let alert_store = alert_store.clone();
         move || {
             let command = broadcast_entry.text().trim().to_string();
             if command.is_empty() {
@@ -582,6 +606,14 @@ fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext
             if sent > 0 {
                 broadcast_entry.set_text("");
             }
+            alert_store.push(AlertEventInput {
+                source: AlertSourceKind::Runbook,
+                severity: AlertSeverity::Info,
+                title: "Quick send executed".into(),
+                detail: format!("Sent quick command to {} pane(s).", sent),
+                pane_id: None,
+                allows_reconnect: false,
+            });
         }
     });
     {
@@ -637,9 +669,16 @@ fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext
             .connect_clicked(move |_| update_web_url());
     }
 
-    bind_preview_runbook_controls(&summary, render_context);
+    bind_preview_runbook_controls(&summary, render_context, &alert_store);
 
-    summary.widget
+    let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
+    let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
+    bind_preview_alert_controls(&summary, &alert_sidebar, &alert_revealer, &alert_store);
+
+    PreviewSummaryChrome {
+        widget: summary.widget,
+        alert_revealer,
+    }
 }
 
 fn saved_groups(tab: &SavedTab) -> Vec<String> {
@@ -649,6 +688,7 @@ fn saved_groups(tab: &SavedTab) -> Vec<String> {
 fn bind_preview_runbook_controls(
     summary: &WorkspaceSummaryChrome,
     render_context: &PreviewRenderContext,
+    alert_store: &AlertStore,
 ) {
     summary.runbook_selector.remove_all();
     summary.runbook_selector.append(Some(""), "Runbook");
@@ -668,7 +708,8 @@ fn bind_preview_runbook_controls(
     let assets = render_context.assets.clone();
     let runbook_selector = summary.runbook_selector.clone();
     let broadcast_state = summary.broadcast_state.clone();
-    summary.runbook_button.connect_clicked(move |_| {
+    let alert_store = alert_store.clone();
+    summary.runbook_button.connect_clicked(move |button| {
         let Some(runbook_id) = runbook_selector.active_id() else {
             return;
         };
@@ -682,32 +723,276 @@ fn bind_preview_runbook_controls(
         else {
             return;
         };
-        if !runbook.variables.is_empty() {
-            broadcast_state.set_text("Runbook requires variables");
-            return;
+        present_preview_runbook_dialog(
+            button,
+            runbook,
+            PreviewRunbookContext {
+                session: session.clone(),
+                active_index: active_index.clone(),
+                runtime_surfaces: runtime_surfaces.clone(),
+                broadcast_state: broadcast_state.clone(),
+                alert_store: alert_store.clone(),
+            },
+        );
+    });
+}
+
+#[derive(Clone)]
+struct PreviewRunbookContext {
+    session: Rc<RefCell<SavedSession>>,
+    active_index: Rc<Cell<usize>>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    broadcast_state: gtk::Label,
+    alert_store: AlertStore,
+}
+
+fn present_preview_runbook_dialog(
+    button: &gtk::Button,
+    runbook: &Runbook,
+    context: PreviewRunbookContext,
+) {
+    if runbook.variables.is_empty()
+        && runbook.confirm_policy == crate::model::assets::RunbookConfirmPolicy::Never
+    {
+        execute_preview_runbook(runbook, TemplateVariableValues::new(), &context);
+        return;
+    }
+
+    let Some(window) = button
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+    else {
+        return;
+    };
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&format!("Run {}", runbook.name));
+    let area = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+    area.append(
+        &gtk::Label::builder()
+            .label(if runbook.description.trim().is_empty() {
+                format!(
+                    "Target: {}  •  Steps: {}  •  {}",
+                    runbook.target.label(),
+                    runbook.steps.len(),
+                    runbook.confirm_policy.label()
+                )
+            } else {
+                format!(
+                    "{}\nTarget: {}  •  Steps: {}  •  {}",
+                    runbook.description,
+                    runbook.target.label(),
+                    runbook.steps.len(),
+                    runbook.confirm_policy.label()
+                )
+            })
+            .wrap(true)
+            .halign(gtk::Align::Start)
+            .build(),
+    );
+
+    let entries = runbook
+        .variables
+        .iter()
+        .map(|variable| {
+            let entry = gtk::Entry::builder()
+                .placeholder_text(&variable.label)
+                .text(variable.default_value.clone().unwrap_or_default())
+                .activates_default(true)
+                .build();
+            area.append(
+                &gtk::Label::builder()
+                    .label(&variable.label)
+                    .halign(gtk::Align::Start)
+                    .build(),
+            );
+            area.append(&entry);
+            (variable.id.clone(), entry)
+        })
+        .collect::<Vec<_>>();
+    let preview = runbook
+        .steps
+        .iter()
+        .map(|step| step.command.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    area.append(
+        &gtk::Label::builder()
+            .label(format!("Preview:\n{preview}"))
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint"])
+            .build(),
+    );
+
+    let action_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::End)
+        .build();
+    let cancel_button = icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
+    let run_button =
+        icons::labeled_button("Run", icon_name::RUN, &["pill-button", "suggested-action"]);
+    action_row.append(&cancel_button);
+    action_row.append(&run_button);
+    area.append(&action_row);
+    dialog.set_child(Some(&area));
+    dialog.set_default_widget(Some(&run_button));
+
+    {
+        let dialog = dialog.clone();
+        cancel_button.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+    {
+        let dialog = dialog.clone();
+        let runbook = runbook.clone();
+        run_button.connect_clicked(move |_| {
+            let variables = entries
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.text().to_string()))
+                .collect::<TemplateVariableValues>();
+            execute_preview_runbook(&runbook, variables, &context);
+            dialog.close();
+        });
+    }
+    dialog.present(Some(&window));
+}
+
+fn execute_preview_runbook(
+    runbook: &Runbook,
+    variables: TemplateVariableValues,
+    context: &PreviewRunbookContext,
+) {
+    let tile_specs = active_tab_tile_specs(&context.session, &context.active_index);
+    match resolve_runbook(runbook, &variables, &tile_specs) {
+        Ok(resolved) => {
+            let sent = resolved
+                .commands
+                .iter()
+                .map(|command| {
+                    send_command_to_active_runtime_surfaces(
+                        &context.session,
+                        &context.active_index,
+                        &context.runtime_surfaces,
+                        &resolved.target,
+                        command,
+                    )
+                })
+                .sum::<usize>();
+            context
+                .broadcast_state
+                .set_text(&format!("{}  •  sent to {}", resolved.target_label, sent));
+            let mut alert = AlertEventInput::new(
+                AlertSourceKind::Runbook,
+                AlertSeverity::Info,
+                format!("Runbook '{}' executed", runbook.name),
+            );
+            alert.detail = format!(
+                "Targeted {} pane(s) with {} step(s).",
+                resolved.matching_tile_ids.len(),
+                resolved.commands.len()
+            );
+            context.alert_store.push(alert);
         }
-        let tile_specs = active_tab_tile_specs(&session, &active_index);
-        match resolve_runbook(runbook, &TemplateVariableValues::default(), &tile_specs) {
-            Ok(resolved) => {
-                let sent = resolved
-                    .commands
-                    .iter()
-                    .map(|command| {
-                        send_command_to_active_runtime_surfaces(
-                            &session,
-                            &active_index,
-                            &runtime_surfaces,
-                            &resolved.target,
-                            command,
-                        )
+        Err(error) => {
+            let error = error.to_string();
+            let mut alert = AlertEventInput::new(
+                AlertSourceKind::Runbook,
+                AlertSeverity::Error,
+                format!("Runbook '{}' failed", runbook.name),
+            );
+            alert.detail = error.clone();
+            context.alert_store.push(alert);
+            context.broadcast_state.set_text(&error);
+        }
+    }
+}
+
+fn bind_preview_alert_controls(
+    summary: &WorkspaceSummaryChrome,
+    alert_sidebar: &WorkspaceAlertSidebarChrome,
+    alert_revealer: &gtk::Revealer,
+    alert_store: &AlertStore,
+) {
+    {
+        let alert_revealer = alert_revealer.clone();
+        summary.alert_button.connect_clicked(move |_| {
+            alert_revealer.set_reveal_child(!alert_revealer.reveals_child());
+        });
+    }
+    {
+        let alert_store = alert_store.clone();
+        alert_sidebar
+            .mark_all_read_button
+            .connect_clicked(move |_| {
+                alert_store.mark_all_read();
+            });
+    }
+
+    let alert_button = summary.alert_button.clone();
+    let alert_list = alert_sidebar.alert_list.clone();
+    let alert_store_for_refresh = alert_store.clone();
+    let refresh = Rc::new(move || {
+        icons::set_button_icon_label(
+            &alert_button,
+            &format!("Alerts ({})", alert_store_for_refresh.unread_count()),
+            icon_name::ALERTS,
+        );
+        while let Some(child) = alert_list.first_child() {
+            alert_list.remove(&child);
+        }
+
+        for alert in alert_store_for_refresh.snapshot().into_iter().rev() {
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(6)
+                .css_classes(["tile-editor-row"])
+                .build();
+            row.append(
+                &gtk::Label::builder()
+                    .label(&alert.title)
+                    .halign(gtk::Align::Start)
+                    .wrap(true)
+                    .css_classes(["card-title"])
+                    .build(),
+            );
+            row.append(
+                &gtk::Label::builder()
+                    .label(if alert.detail.trim().is_empty() {
+                        "No detail available."
+                    } else {
+                        alert.detail.as_str()
                     })
-                    .sum::<usize>();
-                broadcast_state
-                    .set_text(&format!("{}  •  sent to {}", resolved.target_label, sent));
-            }
-            Err(error) => broadcast_state.set_text(&error.to_string()),
+                    .halign(gtk::Align::Start)
+                    .wrap(true)
+                    .css_classes(["field-hint"])
+                    .build(),
+            );
+            let mark_read_button = icons::labeled_button(
+                if alert.unread { "Mark Read" } else { "Read" },
+                icon_name::APPLY,
+                &["flat", "surface-button"],
+            );
+            mark_read_button.set_sensitive(alert.unread);
+            let alert_store = alert_store_for_refresh.clone();
+            let alert_id = alert.id;
+            mark_read_button.connect_clicked(move |_| {
+                alert_store.mark_read(alert_id);
+            });
+            row.append(&mark_read_button);
+            alert_list.append(&row);
         }
     });
+    alert_store.subscribe(refresh.clone());
+    refresh();
 }
 
 fn active_tab_tile_specs(

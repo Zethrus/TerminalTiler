@@ -1103,6 +1103,24 @@ mod imp {
         );
     }
 
+    fn apply_launch_deck_profile(window: &adw::ApplicationWindow) {
+        let preferences = PreferenceStore::new().load();
+        apply_theme_mode(window, preferences.default_theme);
+        apply_window_density(window, preferences.default_density);
+    }
+
+    fn apply_active_preview_profile(
+        window: &adw::ApplicationWindow,
+        preview: &crate::ui::workspace_preview::SessionPreview,
+    ) {
+        let session = preview.snapshot();
+        let Some(tab) = session.tabs.get(preview.active_index()) else {
+            return;
+        };
+        apply_theme_mode(window, tab.preset.theme);
+        apply_window_density(window, tab.preset.density);
+    }
+
     #[derive(Clone, Default)]
     struct WindowsGtkShellState {
         preview: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
@@ -1129,6 +1147,7 @@ mod imp {
         shell_state: &WindowsGtkShellState,
     ) {
         shell_state.launch_deck_active.set(true);
+        apply_launch_deck_profile(window);
         overlay.set_child(Some(launch));
         back_button.set_visible(shell_state.has_workspace_tabs());
         sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, false);
@@ -1171,6 +1190,7 @@ mod imp {
 
         shell_state.launch_deck_active.set(false);
         preview.select_tab(index);
+        apply_active_preview_profile(window, &preview);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
         sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, true);
@@ -1343,6 +1363,7 @@ mod imp {
         if let Some(preview) = shell_state.preview.borrow().as_ref().cloned() {
             preview.push_tab(saved_tab);
             shell_state.launch_deck_active.set(false);
+            apply_active_preview_profile(window, &preview);
             overlay.set_child(Some(&preview.widget()));
             back_button.set_visible(true);
             sync_windows_fullscreen_chrome(
@@ -1412,6 +1433,7 @@ mod imp {
         );
         *shell_state.preview.borrow_mut() = Some(preview.clone());
         shell_state.launch_deck_active.set(false);
+        apply_active_preview_profile(window, &preview);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
         sync_windows_fullscreen_chrome(window, title.root.upcast_ref(), fullscreen_button, true);

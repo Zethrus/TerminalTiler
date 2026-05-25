@@ -27,9 +27,15 @@ pub(crate) struct WorkspaceSummaryChrome {
 
 pub(crate) struct WorkspaceAlertSidebarChrome {
     pub(crate) widget: gtk::Widget,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", feature = "windows-gtk-shell")
+    ))]
     pub(crate) mark_all_read_button: gtk::Button,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", feature = "windows-gtk-shell")
+    ))]
     pub(crate) alert_list: gtk::Box,
 }
 
@@ -87,9 +93,15 @@ pub(crate) fn build_workspace_alert_sidebar_chrome(
 
     WorkspaceAlertSidebarChrome {
         widget: alert_sidebar.upcast(),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", feature = "windows-gtk-shell")
+        ))]
         mark_all_read_button,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", feature = "windows-gtk-shell")
+        ))]
         alert_list,
     }
 }

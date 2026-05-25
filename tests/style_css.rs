@@ -104,6 +104,14 @@ fn linux_and_windows_gtk_shells_share_appearance_chrome() {
             && !WINDOWS_GTK_APP_RS.contains("fn apply_window_density(window:"),
         "Linux and Windows GTK shells should call the same appearance helpers instead of carrying duplicate theme/density implementations"
     );
+    assert!(
+        WINDOWS_GTK_APP_RS.contains("fn apply_launch_deck_profile")
+            && WINDOWS_GTK_APP_RS.contains("fn apply_active_preview_profile")
+            && WINDOWS_GTK_APP_RS.contains("apply_theme_mode(window, tab.preset.theme)")
+            && WINDOWS_GTK_APP_RS.contains("apply_window_density(window, tab.preset.density)")
+            && WINDOWS_GTK_APP_RS.contains("apply_active_preview_profile(window, &preview)"),
+        "Windows GTK should apply the active Linux-style workspace theme/density profile when workspace tabs are opened or selected"
+    );
 }
 
 #[test]
@@ -1100,7 +1108,14 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "connect_preview_tile_close",
         "prune_runtime_surfaces",
         "bind_preview_runbook_controls",
-        "resolve_runbook(runbook, &TemplateVariableValues::default(), &tile_specs)",
+        "present_preview_runbook_dialog",
+        "execute_preview_runbook",
+        "resolve_runbook(runbook, &variables, &tile_specs)",
+        "TemplateVariableValues::new()",
+        "bind_preview_alert_controls",
+        "mark_all_read_button",
+        "alert_store.mark_all_read()",
+        "alert_store.subscribe(refresh.clone())",
         "active_tab_tile_specs",
     ] {
         assert!(
