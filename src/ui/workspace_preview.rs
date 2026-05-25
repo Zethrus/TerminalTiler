@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use adw::prelude::AdwDialogExt;
 use gtk::pango;
 use gtk::prelude::*;
 
