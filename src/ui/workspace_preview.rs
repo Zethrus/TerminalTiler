@@ -17,8 +17,9 @@ use crate::ui::pane_status::initial_status_snapshot;
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS,
     append_terminal_tile_action_chrome, append_web_tile_action_chrome,
-    build_terminal_tile_action_chrome, build_tile_frame, build_tile_header_chrome,
-    build_tile_shell, build_web_tile_action_chrome, domain_from_url, make_shrinkable,
+    bind_web_tile_settings_popover, build_terminal_tile_action_chrome, build_tile_frame,
+    build_tile_header_chrome, build_tile_shell, build_web_tile_action_chrome, domain_from_url,
+    make_shrinkable,
 };
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
@@ -32,6 +33,7 @@ pub struct TileRuntimeSurface {
     pub widget: gtk::Widget,
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
     pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
+    pub url_applier: Option<Rc<dyn Fn(&str)>>,
 }
 
 impl TileRuntimeSurface {
@@ -40,6 +42,7 @@ impl TileRuntimeSurface {
             widget,
             command_sender: None,
             appearance_applier: None,
+            url_applier: None,
         }
     }
 }
@@ -790,6 +793,28 @@ fn first_web_tile_url(tab: &SavedTab) -> Option<String> {
         .map(|tile| normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL)))
 }
 
+fn active_web_tile_settings(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    tile_id: &str,
+) -> Option<(String, Option<u32>)> {
+    let session_ref = session.borrow();
+    let tab_index = active_tab_index(&session_ref, active_index.get())?;
+    session_ref.tabs.get(tab_index).and_then(|tab| {
+        tab.preset
+            .layout
+            .tile_specs()
+            .iter()
+            .find(|tile| tile.id == tile_id && tile.tile_kind == TileKind::WebView)
+            .map(|tile| {
+                (
+                    normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL)),
+                    tile.auto_refresh_seconds,
+                )
+            })
+    })
+}
+
 fn update_active_web_tile_url(
     session: &Rc<RefCell<SavedSession>>,
     active_index: &Rc<Cell<usize>>,
@@ -822,6 +847,72 @@ fn update_active_web_tile_url(
     }
     tile.url = Some(normalized_url);
     true
+}
+
+fn update_active_web_tile_settings(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    tile_id: &str,
+    url: &str,
+    auto_refresh_seconds: Option<u32>,
+) -> bool {
+    let normalized_url = normalize_web_url(url);
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(tile) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .tile_spec_mut_by_id(tile_id)
+    else {
+        return false;
+    };
+    if tile.tile_kind != TileKind::WebView {
+        return false;
+    }
+    let url_changed = tile.url.as_deref() != Some(normalized_url.as_str());
+    let refresh_changed = tile.auto_refresh_seconds != auto_refresh_seconds;
+    if url_changed {
+        tile.url = Some(normalized_url);
+    }
+    if refresh_changed {
+        tile.auto_refresh_seconds = auto_refresh_seconds;
+    }
+    url_changed || refresh_changed
+}
+
+fn reapply_active_web_runtime_url(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    tile_id: &str,
+) -> bool {
+    let session_ref = session.borrow();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(tab) = session_ref.tabs.get(tab_index) else {
+        return false;
+    };
+    let Some(tile) = tab
+        .preset
+        .layout
+        .tile_specs()
+        .iter()
+        .find(|tile| tile.id == tile_id && tile.tile_kind == TileKind::WebView)
+    else {
+        return false;
+    };
+    let key = runtime_surface_key(tab_index, tab, tile);
+    runtime_surfaces
+        .borrow()
+        .get(&key)
+        .and_then(|surface| surface.url_applier.as_ref())
+        .is_some_and(|apply_url| {
+            apply_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
+            true
+        })
 }
 
 fn send_command_to_active_runtime_surfaces(
@@ -948,6 +1039,7 @@ fn build_tile(
         }
         TileKind::WebView => {
             let tile_actions = build_web_tile_action_chrome(can_close);
+            bind_preview_web_tile_settings(&tile_actions.settings_button, tile, render_context);
             connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
             append_web_tile_action_chrome(&actions, &tile_actions);
         }
@@ -970,6 +1062,11 @@ fn build_tile(
         if let Some(apply_appearance) = &surface.appearance_applier {
             apply_appearance(tab.preset.density, tab.terminal_zoom_steps);
         }
+        if tile.tile_kind == TileKind::WebView
+            && let Some(apply_url) = &surface.url_applier
+        {
+            apply_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
+        }
         detach_from_previous_parent(&surface.widget);
         surface.widget
     } else {
@@ -979,6 +1076,49 @@ fn build_tile(
     shell.append(&frame);
 
     shell.upcast()
+}
+
+fn bind_preview_web_tile_settings(
+    settings_button: &gtk::Button,
+    tile: &TileSpec,
+    render_context: &PreviewRenderContext,
+) {
+    let get_settings = {
+        let session = render_context.session.clone();
+        let active_index = render_context.active_index.clone();
+        Rc::new(move |tile_id: String| active_web_tile_settings(&session, &active_index, &tile_id))
+    };
+    let on_update_settings = {
+        let render_context = render_context.clone();
+        Rc::new(
+            move |tile_id: String, url: String, auto_refresh_seconds: Option<u32>| {
+                if update_active_web_tile_settings(
+                    &render_context.session,
+                    &render_context.active_index,
+                    &tile_id,
+                    &url,
+                    auto_refresh_seconds,
+                ) {
+                    render_context.prune_and_rerender();
+                }
+            },
+        )
+    };
+    let on_reload = {
+        let session = render_context.session.clone();
+        let active_index = render_context.active_index.clone();
+        let runtime_surfaces = render_context.runtime_surfaces.clone();
+        Rc::new(move |tile_id: String| {
+            reapply_active_web_runtime_url(&session, &active_index, &runtime_surfaces, &tile_id);
+        })
+    };
+    bind_web_tile_settings_popover(
+        settings_button,
+        &tile.id,
+        get_settings,
+        on_update_settings,
+        on_reload,
+    );
 }
 
 fn build_tile_surface(tile: &TileSpec) -> gtk::Box {

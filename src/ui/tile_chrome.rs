@@ -1,6 +1,7 @@
-use crate::model::layout::TileSpec;
+use crate::model::layout::{DEFAULT_WEB_URL, TileSpec};
 use crate::ui::icons::{self, name as icon_name};
 use gtk::prelude::*;
+use std::rc::Rc;
 
 pub(crate) const TERMINAL_HEADER_BADGE_MAX_CHARS: i32 = 12;
 pub(crate) const WEB_HEADER_BADGE_MAX_CHARS: i32 = 4;
@@ -46,6 +47,8 @@ pub(crate) struct WebTileActionChrome {
     pub(crate) close_button: gtk::Button,
 }
 
+pub(crate) type GetWebTileSettings = Rc<dyn Fn(String) -> Option<(String, Option<u32>)>>;
+
 pub(crate) fn build_terminal_tile_action_chrome(can_close: bool) -> TerminalTileActionChrome {
     let recovery_button = build_header_icon_button(icon_name::RECOVER, "Recover pane");
     recovery_button.add_css_class("tile-recovery-action");
@@ -89,6 +92,130 @@ pub(crate) fn append_web_tile_action_chrome(actions: &gtk::Box, chrome: &WebTile
     actions.append(&chrome.close_button);
 }
 
+pub(crate) fn bind_web_tile_settings_popover(
+    settings_button: &gtk::Button,
+    tile_id: &str,
+    get_settings: GetWebTileSettings,
+    on_update_settings: Rc<dyn Fn(String, String, Option<u32>)>,
+    on_reload: Rc<dyn Fn(String)>,
+) {
+    let settings_popover = gtk::Popover::new();
+    settings_popover.add_css_class("web-tile-settings-popover");
+    settings_popover.set_autohide(true);
+    settings_popover.set_has_arrow(true);
+    settings_popover.set_position(gtk::PositionType::Bottom);
+    settings_popover.set_parent(settings_button);
+
+    let settings_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    settings_box.append(&build_settings_label("URL"));
+
+    let url_entry = gtk::Entry::builder()
+        .hexpand(true)
+        .placeholder_text("https://example.com")
+        .css_classes(["workspace-url-entry", "web-tile-settings-entry"])
+        .build();
+    settings_box.append(&url_entry);
+
+    settings_box.append(&build_settings_label("Auto-refresh (seconds)"));
+    let auto_refresh = gtk::SpinButton::with_range(0.0, 3600.0, 5.0);
+    auto_refresh.set_numeric(true);
+    auto_refresh.set_width_chars(6);
+    auto_refresh.add_css_class("tile-count-input");
+    auto_refresh.set_tooltip_text(Some(
+        "Auto-refresh in seconds, 0 disables automatic reload.",
+    ));
+    settings_box.append(&auto_refresh);
+
+    let settings_actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    let reload_button =
+        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
+    reload_button.set_focus_on_click(false);
+    let apply_button =
+        icons::labeled_button("Apply", icon_name::APPLY, &["flat", "surface-button"]);
+    apply_button.set_focus_on_click(false);
+    settings_actions.append(&reload_button);
+    settings_actions.append(&apply_button);
+    settings_box.append(&settings_actions);
+    settings_popover.set_child(Some(&settings_box));
+
+    let tile_id = tile_id.to_string();
+    let sync_settings_inputs = Rc::new({
+        let url_entry = url_entry.clone();
+        let auto_refresh = auto_refresh.clone();
+        let get_settings = get_settings.clone();
+        let tile_id = tile_id.clone();
+        move || {
+            let (current_url, refresh_seconds) =
+                get_settings(tile_id.clone()).unwrap_or_else(|| (DEFAULT_WEB_URL.into(), None));
+            url_entry.set_text(&current_url);
+            auto_refresh.set_value(refresh_seconds.unwrap_or_default() as f64);
+        }
+    });
+    {
+        let sync_settings_inputs = sync_settings_inputs.clone();
+        let settings_popover = settings_popover.clone();
+        let url_entry = url_entry.clone();
+        settings_button.connect_clicked(move |_| {
+            sync_settings_inputs();
+            if settings_popover.is_visible() {
+                settings_popover.popdown();
+            } else {
+                settings_popover.popup();
+                url_entry.grab_focus();
+            }
+        });
+    }
+
+    let apply_settings = Rc::new({
+        let url_entry = url_entry.clone();
+        let auto_refresh = auto_refresh.clone();
+        let on_update_settings = on_update_settings.clone();
+        let settings_popover = settings_popover.clone();
+        let tile_id = tile_id.clone();
+        move || {
+            let refresh_seconds = match auto_refresh.value_as_int().max(0) {
+                0 => None,
+                value => Some(value as u32),
+            };
+            on_update_settings(
+                tile_id.clone(),
+                url_entry.text().to_string(),
+                refresh_seconds,
+            );
+            settings_popover.popdown();
+        }
+    });
+    {
+        let apply_settings = apply_settings.clone();
+        apply_button.connect_clicked(move |_| {
+            apply_settings();
+        });
+    }
+    {
+        let apply_settings = apply_settings.clone();
+        url_entry.connect_activate(move |_| {
+            apply_settings();
+        });
+    }
+    {
+        let settings_popover = settings_popover.clone();
+        reload_button.connect_clicked(move |_| {
+            on_reload(tile_id.clone());
+            settings_popover.popdown();
+        });
+    }
+}
+
 fn build_tile_close_button(can_close: bool) -> gtk::Button {
     let close_button = build_header_icon_button(
         icon_name::CLOSE,
@@ -100,6 +227,14 @@ fn build_tile_close_button(can_close: bool) -> gtk::Button {
     );
     close_button.set_sensitive(can_close);
     close_button
+}
+
+fn build_settings_label(label: &str) -> gtk::Label {
+    gtk::Label::builder()
+        .label(label)
+        .halign(gtk::Align::Start)
+        .css_classes(["tile-header-popover-label"])
+        .build()
 }
 
 pub(crate) fn build_tile_shell(tile: &TileSpec) -> gtk::Box {

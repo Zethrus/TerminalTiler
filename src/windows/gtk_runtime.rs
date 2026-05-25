@@ -1,5 +1,6 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
+    use std::cell::RefCell;
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -32,7 +33,7 @@ mod imp {
     ) -> TileRuntimeSurface {
         match tile.tile_kind {
             TileKind::Terminal => build_terminal_runtime_surface(tile, tab, assets),
-            TileKind::WebView => TileRuntimeSurface::widget(build_web_runtime_surface(tile)),
+            TileKind::WebView => build_web_runtime_surface(tile),
         }
     }
 
@@ -158,6 +159,7 @@ mod imp {
             widget: surface.upcast(),
             command_sender: Some(command_sender),
             appearance_applier: Some(appearance_applier),
+            url_applier: None,
         }
     }
 
@@ -319,8 +321,13 @@ mod imp {
         buffer.insert(&mut end, text);
     }
 
-    fn build_web_runtime_surface(tile: &TileSpec) -> gtk::Widget {
+    fn build_web_runtime_surface(tile: &TileSpec) -> TileRuntimeSurface {
         let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
+        let current_url = Rc::new(RefCell::new(url.clone()));
+        let runtime_status = match workspace::probe_webview2_runtime() {
+            Ok(()) => "WebView2 available".to_string(),
+            Err(error) => format!("WebView2 unavailable: {error}"),
+        };
         let surface = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(10)
@@ -337,29 +344,27 @@ mod imp {
             .margin_start(12)
             .css_classes(["tile-directory"])
             .build();
+        title.set_tooltip_text(Some(&url));
         surface.append(&title);
 
-        let detail = match workspace::probe_webview2_runtime() {
-            Ok(()) => format!("WebView2 available: {url}"),
-            Err(error) => format!("WebView2 unavailable: {error}\n{url}"),
-        };
-        surface.append(
-            &gtk::Label::builder()
-                .label(&detail)
-                .halign(gtk::Align::Start)
-                .margin_start(12)
-                .wrap(true)
-                .css_classes(["tile-meta"])
-                .build(),
-        );
+        let detail = web_runtime_detail(&runtime_status, &url);
+        let detail_label = gtk::Label::builder()
+            .label(&detail)
+            .halign(gtk::Align::Start)
+            .margin_start(12)
+            .wrap(true)
+            .css_classes(["tile-meta"])
+            .build();
+        surface.append(&detail_label);
 
         let open_button =
             icons::labeled_button("Open Web Tile", icon_name::WEB, &["flat", "surface-button"]);
         open_button.set_halign(gtk::Align::Start);
         open_button.set_margin_start(12);
         {
-            let url = url.clone();
+            let current_url = current_url.clone();
             open_button.connect_clicked(move |_| {
+                let url = current_url.borrow().clone();
                 if let Err(error) =
                     gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
                 {
@@ -371,7 +376,34 @@ mod imp {
         }
         surface.append(&open_button);
 
-        surface.upcast()
+        let url_applier = Rc::new({
+            let current_url = current_url.clone();
+            let runtime_status = runtime_status.clone();
+            let title = title.clone();
+            let detail_label = detail_label.clone();
+            move |url: &str| {
+                let url = normalize_web_url(url);
+                if current_url.borrow().as_str() == url {
+                    return;
+                }
+                current_url.replace(url.clone());
+                let domain = domain_from_url(&url);
+                title.set_text(&domain);
+                title.set_tooltip_text(Some(&url));
+                detail_label.set_text(&web_runtime_detail(&runtime_status, &url));
+            }
+        });
+
+        TileRuntimeSurface {
+            widget: surface.upcast(),
+            command_sender: None,
+            appearance_applier: None,
+            url_applier: Some(url_applier),
+        }
+    }
+
+    fn web_runtime_detail(runtime_status: &str, url: &str) -> String {
+        format!("{runtime_status}: {url}")
     }
 }
 

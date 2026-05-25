@@ -189,6 +189,14 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_RUNTIME_RS.contains("effective_terminal_font_points")
             && WINDOWS_GTK_RUNTIME_RS.contains("font-size: {}pt")
             && WINDOWS_GTK_RUNTIME_RS.contains("appearance_applier: Some(appearance_applier)")
+            && WORKSPACE_PREVIEW_RS.contains("bind_preview_web_tile_settings")
+            && WORKSPACE_PREVIEW_RS.contains("bind_web_tile_settings_popover")
+            && WORKSPACE_PREVIEW_RS.contains("update_active_web_tile_settings")
+            && WORKSPACE_PREVIEW_RS.contains("reapply_active_web_runtime_url")
+            && WORKSPACE_PREVIEW_RS.contains("url_applier")
+            && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("web_runtime_detail")
+            && TILE_CHROME_RS.contains("pub(crate) fn bind_web_tile_settings_popover")
             && WORKSPACE_PREVIEW_RS.contains("clamp_terminal_zoom_steps")
             && WINDOWS_GTK_APP_RS.contains("window.connect_fullscreened_notify")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_fullscreen_chrome(window")
@@ -545,7 +553,8 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
         assert!(
             source.contains("icons::labeled_button")
                 || source.contains("icons::icon_button")
-                || source.contains("build_header_icon_button(icon_name::"),
+                || source.contains("build_header_icon_button(icon_name::")
+                || source.contains("bind_web_tile_settings_popover"),
             "{surface} should use shared symbolic icon helpers for visible actions"
         );
     }
@@ -1105,7 +1114,8 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
             && WINDOWS_GTK_RUNTIME_RS.contains("stdin_tx.send(command.to_string())")
             && WINDOWS_GTK_RUNTIME_RS
-                .contains("TileRuntimeSurface::widget(build_web_runtime_surface(tile))"),
+                .contains("TileKind::WebView => build_web_runtime_surface(tile)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)"),
         "Windows GTK terminal runtime surfaces should expose command senders for the shared broadcast toolbar while web panes remain visual runtime widgets"
     );
 }
