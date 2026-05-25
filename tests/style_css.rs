@@ -22,6 +22,7 @@ const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
+const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
@@ -1123,7 +1124,18 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added")
             && WORKSPACE_PREVIEW_RS.contains("AlertSourceKind::Runbook")
             && WORKSPACE_PREVIEW_RS.contains("send_command_to_active_runtime_surfaces(")
-            && WINDOWS_GTK_APP_RS.contains("prompt_windows_tab_rename")
+            && UI_MOD_RS.contains("pub(crate) mod tab_rename_dialog")
+            && TAB_RENAME_DIALOG_RS.contains("dialog.set_title(\"Rename Workspace\")")
+            && TAB_RENAME_DIALOG_RS.contains(
+                "Enter a new workspace tab name. Leave it blank to restore automatic naming."
+            )
+            && TAB_RENAME_DIALOG_RS.contains("let apply_button = icons::labeled_button(")
+            && TAB_RENAME_DIALOG_RS.contains("\"Apply\"")
+            && WINDOW_RS.contains("tab_rename_dialog::present(")
+            && WINDOW_RS.contains("&window_for_rename")
+            && WINDOWS_GTK_APP_RS.contains("tab_rename_dialog::present(window")
+            && !WINDOWS_GTK_APP_RS.contains("fn prompt_windows_tab_rename")
+            && !WINDOW_RS.contains("fn prompt_tab_rename")
             && WINDOWS_GTK_APP_RS.contains("let rename_click = gtk::GestureClick::builder()")
             && WINDOWS_GTK_APP_RS.contains(".propagation_phase(gtk::PropagationPhase::Capture)")
             && WINDOWS_GTK_APP_RS.contains("let middle_close = gtk::GestureClick::builder()")
