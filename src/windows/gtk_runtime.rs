@@ -6,6 +6,7 @@ mod imp {
     use std::io::{Read, Write};
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::rc::Rc;
     use std::sync::OnceLock;
@@ -34,10 +35,11 @@ mod imp {
     use windows_sys::Win32::System::Threading::TerminateProcess;
 
     use crate::logging;
-    use crate::model::assets::WorkspaceAssets;
+    use crate::model::assets::{OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, TileKind, TileSpec, normalize_web_url};
     use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
+    use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::storage::session_store::SavedTab;
     use crate::terminal_palette::{TerminalPalette, terminal_palette};
     use crate::ui::appearance::resolved_theme_uses_dark_palette;
@@ -122,6 +124,15 @@ mod imp {
         style: TerminalTextStyleKey,
     }
 
+    #[derive(Clone)]
+    struct TerminalRuntimeChromeContext {
+        tile: TileSpec,
+        workspace_root: PathBuf,
+        assets: WorkspaceAssets,
+        output_helpers: CompiledOutputHelpers,
+        terminal_buffer: Rc<RefCell<VtBuffer>>,
+    }
+
     #[derive(Default)]
     struct WebRuntimeState {
         environment: Option<ICoreWebView2Environment>,
@@ -170,6 +181,14 @@ mod imp {
             TERMINAL_RUNTIME_ROWS,
         )));
         let terminal_style_tags = Rc::new(RefCell::new(HashMap::new()));
+        let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
+        let chrome_context = TerminalRuntimeChromeContext {
+            tile: tile.clone(),
+            workspace_root: tab.workspace_root.clone(),
+            assets: assets.clone(),
+            output_helpers,
+            terminal_buffer: terminal_buffer.clone(),
+        };
         let use_dark_palette = Rc::new(Cell::new(resolved_theme_uses_dark_palette(
             tab.preset.theme,
         )));
@@ -396,14 +415,17 @@ mod imp {
                     let state = state.clone();
                     let restart_runtime = restart_runtime.clone();
                     let recovery_bind_generation = recovery_bind_generation.clone();
-                    move |shell, status, recovery_button| {
+                    let chrome_context = chrome_context.clone();
+                    move |shell, status, recovery_button, title_label| {
                         bind_terminal_recovery_controls(
                             shell,
                             status,
                             recovery_button,
+                            title_label,
                             state.clone(),
                             restart_runtime.clone(),
                             recovery_bind_generation.clone(),
+                            chrome_context.clone(),
                         );
                     }
                 }),
@@ -1131,19 +1153,21 @@ mod imp {
         shell: &gtk::Box,
         status: &gtk::Label,
         recovery_button: &gtk::Button,
+        title_label: &gtk::Label,
         state: Rc<RefCell<TerminalRuntimeState>>,
         restart_runtime: Rc<dyn Fn()>,
         bind_generation: Rc<Cell<u64>>,
+        chrome_context: TerminalRuntimeChromeContext,
     ) {
         let current_generation = bind_generation.get().saturating_add(1);
         bind_generation.set(current_generation);
 
-        let active_status_line = status.text().to_string();
-        let active_status_tooltip = status.tooltip_text().map(|value| value.to_string());
+        let initial_status_line = status.text().to_string();
+        let default_title = title_label.text().to_string();
         let popover = build_terminal_recovery_popover(
             recovery_button,
             restart_runtime,
-            active_status_line.clone(),
+            initial_status_line.clone(),
         );
 
         {
@@ -1157,22 +1181,25 @@ mod imp {
             shell,
             status,
             recovery_button,
+            title_label,
             &state,
-            &active_status_line,
-            &active_status_tooltip,
+            &chrome_context,
+            &default_title,
         );
 
         let shell_weak = shell.downgrade();
         let status_weak = status.downgrade();
         let recovery_button_weak = recovery_button.downgrade();
+        let title_label_weak = title_label.downgrade();
         gtk::glib::timeout_add_local(Duration::from_millis(TERMINAL_RUNTIME_POLL_MS), move || {
             if bind_generation.get() != current_generation {
                 return gtk::glib::ControlFlow::Break;
             }
-            let (Some(shell), Some(status), Some(recovery_button)) = (
+            let (Some(shell), Some(status), Some(recovery_button), Some(title_label)) = (
                 shell_weak.upgrade(),
                 status_weak.upgrade(),
                 recovery_button_weak.upgrade(),
+                title_label_weak.upgrade(),
             ) else {
                 return gtk::glib::ControlFlow::Break;
             };
@@ -1180,9 +1207,10 @@ mod imp {
                 &shell,
                 &status,
                 &recovery_button,
+                &title_label,
                 &state,
-                &active_status_line,
-                &active_status_tooltip,
+                &chrome_context,
+                &default_title,
             );
             gtk::glib::ControlFlow::Continue
         });
@@ -1192,26 +1220,112 @@ mod imp {
         shell: &gtk::Box,
         status: &gtk::Label,
         recovery_button: &gtk::Button,
+        title_label: &gtk::Label,
         state: &Rc<RefCell<TerminalRuntimeState>>,
-        active_status_line: &str,
-        active_status_tooltip: &Option<String>,
+        chrome_context: &TerminalRuntimeChromeContext,
+        default_title: &str,
     ) {
         if state.borrow().active {
             shell.remove_css_class("is-disconnected");
             status.remove_css_class("recovery-chip");
-            status.set_text(active_status_line);
-            status.set_tooltip_text(active_status_tooltip.as_deref());
+            let terminal = chrome_context.terminal_buffer.borrow();
+            sync_terminal_runtime_title(title_label, &terminal, default_title);
+            let snapshot = status_snapshot_for_terminal_runtime(&terminal, chrome_context);
+            let status_line = snapshot.to_line();
+            status.set_text(&status_line);
+            status.set_tooltip_text(Some(&status_line));
+            sync_status_severity(status, snapshot.helper_severity);
             recovery_button.set_visible(false);
             recovery_button.set_sensitive(false);
         } else {
             shell.add_css_class("is-disconnected");
             status.add_css_class("recovery-chip");
+            sync_status_severity(status, None);
             status.set_text("Disconnected  •  Reconnect session");
             status.set_tooltip_text(Some(
                 "This Windows GTK terminal process exited. Reconnect the configured session.",
             ));
             recovery_button.set_visible(true);
             recovery_button.set_sensitive(true);
+        }
+    }
+
+    fn sync_terminal_runtime_title(
+        title_label: &gtk::Label,
+        terminal: &VtBuffer,
+        default_title: &str,
+    ) {
+        let title = terminal.window_title();
+        let title = title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(default_title);
+        title_label.set_text(title);
+        title_label.set_tooltip_text(Some(title));
+    }
+
+    fn status_snapshot_for_terminal_runtime(
+        terminal: &VtBuffer,
+        context: &TerminalRuntimeChromeContext,
+    ) -> PaneStatusSnapshot {
+        let mut snapshot = crate::ui::pane_status::initial_status_snapshot(
+            &context.tile,
+            &context.workspace_root,
+            &context.assets,
+        );
+        if let Some(cwd) = terminal.current_working_directory() {
+            snapshot.location_label = short_location_from_path(cwd);
+        } else if let Some(title) = terminal.window_title() {
+            snapshot.location_label = title.to_string();
+        }
+
+        let title = terminal.window_title();
+        let shell_label = title
+            .filter(|title| !title.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                terminal_recent_output_line(terminal)
+                    .filter(|line| !line.trim().is_empty())
+                    .unwrap_or_else(|| context.tile.agent_label.clone())
+            });
+        let matches = context.output_helpers.scan(&shell_label);
+        let (helper_label, helper_severity) = helper_summary_text(&matches);
+        snapshot.shell_label = shell_label;
+        snapshot.helper_label = helper_label;
+        snapshot.helper_severity = helper_severity;
+        snapshot
+    }
+
+    fn terminal_recent_output_line(terminal: &VtBuffer) -> Option<String> {
+        for row in (0..terminal.rows()).rev() {
+            let mut line = String::with_capacity(terminal.columns());
+            for column in 0..terminal.columns() {
+                line.push(terminal.visible_cell(row, column).ch);
+            }
+            let line = line.trim().to_string();
+            if !line.is_empty() {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    fn short_location_from_path(path: &str) -> String {
+        PathBuf::from(path)
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| path.to_string())
+    }
+
+    fn sync_status_severity(status: &gtk::Label, severity: Option<OutputSeverity>) {
+        status.remove_css_class("helper-info");
+        status.remove_css_class("helper-warning");
+        status.remove_css_class("helper-error");
+        match severity {
+            Some(OutputSeverity::Info) => status.add_css_class("helper-info"),
+            Some(OutputSeverity::Warning) => status.add_css_class("helper-warning"),
+            Some(OutputSeverity::Error) => status.add_css_class("helper-error"),
+            None => {}
         }
     }
 

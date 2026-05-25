@@ -48,7 +48,7 @@ pub struct TileRuntimeSurface {
 
 #[derive(Clone)]
 pub struct TileRuntimeRecoveryBinder {
-    pub bind: Rc<dyn Fn(&gtk::Box, &gtk::Label, &gtk::Button)>,
+    pub bind: Rc<dyn Fn(&gtk::Box, &gtk::Label, &gtk::Button, &gtk::Label)>,
 }
 
 impl TileRuntimeSurface {
@@ -1945,7 +1945,12 @@ fn build_tile(
                 .as_ref()
                 .and_then(|surface| surface.recovery_binder.as_ref())
             {
-                (recovery_binder.bind)(&shell, &header.status_label, &tile_actions.recovery_button);
+                (recovery_binder.bind)(
+                    &shell,
+                    &header.status_label,
+                    &tile_actions.recovery_button,
+                    &header.title_label,
+                );
             }
             bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
             connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
