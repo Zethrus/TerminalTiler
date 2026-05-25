@@ -310,6 +310,8 @@ mod imp {
                 let asset_store = asset_store.clone();
                 let options = options.clone();
                 let voice_toast_tx = voice_toast_tx.clone();
+                let workspace_fullscreen_shortcut_controller =
+                    workspace_fullscreen_shortcut_controller.clone();
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
@@ -1394,6 +1396,9 @@ mod imp {
                 on_activate: Rc::new({
                     let window = window.clone();
                     let overlay = overlay.clone();
+                    let title = title.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
                     let preference_store = preference_store.clone();
                     let preset_store = preset_store.clone();
                     let options = options.clone();
@@ -1407,6 +1412,9 @@ mod imp {
                         present_settings_dialog(
                             &window,
                             &overlay,
+                            &title,
+                            &fullscreen_button,
+                            &shell_state,
                             preference_store.clone(),
                             preset_store.clone(),
                             options.clone(),
