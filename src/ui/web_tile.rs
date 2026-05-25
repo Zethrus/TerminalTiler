@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gdk::prelude::StaticType;
+use gtk::glib;
 use gtk::prelude::*;
-use gtk::{gio, glib};
 
 use webkit6::prelude::*;
 
@@ -11,13 +11,13 @@ use crate::logging;
 use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
-use crate::ui::context_menu;
 use crate::ui::tile_chrome::{
     GetWebTileSettings, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS, append_web_tile_action_chrome,
     bind_web_tile_settings_popover, build_tile_frame, build_tile_header_chrome, build_tile_shell,
     build_web_tile_action_chrome, domain_from_url, make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
+use crate::ui::web_context_menu::{self, WebContextMenuInput};
 
 pub struct WebTileView {
     pub widget: gtk::Widget,
@@ -297,70 +297,20 @@ fn defer_initial_navigation_until_mapped(web_view: &webkit6::WebView, url: &str,
 }
 
 fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {
-    let popover = context_menu::popover(parent);
-    let menu = context_menu::menu_box();
-
-    let reload_button = context_menu::action_button("Reload", Some("F5"));
-    {
-        let web_view = web_view.clone();
-        let popover = popover.clone();
-        reload_button.connect_clicked(move |_| {
-            web_view.reload();
-            popover.popdown();
-        });
-    }
-    menu.append(&reload_button);
-
-    let copy_url_button = context_menu::action_button("Copy URL", None);
-    {
-        let web_view = web_view.clone();
-        let popover = popover.clone();
-        let parent = parent.clone();
-        copy_url_button.connect_clicked(move |_| {
-            if let Some(uri) = web_view.uri() {
-                let display = parent.display();
-                display.clipboard().set_text(uri.as_str());
-            }
-            popover.popdown();
-        });
-    }
-    menu.append(&copy_url_button);
-
-    let open_external_button = context_menu::action_button("Open in Browser", None);
-    {
-        let web_view = web_view.clone();
-        let popover = popover.clone();
-        open_external_button.connect_clicked(move |_| {
-            if let Some(uri) = web_view.uri() {
-                let url = uri.to_string();
-                if !url.trim().is_empty()
-                    && let Err(error) =
-                        gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
-                {
-                    logging::error(format!(
-                        "GTK web tile context open failed for '{url}': {error}"
-                    ));
+    web_context_menu::install_right_click(
+        parent,
+        WebContextMenuInput {
+            reload: Rc::new({
+                let web_view = web_view.clone();
+                move || {
+                    web_view.reload();
                 }
-            }
-            popover.popdown();
-        });
-    }
-    menu.append(&open_external_button);
-
-    popover.set_child(Some(&menu));
-
-    let right_click = gtk::GestureClick::builder()
-        .button(3)
-        .propagation_phase(gtk::PropagationPhase::Capture)
-        .build();
-    {
-        let parent = parent.clone();
-        let popover = popover.clone();
-        right_click.connect_pressed(move |gesture, _, x, y| {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            parent.grab_focus();
-            context_menu::popup_at(&popover, x, y);
-        });
-    }
-    parent.add_controller(right_click);
+            }),
+            current_url: Rc::new({
+                let web_view = web_view.clone();
+                move || web_view.uri().map(|uri| uri.to_string())
+            }),
+            open_error_context: "GTK web tile context",
+        },
+    );
 }

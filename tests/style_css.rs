@@ -31,6 +31,7 @@ const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
 const TRANSCRIPT_DIALOG_RS: &str = include_str!("../src/ui/transcript_dialog.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
+const WEB_CONTEXT_MENU_RS: &str = include_str!("../src/ui/web_context_menu.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
 const WINDOWS_APP_RS: &str = include_str!("../src/windows/app.rs");
@@ -1389,16 +1390,17 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("webview.Navigate(&HSTRING::from")
             && WINDOWS_GTK_RUNTIME_RS.contains("webview.Reload()")
             && WINDOWS_GTK_RUNTIME_RS.contains("build_web_runtime_context_menu")
-            && WINDOWS_GTK_RUNTIME_RS
-                .contains(r#"context_menu::action_button("Reload", Some("F5"))"#)
-            && WINDOWS_GTK_RUNTIME_RS.contains(r#"context_menu::action_button("Copy URL", None)"#)
-            && WINDOWS_GTK_RUNTIME_RS
+            && UI_MOD_RS.contains("pub(crate) mod web_context_menu")
+            && WEB_CONTEXT_MENU_RS.contains("WebContextMenuInput")
+            && WEB_CONTEXT_MENU_RS.contains(r#"context_menu::action_button("Reload", Some("F5"))"#)
+            && WEB_CONTEXT_MENU_RS.contains(r#"context_menu::action_button("Copy URL", None)"#)
+            && WEB_CONTEXT_MENU_RS
                 .contains(r#"context_menu::action_button("Open in Browser", None)"#)
-            && WINDOWS_GTK_RUNTIME_RS.contains("gio::AppInfo::launch_default_for_uri")
-            && WEB_TILE_RS.contains(r#"context_menu::action_button("Reload", Some("F5"))"#)
-            && WEB_TILE_RS.contains(r#"context_menu::action_button("Copy URL", None)"#)
-            && WEB_TILE_RS.contains(r#"context_menu::action_button("Open in Browser", None)"#)
-            && WEB_TILE_RS.contains("gio::AppInfo::launch_default_for_uri")
+            && WEB_CONTEXT_MENU_RS.contains("gio::AppInfo::launch_default_for_uri")
+            && WEB_CONTEXT_MENU_RS.contains("open_error_context")
+            && WEB_TILE_RS.contains("web_context_menu::install_right_click(")
+            && WINDOWS_GTK_RUNTIME_RS.contains("web_context_menu::build(")
+            && WINDOWS_GTK_RUNTIME_RS.contains("Windows GTK WebView2 context")
             && WINDOWS_GTK_RUNTIME_RS.contains("ContextMenuRequestedEventHandler")
             && WINDOWS_GTK_RUNTIME_RS.contains("NewWindowRequestedEventHandler")
             && WINDOWS_GTK_RUNTIME_RS.contains("handle_gtk_webview_new_window_request")

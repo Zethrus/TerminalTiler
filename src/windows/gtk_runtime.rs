@@ -51,6 +51,7 @@ mod imp {
     use crate::ui::terminal_recovery_popover;
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::transcript_dialog;
+    use crate::ui::web_context_menu::{self, WebContextMenuInput};
     use crate::ui::workspace_preview::{TileRuntimeRecoveryBinder, TileRuntimeSurface};
     use crate::windows::vt::{VtBuffer, VtColor, VtStyle};
     use crate::windows::{workspace, wsl};
@@ -1571,62 +1572,28 @@ mod imp {
         parent: &gtk::Box,
         state: Rc<RefCell<WebRuntimeState>>,
     ) -> gtk::Popover {
-        let popover = context_menu::popover(parent);
-        let menu = context_menu::menu_box();
-
-        let reload_button = context_menu::action_button("Reload", Some("F5"));
-        {
-            let state = state.clone();
-            let popover = popover.clone();
-            reload_button.connect_clicked(move |_| {
-                if let Some(webview) = state.borrow().webview.clone()
-                    && let Err(error) = unsafe { webview.Reload() }
-                {
-                    logging::error(format!(
-                        "Windows GTK WebView2 context reload failed: {error}"
-                    ));
-                }
-                popover.popdown();
-            });
-        }
-        menu.append(&reload_button);
-
-        let copy_url_button = context_menu::action_button("Copy URL", None);
-        {
-            let state = state.clone();
-            let popover = popover.clone();
-            let parent = parent.clone();
-            copy_url_button.connect_clicked(move |_| {
-                let url = state.borrow().current_url.clone();
-                if !url.trim().is_empty() {
-                    parent.display().clipboard().set_text(&url);
-                }
-                popover.popdown();
-            });
-        }
-        menu.append(&copy_url_button);
-
-        let open_external_button = context_menu::action_button("Open in Browser", None);
-        {
-            let state = state.clone();
-            let popover = popover.clone();
-            open_external_button.connect_clicked(move |_| {
-                let url = state.borrow().current_url.clone();
-                if !url.trim().is_empty()
-                    && let Err(error) =
-                        gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
-                {
-                    logging::error(format!(
-                        "Windows GTK WebView2 context open failed for '{url}': {error}"
-                    ));
-                }
-                popover.popdown();
-            });
-        }
-        menu.append(&open_external_button);
-
-        popover.set_child(Some(&menu));
-        popover
+        web_context_menu::build(
+            parent,
+            WebContextMenuInput {
+                reload: Rc::new({
+                    let state = state.clone();
+                    move || {
+                        if let Some(webview) = state.borrow().webview.clone()
+                            && let Err(error) = unsafe { webview.Reload() }
+                        {
+                            logging::error(format!(
+                                "Windows GTK WebView2 context reload failed: {error}"
+                            ));
+                        }
+                    }
+                }),
+                current_url: Rc::new({
+                    let state = state.clone();
+                    move || Some(state.borrow().current_url.clone())
+                }),
+                open_error_context: "Windows GTK WebView2 context",
+            },
+        )
     }
 
     fn apply_web_runtime_settings(

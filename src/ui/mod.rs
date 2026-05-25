@@ -92,6 +92,11 @@ pub(crate) mod title_chrome;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub(crate) mod transcript_dialog;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub(crate) mod web_context_menu;
 #[cfg(target_os = "linux")]
 pub mod web_tile;
 #[cfg(target_os = "linux")]
