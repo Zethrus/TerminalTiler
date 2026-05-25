@@ -8,10 +8,11 @@ mod imp {
     use std::time::Duration;
 
     use adw::prelude::*;
-    use gtk::gio;
+    use gtk::{gio, glib};
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
+    use crate::product;
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -24,7 +25,9 @@ mod imp {
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, apply_title_tab_state, build_title_tab_chrome};
-    use crate::ui::{assets_manager, companion_dialog, settings_dialog};
+    use crate::ui::{
+        about_dialog, assets_manager, command_palette, companion_dialog, settings_dialog,
+    };
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
@@ -189,6 +192,8 @@ mod imp {
 
         let shell_state = WindowsGtkShellState::default();
         shell_state.launch_deck_active.set(true);
+        let command_palette_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
         let launch_widget_handle: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
 
         let launch_preferences = preferences.clone();
@@ -307,6 +312,42 @@ mod imp {
             title_add_button.connect_clicked(move |_| {
                 show_launch_deck();
             });
+            let open_command_palette: Rc<dyn Fn()> = Rc::new({
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let title = title.clone();
+                let launch = launch.clone();
+                let back_button = back_button.clone();
+                let fullscreen_button = fullscreen_button.clone();
+                let shell_state = shell_state.clone();
+                let preference_store = preference_store.clone();
+                let preset_store = preset_store.clone();
+                let asset_store = asset_store.clone();
+                let options = options.clone();
+                let voice_toast_tx = voice_toast_tx.clone();
+                move || {
+                    present_command_palette(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                        preference_store.clone(),
+                        preset_store.clone(),
+                        asset_store.clone(),
+                        options.clone(),
+                        voice_toast_tx.clone(),
+                    );
+                }
+            });
+            install_command_palette_shortcut(
+                &window,
+                &command_palette_shortcut_controller,
+                &preferences.command_palette_shortcut,
+                open_command_palette.clone(),
+            );
         }
         overlay.set_child(Some(&launch));
         sync_windows_shell_title_tabs(
@@ -1189,6 +1230,238 @@ mod imp {
         }
 
         chrome.shell.upcast()
+    }
+
+    type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn present_command_palette(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        preference_store: PreferenceStore,
+        preset_store: PresetStore,
+        asset_store: AssetStore,
+        options: RuntimeOptions,
+        voice_toast_tx: mpsc::Sender<String>,
+    ) {
+        let mut actions = vec![
+            command_palette::PaletteAction {
+                title: "Show Templates".into(),
+                subtitle: "Return to the shared workspace launch deck.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let title = title.clone();
+                    let launch = launch.clone();
+                    let back_button = back_button.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
+                    move || {
+                        show_launch_deck_tab(
+                            &window,
+                            &overlay,
+                            &title,
+                            &launch,
+                            &back_button,
+                            &fullscreen_button,
+                            &shell_state,
+                        );
+                    }
+                }),
+            },
+            command_palette::PaletteAction {
+                title: "Open Settings".into(),
+                subtitle: "Application preferences, shortcuts, theme, density, and voice.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let preference_store = preference_store.clone();
+                    let preset_store = preset_store.clone();
+                    let options = options.clone();
+                    let voice_toast_tx = voice_toast_tx.clone();
+                    move || {
+                        present_settings_dialog(
+                            &window,
+                            &overlay,
+                            preference_store.clone(),
+                            preset_store.clone(),
+                            options.clone(),
+                            voice_toast_tx.clone(),
+                        );
+                    }
+                }),
+            },
+            command_palette::PaletteAction {
+                title: "Open Assets Manager".into(),
+                subtitle: "Edit global or workspace scoped assets.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let asset_store = asset_store.clone();
+                    move || present_assets_manager(&window, &overlay, asset_store.clone())
+                }),
+            },
+            command_palette::PaletteAction {
+                title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+                subtitle: "Version, license, source, and open-core model.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    let options = options.clone();
+                    move || about_dialog::present(&window, &options.product)
+                }),
+            },
+        ];
+
+        if let Some(companion) = options.companion.clone() {
+            actions.push(command_palette::PaletteAction {
+                title: "Open Account / Sync".into(),
+                subtitle: "Account, activation, device, and sync controls.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    move || companion_dialog::present(&window, companion.clone())
+                }),
+            });
+        }
+
+        if let Some(preview) = shell_state.preview.borrow().as_ref() {
+            let session = preview.snapshot();
+            for (index, tab) in session.tabs.iter().enumerate() {
+                let label = tab
+                    .custom_title
+                    .as_deref()
+                    .unwrap_or(tab.preset.name.as_str());
+                actions.push(command_palette::PaletteAction {
+                    title: format!("Switch to {label}"),
+                    subtitle: tab.workspace_root.display().to_string(),
+                    on_activate: Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            show_workspace_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                index,
+                            );
+                        }
+                    }),
+                });
+            }
+        }
+
+        command_palette::present(window, actions);
+    }
+
+    fn install_command_palette_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shortcut: &str,
+        open_command_palette: Rc<dyn Fn()>,
+    ) {
+        install_shortcut_controller(
+            window,
+            controller_handle,
+            "command_palette",
+            &command_palette_shortcut_accelerators(shortcut),
+            move || {
+                open_command_palette();
+                glib::Propagation::Stop
+            },
+        );
+    }
+
+    fn install_shortcut_controller<F>(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shortcut_name: &str,
+        accelerators: &[String],
+        on_activate: F,
+    ) where
+        F: Fn() -> glib::Propagation + 'static,
+    {
+        if let Some(existing) = controller_handle.borrow_mut().take() {
+            window.remove_controller(&existing);
+        }
+
+        let shortcut_controller = gtk::ShortcutController::new();
+        shortcut_controller.set_scope(gtk::ShortcutScope::Global);
+        shortcut_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let on_activate = Rc::new(on_activate);
+        let mut installed_triggers = Vec::new();
+        let mut active_labels = Vec::new();
+        for accelerator in accelerators {
+            let accelerator = accelerator.trim();
+            if accelerator.is_empty() || installed_triggers.iter().any(|item| item == accelerator) {
+                continue;
+            }
+            installed_triggers.push(accelerator.to_string());
+
+            let Some(trigger) = gtk::ShortcutTrigger::parse_string(accelerator) else {
+                logging::error(format!(
+                    "failed to parse {} shortcut accelerator='{}'",
+                    shortcut_name, accelerator
+                ));
+                continue;
+            };
+
+            active_labels.push(trigger.to_str().to_string());
+            let on_activate = on_activate.clone();
+            let action = gtk::CallbackAction::new(move |_, _| on_activate());
+            shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
+        }
+
+        if installed_triggers.is_empty() {
+            logging::error(format!(
+                "failed to install {} shortcut: no valid accelerators",
+                shortcut_name,
+            ));
+            return;
+        }
+
+        logging::info(format!(
+            "installed {} shortcut requested={:?} active={:?}",
+            shortcut_name, installed_triggers, active_labels
+        ));
+        window.add_controller(shortcut_controller.clone());
+        *controller_handle.borrow_mut() = Some(shortcut_controller);
+    }
+
+    fn command_palette_shortcut_accelerators(shortcut: &str) -> Vec<String> {
+        equivalent_shortcut_accelerators(
+            shortcut,
+            &[
+                &["<Ctrl><Shift>P", "<Primary><Shift>P", "<Control><Shift>P"],
+                &["<Ctrl>P", "<Primary>P", "<Control>P"],
+            ],
+        )
+    }
+
+    fn equivalent_shortcut_accelerators(shortcut: &str, families: &[&[&str]]) -> Vec<String> {
+        let trimmed = shortcut.trim();
+        let mut accelerators = vec![trimmed.to_string()];
+
+        if let Some(family) = families
+            .iter()
+            .find(|family| family.iter().any(|candidate| candidate == &trimmed))
+        {
+            accelerators.extend(family.iter().map(|candidate| (*candidate).to_string()));
+        }
+
+        accelerators
     }
 
     fn combine_warnings(first: Option<String>, second: Option<String>) -> Option<String> {

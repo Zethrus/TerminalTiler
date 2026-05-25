@@ -1005,6 +1005,41 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
 }
 
 #[test]
+fn windows_gtk_shell_exposes_shared_command_palette() {
+    assert!(
+        UI_MOD_RS.contains("pub mod about_dialog;")
+            && UI_MOD_RS.contains("pub mod command_palette;")
+            && UI_MOD_RS
+                .matches("all(target_os = \"windows\", feature = \"windows-gtk-shell\")")
+                .count()
+                >= 2,
+        "about dialog and command palette should be compiled for both Linux GTK and Windows GTK shells"
+    );
+
+    for token in [
+        "use crate::ui::{",
+        "about_dialog, assets_manager, command_palette, companion_dialog, settings_dialog",
+        "ShortcutControllerHandle",
+        "present_command_palette",
+        "command_palette::PaletteAction",
+        "Show Templates",
+        "Open Settings",
+        "Open Assets Manager",
+        "About {}",
+        "Open Account / Sync",
+        "Switch to {label}",
+        "install_command_palette_shortcut",
+        "command_palette_shortcut_accelerators",
+        "<Ctrl><Shift>P",
+    ] {
+        assert!(
+            WINDOWS_GTK_APP_RS.contains(token),
+            "Windows GTK should expose the shared Linux command palette affordance: {token}"
+        );
+    }
+}
+
+#[test]
 fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     for token in [
         "pub struct TileRuntimeSurface",

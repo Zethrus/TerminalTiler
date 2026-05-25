@@ -1,4 +1,7 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod about_dialog;
 #[cfg(any(
     target_os = "linux",
@@ -15,7 +18,10 @@ pub(crate) mod appearance;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod assets_manager;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod command_palette;
 #[cfg(any(
     target_os = "linux",
