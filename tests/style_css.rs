@@ -26,6 +26,7 @@ const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs"
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
+const TRANSCRIPT_DIALOG_RS: &str = include_str!("../src/ui/transcript_dialog.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
@@ -1274,7 +1275,16 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Paste\"")
             && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Show Transcript\"")
             && WINDOWS_GTK_RUNTIME_RS.contains("TranscriptBuffer")
-            && WINDOWS_GTK_RUNTIME_RS.contains("present_transcript_dialog")
+            && UI_MOD_RS.contains("pub(crate) mod transcript_dialog")
+            && TRANSCRIPT_DIALOG_RS.contains("dialog.set_title(\"Recent Transcript\")")
+            && TRANSCRIPT_DIALOG_RS.contains("dialog.set_content_width(820)")
+            && TRANSCRIPT_DIALOG_RS.contains("dialog.set_content_height(480)")
+            && TRANSCRIPT_DIALOG_RS.contains(".monospace(true)")
+            && TRANSCRIPT_DIALOG_RS.contains("icons::labeled_button(\"Close\"")
+            && TILE_VIEW_RS.contains("transcript_dialog::present(&terminal")
+            && WINDOWS_GTK_RUNTIME_RS.contains("transcript_dialog::present(&output")
+            && !TILE_VIEW_RS.contains("fn present_transcript_dialog")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("fn present_transcript_dialog")
             && WINDOWS_GTK_RUNTIME_RS.contains("recent_transcript(240)")
             && WINDOWS_GTK_RUNTIME_RS.contains("copy_terminal_output_selection")
             && WINDOWS_GTK_RUNTIME_RS.contains("paste_clipboard_into_terminal_runtime")

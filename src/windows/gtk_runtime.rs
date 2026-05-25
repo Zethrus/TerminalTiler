@@ -48,6 +48,7 @@ mod imp {
     use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
+    use crate::ui::transcript_dialog;
     use crate::ui::workspace_preview::{TileRuntimeRecoveryBinder, TileRuntimeSurface};
     use crate::windows::vt::{VtBuffer, VtColor, VtStyle};
     use crate::windows::{workspace, wsl};
@@ -1121,7 +1122,7 @@ mod imp {
             transcript_button.connect_clicked(move |_| {
                 let transcript = state.borrow().transcript.recent_transcript(240);
                 popover.popdown();
-                present_transcript_dialog(&output, &transcript);
+                transcript_dialog::present(&output, &transcript);
             });
         }
         menu.append(&transcript_button);
@@ -1163,63 +1164,6 @@ mod imp {
             });
         }
         output.add_controller(right_click);
-    }
-
-    fn present_transcript_dialog(output: &gtk::TextView, transcript: &str) {
-        let Some(window) = output
-            .root()
-            .and_then(|root| root.downcast::<gtk::Window>().ok())
-        else {
-            return;
-        };
-
-        let dialog = adw::Dialog::new();
-        dialog.set_title("Recent Transcript");
-        dialog.set_follows_content_size(false);
-        dialog.set_content_width(820);
-        dialog.set_content_height(480);
-
-        let area = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .margin_top(16)
-            .margin_bottom(16)
-            .margin_start(16)
-            .margin_end(16)
-            .build();
-        let scroller = gtk::ScrolledWindow::builder()
-            .hexpand(true)
-            .vexpand(true)
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .build();
-        let text = gtk::TextView::builder()
-            .editable(false)
-            .cursor_visible(false)
-            .monospace(true)
-            .wrap_mode(gtk::WrapMode::WordChar)
-            .build();
-        text.buffer().set_text(if transcript.trim().is_empty() {
-            "No transcript is available yet."
-        } else {
-            transcript
-        });
-        scroller.set_child(Some(&text));
-        area.append(&scroller);
-
-        let close_button =
-            icons::labeled_button("Close", icon_name::CLOSE, &["pill-button", "flat"]);
-        close_button.set_halign(gtk::Align::End);
-        area.append(&close_button);
-        dialog.set_child(Some(&area));
-        dialog.set_default_widget(Some(&close_button));
-        {
-            let dialog = dialog.clone();
-            close_button.connect_clicked(move |_| {
-                dialog.close();
-            });
-        }
-        dialog.present(Some(&window));
     }
 
     fn install_terminal_output_shortcuts(
