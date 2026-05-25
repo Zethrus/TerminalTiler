@@ -936,7 +936,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         UI_MOD_RS.contains("pub(crate) mod workspace_tile_state;")
             && WORKSPACE_TILE_STATE_RS
                 .contains("const ACTIVE_TILE_CLASS: &str = \"is-active-tile\";")
-            && WORKSPACE_TILE_STATE_RS.contains("pub(crate) fn set_tile_active_class")
+            && WORKSPACE_TILE_STATE_RS
+                .contains("pub(crate) fn set_tile_active_class<W: IsA<gtk::Widget>>")
             && WORKSPACE_TILE_STATE_RS.contains("widget.add_css_class(ACTIVE_TILE_CLASS)")
             && WORKSPACE_TILE_STATE_RS.contains("widget.remove_css_class(ACTIVE_TILE_CLASS)")
             && WORKSPACE_VIEW_RS.contains("workspace_tile_state::set_tile_active_class(")
