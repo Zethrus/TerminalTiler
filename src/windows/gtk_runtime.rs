@@ -47,6 +47,7 @@ mod imp {
     use crate::ui::appearance::resolved_theme_uses_dark_palette;
     use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
+    use crate::ui::terminal_context_menu::{self, TerminalContextMenuInput};
     use crate::ui::terminal_recovery_popover;
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::transcript_dialog;
@@ -1060,111 +1061,68 @@ mod imp {
         restart_runtime: Rc<dyn Fn()>,
         open_local_shell: Rc<dyn Fn()>,
     ) {
-        let popover = context_menu::popover(output);
-        let menu = context_menu::menu_box();
-
-        let copy_button = context_menu::action_button("Copy", Some("Ctrl+Shift+C"));
-        copy_button.set_sensitive(output.buffer().has_selection());
+        let context_menu = terminal_context_menu::install(
+            output,
+            TerminalContextMenuInput {
+                grab_focus: Rc::new({
+                    let output = output.clone();
+                    move || {
+                        output.grab_focus();
+                    }
+                }),
+                has_selection: Rc::new({
+                    let output = output.clone();
+                    move || output.buffer().has_selection()
+                }),
+                can_paste: Rc::new({
+                    let state = state.clone();
+                    move || state.borrow().active
+                }),
+                can_reconnect: Rc::new({
+                    let state = state.clone();
+                    move || !state.borrow().active
+                }),
+                can_open_local_shell: Rc::new({
+                    let state = state.clone();
+                    move || !state.borrow().active
+                }),
+                copy: Rc::new({
+                    let output = output.clone();
+                    move || {
+                        copy_terminal_output_selection(&output);
+                    }
+                }),
+                paste: Rc::new({
+                    let output = output.clone();
+                    let state = state.clone();
+                    move || {
+                        paste_clipboard_into_terminal_runtime(&output, &state);
+                    }
+                }),
+                reconnect: restart_runtime,
+                open_local_shell,
+                show_transcript: Rc::new({
+                    let output = output.clone();
+                    let state = state.clone();
+                    move || {
+                        let transcript = state.borrow().transcript.recent_transcript(240);
+                        transcript_dialog::present(&output, &transcript);
+                    }
+                }),
+                focus_command_input: Some(Rc::new({
+                    let input = input.clone();
+                    move || {
+                        input.grab_focus();
+                    }
+                })),
+            },
+        );
         {
-            let output = output.clone();
-            let popover = popover.clone();
-            copy_button.connect_clicked(move |_| {
-                copy_terminal_output_selection(&output);
-                popover.popdown();
-            });
-        }
-        {
-            let copy_button = copy_button.clone();
+            let copy_button = context_menu.copy_button.clone();
             output.buffer().connect_has_selection_notify(move |buffer| {
                 copy_button.set_sensitive(buffer.has_selection());
             });
         }
-        menu.append(&copy_button);
-
-        let paste_button = context_menu::action_button("Paste", Some("Ctrl+Shift+V"));
-        {
-            let output = output.clone();
-            let state = state.clone();
-            let popover = popover.clone();
-            paste_button.connect_clicked(move |_| {
-                paste_clipboard_into_terminal_runtime(&output, &state);
-                popover.popdown();
-            });
-        }
-        menu.append(&paste_button);
-
-        let reconnect_button = context_menu::action_button("Reconnect", None);
-        {
-            let restart_runtime = restart_runtime.clone();
-            let popover = popover.clone();
-            reconnect_button.connect_clicked(move |_| {
-                restart_runtime();
-                popover.popdown();
-            });
-        }
-        menu.append(&reconnect_button);
-
-        let local_shell_button = context_menu::action_button("Open Local Shell", None);
-        {
-            let open_local_shell = open_local_shell.clone();
-            let popover = popover.clone();
-            local_shell_button.connect_clicked(move |_| {
-                open_local_shell();
-                popover.popdown();
-            });
-        }
-        menu.append(&local_shell_button);
-
-        let transcript_button = context_menu::action_button("Show Transcript", None);
-        {
-            let output = output.clone();
-            let state = state.clone();
-            let popover = popover.clone();
-            transcript_button.connect_clicked(move |_| {
-                let transcript = state.borrow().transcript.recent_transcript(240);
-                popover.popdown();
-                transcript_dialog::present(&output, &transcript);
-            });
-        }
-        menu.append(&transcript_button);
-
-        let focus_input_button = context_menu::action_button("Focus Command Input", None);
-        {
-            let input = input.clone();
-            let popover = popover.clone();
-            focus_input_button.connect_clicked(move |_| {
-                input.grab_focus();
-                popover.popdown();
-            });
-        }
-        menu.append(&focus_input_button);
-
-        popover.set_child(Some(&menu));
-
-        let right_click = gtk::GestureClick::builder()
-            .button(3)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        {
-            let output = output.clone();
-            let popover = popover.clone();
-            let copy_button = copy_button.clone();
-            let paste_button = paste_button.clone();
-            let reconnect_button = reconnect_button.clone();
-            let local_shell_button = local_shell_button.clone();
-            let state = state.clone();
-            right_click.connect_pressed(move |gesture, _, x, y| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                output.grab_focus();
-                copy_button.set_sensitive(output.buffer().has_selection());
-                let active = state.borrow().active;
-                paste_button.set_sensitive(active);
-                reconnect_button.set_sensitive(!active);
-                local_shell_button.set_sensitive(!active);
-                context_menu::popup_at(&popover, x, y);
-            });
-        }
-        output.add_controller(right_click);
     }
 
     fn install_terminal_output_shortcuts(

@@ -23,6 +23,7 @@ const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
+const TERMINAL_CONTEXT_MENU_RS: &str = include_str!("../src/ui/terminal_context_menu.rs");
 const TERMINAL_RECOVERY_POPOVER_RS: &str = include_str!("../src/ui/terminal_recovery_popover.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
@@ -1271,10 +1272,18 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     assert!(
         WINDOWS_GTK_RUNTIME_RS.contains("TileRuntimeSurface")
             && WINDOWS_GTK_RUNTIME_RS.contains("install_terminal_output_context_menu")
-            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::popover(output)")
-            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Copy\"")
-            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Paste\"")
-            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Show Transcript\"")
+            && UI_MOD_RS.contains("pub(crate) mod terminal_context_menu")
+            && TERMINAL_CONTEXT_MENU_RS.contains("TerminalContextMenuInput")
+            && TERMINAL_CONTEXT_MENU_RS.contains("context_menu::popover(parent)")
+            && TERMINAL_CONTEXT_MENU_RS.contains("context_menu::action_button(\"Copy\"")
+            && TERMINAL_CONTEXT_MENU_RS.contains("context_menu::action_button(\"Paste\"")
+            && TERMINAL_CONTEXT_MENU_RS.contains("context_menu::action_button(\"Reconnect\"")
+            && TERMINAL_CONTEXT_MENU_RS
+                .contains(r#"context_menu::action_button("Open Local Shell", None)"#)
+            && TERMINAL_CONTEXT_MENU_RS.contains("context_menu::action_button(\"Show Transcript\"")
+            && TERMINAL_CONTEXT_MENU_RS.contains("Focus Command Input")
+            && TILE_VIEW_RS.contains("terminal_context_menu::install(")
+            && WINDOWS_GTK_RUNTIME_RS.contains("terminal_context_menu::install(")
             && WINDOWS_GTK_RUNTIME_RS.contains("TranscriptBuffer")
             && UI_MOD_RS.contains("pub(crate) mod transcript_dialog")
             && TRANSCRIPT_DIALOG_RS.contains("dialog.set_title(\"Recent Transcript\")")
@@ -1352,9 +1361,6 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("terminal_recovery_popover::build(")
             && !TILE_VIEW_RS.contains("fn build_terminal_recovery_popover")
             && !WINDOWS_GTK_RUNTIME_RS.contains("fn build_terminal_recovery_popover")
-            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Reconnect\"")
-            && WINDOWS_GTK_RUNTIME_RS
-                .contains(r#"context_menu::action_button("Open Local Shell", None)"#)
             && WINDOWS_GTK_RUNTIME_RS.contains("TerminalLaunchMode::LocalShell")
             && WINDOWS_GTK_RUNTIME_RS.contains("wsl::build_local_shell_command")
             && WORKSPACE_PREVIEW_RS.contains("(recovery_binder.bind)")

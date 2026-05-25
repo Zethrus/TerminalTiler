@@ -15,9 +15,9 @@ use crate::model::preset::ApplicationDensity;
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::snippets::resolve_snippet;
 use crate::terminal::session::TerminalSession;
-use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
+use crate::ui::terminal_context_menu::{self, TerminalContextMenuInput};
 use crate::ui::terminal_recovery_popover;
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, append_terminal_tile_action_chrome,
@@ -891,101 +891,75 @@ fn install_terminal_context_menu(
     session: &TerminalSession,
     show_recovery_prompt: Rc<dyn Fn()>,
 ) {
-    let popover = context_menu::popover(terminal);
-    let menu = context_menu::menu_box();
-
-    let copy_button = context_menu::action_button("Copy", Some("Ctrl+Shift+C"));
-    copy_button.set_sensitive(session.has_selection());
+    let context_menu = terminal_context_menu::install(
+        terminal,
+        TerminalContextMenuInput {
+            grab_focus: Rc::new({
+                let terminal = terminal.clone();
+                move || {
+                    terminal.grab_focus();
+                }
+            }),
+            has_selection: Rc::new({
+                let session = session.clone();
+                move || session.has_selection()
+            }),
+            can_paste: Rc::new({
+                let session = session.clone();
+                move || session.has_active_process() || session.needs_recovery_prompt()
+            }),
+            can_reconnect: Rc::new(|| true),
+            can_open_local_shell: Rc::new({
+                let session = session.clone();
+                move || session.needs_recovery_prompt()
+            }),
+            copy: Rc::new({
+                let session = session.clone();
+                move || {
+                    session.copy_selection_to_clipboard();
+                }
+            }),
+            paste: Rc::new({
+                let session = session.clone();
+                let show_recovery_prompt = show_recovery_prompt.clone();
+                move || {
+                    if session.needs_recovery_prompt() {
+                        show_recovery_prompt();
+                    } else {
+                        session.paste_clipboard();
+                    }
+                }
+            }),
+            reconnect: Rc::new({
+                let session = session.clone();
+                move || {
+                    session.reset_auto_reconnect_attempts();
+                    let _ = session.reconnect();
+                }
+            }),
+            open_local_shell: Rc::new({
+                let session = session.clone();
+                move || {
+                    session.reset_auto_reconnect_attempts();
+                    let _ = session.open_local_shell();
+                }
+            }),
+            show_transcript: Rc::new({
+                let session = session.clone();
+                let terminal = terminal.clone();
+                move || {
+                    transcript_dialog::present(&terminal, &session.recent_transcript(240));
+                }
+            }),
+            focus_command_input: None,
+        },
+    );
     {
-        let session = session.clone();
-        let popover = popover.clone();
-        copy_button.connect_clicked(move |_| {
-            session.copy_selection_to_clipboard();
-            popover.popdown();
-        });
-    }
-    {
-        let copy_button = copy_button.clone();
+        let copy_button = context_menu.copy_button.clone();
         terminal.connect_selection_changed(move |term| {
             copy_button.set_sensitive(term.has_selection());
         });
     }
-    menu.append(&copy_button);
-
-    let paste_button = context_menu::action_button("Paste", Some("Ctrl+Shift+V"));
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        let show_recovery_prompt = show_recovery_prompt.clone();
-        paste_button.connect_clicked(move |_| {
-            if session.needs_recovery_prompt() {
-                show_recovery_prompt();
-            } else {
-                session.paste_clipboard();
-            }
-            popover.popdown();
-        });
-    }
-    menu.append(&paste_button);
-
-    let reconnect_button = context_menu::action_button("Reconnect", None);
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        reconnect_button.connect_clicked(move |_| {
-            session.reset_auto_reconnect_attempts();
-            let _ = session.reconnect();
-            popover.popdown();
-        });
-    }
-    menu.append(&reconnect_button);
-
-    let local_shell_button = context_menu::action_button("Open Local Shell", None);
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        local_shell_button.connect_clicked(move |_| {
-            session.reset_auto_reconnect_attempts();
-            let _ = session.open_local_shell();
-            popover.popdown();
-        });
-    }
-    menu.append(&local_shell_button);
-
-    let transcript_button = context_menu::action_button("Show Transcript", None);
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        let terminal = terminal.clone();
-        transcript_button.connect_clicked(move |_| {
-            popover.popdown();
-            transcript_dialog::present(&terminal, &session.recent_transcript(240));
-        });
-    }
-    menu.append(&transcript_button);
-
-    popover.set_child(Some(&menu));
-
-    let right_click = gtk::GestureClick::builder()
-        .button(3)
-        .propagation_phase(gtk::PropagationPhase::Capture)
-        .build();
-    {
-        let terminal = terminal.clone();
-        let popover = popover.clone();
-        let session = session.clone();
-        let paste_button = paste_button.clone();
-        let local_shell_button = local_shell_button.clone();
-        right_click.connect_pressed(move |gesture, _, x, y| {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            terminal.grab_focus();
-            paste_button
-                .set_sensitive(session.has_active_process() || session.needs_recovery_prompt());
-            local_shell_button.set_sensitive(session.needs_recovery_prompt());
-            context_menu::popup_at(&popover, x, y);
-        });
-    }
-    terminal.add_controller(right_click);
 }
 
 fn install_terminal_recovery_key_controller(
