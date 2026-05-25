@@ -1078,11 +1078,14 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "ShortcutControllerHandle",
         "present_command_palette",
         "command_palette::PaletteAction",
-        "Show Templates",
+        "New Tab",
+        "Open a fresh launch deck tab.",
         "Open Settings",
         "Open Assets Manager",
         "About {}",
         "Open Account / Sync",
+        "Add Web Tile",
+        "preview.add_web_tile(DEFAULT_WEB_URL)",
         "Switch to {label}",
         "open_command_palette_handle",
         "save_command_palette_shortcut(&shortcut)",
@@ -1097,6 +1100,12 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             "Windows GTK should expose the shared Linux command palette affordance: {token}"
         );
     }
+
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("pub fn add_web_tile(&self, initial_url: &str) -> bool")
+            && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added"),
+        "shared GTK workspace preview should expose the same add-web-tile mutation used by Linux toolbar controls and Windows GTK command palette actions"
+    );
 }
 
 #[test]

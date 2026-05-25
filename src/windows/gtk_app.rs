@@ -12,6 +12,7 @@ mod imp {
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
+    use crate::model::layout::DEFAULT_WEB_URL;
     use crate::product;
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
@@ -1589,8 +1590,8 @@ mod imp {
     ) {
         let mut actions = vec![
             command_palette::PaletteAction {
-                title: "Show Templates".into(),
-                subtitle: "Return to the shared workspace launch deck.".into(),
+                title: "New Tab".into(),
+                subtitle: "Open a fresh launch deck tab.".into(),
                 on_activate: Rc::new({
                     let window = window.clone();
                     let overlay = overlay.clone();
@@ -1691,6 +1692,19 @@ mod imp {
 
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
             let session = preview.snapshot();
+            if !shell_state.launch_deck_active.get() {
+                actions.push(command_palette::PaletteAction {
+                    title: "Add Web Tile".into(),
+                    subtitle: "Insert a new browser tile beside the focused pane.".into(),
+                    on_activate: Rc::new({
+                        let preview = preview.clone();
+                        move || {
+                            let _ = preview.add_web_tile(DEFAULT_WEB_URL);
+                        }
+                    }),
+                });
+            }
+
             for (index, tab) in session.tabs.iter().enumerate() {
                 let label = tab
                     .custom_title

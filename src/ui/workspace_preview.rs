@@ -258,6 +258,17 @@ impl SessionPreview {
         }
     }
 
+    pub fn add_web_tile(&self, initial_url: &str) -> bool {
+        if add_web_tile_to_active_session(&self.session, &self.active_index, initial_url) {
+            self.prune_runtime_surfaces("workspace preview web tile added");
+            self.notify_session_changed("workspace preview web tile added");
+            self.render();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn cycle_active_density(&self) -> Option<ApplicationDensity> {
         let next_density = {
             let mut session = self.session.borrow_mut();
