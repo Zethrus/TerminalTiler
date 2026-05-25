@@ -41,6 +41,7 @@ use crate::ui::workspace_chrome::{
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 use crate::ui::workspace_navigation;
+use crate::ui::workspace_tile_state;
 
 #[derive(Clone)]
 pub struct TileRuntimeSurface {
@@ -1758,9 +1759,7 @@ fn build_tile(
     render_context: &PreviewRenderContext,
 ) -> gtk::Widget {
     let shell = build_tile_shell(tile);
-    if active {
-        shell.add_css_class("is-active-tile");
-    }
+    workspace_tile_state::set_tile_active_class(&shell, active);
 
     let badge_text = tile_badge_text(tile);
     let badge_tooltip = tile_badge_tooltip(tile);

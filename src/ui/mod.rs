@@ -133,5 +133,10 @@ mod workspace_chrome;
 pub(crate) mod workspace_navigation;
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 pub mod workspace_preview;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub(crate) mod workspace_tile_state;
 #[cfg(target_os = "linux")]
 pub mod workspace_view;

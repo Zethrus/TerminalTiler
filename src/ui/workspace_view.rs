@@ -32,9 +32,8 @@ use crate::ui::workspace_chrome::{
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 use crate::ui::workspace_navigation;
+use crate::ui::workspace_tile_state;
 use crate::ui::{layout_tree, tile_view, web_tile};
-
-const ACTIVE_TILE_CLASS: &str = "is-active-tile";
 
 fn reconnect_delay_seconds(attempt: u32) -> u32 {
     2u32.pow(attempt.saturating_sub(1).min(5)).min(60)
@@ -769,7 +768,7 @@ impl WorkspaceRuntime {
     fn sync_active_tile_styles(&self) {
         let focused_tile_id = self.inner.focused_tile_id.borrow().clone();
         for tile in self.inner.tiles.borrow().iter() {
-            set_tile_active_class(
+            workspace_tile_state::set_tile_active_class(
                 &tile.widget,
                 focused_tile_id.as_deref() == Some(tile.tile.id.as_str()),
             );
@@ -911,14 +910,6 @@ fn shutdown_tile_resources(
     ));
     web_view.stop_loading();
     web_view.load_uri("about:blank");
-}
-
-fn set_tile_active_class(widget: &gtk::Widget, is_active: bool) {
-    if is_active {
-        widget.add_css_class(ACTIVE_TILE_CLASS);
-    } else {
-        widget.remove_css_class(ACTIVE_TILE_CLASS);
-    }
 }
 
 pub struct WorkspaceView {

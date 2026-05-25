@@ -55,6 +55,7 @@ const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const WORKSPACE_NAVIGATION_RS: &str = include_str!("../src/ui/workspace_navigation.rs");
+const WORKSPACE_TILE_STATE_RS: &str = include_str!("../src/ui/workspace_tile_state.rs");
 const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
@@ -932,14 +933,18 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview should reuse the shared Linux GTK split renderer so split orientation, ratios, resize handles, and shrink behavior stay identical"
     );
     assert!(
-        source_contains(
-            WORKSPACE_PREVIEW_RS,
-            "if active {\n        shell.add_css_class(\"is-active-tile\");\n    }"
-        ) && !source_contains(
-            WORKSPACE_PREVIEW_RS,
-            "shell.add_css_class(\"is-active-tile\");\n    make_shrinkable"
-        ),
-        "Windows GTK workspace preview should only mark the active tile with the same header-local active styling as Linux"
+        UI_MOD_RS.contains("pub(crate) mod workspace_tile_state;")
+            && WORKSPACE_TILE_STATE_RS
+                .contains("const ACTIVE_TILE_CLASS: &str = \"is-active-tile\";")
+            && WORKSPACE_TILE_STATE_RS.contains("pub(crate) fn set_tile_active_class")
+            && WORKSPACE_TILE_STATE_RS.contains("widget.add_css_class(ACTIVE_TILE_CLASS)")
+            && WORKSPACE_TILE_STATE_RS.contains("widget.remove_css_class(ACTIVE_TILE_CLASS)")
+            && WORKSPACE_VIEW_RS.contains("workspace_tile_state::set_tile_active_class(")
+            && WORKSPACE_PREVIEW_RS
+                .contains("workspace_tile_state::set_tile_active_class(&shell, active)")
+            && !WORKSPACE_VIEW_RS.contains("const ACTIVE_TILE_CLASS")
+            && !WORKSPACE_PREVIEW_RS.contains("shell.add_css_class(\"is-active-tile\")"),
+        "Linux and Windows GTK workspace tiles should share active tile class application"
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("build_tile_header_chrome")
