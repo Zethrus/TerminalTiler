@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::AdwDialogExt;
+use gtk::glib::types::StaticType;
 use gtk::pango;
 use gtk::prelude::*;
 
@@ -11,7 +12,7 @@ use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, norma
 use crate::model::preset::ApplicationDensity;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
-use crate::services::layout_editor::{close_tile, split_web_tile};
+use crate::services::layout_editor::{close_tile, split_web_tile, update_split_ratio};
 use crate::services::runbooks::resolve_runbook;
 use crate::services::snippets::resolve_snippet;
 use crate::storage::session_store::{SavedSession, SavedTab};
@@ -24,6 +25,7 @@ use crate::ui::tile_chrome::{
     build_tile_header_chrome, build_tile_shell, build_web_tile_action_chrome, domain_from_url,
     make_shrinkable,
 };
+use crate::ui::tile_drag::TileDragPayload;
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
     WorkspaceAlertSidebarChrome, WorkspaceSummaryChrome, WorkspaceSummaryInput,
@@ -1466,6 +1468,48 @@ fn add_web_tile_to_active_session(
     true
 }
 
+fn swap_active_session_tiles(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    dragged_id: &str,
+    target_id: &str,
+) -> bool {
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(next_layout) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .swap_tile_positions(dragged_id, target_id)
+    else {
+        return false;
+    };
+    session_ref.tabs[tab_index].preset.layout = next_layout;
+    true
+}
+
+fn update_active_split_ratio(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    split_path: &[bool],
+    ratio: f32,
+) -> bool {
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(next_layout) = update_split_ratio(
+        &session_ref.tabs[tab_index].preset.layout,
+        split_path,
+        ratio,
+    ) else {
+        return false;
+    };
+    session_ref.tabs[tab_index].preset.layout = next_layout;
+    true
+}
+
 fn close_active_session_tile(
     session: &Rc<RefCell<SavedSession>>,
     active_index: &Rc<Cell<usize>>,
@@ -1682,6 +1726,67 @@ fn connect_preview_tile_close(
     close_button.connect_clicked(move |_| on_close_tile(tile_id.clone()));
 }
 
+fn install_preview_tile_drag_and_drop(
+    drag_handle: &gtk::Box,
+    shell: &gtk::Box,
+    tile: &TileSpec,
+    on_swap_tile: Rc<dyn Fn(String, String)>,
+) {
+    let drag_source = gtk::DragSource::builder()
+        .actions(gtk::gdk::DragAction::MOVE)
+        .build();
+    {
+        let tile_id = tile.id.clone();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gtk::gdk::ContentProvider::for_value(
+                &TileDragPayload::new(tile_id.clone()).to_value(),
+            ))
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_begin(move |_, _| {
+            shell.add_css_class("is-dragging");
+        });
+    }
+    {
+        let shell = shell.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            shell.remove_css_class("is-dragging");
+        });
+    }
+    drag_handle.add_controller(drag_source);
+
+    let drop_target =
+        gtk::DropTarget::new(TileDragPayload::static_type(), gtk::gdk::DragAction::MOVE);
+    {
+        let shell = shell.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gtk::gdk::DragAction::MOVE
+        });
+    }
+    {
+        let shell = shell.clone();
+        drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let target_id = tile.id.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+            let Ok(payload) = value.get::<TileDragPayload>() else {
+                return false;
+            };
+            on_swap_tile(payload.into_tile_id(), target_id.clone());
+            true
+        });
+    }
+    shell.add_controller(drop_target);
+}
+
 fn build_layout(
     tab_index: usize,
     tab: &SavedTab,
@@ -1692,7 +1797,35 @@ fn build_layout(
     on_close_tile: Rc<dyn Fn(String)>,
 ) -> gtk::Widget {
     let layout = &tab.preset.layout;
-    let shell = crate::ui::layout_tree::build(layout, None);
+    let ratio_session = render_context.session.clone();
+    let ratio_active_index = render_context.active_index.clone();
+    let ratio_on_session_changed = render_context.on_session_changed.clone();
+    let shell = crate::ui::layout_tree::build(
+        layout,
+        Some(Rc::new(move |split_path, ratio| {
+            if update_active_split_ratio(&ratio_session, &ratio_active_index, &split_path, ratio) {
+                notify_session_changed(
+                    &ratio_on_session_changed,
+                    &ratio_session,
+                    "workspace preview split ratio changed",
+                );
+            }
+        })),
+    );
+    let on_swap_tile = {
+        let render_context = render_context.clone();
+        Rc::new(move |dragged_id: String, target_id: String| {
+            if swap_active_session_tiles(
+                &render_context.session,
+                &render_context.active_index,
+                &dragged_id,
+                &target_id,
+            ) {
+                render_context.rerender();
+                render_context.notify_session_changed("workspace preview tile order changed");
+            }
+        })
+    };
     for (index, tile) in layout.tile_specs().iter().enumerate() {
         let Some(slot) = shell.slots.get(index) else {
             continue;
@@ -1706,6 +1839,7 @@ fn build_layout(
             runtime_factory,
             runtime_surfaces,
             on_close_tile.clone(),
+            on_swap_tile.clone(),
             render_context,
         ));
     }
@@ -1721,6 +1855,7 @@ fn build_tile(
     runtime_factory: Option<&TileRuntimeFactory>,
     runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
     on_close_tile: Rc<dyn Fn(String)>,
+    on_swap_tile: Rc<dyn Fn(String, String)>,
     render_context: &PreviewRenderContext,
 ) -> gtk::Widget {
     let shell = build_tile_shell(tile);
@@ -1759,6 +1894,7 @@ fn build_tile(
             TileKind::WebView => "Drag this header to swap tile positions",
         },
     });
+    install_preview_tile_drag_and_drop(&header.drag_handle, &shell, tile, on_swap_tile);
 
     let frame_class = match tile.tile_kind {
         TileKind::Terminal => "terminal-frame",

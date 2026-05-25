@@ -898,7 +898,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK preview headers should share Linux launch-resolution status text instead of reducing terminal status to only the working-directory label"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(layout, None)")
+        WORKSPACE_PREVIEW_RS.contains("crate::ui::layout_tree::build(")
+            && WORKSPACE_PREVIEW_RS.contains("update_active_split_ratio")
+            && WORKSPACE_PREVIEW_RS.contains("workspace preview split ratio changed")
             && WORKSPACE_PREVIEW_RS
                 .contains("for (index, tile) in layout.tile_specs().iter().enumerate()")
             && WORKSPACE_PREVIEW_RS.contains("slot.append(&build_tile(")
@@ -1118,6 +1120,15 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "target.includes(tile)",
         "add_web_tile_to_active_session",
         "split_web_tile(",
+        "pub(crate) mod tile_drag;",
+        "TileDragPayload::new",
+        "TileDragPayload::static_type()",
+        "install_preview_tile_drag_and_drop",
+        "swap_active_session_tiles",
+        "swap_tile_positions(dragged_id, target_id)",
+        "workspace preview tile order changed",
+        "update_active_split_ratio",
+        "update_split_ratio(",
         "update_active_web_tile_url",
         "close_active_session_tile",
         "close_tile(&session_ref.tabs[tab_index].preset.layout, tile_id)",
