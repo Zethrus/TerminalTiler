@@ -18,6 +18,7 @@ use crate::terminal::session::TerminalSession;
 use crate::ui::context_menu;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
+use crate::ui::terminal_recovery_popover;
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, append_terminal_tile_action_chrome,
     build_terminal_tile_action_chrome, build_tile_frame, build_tile_header_chrome,
@@ -98,7 +99,23 @@ pub fn build(
     terminal.add_css_class("terminal-surface");
     make_shrinkable(&terminal);
 
-    let recovery_popover = build_terminal_recovery_popover(&terminal, &session);
+    let recovery_popover = terminal_recovery_popover::build(
+        &terminal,
+        Rc::new({
+            let session = session.clone();
+            move || {
+                session.reset_auto_reconnect_attempts();
+                let _ = session.reconnect();
+            }
+        }),
+        Rc::new({
+            let session = session.clone();
+            move || {
+                session.reset_auto_reconnect_attempts();
+                let _ = session.open_local_shell();
+            }
+        }),
+    );
     let show_recovery_prompt: Rc<dyn Fn()> = {
         let terminal = terminal.clone();
         let recovery_popover = recovery_popover.clone();
@@ -969,79 +986,6 @@ fn install_terminal_context_menu(
         });
     }
     terminal.add_controller(right_click);
-}
-
-fn build_terminal_recovery_popover(
-    terminal: &vte4::Terminal,
-    session: &TerminalSession,
-) -> gtk::Popover {
-    let popover = gtk::Popover::new();
-    popover.add_css_class("terminal-recovery-popover");
-    popover.set_autohide(true);
-    popover.set_has_arrow(true);
-    popover.set_position(gtk::PositionType::Bottom);
-    popover.set_parent(terminal);
-
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
-        .margin_top(10)
-        .margin_bottom(10)
-        .margin_start(10)
-        .margin_end(10)
-        .build();
-    shell.append(
-        &gtk::Label::builder()
-            .label("Session ended")
-            .halign(gtk::Align::Start)
-            .css_classes(["card-title"])
-            .build(),
-    );
-    shell.append(
-        &gtk::Label::builder()
-            .label("Reconnect the configured session or open a local shell in this pane.")
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
-            .build(),
-    );
-
-    let reconnect_button = icons::labeled_button(
-        "Reconnect Session",
-        icon_name::RECOVER,
-        &["flat", "surface-button"],
-    );
-    reconnect_button.set_focus_on_click(false);
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        reconnect_button.connect_clicked(move |_| {
-            session.reset_auto_reconnect_attempts();
-            let _ = session.reconnect();
-            popover.popdown();
-        });
-    }
-    shell.append(&reconnect_button);
-
-    let local_shell_button = icons::labeled_button(
-        "Open Local Shell",
-        icon_name::TERMINAL,
-        &["flat", "surface-button"],
-    );
-    local_shell_button.set_focus_on_click(false);
-    {
-        let session = session.clone();
-        let popover = popover.clone();
-        local_shell_button.connect_clicked(move |_| {
-            session.reset_auto_reconnect_attempts();
-            let _ = session.open_local_shell();
-            popover.popdown();
-        });
-    }
-    shell.append(&local_shell_button);
-
-    popover.set_child(Some(&shell));
-    popover
 }
 
 fn install_terminal_recovery_key_controller(

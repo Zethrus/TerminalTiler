@@ -23,6 +23,7 @@ const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
+const TERMINAL_RECOVERY_POPOVER_RS: &str = include_str!("../src/ui/terminal_recovery_popover.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
@@ -1340,12 +1341,20 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
                 .contains("active_process_checker: Some(active_process_checker)")
             && WINDOWS_GTK_RUNTIME_RS.contains("recovery_binder: Some(TileRuntimeRecoveryBinder")
             && WINDOWS_GTK_RUNTIME_RS.contains("bind_terminal_recovery_controls")
-            && WINDOWS_GTK_RUNTIME_RS.contains("build_terminal_recovery_popover")
+            && UI_MOD_RS.contains("pub(crate) mod terminal_recovery_popover")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains("terminal-recovery-popover")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains(".label(\"Session ended\")")
+            && TERMINAL_RECOVERY_POPOVER_RS
+                .contains("Reconnect the configured session or open a local shell in this pane.")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains("\"Reconnect Session\"")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains("\"Open Local Shell\"")
+            && TILE_VIEW_RS.contains("terminal_recovery_popover::build(")
+            && WINDOWS_GTK_RUNTIME_RS.contains("terminal_recovery_popover::build(")
+            && !TILE_VIEW_RS.contains("fn build_terminal_recovery_popover")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("fn build_terminal_recovery_popover")
             && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Reconnect\"")
             && WINDOWS_GTK_RUNTIME_RS
                 .contains(r#"context_menu::action_button("Open Local Shell", None)"#)
-            && WINDOWS_GTK_RUNTIME_RS.contains("Reconnect Session")
-            && WINDOWS_GTK_RUNTIME_RS.contains("Open Local Shell")
             && WINDOWS_GTK_RUNTIME_RS.contains("TerminalLaunchMode::LocalShell")
             && WINDOWS_GTK_RUNTIME_RS.contains("wsl::build_local_shell_command")
             && WORKSPACE_PREVIEW_RS.contains("(recovery_binder.bind)")

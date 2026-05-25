@@ -64,6 +64,11 @@ pub(crate) mod tab_rename_dialog;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod terminal_recovery_popover;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod tile_chrome;
 #[cfg(any(
     target_os = "linux",
