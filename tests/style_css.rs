@@ -1128,6 +1128,14 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "swap_active_session_tiles",
         "swap_tile_positions(dragged_id, target_id)",
         "workspace preview tile order changed",
+        "dropped_paths_sender: Option<Rc<dyn Fn(&[PathBuf]) -> bool>>",
+        "install_preview_dropped_file_target",
+        "gtk::gdk::FileList::static_type()",
+        "gtk::gio::File::static_type()",
+        "text/uri-list",
+        "x-special/gnome-copied-files",
+        "read_drop_stream_text",
+        "local_paths_from_uri_list_text",
         "update_active_split_ratio",
         "update_split_ratio(",
         "update_active_web_tile_url",
@@ -1230,6 +1238,16 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WORKSPACE_PREVIEW_RS.contains("(recovery_binder.bind)")
             && !WINDOWS_GTK_RUNTIME_RS.contains("stdin.write_all(b\"\\r\\n\")")
             && WINDOWS_GTK_RUNTIME_RS.contains("format!(\"{text}\\r\\n\")")
+            && WINDOWS_GTK_RUNTIME_RS.contains("dropped_paths::serialize_for_target")
+            && WINDOWS_GTK_RUNTIME_RS.contains("paste_dropped_paths_into_terminal_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("launch_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("dropped_paths_sender: Some(dropped_paths_sender)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("DroppedPathTarget::Wsl")
+            && WINDOWS_GTK_RUNTIME_RS.contains("DroppedPathTarget::PowerShell")
+            && WINDOWS_GTK_RUNTIME_RS.contains("DroppedPathTarget::Posix")
+            && WINDOWS_GTK_RUNTIME_RS.contains("wsl::WindowsLaunchRuntime::Wsl")
+            && WINDOWS_GTK_RUNTIME_RS.contains("wsl::WindowsLaunchRuntime::PowerShell")
+            && WINDOWS_GTK_RUNTIME_RS.contains("wsl::WindowsLaunchRuntime::Ssh")
             && WINDOWS_GTK_RUNTIME_RS
                 .contains("TileKind::WebView => build_web_runtime_surface(tile)")
             && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)")

@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use adw::prelude::AdwDialogExt;
@@ -38,6 +39,7 @@ use crate::ui::workspace_chrome::{
 pub struct TileRuntimeSurface {
     pub widget: gtk::Widget,
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
+    pub dropped_paths_sender: Option<Rc<dyn Fn(&[PathBuf]) -> bool>>,
     pub appearance_applier: Option<Rc<dyn Fn(bool, ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
     pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
@@ -56,6 +58,7 @@ impl TileRuntimeSurface {
         Self {
             widget,
             command_sender: None,
+            dropped_paths_sender: None,
             appearance_applier: None,
             url_applier: None,
             web_settings_applier: None,
@@ -1788,6 +1791,173 @@ fn install_preview_tile_drag_and_drop(
     shell.add_controller(drop_target);
 }
 
+fn install_preview_dropped_file_target(
+    shell: &gtk::Box,
+    dropped_paths_sender: Rc<dyn Fn(&[PathBuf]) -> bool>,
+) {
+    let file_list_drop_target = gtk::DropTarget::new(
+        gtk::gdk::FileList::static_type(),
+        gtk::gdk::DragAction::COPY,
+    );
+    {
+        let shell = shell.clone();
+        file_list_drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gtk::gdk::DragAction::COPY
+        });
+    }
+    {
+        let shell = shell.clone();
+        file_list_drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let dropped_paths_sender = dropped_paths_sender.clone();
+        file_list_drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+            let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                return false;
+            };
+            let paths = local_paths_from_gio_files(files.files());
+            dropped_paths_sender(&paths)
+        });
+    }
+    shell.add_controller(file_list_drop_target);
+
+    let single_file_drop_target =
+        gtk::DropTarget::new(gtk::gio::File::static_type(), gtk::gdk::DragAction::COPY);
+    {
+        let shell = shell.clone();
+        single_file_drop_target.connect_enter(move |_, _, _| {
+            shell.add_css_class("is-drop-target");
+            gtk::gdk::DragAction::COPY
+        });
+    }
+    {
+        let shell = shell.clone();
+        single_file_drop_target.connect_leave(move |_| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        let dropped_paths_sender = dropped_paths_sender.clone();
+        single_file_drop_target.connect_drop(move |_, value, _, _| {
+            shell.remove_css_class("is-drop-target");
+            let Ok(file) = value.get::<gtk::gio::File>() else {
+                return false;
+            };
+            let paths = local_paths_from_gio_files([file]);
+            dropped_paths_sender(&paths)
+        });
+    }
+    shell.add_controller(single_file_drop_target);
+
+    let uri_list_formats =
+        gtk::gdk::ContentFormats::new(&["text/uri-list", "x-special/gnome-copied-files"]);
+    let uri_list_drop_target =
+        gtk::DropTargetAsync::new(Some(uri_list_formats), gtk::gdk::DragAction::COPY);
+    uri_list_drop_target
+        .connect_accept(|_, drop| drop_formats_can_contain_uri_list(&drop.formats()));
+    {
+        let shell = shell.clone();
+        uri_list_drop_target.connect_drag_enter(move |_, _, _, _| {
+            shell.add_css_class("is-drop-target");
+            gtk::gdk::DragAction::COPY
+        });
+    }
+    {
+        let shell = shell.clone();
+        uri_list_drop_target.connect_drag_leave(move |_, _| {
+            shell.remove_css_class("is-drop-target");
+        });
+    }
+    {
+        let shell = shell.clone();
+        uri_list_drop_target.connect_drop(move |_, drop, _, _| {
+            let shell = shell.clone();
+            let dropped_paths_sender = dropped_paths_sender.clone();
+            let drop = drop.clone();
+            let drop_for_finish = drop.clone();
+            drop.read_async(
+                &["text/uri-list", "x-special/gnome-copied-files"],
+                gtk::glib::Priority::DEFAULT,
+                None::<&gtk::gio::Cancellable>,
+                move |result| {
+                    shell.remove_css_class("is-drop-target");
+                    let Ok((stream, _mime_type)) = result else {
+                        drop_for_finish.finish(gtk::gdk::DragAction::empty());
+                        return;
+                    };
+                    gtk::glib::MainContext::default().spawn_local(async move {
+                        let Ok(text) = read_drop_stream_text(stream).await else {
+                            drop_for_finish.finish(gtk::gdk::DragAction::empty());
+                            return;
+                        };
+                        let paths = local_paths_from_uri_list_text(&text);
+                        let accepted = dropped_paths_sender(&paths);
+                        drop_for_finish.finish(if accepted {
+                            gtk::gdk::DragAction::COPY
+                        } else {
+                            gtk::gdk::DragAction::empty()
+                        });
+                    });
+                },
+            );
+            true
+        });
+    }
+    shell.add_controller(uri_list_drop_target);
+}
+
+fn drop_formats_can_contain_uri_list(formats: &gtk::gdk::ContentFormats) -> bool {
+    formats.contain_mime_type("text/uri-list")
+        || formats.contain_mime_type("x-special/gnome-copied-files")
+}
+
+async fn read_drop_stream_text(stream: gtk::gio::InputStream) -> Result<String, gtk::glib::Error> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = stream
+            .read_bytes_future(16 * 1024, gtk::glib::Priority::DEFAULT)
+            .await?;
+        if chunk.is_empty() {
+            break;
+        }
+        bytes.extend_from_slice(chunk.as_ref());
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn local_paths_from_gio_files<I>(files: I) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = gtk::gio::File>,
+{
+    files.into_iter().filter_map(|file| file.path()).collect()
+}
+
+fn local_paths_from_uri_list_text(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with('#'))
+        .filter(|line| !line.eq_ignore_ascii_case("copy") && !line.eq_ignore_ascii_case("cut"))
+        .filter_map(local_path_from_drop_text_line)
+        .collect()
+}
+
+fn local_path_from_drop_text_line(line: &str) -> Option<PathBuf> {
+    if line.starts_with("file://") {
+        gtk::gio::File::for_uri(line).path()
+    } else if line.starts_with('/') {
+        Some(PathBuf::from(line))
+    } else {
+        None
+    }
+}
+
 fn build_layout(
     tab_index: usize,
     tab: &SavedTab,
@@ -1951,6 +2121,12 @@ fn build_tile(
                     &tile_actions.recovery_button,
                     &header.title_label,
                 );
+            }
+            if let Some(dropped_paths_sender) = runtime_surface
+                .as_ref()
+                .and_then(|surface| surface.dropped_paths_sender.as_ref())
+            {
+                install_preview_dropped_file_target(&shell, dropped_paths_sender.clone());
             }
             bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
             connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());

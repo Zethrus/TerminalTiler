@@ -34,6 +34,7 @@ mod imp {
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_sys::Win32::System::Threading::TerminateProcess;
 
+    use crate::dropped_paths::{self, DroppedPathTarget};
     use crate::logging;
     use crate::model::assets::{OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
     use crate::model::layout::{DEFAULT_WEB_URL, TileKind, TileSpec, normalize_web_url};
@@ -68,6 +69,7 @@ mod imp {
         stdin_tx: Option<mpsc::Sender<String>>,
         active: bool,
         process_handle: Option<isize>,
+        launch_runtime: Option<wsl::WindowsLaunchRuntime>,
         next_generation: u64,
         active_generation: u64,
     }
@@ -77,6 +79,7 @@ mod imp {
         ProcessStarted {
             generation: u64,
             process_handle: isize,
+            runtime: wsl::WindowsLaunchRuntime,
         },
         ProcessEnded {
             generation: u64,
@@ -306,11 +309,13 @@ mod imp {
                             TerminalRuntimeEvent::ProcessStarted {
                                 generation,
                                 process_handle,
+                                runtime,
                             } => {
                                 let terminate_stale_process = {
                                     let mut state = state.borrow_mut();
                                     if state.active_generation == generation && state.active {
                                         state.process_handle = Some(process_handle);
+                                        state.launch_runtime = Some(runtime);
                                         false
                                     } else {
                                         true
@@ -325,6 +330,7 @@ mod imp {
                                 if state.active_generation == generation {
                                     state.active = false;
                                     state.stdin_tx = None;
+                                    state.launch_runtime = None;
                                     state.process_handle = None;
                                 }
                             }
@@ -393,6 +399,10 @@ mod imp {
             let state = state.clone();
             move |command: &str| send_terminal_runtime_payload(&state, command.to_string())
         });
+        let dropped_paths_sender = Rc::new({
+            let state = state.clone();
+            move |paths: &[PathBuf]| paste_dropped_paths_into_terminal_runtime(&state, paths)
+        });
         let shutdown = Rc::new({
             let state = state.clone();
             move |reason: &str| terminate_terminal_runtime(&state, reason)
@@ -431,6 +441,7 @@ mod imp {
         TileRuntimeSurface {
             widget: surface.upcast(),
             command_sender: Some(command_sender),
+            dropped_paths_sender: Some(dropped_paths_sender),
             appearance_applier: Some(appearance_applier),
             url_applier: None,
             web_settings_applier: None,
@@ -504,6 +515,7 @@ mod imp {
             state.active = true;
             state.stdin_tx = Some(stdin_tx);
             state.process_handle = None;
+            state.launch_runtime = None;
             state.active_generation
         };
         if generation > 1 {
@@ -587,6 +599,7 @@ mod imp {
             let _ = event_tx.send(TerminalRuntimeEvent::ProcessStarted {
                 generation,
                 process_handle: child.as_raw_handle() as isize,
+                runtime: command.runtime.clone(),
             });
 
             if let Some(mut stdin) = child.stdin.take() {
@@ -959,6 +972,43 @@ mod imp {
         }
     }
 
+    fn paste_dropped_paths_into_terminal_runtime(
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        paths: &[PathBuf],
+    ) -> bool {
+        if paths.is_empty() {
+            return false;
+        }
+
+        let launch_runtime = {
+            let state = state.borrow();
+            if !state.active {
+                return false;
+            }
+            state.launch_runtime.clone()
+        };
+        let Some(launch_runtime) = launch_runtime else {
+            return false;
+        };
+
+        let target = match launch_runtime {
+            wsl::WindowsLaunchRuntime::Wsl { ref distro } => DroppedPathTarget::Wsl { distro },
+            wsl::WindowsLaunchRuntime::PowerShell { .. } => DroppedPathTarget::PowerShell,
+            wsl::WindowsLaunchRuntime::Ssh { .. } => DroppedPathTarget::Posix,
+        };
+        let path_text = paths
+            .iter()
+            .map(|path| path.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        let (payload, errors) =
+            dropped_paths::serialize_for_target(path_text.iter().map(String::as_str), target);
+        for error in errors {
+            logging::error(format!("skipped Windows GTK dropped path: {error}"));
+        }
+
+        payload.is_some_and(|payload| send_terminal_runtime_payload(state, payload))
+    }
+
     fn terminate_terminal_runtime(state: &Rc<RefCell<TerminalRuntimeState>>, reason: &str) {
         let process_handle = {
             let mut state = state.borrow_mut();
@@ -971,6 +1021,7 @@ mod imp {
             ));
             state.active = false;
             state.stdin_tx = None;
+            state.launch_runtime = None;
             state.process_handle.take()
         };
 
@@ -1596,6 +1647,7 @@ mod imp {
         TileRuntimeSurface {
             widget: surface.upcast(),
             command_sender: None,
+            dropped_paths_sender: None,
             appearance_applier: None,
             url_applier: Some(url_applier),
             web_settings_applier: Some(web_settings_applier),
