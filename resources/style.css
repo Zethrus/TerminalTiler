@@ -1,3 +1,36 @@
+/* ============================================================
+   TerminalTiler design tokens  (GTK 4.8 — @define-color + alpha())
+   ------------------------------------------------------------
+   The palette is intentionally unchanged: every token maps 1:1 to
+   the literal it replaced. For translucent variants use
+   alpha(@token, f) — e.g. alpha(@tt_amber, 0.18) == the former
+   alpha(@tt_amber, 0.18). Centralizing these makes future accent
+   or surface tweaks a one-line change instead of a find-and-replace.
+
+   Elevation tiers (box-shadow conventions, applied consistently):
+     e1  resting card     0 10px 22px alpha(@tt_shadow, 0.18)
+     e2  raised / hover    0 16px 34px alpha(@tt_shadow, 0.24)
+     e3  overlay / popover  0 20px 40px alpha(@tt_shadow, 0.30)
+   Radius scale:  chip 999px · control 12px · card 16–18px · panel 22px
+   Motion:  140ms ease.  Interactive cards lift translateY(-1px) on hover.
+   ============================================================ */
+
+/* Neutrals (theme-agnostic structural colors) */
+@define-color tt_white   rgb(255, 255, 255);
+@define-color tt_shadow  rgb(0, 0, 0);
+
+/* Brand accent */
+@define-color tt_amber      rgb(240, 179, 75);
+@define-color tt_copper_hi  rgb(205, 98, 40);
+@define-color tt_copper_lo  rgb(173, 74, 28);
+
+/* Status */
+@define-color tt_danger  rgb(255, 104, 104);
+
+/* Core surface / text anchors (referenced by refined rules) */
+@define-color tt_text  rgb(244, 244, 241);  /* #f4f4f1 */
+@define-color tt_ink   rgb(17, 18, 22);     /* #111216 — dark text on cream CTA */
+
 window.window-shell {
   background:
     radial-gradient(circle at top, rgba(28, 31, 39, 0.28), transparent 28%),
@@ -24,11 +57,11 @@ window.window-shell headerbar.app-headerbar {
   padding: 2px 8px;
   background:
     linear-gradient(180deg, rgba(16, 16, 20, 0.96), rgba(10, 10, 13, 0.94)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.05), transparent 32%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.05), transparent 32%);
+  border-bottom: 1px solid alpha(@tt_white, 0.08);
   box-shadow:
-    inset 0 -1px rgba(255, 255, 255, 0.03),
-    0 8px 20px rgba(0, 0, 0, 0.12);
+    inset 0 -1px alpha(@tt_white, 0.03),
+    0 8px 20px alpha(@tt_shadow, 0.12);
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button,
@@ -44,12 +77,12 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.74);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: alpha(@tt_white, 0.74);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.03));
+  border: 1px solid alpha(@tt_white, 0.07);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.05),
-    0 2px 6px rgba(0, 0, 0, 0.08);
+    inset 0 1px alpha(@tt_white, 0.05),
+    0 2px 6px alpha(@tt_shadow, 0.08);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -64,16 +97,16 @@ window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:hover {
   color: rgba(255, 251, 242, 0.92);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05));
-  border-color: rgba(240, 179, 75, 0.26);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.05));
+  border-color: alpha(@tt_amber, 0.26);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 6px 14px rgba(0, 0, 0, 0.14);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 14px alpha(@tt_shadow, 0.14);
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:active {
-  background: rgba(240, 179, 75, 0.14);
-  border-color: rgba(240, 179, 75, 0.32);
+  background: alpha(@tt_amber, 0.14);
+  border-color: alpha(@tt_amber, 0.32);
 }
 
 .button-icon-label-content {
@@ -494,9 +527,9 @@ tabbar.app-tab-strip tabbox tab {
   margin: 0 6px 0 0;
   padding: 0 6px 0 8px;
   border-radius: 12px 12px 0 0 / 8px 8px 0 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.075), alpha(@tt_white, 0.028));
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.04);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -507,27 +540,27 @@ tabbar.app-tab-strip tabbox tab {
 tabbar.app-tab-strip tabbox tab:selected,
 tabbar.app-tab-strip tabbox tab:checked {
   background:
-    linear-gradient(180deg, rgba(205, 98, 40, 0.98), rgba(173, 74, 28, 0.96)),
+    linear-gradient(180deg, alpha(@tt_copper_hi, 0.98), alpha(@tt_copper_lo, 0.96)),
     radial-gradient(circle at top, rgba(255, 223, 166, 0.14), transparent 46%);
   border: 1px solid rgba(220, 130, 70, 0.42);
   border-bottom-color: rgba(180, 80, 30, 0.96);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.14),
-    0 8px 18px rgba(0, 0, 0, 0.18);
+    inset 0 1px alpha(@tt_white, 0.14),
+    0 8px 18px alpha(@tt_shadow, 0.18);
 }
 
 tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.045));
-  border-color: rgba(255, 255, 255, 0.10);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.045));
+  border-color: alpha(@tt_white, 0.10);
   transform: translateY(-1px);
 }
 
 tabbar.app-tab-strip tabbox tab image {
-  color: rgba(255, 255, 255, 0.72);
+  color: alpha(@tt_white, 0.72);
 }
 
 tabbar.app-tab-strip tabbox tab label {
-  color: rgba(255, 255, 255, 0.92);
+  color: alpha(@tt_white, 0.92);
   font-size: 12px;
   font-weight: 700;
   min-width: 72px;
@@ -547,8 +580,8 @@ tabbar.app-tab-strip tabbox tab button.close {
   margin: 0 1px 0 4px;
   border-radius: 7px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.64);
+  background: alpha(@tt_white, 0.03);
+  color: alpha(@tt_white, 0.64);
   -gtk-icon-size: 12px;
   opacity: 0;
   transition:
@@ -566,8 +599,8 @@ tabbar.app-tab-strip tabbox tab:checked button.close {
 
 tabbar.app-tab-strip tabbox tab button.close:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.10);
+  border-color: alpha(@tt_white, 0.08);
 }
 
 .app-title-handle {
@@ -604,24 +637,24 @@ window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
 
 .app-tab-shell.is-active {
   background:
-    linear-gradient(180deg, rgba(205, 98, 40, 0.98), rgba(173, 74, 28, 0.96)),
+    linear-gradient(180deg, alpha(@tt_copper_hi, 0.98), alpha(@tt_copper_lo, 0.96)),
     radial-gradient(circle at top, rgba(255, 223, 166, 0.14), transparent 46%);
   border: 1px solid rgba(220, 130, 70, 0.42);
   border-bottom-color: rgba(180, 80, 30, 0.96);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.14),
-    0 8px 18px rgba(0, 0, 0, 0.18);
+    inset 0 1px alpha(@tt_white, 0.14),
+    0 8px 18px alpha(@tt_shadow, 0.18);
 }
 
 .app-tab-shell.is-inactive {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.075), alpha(@tt_white, 0.028));
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.04);
 }
 
 .app-tab-shell.is-inactive:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.045));
-  border-color: rgba(255, 255, 255, 0.10);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.045));
+  border-color: alpha(@tt_white, 0.10);
   transform: translateY(-1px);
 }
 
@@ -634,11 +667,11 @@ window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
   border-color: rgba(236, 154, 83, 0.52);
   box-shadow:
     0 0 0 1px rgba(236, 154, 83, 0.42),
-    0 12px 24px rgba(0, 0, 0, 0.16);
+    0 12px 24px alpha(@tt_shadow, 0.16);
 }
 
 .app-tab-shell.is-drop-target.is-inactive {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.12), alpha(@tt_white, 0.05));
 }
 
 button.app-tab-select {
@@ -654,7 +687,7 @@ button.app-tab-select {
 
 .app-tab-icon {
   -gtk-icon-size: 13px;
-  color: rgba(255, 255, 255, 0.72);
+  color: alpha(@tt_white, 0.72);
 }
 
 .app-tab-title {
@@ -665,11 +698,11 @@ button.app-tab-select {
 }
 
 .app-tab-shell.is-inactive .app-tab-title {
-  color: rgba(255, 255, 255, 0.92);
+  color: alpha(@tt_white, 0.92);
 }
 
 .app-tab-shell.is-inactive .app-tab-icon {
-  color: rgba(255, 255, 255, 0.52);
+  color: alpha(@tt_white, 0.52);
 }
 
 button.app-tab-close {
@@ -679,8 +712,8 @@ button.app-tab-close {
   margin: 0 3px 0 0;
   border-radius: 7px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.64);
+  background: alpha(@tt_white, 0.03);
+  color: alpha(@tt_white, 0.64);
   -gtk-icon-size: 12px;
   opacity: 0;
   transition:
@@ -697,8 +730,8 @@ button.app-tab-close {
 
 button.app-tab-close:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.10);
+  border-color: alpha(@tt_white, 0.08);
 }
 
 button.app-tab-add {
@@ -706,10 +739,10 @@ button.app-tab-add {
   min-height: 26px;
   margin-top: 1px;
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
-  color: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.03));
+  color: alpha(@tt_white, 0.82);
+  border: 1px solid alpha(@tt_white, 0.09);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -717,11 +750,11 @@ button.app-tab-add {
 }
 
 button.app-tab-add:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05));
-  border-color: rgba(240, 179, 75, 0.20);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.05));
+  border-color: alpha(@tt_amber, 0.20);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 4px 12px rgba(0, 0, 0, 0.12);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 4px 12px alpha(@tt_shadow, 0.12);
 }
 
 .launch-shell {
@@ -756,7 +789,7 @@ button.app-tab-add:hover {
 
 .config-subtitle {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.58);
+  color: alpha(@tt_white, 0.58);
 }
 
 .configurator-body {
@@ -773,10 +806,13 @@ button.app-tab-add:hover {
 .preview-card,
 .workspace-summary,
 .terminal-card {
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid alpha(@tt_white, 0.07);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(11, 11, 13, 0.98), rgba(7, 7, 9, 0.98));
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+  /* e1 resting elevation + 1px lit top edge */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
 }
 
 .terminal-card {
@@ -823,7 +859,7 @@ button.app-tab-add:hover {
 .card-tags,
 .tile-meta,
 .field-hint {
-  color: rgba(255, 255, 255, 0.56);
+  color: alpha(@tt_white, 0.56);
 }
 
 .path-validation {
@@ -860,7 +896,7 @@ entry.path-valid {
 
 .tile-title {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.58);
+  color: alpha(@tt_white, 0.58);
   font-weight: 500;
   transition: color 140ms ease;
 }
@@ -873,8 +909,8 @@ entry.path-valid {
 entry.workspace-path {
   min-height: 42px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: alpha(@tt_white, 0.02);
+  border: 1px solid alpha(@tt_white, 0.04);
   color: #f5f5f1;
 }
 
@@ -891,8 +927,8 @@ button.workspace-browse-button {
 .path-bar {
   padding: 10px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: alpha(@tt_white, 0.02);
+  border: 1px solid alpha(@tt_white, 0.05);
 }
 
 .launch-column {
@@ -908,14 +944,14 @@ button.pill-button {
   border-radius: 999px;
   padding: 8px 18px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.86);
+  color: alpha(@tt_white, 0.86);
   background:
     linear-gradient(180deg, rgba(26, 27, 32, 0.96), rgba(12, 13, 17, 0.96)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.055), transparent 48%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+    radial-gradient(circle at top, alpha(@tt_white, 0.055), transparent 48%);
+  border: 1px solid alpha(@tt_white, 0.10);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 7px 16px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 7px 16px alpha(@tt_shadow, 0.16);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -926,43 +962,56 @@ button.pill-button {
 button.pill-button.flat {
   background:
     linear-gradient(180deg, rgba(24, 25, 30, 0.72), rgba(12, 13, 17, 0.74)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.035), transparent 50%);
-  border-color: rgba(255, 255, 255, 0.075);
+    radial-gradient(circle at top, alpha(@tt_white, 0.035), transparent 50%);
+  border-color: alpha(@tt_white, 0.075);
   color: rgba(255, 251, 242, 0.74);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.045),
-    0 5px 12px rgba(0, 0, 0, 0.12);
+    inset 0 1px alpha(@tt_white, 0.045),
+    0 5px 12px alpha(@tt_shadow, 0.12);
 }
 
 button.pill-button.flat:hover {
   background:
     linear-gradient(180deg, rgba(31, 32, 38, 0.86), rgba(14, 15, 20, 0.88)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.055), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.16);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.055), transparent 52%);
+  border-color: alpha(@tt_amber, 0.16);
   color: rgba(255, 250, 238, 0.88);
 }
 
 button:hover {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: alpha(@tt_white, 0.12);
 }
 
 button.preset-card {
   padding: 12px 10px;
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   background: linear-gradient(180deg, rgba(14, 14, 17, 0.98), rgba(9, 9, 12, 0.98));
-  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.18);
+  /* e1 resting elevation */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 button.preset-card:hover {
   background: linear-gradient(180deg, rgba(19, 19, 23, 1), rgba(12, 12, 15, 1));
-  border-color: rgba(240, 179, 75, 0.18);
+  border-color: alpha(@tt_amber, 0.18);
+  /* e2 raised on hover */
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 34px alpha(@tt_shadow, 0.24),
+    inset 0 1px alpha(@tt_white, 0.05);
 }
 
 button.preset-card.is-selected {
-  border-color: rgba(255, 255, 255, 0.74);
+  border-color: alpha(@tt_white, 0.74);
   background-image: linear-gradient(180deg, rgba(22, 22, 27, 1), rgba(10, 10, 12, 1));
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 1px alpha(@tt_white, 0.12);
 }
 
 button.template-button {
@@ -982,8 +1031,8 @@ button.template-button {
 .template-icon-cell {
   border-radius: 3px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04));
-  border: 1px solid rgba(255, 255, 255, 0.08);
+    linear-gradient(180deg, alpha(@tt_white, 0.10), alpha(@tt_white, 0.04));
+  border: 1px solid alpha(@tt_white, 0.08);
 }
 
 .card-title {
@@ -999,7 +1048,7 @@ button.template-button {
 
 .selection-summary {
   padding: 10px 12px;
-  border-color: rgba(240, 179, 75, 0.14);
+  border-color: alpha(@tt_amber, 0.14);
   background: linear-gradient(180deg, rgba(18, 18, 22, 0.94), rgba(10, 10, 13, 0.94));
 }
 
@@ -1011,49 +1060,64 @@ button.template-button {
 
 .selection-summary-subtitle {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.56);
+  color: alpha(@tt_white, 0.56);
 }
 
 .status-chip,
 .agent-badge {
   border-radius: 999px;
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  /* subtle dimensional glass; flat .accent-* badge variants still override */
+  background: linear-gradient(180deg, alpha(@tt_white, 0.085), alpha(@tt_white, 0.045));
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
   color: #f2f2ee;
   font-size: 10px;
   font-weight: 700;
 }
 
 .muted-chip {
-  color: rgba(255, 255, 255, 0.54);
+  color: alpha(@tt_white, 0.54);
 }
 
 .control-strip {
   padding: 7px 9px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
 }
 
 .preset-card-compact {
   padding: 10px 12px;
   min-width: 168px;
   min-height: 56px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(13, 13, 16, 0.98), rgba(8, 8, 11, 0.98));
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  /* e1 resting elevation */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .preset-card-compact:hover {
-  border-color: rgba(240, 179, 75, 0.2);
+  border-color: alpha(@tt_amber, 0.2);
   background: linear-gradient(180deg, rgba(18, 18, 22, 1), rgba(11, 11, 14, 1));
+  /* e2 raised on hover */
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 34px alpha(@tt_shadow, 0.24),
+    inset 0 1px alpha(@tt_white, 0.05);
 }
 
 .preset-card-compact.is-selected {
-  border-color: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  border-color: alpha(@tt_white, 0.74);
+  box-shadow: 0 0 0 1px alpha(@tt_white, 0.12);
 }
 
 .preset-card-compact button.preset-card-compact-button {
@@ -1073,31 +1137,31 @@ button.new-preset-button {
   min-width: 0;
   min-height: 38px;
   border-radius: 999px;
-  border: 1px solid rgba(240, 179, 75, 0.18);
-  background: rgba(240, 179, 75, 0.06);
-  color: rgba(255, 255, 255, 0.84);
+  border: 1px solid alpha(@tt_amber, 0.18);
+  background: alpha(@tt_amber, 0.06);
+  color: alpha(@tt_white, 0.84);
   font-weight: 700;
   font-size: 11px;
   letter-spacing: 0.03em;
 }
 
 button.new-preset-button:hover {
-  background: rgba(240, 179, 75, 0.11);
-  border-color: rgba(240, 179, 75, 0.28);
+  background: alpha(@tt_amber, 0.11);
+  border-color: alpha(@tt_amber, 0.28);
 }
 
 .breadcrumb-hint {
   background: transparent;
   border: none;
   box-shadow: none;
-  color: rgba(255, 255, 255, 0.32);
+  color: alpha(@tt_white, 0.32);
   font-size: 11px;
   font-family: monospace;
   padding: 4px 0;
 }
 
 .breadcrumb-hint:hover {
-  color: rgba(255, 255, 255, 0.56);
+  color: alpha(@tt_white, 0.56);
 }
 
 .presets-section {
@@ -1125,8 +1189,8 @@ spinbutton.tile-count-input,
 entry.tile-editor-input {
   min-height: 38px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: alpha(@tt_white, 0.02);
+  border: 1px solid alpha(@tt_white, 0.06);
   color: #f5f5f1;
 }
 
@@ -1137,8 +1201,8 @@ entry.tile-editor-input {
 .tile-editor-row {
   padding: 10px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: alpha(@tt_white, 0.025);
+  border: 1px solid alpha(@tt_white, 0.05);
 }
 
 .action-bar-bottom {
@@ -1158,70 +1222,70 @@ button.ghost-link-button:focus,
 button.destructive-button:focus,
 button.destructive-action:focus,
 button.surface-button:focus {
-  outline-color: rgba(240, 179, 75, 0.58);
+  outline-color: alpha(@tt_amber, 0.58);
   outline-offset: 2px;
   outline-width: 2px;
   box-shadow:
-    0 0 0 2px rgba(240, 179, 75, 0.20),
-    inset 0 1px rgba(255, 255, 255, 0.08);
+    0 0 0 2px alpha(@tt_amber, 0.20),
+    inset 0 1px alpha(@tt_white, 0.08);
 }
 
 button.secondary-button {
   background:
     linear-gradient(180deg, rgba(37, 38, 45, 0.96), rgba(13, 14, 18, 0.98)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.075), transparent 52%);
-  border: 1px solid rgba(240, 179, 75, 0.18);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.075), transparent 52%);
+  border: 1px solid alpha(@tt_amber, 0.18);
   color: rgba(255, 251, 242, 0.90);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.07),
-    0 8px 18px rgba(0, 0, 0, 0.20);
+    inset 0 1px alpha(@tt_white, 0.07),
+    0 8px 18px alpha(@tt_shadow, 0.20);
 }
 
 button.secondary-button:hover {
   background:
     linear-gradient(180deg, rgba(40, 40, 47, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.10), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.28);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.10), transparent 52%);
+  border-color: alpha(@tt_amber, 0.28);
   color: rgba(255, 250, 238, 0.96);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.08),
-    0 10px 22px rgba(0, 0, 0, 0.22);
+    inset 0 1px alpha(@tt_white, 0.08),
+    0 10px 22px alpha(@tt_shadow, 0.22);
 }
 
 button.secondary-button:active {
   background:
     linear-gradient(180deg, rgba(19, 20, 25, 0.98), rgba(10, 10, 14, 0.98)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.14), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.34);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.14), transparent 52%);
+  border-color: alpha(@tt_amber, 0.34);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.04),
-    0 4px 10px rgba(0, 0, 0, 0.18);
+    inset 0 1px alpha(@tt_white, 0.04),
+    0 4px 10px alpha(@tt_shadow, 0.18);
 }
 
 button.ghost-link-button {
   background:
     linear-gradient(180deg, rgba(24, 25, 30, 0.42), rgba(12, 13, 17, 0.46));
-  border-color: rgba(255, 255, 255, 0.045);
+  border-color: alpha(@tt_white, 0.045);
   color: rgba(255, 251, 242, 0.60);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.025),
-    0 4px 10px rgba(0, 0, 0, 0.08);
+    inset 0 1px alpha(@tt_white, 0.025),
+    0 4px 10px alpha(@tt_shadow, 0.08);
 }
 
 button.ghost-link-button:hover {
   background:
     linear-gradient(180deg, rgba(31, 32, 38, 0.58), rgba(14, 15, 20, 0.62));
-  border-color: rgba(240, 179, 75, 0.14);
+  border-color: alpha(@tt_amber, 0.14);
   color: rgba(255, 250, 238, 0.82);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.04),
-    0 6px 14px rgba(0, 0, 0, 0.12);
+    inset 0 1px alpha(@tt_white, 0.04),
+    0 6px 14px alpha(@tt_shadow, 0.12);
 }
 
 button.ghost-link-button:active {
   background:
     linear-gradient(180deg, rgba(18, 19, 23, 0.66), rgba(10, 11, 15, 0.70));
-  border-color: rgba(240, 179, 75, 0.18);
+  border-color: alpha(@tt_amber, 0.18);
   color: rgba(255, 250, 238, 0.76);
 }
 
@@ -1233,13 +1297,13 @@ button.suggested-action {
   padding-right: 18px;
   background:
     linear-gradient(180deg, #fffdf7 0%, #f7efd9 48%, #eadcbd 100%),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.76), transparent 56%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.76), transparent 56%);
   color: #111216;
   border: 1px solid rgba(255, 246, 221, 0.98);
   box-shadow:
-    0 12px 26px rgba(0, 0, 0, 0.28),
-    0 0 0 1px rgba(240, 179, 75, 0.18),
-    inset 0 1px rgba(255, 255, 255, 0.86),
+    0 12px 26px alpha(@tt_shadow, 0.28),
+    0 0 0 1px alpha(@tt_amber, 0.18),
+    inset 0 1px alpha(@tt_white, 0.86),
     inset 0 -1px rgba(145, 94, 28, 0.12);
 }
 
@@ -1259,12 +1323,12 @@ button.primary-cta-button:hover,
 button.suggested-action:hover {
   background:
     linear-gradient(180deg, #ffffff 0%, #fbf3df 46%, #efe0bf 100%),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.82), transparent 56%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.82), transparent 56%);
   border-color: rgba(255, 250, 236, 1);
   box-shadow:
-    0 15px 30px rgba(0, 0, 0, 0.32),
-    0 0 0 1px rgba(240, 179, 75, 0.26),
-    inset 0 1px rgba(255, 255, 255, 0.90),
+    0 15px 30px alpha(@tt_shadow, 0.32),
+    0 0 0 1px alpha(@tt_amber, 0.26),
+    inset 0 1px alpha(@tt_white, 0.90),
     inset 0 -1px rgba(145, 94, 28, 0.15);
 }
 
@@ -1273,9 +1337,9 @@ button.suggested-action:active {
   background:
     linear-gradient(180deg, #eadfca 0%, #e1d3b7 100%);
   box-shadow:
-    0 6px 14px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(240, 179, 75, 0.22),
-    inset 0 1px rgba(255, 255, 255, 0.48),
+    0 6px 14px alpha(@tt_shadow, 0.22),
+    0 0 0 1px alpha(@tt_amber, 0.22),
+    inset 0 1px alpha(@tt_white, 0.48),
     inset 0 2px rgba(96, 62, 18, 0.10);
 }
 
@@ -1283,12 +1347,12 @@ button.destructive-button,
 button.destructive-action {
   background:
     linear-gradient(180deg, rgba(95, 28, 28, 0.36), rgba(41, 16, 18, 0.52)),
-    radial-gradient(circle at top, rgba(255, 104, 104, 0.10), transparent 52%);
+    radial-gradient(circle at top, alpha(@tt_danger, 0.10), transparent 52%);
   color: #ff8a8a;
-  border: 1px solid rgba(255, 104, 104, 0.28);
+  border: 1px solid alpha(@tt_danger, 0.28);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.05),
-    0 7px 16px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.05),
+    0 7px 16px alpha(@tt_shadow, 0.16);
 }
 
 .preset-delete-button {
@@ -1302,8 +1366,8 @@ button.destructive-button:hover,
 button.destructive-action:hover {
   background:
     linear-gradient(180deg, rgba(118, 34, 34, 0.46), rgba(54, 18, 20, 0.62)),
-    radial-gradient(circle at top, rgba(255, 104, 104, 0.16), transparent 52%);
-  border-color: rgba(255, 104, 104, 0.38);
+    radial-gradient(circle at top, alpha(@tt_danger, 0.16), transparent 52%);
+  border-color: alpha(@tt_danger, 0.38);
   color: #ffd0d0;
 }
 
@@ -1311,8 +1375,8 @@ button.destructive-button:active,
 button.destructive-action:active {
   background:
     linear-gradient(180deg, rgba(70, 22, 22, 0.58), rgba(35, 13, 15, 0.70)),
-    radial-gradient(circle at top, rgba(255, 104, 104, 0.12), transparent 52%);
-  border-color: rgba(255, 104, 104, 0.34);
+    radial-gradient(circle at top, alpha(@tt_danger, 0.12), transparent 52%);
+  border-color: alpha(@tt_danger, 0.34);
   color: #ffc1c1;
 }
 
@@ -1326,10 +1390,10 @@ button.destructive-button:disabled,
 button.destructive-action:disabled {
   background:
     linear-gradient(180deg, rgba(31, 32, 37, 0.54), rgba(15, 16, 20, 0.58)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.026), transparent 52%);
-  border-color: rgba(255, 255, 255, 0.055);
-  color: rgba(255, 255, 255, 0.36);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
+    radial-gradient(circle at top, alpha(@tt_white, 0.026), transparent 52%);
+  border-color: alpha(@tt_white, 0.055);
+  color: alpha(@tt_white, 0.36);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.025);
 }
 
 button.primary-cta-button:disabled,
@@ -1339,8 +1403,8 @@ button.suggested-action:disabled {
     linear-gradient(180deg, rgba(236, 230, 216, 0.66), rgba(198, 190, 174, 0.56));
   border-color: rgba(255, 246, 221, 0.32);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.32),
-    0 0 0 1px rgba(240, 179, 75, 0.06);
+    inset 0 1px alpha(@tt_white, 0.32),
+    0 0 0 1px alpha(@tt_amber, 0.06);
 }
 
 button.surface-button {
@@ -1349,12 +1413,12 @@ button.surface-button {
   border-radius: 10px;
   background:
     linear-gradient(180deg, rgba(31, 32, 38, 0.94), rgba(13, 14, 18, 0.96)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.045), transparent 52%);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+    radial-gradient(circle at top, alpha(@tt_white, 0.045), transparent 52%);
+  border: 1px solid alpha(@tt_white, 0.09);
   color: rgba(255, 251, 242, 0.78);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.055),
-    0 6px 14px rgba(0, 0, 0, 0.14);
+    inset 0 1px alpha(@tt_white, 0.055),
+    0 6px 14px alpha(@tt_shadow, 0.14);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -1365,22 +1429,22 @@ button.surface-button {
 button.surface-button:hover {
   background:
     linear-gradient(180deg, rgba(38, 39, 46, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.075), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.20);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.075), transparent 52%);
+  border-color: alpha(@tt_amber, 0.20);
   color: rgba(255, 250, 238, 0.94);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.07),
-    0 8px 18px rgba(0, 0, 0, 0.18);
+    inset 0 1px alpha(@tt_white, 0.07),
+    0 8px 18px alpha(@tt_shadow, 0.18);
 }
 
 button.surface-button:active {
   background:
     linear-gradient(180deg, rgba(18, 19, 24, 0.98), rgba(9, 10, 14, 0.98)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.10), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.26);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.10), transparent 52%);
+  border-color: alpha(@tt_amber, 0.26);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.035),
-    0 4px 10px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.035),
+    0 4px 10px alpha(@tt_shadow, 0.16);
 }
 
 button.surface-button.surface-button-icon {
@@ -1389,9 +1453,9 @@ button.surface-button.surface-button-icon {
 }
 
 button.surface-button:disabled {
-  background: rgba(255, 255, 255, 0.025);
-  border-color: rgba(255, 255, 255, 0.045);
-  color: rgba(255, 255, 255, 0.32);
+  background: alpha(@tt_white, 0.025);
+  border-color: alpha(@tt_white, 0.045);
+  color: alpha(@tt_white, 0.32);
   box-shadow: none;
 }
 
@@ -1399,11 +1463,11 @@ button.surface-button:disabled {
 .workspace-summary {
   padding: 10px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid alpha(@tt_white, 0.07);
   background:
     linear-gradient(180deg, rgba(20, 20, 25, 0.96), rgba(10, 10, 14, 0.96)),
-    radial-gradient(circle at left, rgba(240, 179, 75, 0.08), transparent 38%);
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.20);
+    radial-gradient(circle at left, alpha(@tt_amber, 0.08), transparent 38%);
+  box-shadow: 0 14px 30px alpha(@tt_shadow, 0.20);
   margin-bottom: 6px;
 }
 .workspace-summary-name {
@@ -1423,9 +1487,9 @@ button.surface-button:disabled {
 .terminal-header {
   padding: 10px 12px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.06), transparent 42%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.025)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.06), transparent 42%);
+  border-bottom: 1px solid alpha(@tt_white, 0.07);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   transition:
@@ -1439,8 +1503,8 @@ button.tile-header-action {
   padding: 0;
   border-radius: 7px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.66);
+  background: alpha(@tt_white, 0.03);
+  color: alpha(@tt_white, 0.66);
   -gtk-icon-size: 12px;
   opacity: 0;
   transition:
@@ -1459,29 +1523,29 @@ button.tile-header-action:disabled {
 
 button.tile-header-action:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.10);
+  border-color: alpha(@tt_white, 0.08);
 }
 
 button.tile-header-action:disabled {
-  color: rgba(255, 255, 255, 0.34);
-  background: rgba(255, 255, 255, 0.025);
+  color: alpha(@tt_white, 0.34);
+  background: alpha(@tt_white, 0.025);
   border-color: transparent;
 }
 
 .web-tile-settings-popover contents {
   padding: 6px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   background: linear-gradient(180deg, rgba(18, 19, 24, 0.98), rgba(10, 11, 15, 0.98));
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.30);
 }
 
 .tile-header-popover-label {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.76);
+  color: alpha(@tt_white, 0.76);
 }
 
 .web-tile-settings-entry {
@@ -1511,9 +1575,12 @@ button.tile-header-action:disabled {
 
 .terminal-card {
   border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid alpha(@tt_white, 0.06);
   background: linear-gradient(180deg, rgba(16, 18, 23, 0.98), rgba(9, 10, 14, 0.98));
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  /* e1 resting + lit top edge (no hover transform: terminal cards host live VTE) */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease,
@@ -1522,11 +1589,14 @@ button.tile-header-action:disabled {
 
 .terminal-card.is-active-tile .terminal-header {
   /* State emphasis is intentionally header-local to avoid full-height split-pane rings. */
-  border-bottom-color: rgba(255, 255, 255, 0.14);
+  border-bottom-color: alpha(@tt_amber, 0.22);
+  background:
+    linear-gradient(180deg, alpha(@tt_white, 0.085), alpha(@tt_white, 0.03)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.08), transparent 44%);
 }
 
 .terminal-card.is-active-tile .tile-title {
-  color: rgba(255, 255, 255, 0.82);
+  color: alpha(@tt_white, 0.82);
 }
 
 .terminal-card.is-dragging {
@@ -1539,16 +1609,16 @@ button.tile-header-action:disabled {
 }
 
 .tile-directory {
-  color: rgba(255, 255, 255, 0.48);
+  color: alpha(@tt_white, 0.48);
   font-family: monospace;
 }
 
 .terminal-card.is-disconnected .terminal-header {
   /* Disconnected feedback stays in the header and recovery chip. */
   background:
-    linear-gradient(180deg, rgba(240, 179, 75, 0.09), rgba(240, 179, 75, 0.035)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.11), transparent 42%);
-  border-bottom-color: rgba(240, 179, 75, 0.18);
+    linear-gradient(180deg, alpha(@tt_amber, 0.09), alpha(@tt_amber, 0.035)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.11), transparent 42%);
+  border-bottom-color: alpha(@tt_amber, 0.18);
 }
 
 .terminal-card.is-disconnected .tile-title {
@@ -1558,9 +1628,9 @@ button.tile-header-action:disabled {
 .terminal-card.is-drop-target .terminal-header {
   /* Drag/drop feedback is carried by the header, not the full card edge. */
   background:
-    linear-gradient(180deg, rgba(240, 179, 75, 0.11), rgba(240, 179, 75, 0.045)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.15), transparent 42%);
-  border-bottom-color: rgba(240, 179, 75, 0.26);
+    linear-gradient(180deg, alpha(@tt_amber, 0.11), alpha(@tt_amber, 0.045)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.15), transparent 42%);
+  border-bottom-color: alpha(@tt_amber, 0.26);
 }
 
 .terminal-card.is-drop-target .tile-title {
@@ -1569,45 +1639,45 @@ button.tile-header-action:disabled {
 
 .status-chip.recovery-chip {
   color: rgba(255, 236, 197, 0.94);
-  background: rgba(240, 179, 75, 0.14);
-  border-color: rgba(240, 179, 75, 0.24);
+  background: alpha(@tt_amber, 0.14);
+  border-color: alpha(@tt_amber, 0.24);
 }
 
 .terminal-card.is-disconnected button.tile-header-action.tile-recovery-action {
   opacity: 1;
   color: rgba(255, 236, 197, 0.92);
-  background: rgba(240, 179, 75, 0.12);
-  border-color: rgba(240, 179, 75, 0.20);
+  background: alpha(@tt_amber, 0.12);
+  border-color: alpha(@tt_amber, 0.20);
 }
 
 .terminal-card.is-disconnected button.tile-header-action.tile-recovery-action:hover {
   color: #fff8ea;
-  background: rgba(240, 179, 75, 0.18);
-  border-color: rgba(240, 179, 75, 0.28);
+  background: alpha(@tt_amber, 0.18);
+  border-color: alpha(@tt_amber, 0.28);
 }
 
 .terminal-context-popover contents {
   padding: 6px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   background: linear-gradient(180deg, rgba(18, 19, 24, 0.98), rgba(10, 11, 15, 0.98));
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.30);
 }
 
 .snippet-popover contents {
   padding: 6px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   background: linear-gradient(180deg, rgba(18, 19, 24, 0.98), rgba(10, 11, 15, 0.98));
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.30);
 }
 
 .terminal-recovery-popover contents {
   padding: 6px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid alpha(@tt_white, 0.08);
   background: linear-gradient(180deg, rgba(18, 19, 24, 0.98), rgba(10, 11, 15, 0.98));
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.30);
 }
 
 .terminal-context-menu {
@@ -1637,7 +1707,7 @@ button.tile-header-action:disabled {
 }
 
 .snippet-list-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.08);
 }
 
 .snippet-name {
@@ -1666,7 +1736,7 @@ button.tile-header-action:disabled {
 }
 
 .accent-amber .agent-badge {
-  background: rgba(240, 179, 75, 0.18);
+  background: alpha(@tt_amber, 0.18);
 }
 
 .accent-cyan .agent-badge {
@@ -1682,7 +1752,7 @@ button.tile-header-action:disabled {
 }
 
 .split-pane separator {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.08), alpha(@tt_white, 0.03));
   min-width: 5px;
   min-height: 5px;
 }
@@ -1693,17 +1763,20 @@ button.tile-header-action:disabled {
 
 .settings-section {
   border-radius: 16px;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+  /* e1 resting elevation + lit top edge (shared card system) */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
 }
 
 .settings-hero-icon {
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(240, 179, 75, 0.18), rgba(240, 179, 75, 0.06));
-  border: 1px solid rgba(240, 179, 75, 0.18);
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.18), alpha(@tt_amber, 0.06));
+  border: 1px solid alpha(@tt_amber, 0.18);
 }
 
 .settings-hero-icon image {
-  color: rgba(240, 179, 75, 0.92);
+  color: alpha(@tt_amber, 0.92);
 }
 
 .settings-title {
@@ -1719,7 +1792,7 @@ button.tile-header-action:disabled {
 }
 
 .settings-inline-note {
-  color: rgba(240, 179, 75, 0.88);
+  color: alpha(@tt_amber, 0.88);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -1730,9 +1803,9 @@ button.tile-header-action:disabled {
 }
 
 .settings-meta-chip {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.06);
+  color: alpha(@tt_white, 0.72);
+  border: 1px solid alpha(@tt_white, 0.08);
 }
 
 .settings-shortcut-row {
@@ -1767,8 +1840,8 @@ button.tile-header-action:disabled {
 }
 
 .settings-shortcut-record-button.is-recording {
-  background: rgba(240, 179, 75, 0.18);
-  border-color: rgba(240, 179, 75, 0.28);
+  background: alpha(@tt_amber, 0.18);
+  border-color: alpha(@tt_amber, 0.28);
   color: rgba(255, 246, 221, 0.96);
 }
 
@@ -1776,12 +1849,12 @@ button.tile-header-action:disabled {
   min-width: 26px;
   min-height: 26px;
   padding: 0;
-  color: rgba(255, 255, 255, 0.66);
+  color: alpha(@tt_white, 0.66);
 }
 
 .settings-help-button:hover {
-  color: rgba(255, 255, 255, 0.92);
-  background: rgba(255, 255, 255, 0.06);
+  color: alpha(@tt_white, 0.92);
+  background: alpha(@tt_white, 0.06);
 }
 
 .settings-help-popover contents {
@@ -1806,8 +1879,8 @@ button.tile-header-action:disabled {
   font-weight: 600;
   padding: 5px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.05);
+  border: 1px solid alpha(@tt_white, 0.08);
 }
 
 .settings-actions {
@@ -1826,14 +1899,14 @@ button.tile-header-action:disabled {
 .launch-config-stage .preset-card,
 .launch-config-stage .preset-card-compact,
 .settings-dialog-content .config-panel {
-  border-color: rgba(255, 255, 255, 0.08);
+  border-color: alpha(@tt_white, 0.08);
   border-radius: 22px;
   background:
     linear-gradient(180deg, rgba(19, 19, 24, 0.98), rgba(10, 10, 14, 0.98)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.06), transparent 42%);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.06), transparent 42%);
   box-shadow:
-    0 22px 48px rgba(0, 0, 0, 0.26),
-    inset 0 1px rgba(255, 255, 255, 0.04);
+    0 22px 48px alpha(@tt_shadow, 0.26),
+    inset 0 1px alpha(@tt_white, 0.04);
 }
 
 .launch-config-stage .config-panel,
@@ -1843,7 +1916,7 @@ button.tile-header-action:disabled {
 
 .launch-config-stage .field-hint,
 .settings-dialog-content .field-hint {
-  color: rgba(255, 255, 255, 0.68);
+  color: alpha(@tt_white, 0.68);
 }
 
 .launch-config-stage .field-hint {
@@ -1878,18 +1951,18 @@ button.tile-header-action:disabled {
 .settings-dialog-content entry.workspace-path {
   min-height: 46px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.03);
+  background: alpha(@tt_white, 0.035);
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .launch-config-stage .control-strip,
 .settings-dialog-content .control-strip {
   padding: 4px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.03);
+  background: alpha(@tt_white, 0.035);
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .launch-config-stage .control-strip > button,
@@ -1900,32 +1973,32 @@ button.tile-header-action:disabled {
   border: 1px solid transparent;
   background: transparent;
   box-shadow: none;
-  color: rgba(255, 255, 255, 0.76);
+  color: alpha(@tt_white, 0.76);
   font-size: 12px;
   font-weight: 700;
 }
 
 .launch-config-stage .control-strip > button:hover,
 .settings-dialog-content .control-strip > button:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: alpha(@tt_white, 0.06);
+  border-color: alpha(@tt_white, 0.08);
 }
 
 .launch-config-stage .control-strip > button.is-active,
 .settings-dialog-content .control-strip > button.is-active {
   background: linear-gradient(180deg, rgba(244, 193, 107, 0.20), rgba(190, 97, 45, 0.14));
-  border-color: rgba(240, 179, 75, 0.24);
+  border-color: alpha(@tt_amber, 0.24);
   color: #fffaf0;
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.08),
-    0 6px 14px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.08),
+    0 6px 14px alpha(@tt_shadow, 0.16);
 }
 
 .settings-summary-icon,
 .launch-overview-icon {
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(240, 179, 75, 0.18), rgba(190, 97, 45, 0.06));
-  border: 1px solid rgba(240, 179, 75, 0.22);
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.18), rgba(190, 97, 45, 0.06));
+  border: 1px solid alpha(@tt_amber, 0.22);
 }
 
 .settings-summary-icon image,
@@ -1942,13 +2015,13 @@ button.tile-header-action:disabled {
 .launch-overview {
   padding: 10px 14px;
   border-radius: 16px;
-  border-color: rgba(255, 255, 255, 0.055);
+  border-color: alpha(@tt_white, 0.055);
   background:
     linear-gradient(180deg, rgba(15, 15, 19, 0.96), rgba(8, 8, 11, 0.96)),
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.045), transparent 38%);
+    radial-gradient(circle at top left, alpha(@tt_white, 0.045), transparent 38%);
   box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.18),
-    inset 0 1px rgba(255, 255, 255, 0.045);
+    0 10px 24px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.045);
 }
 
 .launch-overview-body {
@@ -1966,7 +2039,7 @@ button.tile-header-action:disabled {
 
 .settings-summary-copy,
 .launch-overview-copy {
-  color: rgba(255, 255, 255, 0.76);
+  color: alpha(@tt_white, 0.76);
 }
 
 .launch-overview-copy {
@@ -1983,9 +2056,9 @@ button.tile-header-action:disabled {
 .launch-meta-chip {
   min-height: 22px;
   padding: 0 9px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  color: rgba(255, 255, 255, 0.74);
+  background: alpha(@tt_white, 0.04);
+  border: 1px solid alpha(@tt_white, 0.07);
+  color: alpha(@tt_white, 0.74);
   font-size: 9px;
   letter-spacing: 0.04em;
 }
@@ -2018,8 +2091,8 @@ button.tile-header-action:disabled {
 .launch-setting-row {
   padding: 14px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.07);
 }
 
 .settings-microphone-row {
@@ -2035,12 +2108,12 @@ button.tile-header-action:disabled {
   padding: 6px;
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.12), transparent 48%);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+    linear-gradient(180deg, alpha(@tt_white, 0.075), alpha(@tt_white, 0.035)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.12), transparent 48%);
+  border: 1px solid alpha(@tt_white, 0.10);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 12px 28px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 12px 28px alpha(@tt_shadow, 0.16);
 }
 
 combobox.surface-select-control button.combo {
@@ -2048,38 +2121,38 @@ combobox.surface-select-control button.combo {
   padding: 0 12px;
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(28, 29, 36, 0.98), rgba(17, 18, 24, 0.98));
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: rgba(255, 255, 255, 0.90);
+  border: 1px solid alpha(@tt_white, 0.10);
+  color: alpha(@tt_white, 0.90);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 6px 16px rgba(0, 0, 0, 0.14);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 16px alpha(@tt_shadow, 0.14);
 }
 
 combobox.surface-select-control button.combo:hover {
   background: linear-gradient(180deg, rgba(34, 35, 43, 0.98), rgba(21, 22, 29, 0.98));
-  border-color: rgba(240, 179, 75, 0.24);
+  border-color: alpha(@tt_amber, 0.24);
 }
 
 combobox.surface-select-control button.combo:active,
 combobox.surface-select-control button.combo:checked {
   background: linear-gradient(180deg, rgba(20, 21, 28, 0.98), rgba(13, 14, 19, 0.98));
-  border-color: rgba(240, 179, 75, 0.32);
+  border-color: alpha(@tt_amber, 0.32);
 }
 
 combobox.surface-select-control button.combo arrow {
-  color: rgba(240, 179, 75, 0.86);
+  color: alpha(@tt_amber, 0.86);
   min-width: 16px;
 }
 
 combobox.surface-select-control button.combo cellview {
-  color: rgba(255, 255, 255, 0.90);
+  color: alpha(@tt_white, 0.90);
   font-weight: 700;
 }
 
 combobox.surface-select-control window.popup {
   background: linear-gradient(180deg, rgba(25, 25, 31, 0.99), rgba(13, 13, 18, 0.99));
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.36);
+  border: 1px solid alpha(@tt_white, 0.10);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.36);
 }
 
 combobox.microphone-select-control button.combo {
@@ -2100,8 +2173,8 @@ combobox.microphone-select-control button.combo {
 .settings-shortcut-card {
   padding: 14px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.07);
 }
 
 .settings-shortcut-row {
@@ -2133,8 +2206,8 @@ combobox.microphone-select-control button.combo {
   min-width: 108px;
   min-height: 30px;
   border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid alpha(@tt_white, 0.08);
+  background: alpha(@tt_white, 0.045);
   color: #fbfaf6;
   font-size: 11px;
 }
@@ -2177,10 +2250,10 @@ combobox.microphone-select-control button.combo {
 
 .launch-selection-summary {
   padding: 14px 16px;
-  border-color: rgba(240, 179, 75, 0.18);
+  border-color: alpha(@tt_amber, 0.18);
   background:
     linear-gradient(180deg, rgba(23, 22, 28, 0.96), rgba(12, 12, 16, 0.96)),
-    radial-gradient(circle at left, rgba(240, 179, 75, 0.08), transparent 36%);
+    radial-gradient(circle at left, alpha(@tt_amber, 0.08), transparent 36%);
 }
 
 .launch-template-card {
@@ -2206,13 +2279,13 @@ combobox.microphone-select-control button.combo {
 
 .launch-dashboard-hero {
   padding: 14px 16px;
-  border-color: rgba(255, 255, 255, 0.06);
+  border-color: alpha(@tt_white, 0.06);
   background:
     linear-gradient(180deg, rgba(13, 13, 16, 0.96), rgba(8, 8, 11, 0.96)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.05), transparent 38%);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.05), transparent 38%);
   box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.18),
-    inset 0 1px rgba(255, 255, 255, 0.03);
+    0 12px 28px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .launch-dashboard-kicker {
@@ -2243,8 +2316,8 @@ button.new-workspace-layout-button {
   min-width: 0;
   padding: 14px;
   box-shadow:
-    0 14px 32px rgba(0, 0, 0, 0.20),
-    inset 0 1px rgba(255, 255, 255, 0.03);
+    0 14px 32px alpha(@tt_shadow, 0.20),
+    inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .saved-workspaces-panel .section-title {
@@ -2253,7 +2326,7 @@ button.new-workspace-layout-button {
 
 .saved-workspaces-panel .section-header .field-hint {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.68);
+  color: alpha(@tt_white, 0.68);
 }
 
 .saved-workspace-grid {
@@ -2267,17 +2340,17 @@ button.new-workspace-layout-button {
   border-radius: 16px;
   background:
     linear-gradient(180deg, rgba(15, 15, 18, 0.98), rgba(8, 8, 11, 0.98)),
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.035), transparent 42%);
+    radial-gradient(circle at top left, alpha(@tt_white, 0.035), transparent 42%);
   box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.16),
-    inset 0 1px rgba(255, 255, 255, 0.025);
+    0 10px 22px alpha(@tt_shadow, 0.16),
+    inset 0 1px alpha(@tt_white, 0.025);
 }
 
 .saved-workspace-card:hover {
-  border-color: rgba(240, 179, 75, 0.16);
+  border-color: alpha(@tt_amber, 0.16);
   background:
     linear-gradient(180deg, rgba(18, 18, 22, 1), rgba(10, 10, 13, 1)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.045), transparent 42%);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.045), transparent 42%);
 }
 
 .saved-workspace-card .card-title {
@@ -2287,15 +2360,15 @@ button.new-workspace-layout-button {
 .saved-workspace-card .card-meta {
   font-size: 12px;
   line-height: 1.48;
-  color: rgba(255, 255, 255, 0.66);
+  color: alpha(@tt_white, 0.66);
 }
 
 .saved-workspace-tile-chip {
   padding: 4px 9px;
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.68);
-  background: rgba(255, 255, 255, 0.045);
-  border-color: rgba(255, 255, 255, 0.065);
+  color: alpha(@tt_white, 0.68);
+  background: alpha(@tt_white, 0.045);
+  border-color: alpha(@tt_white, 0.065);
 }
 
 .saved-workspace-footer {
@@ -2306,7 +2379,7 @@ button.new-workspace-layout-button {
 .saved-workspace-root {
   min-width: 0;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.58);
+  color: alpha(@tt_white, 0.58);
 }
 
 .saved-workspace-actions {
@@ -2318,34 +2391,34 @@ window.window-shell button.pill-button.compact-action-button {
   padding: 6px 13px;
   font-size: 12px;
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.06),
-    0 6px 14px rgba(0, 0, 0, 0.16);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 14px alpha(@tt_shadow, 0.16);
 }
 
 window.window-shell button.primary-cta-button.compact-action-button,
 window.window-shell button.suggested-action.compact-action-button {
   box-shadow:
-    0 10px 20px rgba(0, 0, 0, 0.26),
-    0 0 0 1px rgba(240, 179, 75, 0.18),
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    0 10px 20px alpha(@tt_shadow, 0.26),
+    0 0 0 1px alpha(@tt_amber, 0.18),
+    inset 0 1px alpha(@tt_white, 0.84),
     inset 0 -1px rgba(145, 94, 28, 0.12);
 }
 
 window.window-shell button.primary-cta-button.compact-action-button:hover,
 window.window-shell button.suggested-action.compact-action-button:hover {
   box-shadow:
-    0 12px 24px rgba(0, 0, 0, 0.30),
-    0 0 0 1px rgba(240, 179, 75, 0.26),
-    inset 0 1px rgba(255, 255, 255, 0.88),
+    0 12px 24px alpha(@tt_shadow, 0.30),
+    0 0 0 1px alpha(@tt_amber, 0.26),
+    inset 0 1px alpha(@tt_white, 0.88),
     inset 0 -1px rgba(145, 94, 28, 0.15);
 }
 
 window.window-shell button.primary-cta-button.compact-action-button:active,
 window.window-shell button.suggested-action.compact-action-button:active {
   box-shadow:
-    0 5px 12px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(240, 179, 75, 0.22),
-    inset 0 1px rgba(255, 255, 255, 0.48);
+    0 5px 12px alpha(@tt_shadow, 0.22),
+    0 0 0 1px alpha(@tt_amber, 0.22),
+    inset 0 1px alpha(@tt_white, 0.48);
 }
 
 window.window-shell button.pill-button.compact-icon-button {
@@ -2359,6 +2432,25 @@ button.compact-icon-button .button-leading-icon {
   opacity: 0.82;
 }
 
+/* Saved-workspace Delete recedes at rest so the action cluster reads
+   Open (cream) > Edit (glass) > Delete (quiet), then resolves to the full
+   destructive red on hover. Dark theme only; light keeps its destructive
+   treatment, which already reads correctly on the light surface. */
+window.window-shell:not(.theme-light) button.saved-workspace-delete-button {
+  background: linear-gradient(180deg, alpha(@tt_white, 0.05), alpha(@tt_white, 0.02));
+  border-color: alpha(@tt_danger, 0.22);
+  color: alpha(@tt_danger, 0.66);
+  box-shadow:
+    inset 0 1px alpha(@tt_white, 0.05),
+    0 6px 14px alpha(@tt_shadow, 0.14);
+}
+
+window.window-shell:not(.theme-light) button.saved-workspace-delete-button:hover {
+  background: linear-gradient(180deg, alpha(@tt_danger, 0.22), alpha(@tt_danger, 0.12));
+  border-color: alpha(@tt_danger, 0.40);
+  color: #ffd0d0;
+}
+
 .saved-workspaces-empty {
   border-style: dashed;
 }
@@ -2368,12 +2460,12 @@ button.compact-icon-button .button-leading-icon {
   border-radius: 22px;
   background:
     linear-gradient(180deg, rgba(18, 19, 24, 0.96), rgba(8, 9, 13, 0.96)),
-    radial-gradient(circle at top left, rgba(240, 179, 75, 0.065), transparent 42%),
-    radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.035), transparent 44%);
-  border-color: rgba(255, 255, 255, 0.075);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.065), transparent 42%),
+    radial-gradient(circle at bottom right, alpha(@tt_white, 0.035), transparent 44%);
+  border-color: alpha(@tt_white, 0.075);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.045),
-    0 14px 34px rgba(0, 0, 0, 0.20);
+    inset 0 1px alpha(@tt_white, 0.045),
+    0 14px 34px alpha(@tt_shadow, 0.20);
 }
 
 .wizard-step-chip {
@@ -2383,9 +2475,9 @@ button.compact-icon-button .button-leading-icon {
   padding: 0 14px;
   background:
     linear-gradient(180deg, rgba(30, 31, 38, 0.78), rgba(13, 14, 19, 0.78)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.045), transparent 48%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  color: rgba(255, 255, 255, 0.58);
+    radial-gradient(circle at top, alpha(@tt_white, 0.045), transparent 48%);
+  border: 1px solid alpha(@tt_white, 0.07);
+  color: alpha(@tt_white, 0.58);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -2404,8 +2496,8 @@ button.compact-icon-button .button-leading-icon {
   font-size: 10px;
   font-weight: 800;
   color: rgba(255, 250, 238, 0.70);
-  background: rgba(255, 255, 255, 0.065);
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: alpha(@tt_white, 0.065);
+  border: 1px solid alpha(@tt_white, 0.075);
 }
 
 .wizard-step-icon {
@@ -2421,42 +2513,42 @@ button.compact-icon-button .button-leading-icon {
 
 button.wizard-step-chip {
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.045),
-    0 6px 14px rgba(0, 0, 0, 0.12);
+    inset 0 1px alpha(@tt_white, 0.045),
+    0 6px 14px alpha(@tt_shadow, 0.12);
 }
 
 button.wizard-step-chip:hover {
   background:
     linear-gradient(180deg, rgba(40, 41, 49, 0.92), rgba(17, 18, 24, 0.92)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.08), transparent 50%);
-  border-color: rgba(240, 179, 75, 0.20);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.08), transparent 50%);
+  border-color: alpha(@tt_amber, 0.20);
   color: rgba(255, 250, 238, 0.86);
 }
 
 button.wizard-step-chip:focus {
-  outline-color: rgba(240, 179, 75, 0.58);
+  outline-color: alpha(@tt_amber, 0.58);
   outline-offset: 2px;
   outline-width: 2px;
   box-shadow:
-    0 0 0 2px rgba(240, 179, 75, 0.16),
-    inset 0 1px rgba(255, 255, 255, 0.07);
+    0 0 0 2px alpha(@tt_amber, 0.16),
+    inset 0 1px alpha(@tt_white, 0.07);
 }
 
 button.wizard-step-chip:active {
   background:
-    linear-gradient(180deg, rgba(240, 179, 75, 0.16), rgba(178, 99, 44, 0.12));
+    linear-gradient(180deg, alpha(@tt_amber, 0.16), rgba(178, 99, 44, 0.12));
 }
 
 .wizard-step-chip.is-active {
   background:
     linear-gradient(180deg, rgba(255, 236, 194, 0.34), rgba(211, 125, 57, 0.22)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.16), transparent 52%);
-  border-color: rgba(240, 179, 75, 0.42);
+    radial-gradient(circle at top, alpha(@tt_white, 0.16), transparent 52%);
+  border-color: alpha(@tt_amber, 0.42);
   color: #fff8e8;
   box-shadow:
-    0 0 0 1px rgba(240, 179, 75, 0.14),
-    0 10px 20px rgba(0, 0, 0, 0.16),
-    inset 0 1px rgba(255, 255, 255, 0.10);
+    0 0 0 1px alpha(@tt_amber, 0.14),
+    0 10px 20px alpha(@tt_shadow, 0.16),
+    inset 0 1px alpha(@tt_white, 0.10);
 }
 
 .wizard-step-chip.is-active .wizard-step-index {
@@ -2474,15 +2566,15 @@ button.wizard-step-chip:active {
 
 .wizard-step-chip.is-complete {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.045));
-  border-color: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.76);
+    linear-gradient(180deg, alpha(@tt_white, 0.095), alpha(@tt_white, 0.045));
+  border-color: alpha(@tt_white, 0.14);
+  color: alpha(@tt_white, 0.76);
 }
 
 .wizard-step-chip.is-complete .wizard-step-index {
   color: rgba(255, 250, 238, 0.84);
-  background: rgba(240, 179, 75, 0.16);
-  border-color: rgba(240, 179, 75, 0.18);
+  background: alpha(@tt_amber, 0.16);
+  border-color: alpha(@tt_amber, 0.18);
 }
 
 .wizard-step-chip.is-complete .wizard-step-icon,
@@ -2523,7 +2615,7 @@ window.profile-comfortable .settings-shortcut-title {
 
 window.profile-compact headerbar {
   background: rgba(6, 6, 8, 0.9);
-  box-shadow: inset 0 -1px rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 -1px alpha(@tt_white, 0.03);
 }
 
 window.profile-compact .settings-section {
@@ -2600,7 +2692,7 @@ window.settings-dialog-window.theme-light headerbar {
     radial-gradient(circle at top, rgba(196, 112, 54, 0.06), transparent 34%);
   border-bottom: 1px solid rgba(25, 35, 50, 0.12);
   box-shadow:
-    inset 0 -1px rgba(255, 255, 255, 0.78),
+    inset 0 -1px alpha(@tt_white, 0.78),
     0 8px 18px rgba(15, 23, 42, 0.06);
 }
 
@@ -2609,16 +2701,16 @@ window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-b
   background: linear-gradient(180deg, rgba(25, 35, 50, 0.06), rgba(25, 35, 50, 0.03));
   border: 1px solid rgba(25, 35, 50, 0.10);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.60),
+    inset 0 1px alpha(@tt_white, 0.60),
     0 2px 6px rgba(15, 23, 42, 0.04);
 }
 
 window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(239, 243, 247, 0.94));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(239, 243, 247, 0.94));
   border-color: rgba(25, 35, 50, 0.16);
   color: rgba(25, 35, 50, 0.92);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.68),
+    inset 0 1px alpha(@tt_white, 0.68),
     0 6px 14px rgba(15, 23, 42, 0.08);
 }
 
@@ -2631,7 +2723,7 @@ window.window-shell.theme-light tabbar.app-tab-strip tabbox tab,
 window.window-shell.theme-light .app-tab-shell.is-inactive {
   background: linear-gradient(180deg, rgba(25, 35, 50, 0.065), rgba(25, 35, 50, 0.03));
   border: 1px solid rgba(25, 35, 50, 0.10);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.52);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.52);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked),
@@ -2645,11 +2737,11 @@ window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:checked,
 window.window-shell.theme-light .app-tab-shell.is-active {
   background:
     linear-gradient(180deg, rgba(196, 112, 54, 0.94), rgba(173, 88, 33, 0.94)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.18), transparent 48%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.18), transparent 48%);
   border: 1px solid rgba(210, 129, 74, 0.48);
   border-bottom-color: rgba(173, 88, 33, 0.94);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.20),
+    inset 0 1px alpha(@tt_white, 0.20),
     0 8px 18px rgba(15, 23, 42, 0.11);
 }
 
@@ -2715,16 +2807,16 @@ window.theme-light .settings-dialog-content .settings-toggle-row {
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
   box-shadow:
     0 14px 30px rgba(15, 23, 42, 0.07),
-    inset 0 1px rgba(255, 255, 255, 0.62);
+    inset 0 1px alpha(@tt_white, 0.62);
 }
 
 window.theme-light .microphone-select-shell {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(238, 243, 249, 0.96)),
+    linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(238, 243, 249, 0.96)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.09), transparent 46%);
   border-color: rgba(101, 119, 151, 0.16);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    inset 0 1px alpha(@tt_white, 0.84),
     0 12px 24px rgba(15, 23, 42, 0.06);
 }
 
@@ -2776,10 +2868,10 @@ window.theme-light .settings-dialog-content .launch-meta-chip {
 }
 
 window.window-shell.theme-light button.breadcrumb-hint {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 249, 0.94));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(241, 245, 249, 0.94));
   border: 1px solid rgba(25, 35, 50, 0.12);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    inset 0 1px alpha(@tt_white, 0.84),
     0 4px 10px rgba(15, 23, 42, 0.03);
   border-radius: 10px;
   padding: 4px 10px;
@@ -2787,7 +2879,7 @@ window.window-shell.theme-light button.breadcrumb-hint {
 
 window.window-shell.theme-light button.breadcrumb-hint:hover,
 window.theme-light .settings-dialog-content .settings-help-button:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 240, 245, 0.98));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(236, 240, 245, 0.98));
   border-color: rgba(25, 35, 50, 0.16);
   color: rgba(25, 35, 50, 0.88);
 }
@@ -2796,7 +2888,7 @@ window.window-shell.theme-light button.breadcrumb-hint:active {
   background: linear-gradient(180deg, rgba(244, 247, 250, 0.98), rgba(232, 236, 241, 0.98));
   border-color: rgba(25, 35, 50, 0.18);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.72),
+    inset 0 1px alpha(@tt_white, 0.72),
     0 2px 6px rgba(15, 23, 42, 0.03);
 }
 
@@ -2812,10 +2904,10 @@ window.window-shell.theme-light .agent-badge,
 window.theme-light .settings-dialog-content .settings-meta-chip,
 window.theme-light .settings-dialog-content .launch-meta-chip,
 window.theme-light .settings-dialog-content .settings-shortcut-chip {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.70), rgba(241, 245, 250, 0.82));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.70), rgba(241, 245, 250, 0.82));
   border-color: rgba(101, 119, 151, 0.15);
   color: rgba(25, 35, 50, 0.84);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.72);
 }
 
 window.window-shell.theme-light .launch-selection-summary,
@@ -2823,21 +2915,21 @@ window.window-shell.theme-light .launch-setting-row,
 window.window-shell.theme-light .tile-editor-row,
 window.theme-light .settings-dialog-content .settings-shortcut-card,
 window.theme-light .settings-dialog-content .settings-toggle-row {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(245, 248, 252, 0.88));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.76), rgba(245, 248, 252, 0.88));
   border-color: rgba(101, 119, 151, 0.15);
 }
 
 window.window-shell.theme-light .launch-setting-row,
 window.theme-light .settings-dialog-content .settings-toggle-row {
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.72),
+    inset 0 1px alpha(@tt_white, 0.72),
     0 8px 18px rgba(15, 23, 42, 0.03);
 }
 
 window.window-shell.theme-light .tile-editor-row,
 window.theme-light .settings-dialog-content .settings-shortcut-card {
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.78),
+    inset 0 1px alpha(@tt_white, 0.78),
     0 10px 20px rgba(15, 23, 42, 0.03);
 }
 
@@ -2846,7 +2938,7 @@ window.window-shell.theme-light .saved-workspaces-panel,
 window.window-shell.theme-light .saved-workspaces-empty,
 window.window-shell.theme-light .wizard-stepper {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 248, 252, 0.92)),
+    linear-gradient(180deg, alpha(@tt_white, 0.82), rgba(244, 248, 252, 0.92)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.07), transparent 40%);
   border-color: rgba(101, 119, 151, 0.14);
 }
@@ -2868,12 +2960,12 @@ window.window-shell.theme-light .saved-workspace-root {
 
 window.window-shell.theme-light .wizard-step-chip {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.80), rgba(241, 245, 250, 0.90)),
+    linear-gradient(180deg, alpha(@tt_white, 0.80), rgba(241, 245, 250, 0.90)),
     radial-gradient(circle at top, rgba(196, 112, 54, 0.045), transparent 48%);
   border-color: rgba(101, 119, 151, 0.15);
   color: rgba(25, 35, 50, 0.58);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.74),
+    inset 0 1px alpha(@tt_white, 0.74),
     0 6px 14px rgba(15, 23, 42, 0.035);
 }
 
@@ -2894,13 +2986,13 @@ window.window-shell.theme-light .wizard-step-label {
 window.window-shell.theme-light .wizard-step-chip.is-active {
   background:
     linear-gradient(180deg, rgba(255, 247, 232, 0.98), rgba(242, 211, 166, 0.88)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.54), transparent 52%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.54), transparent 52%);
   border-color: rgba(196, 112, 54, 0.30);
   color: rgba(25, 35, 50, 0.94);
   box-shadow:
     0 0 0 1px rgba(196, 112, 54, 0.08),
     0 10px 20px rgba(15, 23, 42, 0.045),
-    inset 0 1px rgba(255, 255, 255, 0.86);
+    inset 0 1px alpha(@tt_white, 0.86);
 }
 
 window.window-shell.theme-light .wizard-step-chip.is-active .wizard-step-index {
@@ -2917,7 +3009,7 @@ window.window-shell.theme-light .wizard-step-chip.is-active .wizard-step-label {
 
 window.window-shell.theme-light button.wizard-step-chip:hover {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 244, 250, 0.98)),
+    linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(239, 244, 250, 0.98)),
     radial-gradient(circle at top, rgba(196, 112, 54, 0.075), transparent 48%);
   border-color: rgba(196, 112, 54, 0.20);
   color: rgba(25, 35, 50, 0.82);
@@ -2932,7 +3024,7 @@ window.window-shell.theme-light button.wizard-step-chip:active {
 }
 
 window.window-shell.theme-light .wizard-step-chip.is-complete {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(239, 244, 250, 0.92));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.82), rgba(239, 244, 250, 0.92));
   border-color: rgba(101, 119, 151, 0.15);
   color: rgba(25, 35, 50, 0.72);
 }
@@ -2962,15 +3054,15 @@ window.theme-light .settings-dialog-content .settings-summary {
   border-color: rgba(196, 112, 54, 0.18);
   box-shadow:
     0 12px 24px rgba(15, 23, 42, 0.06),
-    inset 0 1px rgba(255, 255, 255, 0.64);
+    inset 0 1px alpha(@tt_white, 0.64);
 }
 
 window.window-shell.theme-light .launch-config-stage .control-strip,
 window.theme-light .settings-dialog-content .control-strip {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(238, 243, 249, 0.82));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.68), rgba(238, 243, 249, 0.82));
   border-color: rgba(101, 119, 151, 0.16);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.76),
+    inset 0 1px alpha(@tt_white, 0.76),
     0 8px 18px rgba(15, 23, 42, 0.04);
 }
 
@@ -2983,21 +3075,21 @@ window.theme-light .settings-dialog-content .control-strip > button {
 
 window.window-shell.theme-light .launch-config-stage .control-strip > button:hover,
 window.theme-light .settings-dialog-content .control-strip > button:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(241, 245, 250, 0.94));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.88), rgba(241, 245, 250, 0.94));
   border-color: rgba(101, 119, 151, 0.18);
   color: rgba(25, 35, 50, 0.92);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    inset 0 1px alpha(@tt_white, 0.84),
     0 4px 10px rgba(15, 23, 42, 0.04);
 }
 
 window.window-shell.theme-light .launch-config-stage .control-strip > button.is-active,
 window.theme-light .settings-dialog-content .control-strip > button.is-active {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(237, 241, 245, 0.98));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(237, 241, 245, 0.98));
   border-color: rgba(25, 35, 50, 0.20);
   color: rgba(25, 35, 50, 0.94);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.88),
+    inset 0 1px alpha(@tt_white, 0.88),
     0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
@@ -3007,11 +3099,11 @@ window.window-shell.theme-light spinbutton.tile-count-input,
 window.window-shell.theme-light entry.tile-editor-input,
 window.theme-light .settings-dialog-content .workspace-path entry,
 window.theme-light .settings-dialog-content entry.workspace-path {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 246, 251, 0.95));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(242, 246, 251, 0.95));
   border-color: rgba(101, 119, 151, 0.18);
   color: #192332;
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.92),
+    inset 0 1px alpha(@tt_white, 0.92),
     0 4px 12px rgba(15, 23, 42, 0.03);
 }
 
@@ -3036,42 +3128,42 @@ window.window-shell.theme-light entry.path-valid {
 
 window.theme-light button.pill-button {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(239, 244, 250, 0.95)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.52), transparent 52%);
+    linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(239, 244, 250, 0.95)),
+    radial-gradient(circle at top, alpha(@tt_white, 0.52), transparent 52%);
   border-color: rgba(101, 119, 151, 0.16);
   color: rgba(25, 35, 50, 0.86);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    inset 0 1px alpha(@tt_white, 0.84),
     0 6px 14px rgba(15, 23, 42, 0.04);
 }
 
 window.theme-light button.pill-button:hover {
   border-color: rgba(101, 119, 151, 0.20);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(239, 242, 246, 0.98)),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.58), transparent 52%);
+    linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(239, 242, 246, 0.98)),
+    radial-gradient(circle at top, alpha(@tt_white, 0.58), transparent 52%);
 }
 
 window.theme-light button.pill-button.flat {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.70), rgba(238, 243, 249, 0.76));
+    linear-gradient(180deg, alpha(@tt_white, 0.70), rgba(238, 243, 249, 0.76));
   border-color: rgba(101, 119, 151, 0.13);
   color: rgba(25, 35, 50, 0.68);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.72),
+    inset 0 1px alpha(@tt_white, 0.72),
     0 4px 10px rgba(15, 23, 42, 0.025);
 }
 
 window.theme-light button.pill-button.flat:hover {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(239, 243, 248, 0.92));
+    linear-gradient(180deg, alpha(@tt_white, 0.88), rgba(239, 243, 248, 0.92));
   border-color: rgba(196, 112, 54, 0.18);
   color: rgba(25, 35, 50, 0.84);
 }
 
 window.theme-light button.pill-button:active {
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.74),
+    inset 0 1px alpha(@tt_white, 0.74),
     0 2px 8px rgba(15, 23, 42, 0.04);
 }
 
@@ -3088,11 +3180,11 @@ window.theme-light button.surface-button:focus {
   outline-width: 2px;
   box-shadow:
     0 0 0 2px rgba(196, 112, 54, 0.13),
-    inset 0 1px rgba(255, 255, 255, 0.82);
+    inset 0 1px alpha(@tt_white, 0.82);
 }
 
 window.theme-light button.secondary-button {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 244, 249, 0.96));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(240, 244, 249, 0.96));
   border-color: rgba(101, 119, 151, 0.18);
   color: rgba(25, 35, 50, 0.92);
 }
@@ -3102,7 +3194,7 @@ window.theme-light button.secondary-button:hover {
   border-color: rgba(25, 35, 50, 0.18);
   color: #192332;
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.88),
+    inset 0 1px alpha(@tt_white, 0.88),
     0 8px 18px rgba(15, 23, 42, 0.05);
 }
 
@@ -3112,16 +3204,16 @@ window.theme-light button.secondary-button:active {
 }
 
 window.theme-light button.ghost-link-button {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.90), rgba(244, 247, 250, 0.92));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.90), rgba(244, 247, 250, 0.92));
   border-color: rgba(25, 35, 50, 0.12);
   color: rgba(25, 35, 50, 0.78);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.84),
+    inset 0 1px alpha(@tt_white, 0.84),
     0 4px 12px rgba(15, 23, 42, 0.03);
 }
 
 window.theme-light button.ghost-link-button:hover {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(238, 242, 246, 0.98));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(238, 242, 246, 0.98));
   border-color: rgba(25, 35, 50, 0.16);
   color: #192332;
 }
@@ -3130,7 +3222,7 @@ window.theme-light button.ghost-link-button:active {
   background: linear-gradient(180deg, rgba(244, 247, 250, 0.98), rgba(232, 236, 241, 0.98));
   border-color: rgba(25, 35, 50, 0.18);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.74),
+    inset 0 1px alpha(@tt_white, 0.74),
     0 2px 8px rgba(15, 23, 42, 0.03);
 }
 
@@ -3176,11 +3268,11 @@ window.theme-light combobox.surface-select-control button.combo {
   min-height: 38px;
   padding: 0 12px;
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 246, 251, 0.96));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(242, 246, 251, 0.96));
   border: 1px solid rgba(101, 119, 151, 0.18);
   color: #192332;
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.88),
+    inset 0 1px alpha(@tt_white, 0.88),
     0 4px 12px rgba(15, 23, 42, 0.03);
 }
 
@@ -3203,7 +3295,7 @@ window.theme-light combobox.surface-select-control button.combo cellview {
 }
 
 window.theme-light combobox.surface-select-control window.popup {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(239, 244, 250, 0.99));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(239, 244, 250, 0.99));
   border: 1px solid rgba(101, 119, 151, 0.16);
   box-shadow: 0 18px 32px rgba(15, 23, 42, 0.10);
 }
@@ -3212,11 +3304,11 @@ window.theme-light button.surface-button {
   min-height: 30px;
   padding: 0 12px;
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 244, 250, 0.96));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(239, 244, 250, 0.96));
   border: 1px solid rgba(101, 119, 151, 0.18);
   color: rgba(25, 35, 50, 0.88);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.86),
+    inset 0 1px alpha(@tt_white, 0.86),
     0 4px 12px rgba(15, 23, 42, 0.03);
 }
 
@@ -3230,7 +3322,7 @@ window.theme-light button.surface-button:active {
   background: linear-gradient(180deg, rgba(243, 246, 249, 0.98), rgba(232, 236, 241, 0.98));
   border-color: rgba(25, 35, 50, 0.20);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.74),
+    inset 0 1px alpha(@tt_white, 0.74),
     0 2px 8px rgba(15, 23, 42, 0.03);
 }
 
@@ -3269,13 +3361,13 @@ window.theme-light button.suggested-action {
   padding-right: 18px;
   background:
     linear-gradient(180deg, #fffdf8 0%, #f6edda 48%, #eadab9 100%),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.72), transparent 56%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.72), transparent 56%);
   border-color: rgba(145, 94, 28, 0.28);
   color: rgba(25, 35, 50, 0.96);
   box-shadow:
     0 12px 22px rgba(15, 23, 42, 0.09),
-    0 0 0 1px rgba(240, 179, 75, 0.16),
-    inset 0 1px rgba(255, 255, 255, 0.88),
+    0 0 0 1px alpha(@tt_amber, 0.16),
+    inset 0 1px alpha(@tt_white, 0.88),
     inset 0 -1px rgba(145, 94, 28, 0.10);
 }
 
@@ -3283,7 +3375,7 @@ window.theme-light button.primary-cta-button:hover,
 window.theme-light button.suggested-action:hover {
   background:
     linear-gradient(180deg, #ffffff 0%, #fbf2df 48%, #efdfbd 100%),
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.78), transparent 56%);
+    radial-gradient(circle at top, alpha(@tt_white, 0.78), transparent 56%);
   border-color: rgba(145, 94, 28, 0.34);
 }
 
@@ -3326,19 +3418,19 @@ window.window-shell.theme-light button.preset-card:hover,
 window.window-shell.theme-light .preset-card-compact:hover {
   background:
     linear-gradient(180deg, rgba(252, 252, 252, 0.99), rgba(241, 244, 248, 0.99)),
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.36), transparent 38%);
+    radial-gradient(circle at top left, alpha(@tt_white, 0.36), transparent 38%);
   border-color: rgba(25, 35, 50, 0.16);
   box-shadow:
     0 12px 24px rgba(15, 23, 42, 0.06),
-    inset 0 1px rgba(255, 255, 255, 0.66);
+    inset 0 1px alpha(@tt_white, 0.66);
 }
 
 window.window-shell.theme-light button.preset-card.is-selected,
 window.window-shell.theme-light .preset-card-compact.is-selected {
   border-color: rgba(25, 35, 50, 0.22);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(237, 241, 245, 0.99)),
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.42), transparent 44%);
+    linear-gradient(180deg, alpha(@tt_white, 0.99), rgba(237, 241, 245, 0.99)),
+    radial-gradient(circle at top left, alpha(@tt_white, 0.42), transparent 44%);
   box-shadow:
     0 0 0 1px rgba(25, 35, 50, 0.10),
     0 14px 26px rgba(15, 23, 42, 0.05);
@@ -3347,7 +3439,7 @@ window.window-shell.theme-light .preset-card-compact.is-selected {
 window.window-shell.theme-light .template-icon-cell {
   background:
     linear-gradient(180deg, rgba(25, 35, 50, 0.07), rgba(25, 35, 50, 0.03)),
-    rgba(255, 255, 255, 0.95);
+    alpha(@tt_white, 0.95);
   border: 1px solid rgba(25, 35, 50, 0.09);
 }
 
@@ -3355,16 +3447,16 @@ window.window-shell.theme-light button.preset-card.is-selected .template-icon-ce
 window.window-shell.theme-light .preset-card-compact.is-selected .template-icon-cell {
   background:
     linear-gradient(180deg, rgba(244, 247, 250, 0.98), rgba(234, 238, 243, 0.98)),
-    rgba(255, 255, 255, 0.98);
+    alpha(@tt_white, 0.98);
   border-color: rgba(25, 35, 50, 0.14);
 }
 
 window.window-shell.theme-light button.new-preset-button {
   border: 1px solid rgba(101, 119, 151, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 244, 250, 0.96));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(239, 244, 250, 0.96));
   color: rgba(25, 35, 50, 0.88);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.86),
+    inset 0 1px alpha(@tt_white, 0.86),
     0 6px 14px rgba(15, 23, 42, 0.04);
 }
 
@@ -3511,7 +3603,7 @@ window.theme-light .settings-help-example {
 
 window.theme-light.profile-compact headerbar {
   background: rgba(247, 244, 239, 0.92);
-  box-shadow: inset 0 -1px rgba(255, 255, 255, 0.76);
+  box-shadow: inset 0 -1px alpha(@tt_white, 0.76);
 }
 
 window.theme-light.profile-comfortable headerbar {
@@ -3530,22 +3622,22 @@ window.window-shell.theme-light .preset-card-compact {
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
   box-shadow:
     0 12px 24px rgba(15, 23, 42, 0.07),
-    inset 0 1px rgba(255, 255, 255, 0.62);
+    inset 0 1px alpha(@tt_white, 0.62);
 }
 
 window.window-shell.theme-light .saved-workspace-card {
   border-color: rgba(101, 119, 151, 0.14);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 248, 252, 0.93)),
+    linear-gradient(180deg, alpha(@tt_white, 0.88), rgba(244, 248, 252, 0.93)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.04), transparent 42%);
   box-shadow:
     0 10px 20px rgba(15, 23, 42, 0.05),
-    inset 0 1px rgba(255, 255, 255, 0.66);
+    inset 0 1px alpha(@tt_white, 0.66);
 }
 
 window.window-shell.theme-light .saved-workspace-card:hover {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 250, 0.98)),
+    linear-gradient(180deg, alpha(@tt_white, 0.96), rgba(241, 245, 250, 0.98)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.06), transparent 42%);
   border-color: rgba(196, 112, 54, 0.16);
 }
@@ -3558,7 +3650,7 @@ window.window-shell.theme-light button.preset-card {
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
   box-shadow:
     0 14px 30px rgba(15, 23, 42, 0.07),
-    inset 0 1px rgba(255, 255, 255, 0.62);
+    inset 0 1px alpha(@tt_white, 0.62);
 }
 
 /* ── Light mode: launch overview subtitle text ── */
@@ -3570,11 +3662,11 @@ window.window-shell.theme-light .settings-summary-copy {
 window.window-shell.theme-light .launch-overview {
   border-color: rgba(25, 35, 50, 0.12);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(244, 248, 252, 0.94)),
+    linear-gradient(180deg, alpha(@tt_white, 0.86), rgba(244, 248, 252, 0.94)),
     radial-gradient(circle at top left, rgba(196, 112, 54, 0.045), transparent 38%);
   box-shadow:
     0 10px 22px rgba(15, 23, 42, 0.045),
-    inset 0 1px rgba(255, 255, 255, 0.72);
+    inset 0 1px alpha(@tt_white, 0.72);
 }
 
 /* ── Light mode: launch overview icon ── */
@@ -3594,10 +3686,10 @@ window.window-shell.theme-light .launch-overview-icon.is-brand-logo {
 
 /* ── Light mode: launch-meta-chip in launch screen ── */
 window.window-shell.theme-light .launch-meta-chip {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(236, 242, 250, 0.76));
+  background: linear-gradient(180deg, alpha(@tt_white, 0.66), rgba(236, 242, 250, 0.76));
   border-color: rgba(101, 119, 151, 0.13);
   color: rgba(25, 35, 50, 0.72);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.66);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.66);
 }
 
 /* ── Light mode: split-pane separator ── */
@@ -3609,9 +3701,9 @@ window.window-shell.theme-light .split-pane separator {
   padding: 10px;
   border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
-    radial-gradient(circle at top, rgba(240, 179, 75, 0.06), transparent 40%);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+    linear-gradient(180deg, alpha(@tt_white, 0.04), alpha(@tt_white, 0.02)),
+    radial-gradient(circle at top, alpha(@tt_amber, 0.06), transparent 40%);
+  border: 1px solid alpha(@tt_white, 0.06);
 }
 
 .assets-manager-window .assets-issue-banner {
@@ -3622,12 +3714,16 @@ window.window-shell.theme-light .split-pane separator {
 }
 
 .assets-manager-window .assets-warning {
-  color: rgba(240, 179, 75, 0.88);
+  color: alpha(@tt_amber, 0.88);
 }
 
 .assets-manager-window .asset-card {
   padding: 16px;
-  border-radius: 20px;
+  border-radius: 18px;
+  /* e1 resting elevation + lit top edge (shared card system) */
+  box-shadow:
+    0 10px 22px alpha(@tt_shadow, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
 }
 
 .assets-manager-window .asset-card-readonly {
@@ -3641,19 +3737,19 @@ window.window-shell.theme-light .split-pane separator {
 .assets-manager-window .asset-nested-section {
   margin-top: 4px;
   padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid alpha(@tt_white, 0.06);
 }
 
 .assets-manager-window .asset-nested-card {
   padding: 12px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.05);
 }
 
 window.theme-light .assets-manager-window .assets-sidebar {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(240, 245, 251, 0.92)),
+    linear-gradient(180deg, alpha(@tt_white, 0.82), rgba(240, 245, 251, 0.92)),
     radial-gradient(circle at top, rgba(185, 115, 20, 0.08), transparent 40%);
   border-color: rgba(25, 35, 50, 0.10);
 }
@@ -3681,7 +3777,7 @@ window.theme-light .assets-manager-window .asset-nested-card {
     linear-gradient(135deg, rgba(83, 109, 254, 0.22), rgba(45, 212, 191, 0.13)),
     rgba(9, 14, 24, 0.88);
   border: 1px solid rgba(125, 211, 252, 0.22);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255, 255, 255, 0.10);
+  box-shadow: 0 18px 48px alpha(@tt_shadow, 0.34), inset 0 1px alpha(@tt_white, 0.10);
 }
 
 .voice-hud-status {
@@ -3697,9 +3793,9 @@ window.theme-light .assets-manager-window .asset-nested-card {
 window.theme-light .voice-hud {
   background:
     linear-gradient(135deg, rgba(79, 70, 229, 0.14), rgba(13, 148, 136, 0.10)),
-    rgba(255, 255, 255, 0.92);
+    alpha(@tt_white, 0.92);
   border-color: rgba(14, 116, 144, 0.18);
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18), inset 0 1px rgba(255, 255, 255, 0.82);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18), inset 0 1px alpha(@tt_white, 0.82);
 }
 
 window.theme-light .voice-hud-status {

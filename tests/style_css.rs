@@ -593,12 +593,12 @@ fn launch_buttons_use_premium_role_contract() {
 
     assert_css_block_contains(
         "button.pill-button:disabled",
-        "color: rgba(255, 255, 255, 0.36)",
+        "color: alpha(@tt_white, 0.36)",
         "dark disabled buttons should remain deliberately muted and legible",
     );
     assert_css_block_contains(
         "button.primary-cta-button:focus",
-        "outline-color: rgba(240, 179, 75, 0.58)",
+        "outline-color: alpha(@tt_amber, 0.58)",
         "keyboard focus should use a visible premium amber ring",
     );
     assert_css_block_contains(
@@ -618,7 +618,7 @@ fn launch_buttons_use_premium_role_contract() {
     );
     assert_css_block_contains(
         "window.window-shell button.primary-cta-button.compact-action-button",
-        "0 10px 20px rgba(0, 0, 0, 0.26)",
+        "0 10px 20px alpha(@tt_shadow, 0.26)",
         "compact primary CTAs should keep dimensional premium shadow after compact sizing overrides",
     );
     assert_css_block_contains(
@@ -1330,7 +1330,7 @@ fn wizard_stepper_uses_dedicated_non_truncating_step_buttons() {
     );
     assert_css_block_contains(
         "button.wizard-step-chip:focus",
-        "outline-color: rgba(240, 179, 75, 0.58)",
+        "outline-color: alpha(@tt_amber, 0.58)",
         "wizard step keyboard focus should share the premium amber focus treatment",
     );
 }

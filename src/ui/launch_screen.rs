@@ -1376,19 +1376,28 @@ where
     header.append(&tile_count);
     card.append(&header);
 
+    // The tile-count chip already states the count, so the description line
+    // carries only the human summary (and stays hidden when there is none)
+    // rather than redundantly repeating "{N} tiles •".
     let detail = gtk::Label::builder()
-        .label(format!(
-            "{} • {}",
-            preset.template_badge(),
-            preset.description
-        ))
+        .label(&preset.description)
         .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .max_width_chars(48)
         .css_classes(["card-meta"])
         .build();
+    detail.set_visible(!preset.description.trim().is_empty());
     card.append(&detail);
+
+    // Absorbs slack so the footer (path + actions) pins to the card bottom,
+    // keeping action rows aligned across a row of varying-length descriptions.
+    let footer_spacer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
+    card.append(&footer_spacer);
 
     let root_label = preset
         .workspace_root
