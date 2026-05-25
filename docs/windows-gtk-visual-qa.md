@@ -44,7 +44,9 @@ After building a GTK package, capture starter screenshots with:
 The helper writes PNGs under `packaging/.build/windows-gtk-visuals/`. It seeds isolated profiles for:
 
 - `launch-dashboard`: clean first-run launch deck.
+- `saved-workspaces`: launch deck with seeded saved workspace cards and mixed terminal/web tile badges.
 - `restored-workspace`: restored 3-pane workspace in the shared interactive GTK workspace shell. This verifies the canonical release no longer opens the legacy Win32 workspace host for restored sessions.
+- `workspace-with-web`: restored workspace with one terminal tile and one `about:blank` web tile so WebKit/WebView2 framing, header chrome, and settings affordances can be compared without relying on external network content.
 
 The capture helper follows the launched process tree, so it works with the
 published self-extracting portable `.exe` as well as an unpacked
@@ -98,13 +100,14 @@ Capture these Windows GTK screens and pair each with the current Ubuntu referenc
 2. Saved workspace cards.
 3. New/edit wizard: setup, appearance, layout, and tiles steps.
 4. Active/restored 3-pane workspace in the shared GTK shell.
-5. Tab strip and command/app chrome.
-6. Active workspace toolbar / summary controls.
-7. Terminal tile card headers, pane chips, focus states, hover states.
-8. Buttons/chips in primary, secondary, ghost, surface, destructive, disabled, and focused states.
-9. Dark and light themes.
-10. Comfortable, standard, and compact density modes.
-11. Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`.
+5. Restored terminal + web workspace in the shared GTK shell.
+6. Tab strip and command/app chrome.
+7. Active workspace toolbar / summary controls.
+8. Terminal tile card headers, pane chips, focus states, hover states.
+9. Buttons/chips in primary, secondary, ghost, surface, destructive, disabled, and focused states.
+10. Dark and light themes.
+11. Comfortable, standard, and compact density modes.
+12. Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`.
 
 ## Naming convention for review bundles
 

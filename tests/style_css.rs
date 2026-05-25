@@ -1478,9 +1478,13 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("packaging/.build/gtk-visual-diffs/report.tsv")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Launch dashboard")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Saved workspace cards")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("saved-workspaces")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("workspace-with-web")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("New/edit wizard")
             && DOC_WINDOWS_GTK_VISUAL_QA
                 .contains("Active/restored 3-pane workspace in the shared GTK shell")
+            && DOC_WINDOWS_GTK_VISUAL_QA
+                .contains("Restored terminal + web workspace in the shared GTK shell")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("Dark and light themes")
             && DOC_WINDOWS_GTK_VISUAL_QA
                 .contains("Comfortable, standard, and compact density modes")
@@ -1493,11 +1497,17 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
 
     assert!(
         WINDOWS_CAPTURE_VISUALS_PS1.contains("launch-dashboard")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("saved-workspaces")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("restored-workspace")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("workspace-with-web")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("System.Drawing")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("PrintWindow")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Saved Fleet")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Web Workspace")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("tile_kind = \"web-view\"")
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains("url = \"about:blank\"")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains(
                 "\"{0:D2}-{1}-{2}-{3}-{4}.png\" -f $index, $Scenario, $Theme, $Density, $safeTitle"
             )
@@ -1525,6 +1535,8 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("portable-zip")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("nsis-install")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msi-install")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("saved-workspaces")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("workspace-with-web")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("Expand-Archive")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msiexec.exe")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
@@ -1535,9 +1547,15 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
 
     assert!(
         PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("launch-dashboard")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("saved-workspaces")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("restored-workspace")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("workspace-with-web")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_theme")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_density")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Saved Fleet")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Web Workspace")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("tile_kind = \"web-view\"")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("url = \"about:blank\"")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("'%02d-%s-%s-%s-%s.png'")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Restore")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("TERMINALTILER_PROFILE_ROOT")
@@ -1555,7 +1573,9 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
     );
     assert!(
         PACKAGE_COMPARE_GTK_VISUALS_SH.contains("launch-dashboard")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("saved-workspaces")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("restored-workspace")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("workspace-with-web")
             && PACKAGE_COMPARE_GTK_VISUALS_SH
                 .contains("<index>-<scenario>-<theme>-<density>-*.png")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("--density comfortable|standard|compact")

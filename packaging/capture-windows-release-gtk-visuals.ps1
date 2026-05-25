@@ -3,8 +3,8 @@ param(
     [string]$DistDir,
     [string]$OutputDir = (Join-Path $PSScriptRoot ".build\windows-gtk-release-visuals"),
     [string]$StageRoot = (Join-Path $PSScriptRoot ".build\windows-gtk-release-visual-stage"),
-    [ValidateSet("launch-dashboard", "restored-workspace")]
-    [string[]]$CaptureSet = @("launch-dashboard", "restored-workspace"),
+    [ValidateSet("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web")]
+    [string[]]$CaptureSet = @("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web"),
     [ValidateSet("system", "light", "dark")]
     [string]$Theme = "dark",
     [ValidateSet("comfortable", "standard", "compact")]

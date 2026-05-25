@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXE_PATH=""
 OUTPUT_DIR="$ROOT_DIR/packaging/.build/linux-gtk-visuals"
-CAPTURE_SET="launch-dashboard,restored-workspace"
+CAPTURE_SET="launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web"
 THEME="dark"
 DENSITY="compact"
 STARTUP_TIMEOUT_SECONDS=20
@@ -20,7 +20,8 @@ the Windows GTK capture helper.
 Options:
   --exe PATH                  TerminalTiler executable (default: target/release/terminaltiler)
   --output-dir DIR            Output directory (default: packaging/.build/linux-gtk-visuals)
-  --capture-set CSV           launch-dashboard,restored-workspace (default: both)
+  --capture-set CSV           launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web
+                              (default: all)
   --theme system|light|dark   Seeded app theme (default: dark)
   --density comfortable|standard|compact
                               Seeded app density (default: compact)
@@ -128,7 +129,7 @@ write_visual_profile() {
   local logs_root="$profile_root/state/logs"
   local restore_mode="prompt"
 
-  if [[ "$scenario" == "restored-workspace" ]]; then
+  if [[ "$scenario" == "restored-workspace" || "$scenario" == "workspace-with-web" ]]; then
     restore_mode="shell-only"
   fi
 
@@ -141,9 +142,88 @@ default_theme = "$THEME"
 default_density = "$DENSITY"
 EOF
 
+  local workspace_path
+  workspace_path="$(toml_path "$workspace_root")"
+
+  if [[ "$scenario" == "saved-workspaces" ]]; then
+    cat >"$config_root/presets.toml" <<EOF
+version = 1
+
+[[presets]]
+id = "visual-qa-saved-fleet"
+name = "Visual QA Saved Fleet"
+description = "Seeded saved workspace card for Linux and Windows visual parity review."
+tags = ["visual", "qa", "saved"]
+root_label = "QA workspace"
+workspace_root = "$workspace_path"
+theme = "$THEME"
+density = "$DENSITY"
+
+[presets.layout]
+kind = "split"
+axis = "horizontal"
+ratio = 0.55
+
+[presets.layout.first]
+kind = "tile"
+id = "saved-builder"
+title = "Builder"
+agent_label = "Build"
+accent_class = "accent-cyan"
+
+[presets.layout.first.working_directory]
+type = "workspace-root"
+
+[presets.layout.second]
+kind = "tile"
+id = "saved-reviewer"
+title = "Reviewer"
+agent_label = "QA"
+accent_class = "accent-rose"
+
+[presets.layout.second.working_directory]
+type = "workspace-root"
+
+[[presets]]
+id = "visual-qa-docs-shell"
+name = "Visual QA Docs + Shell"
+description = "Seeded web plus terminal card to expose saved tile badges and actions."
+tags = ["visual", "web", "shell"]
+root_label = "Docs workspace"
+workspace_root = "$workspace_path"
+theme = "$THEME"
+density = "$DENSITY"
+
+[presets.layout]
+kind = "split"
+axis = "vertical"
+ratio = 0.48
+
+[presets.layout.first]
+kind = "tile"
+id = "saved-docs"
+title = "Docs"
+agent_label = "Browser"
+accent_class = "accent-violet"
+tile_kind = "web-view"
+url = "about:blank"
+
+[presets.layout.first.working_directory]
+type = "workspace-root"
+
+[presets.layout.second]
+kind = "tile"
+id = "saved-shell"
+title = "Shell"
+agent_label = "Terminal"
+accent_class = "accent-amber"
+
+[presets.layout.second.working_directory]
+type = "workspace-root"
+EOF
+  fi
+
   if [[ "$scenario" == "restored-workspace" ]]; then
-    local workspace_path
-    workspace_path="$(toml_path "$workspace_root")"
     cat >"$data_root/session.toml" <<EOF
 version = 1
 active_tab_index = 0
@@ -200,6 +280,54 @@ agent_label = "Monitor"
 accent_class = "accent-amber"
 
 [tabs.preset.layout.second.second.working_directory]
+type = "workspace-root"
+EOF
+  fi
+
+  if [[ "$scenario" == "workspace-with-web" ]]; then
+    cat >"$data_root/session.toml" <<EOF
+version = 1
+active_tab_index = 0
+
+[[tabs]]
+workspace_root = "$workspace_path"
+custom_title = "Visual QA Web Workspace"
+terminal_zoom_steps = 0
+
+[tabs.preset]
+id = "visual-qa-web-workspace"
+name = "Visual QA Web Workspace"
+description = "Visual QA restored web and terminal workspace"
+tags = ["visual", "qa", "web"]
+root_label = "Workspace root"
+theme = "$THEME"
+density = "$DENSITY"
+
+[tabs.preset.layout]
+kind = "split"
+axis = "horizontal"
+ratio = 0.52
+
+[tabs.preset.layout.first]
+kind = "tile"
+id = "terminal-control"
+title = "Control"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+
+[tabs.preset.layout.first.working_directory]
+type = "workspace-root"
+
+[tabs.preset.layout.second]
+kind = "tile"
+id = "web-docs"
+title = "Docs"
+agent_label = "Browser"
+accent_class = "accent-violet"
+tile_kind = "web-view"
+url = "about:blank"
+
+[tabs.preset.layout.second.working_directory]
 type = "workspace-root"
 EOF
   fi
@@ -326,7 +454,7 @@ mkdir -p "$OUTPUT_DIR"
 IFS=',' read -r -a scenarios <<<"$CAPTURE_SET"
 for scenario in "${scenarios[@]}"; do
   case "$scenario" in
-    launch-dashboard|restored-workspace) capture_scenario "$scenario" ;;
+    launch-dashboard|saved-workspaces|restored-workspace|workspace-with-web) capture_scenario "$scenario" ;;
     *) echo "Unknown capture scenario: $scenario" >&2; exit 2 ;;
   esac
 done

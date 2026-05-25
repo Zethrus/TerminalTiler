@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LINUX_DIR="$ROOT_DIR/packaging/.build/linux-gtk-visuals"
 WINDOWS_DIR="$ROOT_DIR/packaging/.build/windows-gtk-visuals"
 OUTPUT_DIR="$ROOT_DIR/packaging/.build/gtk-visual-diffs"
-CAPTURE_SET="launch-dashboard,restored-workspace"
+CAPTURE_SET="launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web"
 THEME="dark"
 DENSITY="compact"
 THRESHOLD="0.035"
@@ -23,7 +23,8 @@ Options:
   --linux-dir DIR             Linux captures root (default: packaging/.build/linux-gtk-visuals)
   --windows-dir DIR           Windows captures root (default: packaging/.build/windows-gtk-visuals)
   --output-dir DIR            Diff/report output root (default: packaging/.build/gtk-visual-diffs)
-  --capture-set CSV           launch-dashboard,restored-workspace (default: both)
+  --capture-set CSV           launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web
+                              (default: all)
   --theme system|light|dark   Capture theme to compare (default: dark)
   --density comfortable|standard|compact
                               Capture density to compare (default: compact)
@@ -186,7 +187,7 @@ compare_pair() {
 IFS=',' read -r -a scenarios <<<"$CAPTURE_SET"
 for scenario in "${scenarios[@]}"; do
   case "$scenario" in
-    launch-dashboard|restored-workspace) ;;
+    launch-dashboard|saved-workspaces|restored-workspace|workspace-with-web) ;;
     *) echo "Unknown capture scenario: $scenario" >&2; exit 2 ;;
   esac
 

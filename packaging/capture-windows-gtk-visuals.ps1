@@ -1,8 +1,8 @@
 param(
     [string]$ExePath,
     [string]$OutputDir = (Join-Path $PSScriptRoot ".build\windows-gtk-visuals"),
-    [ValidateSet("launch-dashboard", "restored-workspace")]
-    [string[]]$CaptureSet = @("launch-dashboard", "restored-workspace"),
+    [ValidateSet("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web")]
+    [string[]]$CaptureSet = @("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web"),
     [ValidateSet("system", "light", "dark")]
     [string]$Theme = "dark",
     [ValidateSet("comfortable", "standard", "compact")]
@@ -92,7 +92,7 @@ function Initialize-VisualProfile {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
 
-    $restoreMode = if ($Scenario -eq "restored-workspace") { "shell-only" } else { "prompt" }
+    $restoreMode = if ($Scenario -in @("restored-workspace", "workspace-with-web")) { "shell-only" } else { "prompt" }
     @"
 version = 1
 default_restore_mode = "$restoreMode"
@@ -100,8 +100,86 @@ default_theme = "$Theme"
 default_density = "$Density"
 "@ | Set-Content -Path (Join-Path $configRoot "preferences.toml") -Encoding ASCII
 
+    $workspacePath = Convert-ToTomlPath -Path $workspaceRoot
+    if ($Scenario -eq "saved-workspaces") {
+        @"
+version = 1
+
+[[presets]]
+id = "visual-qa-saved-fleet"
+name = "Visual QA Saved Fleet"
+description = "Seeded saved workspace card for Linux and Windows visual parity review."
+tags = ["visual", "qa", "saved"]
+root_label = "QA workspace"
+workspace_root = "$workspacePath"
+theme = "$Theme"
+density = "$Density"
+
+[presets.layout]
+kind = "split"
+axis = "horizontal"
+ratio = 0.55
+
+[presets.layout.first]
+kind = "tile"
+id = "saved-builder"
+title = "Builder"
+agent_label = "Build"
+accent_class = "accent-cyan"
+
+[presets.layout.first.working_directory]
+type = "workspace-root"
+
+[presets.layout.second]
+kind = "tile"
+id = "saved-reviewer"
+title = "Reviewer"
+agent_label = "QA"
+accent_class = "accent-rose"
+
+[presets.layout.second.working_directory]
+type = "workspace-root"
+
+[[presets]]
+id = "visual-qa-docs-shell"
+name = "Visual QA Docs + Shell"
+description = "Seeded web plus terminal card to expose saved tile badges and actions."
+tags = ["visual", "web", "shell"]
+root_label = "Docs workspace"
+workspace_root = "$workspacePath"
+theme = "$Theme"
+density = "$Density"
+
+[presets.layout]
+kind = "split"
+axis = "vertical"
+ratio = 0.48
+
+[presets.layout.first]
+kind = "tile"
+id = "saved-docs"
+title = "Docs"
+agent_label = "Browser"
+accent_class = "accent-violet"
+tile_kind = "web-view"
+url = "about:blank"
+
+[presets.layout.first.working_directory]
+type = "workspace-root"
+
+[presets.layout.second]
+kind = "tile"
+id = "saved-shell"
+title = "Shell"
+agent_label = "Terminal"
+accent_class = "accent-amber"
+
+[presets.layout.second.working_directory]
+type = "workspace-root"
+"@ | Set-Content -Path (Join-Path $configRoot "presets.toml") -Encoding ASCII
+    }
+
     if ($Scenario -eq "restored-workspace") {
-        $workspacePath = Convert-ToTomlPath -Path $workspaceRoot
         @"
 version = 1
 active_tab_index = 0
@@ -158,6 +236,54 @@ agent_label = "Monitor"
 accent_class = "accent-amber"
 
 [tabs.preset.layout.second.second.working_directory]
+type = "workspace-root"
+"@ | Set-Content -Path (Join-Path $dataRoot "session.toml") -Encoding ASCII
+    }
+
+    if ($Scenario -eq "workspace-with-web") {
+        @"
+version = 1
+active_tab_index = 0
+
+[[tabs]]
+workspace_root = "$workspacePath"
+custom_title = "Visual QA Web Workspace"
+terminal_zoom_steps = 0
+
+[tabs.preset]
+id = "visual-qa-web-workspace"
+name = "Visual QA Web Workspace"
+description = "Visual QA restored web and terminal workspace"
+tags = ["visual", "qa", "web"]
+root_label = "Workspace root"
+theme = "$Theme"
+density = "$Density"
+
+[tabs.preset.layout]
+kind = "split"
+axis = "horizontal"
+ratio = 0.52
+
+[tabs.preset.layout.first]
+kind = "tile"
+id = "terminal-control"
+title = "Control"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+
+[tabs.preset.layout.first.working_directory]
+type = "workspace-root"
+
+[tabs.preset.layout.second]
+kind = "tile"
+id = "web-docs"
+title = "Docs"
+agent_label = "Browser"
+accent_class = "accent-violet"
+tile_kind = "web-view"
+url = "about:blank"
+
+[tabs.preset.layout.second.working_directory]
 type = "workspace-root"
 "@ | Set-Content -Path (Join-Path $dataRoot "session.toml") -Encoding ASCII
     }
