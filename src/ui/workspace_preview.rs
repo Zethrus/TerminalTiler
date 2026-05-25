@@ -1084,7 +1084,7 @@ fn refresh_preview_snippet_list(
 
     for snippet in context.snippets.iter().cloned() {
         let button = build_preview_snippet_button(&snippet);
-        let content = content.clone();
+        let form_content = content.clone();
         let popover = popover.clone();
         let context = context.clone();
         button.connect_clicked(move |_| {
@@ -1096,7 +1096,7 @@ fn refresh_preview_snippet_list(
                 }
             } else {
                 show_preview_snippet_variable_form(
-                    &content,
+                    &form_content,
                     &popover,
                     snippet.clone(),
                     context.clone(),
