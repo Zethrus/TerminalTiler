@@ -208,7 +208,7 @@ impl VoiceEngineProcess {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(crate::voice::process::voice_engine_stderr())
             .env("TERMINALTILER_PARAKEET_MODEL", &manifest.model_name)
             .env(
                 "TERMINALTILER_PARAKEET_STREAMING_MODEL",
@@ -216,6 +216,7 @@ impl VoiceEngineProcess {
             )
             .env("TERMINALTILER_VOICE_MODEL_PATH", model_path)
             .env("TERMINALTILER_VOICE_ENGINE_MODE", engine_mode.env_value());
+        crate::voice::process::apply_background_spawn(&mut command);
 
         let mut child = command.spawn()?;
         let stdin = child

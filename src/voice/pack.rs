@@ -1,9 +1,11 @@
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,8 +40,16 @@ pub enum VoicePackHealth {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VoicePackError {
     Io(String),
-    CommandFailed { command: String, status: String },
-    ChecksumMismatch { expected: String, actual: String },
+    CommandFailed {
+        command: String,
+        status: String,
+        log_path: Option<String>,
+        output_tail: String,
+    },
+    ChecksumMismatch {
+        expected: String,
+        actual: String,
+    },
     InvalidManifest(String),
 }
 
@@ -49,10 +59,44 @@ impl From<io::Error> for VoicePackError {
     }
 }
 
+impl std::fmt::Display for VoicePackError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(message) => write!(formatter, "{message}"),
+            Self::CommandFailed {
+                status,
+                log_path,
+                output_tail,
+                ..
+            } => {
+                write!(formatter, "Voice pack command failed ({status})")?;
+                if let Some(path) = log_path {
+                    write!(formatter, "; see {path}")?;
+                }
+                if !output_tail.trim().is_empty() {
+                    write!(formatter, "; last output: {}", output_tail.trim())?;
+                }
+                Ok(())
+            }
+            Self::ChecksumMismatch { expected, actual } => write!(
+                formatter,
+                "voice pack checksum mismatch: expected {expected}, got {actual}"
+            ),
+            Self::InvalidManifest(message) => {
+                write!(formatter, "invalid voice pack manifest: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VoicePackError {}
+
 const BUILTIN_PARAKEET_MANIFEST: &str =
     include_str!("../../resources/voice/parakeet/manifest.toml");
 const BUILTIN_PARAKEET_ENGINE: &str =
     include_str!("../../resources/voice/parakeet/parakeet_engine.py");
+const VOICE_PACK_INSTALL_LOG_FILE: &str = "voice-pack-install.log";
+const COMMAND_OUTPUT_TAIL_LIMIT: usize = 8 * 1024;
 
 pub fn default_parakeet_model_name() -> String {
     "nvidia/parakeet-tdt-0.6b-v2".into()
@@ -254,13 +298,19 @@ where
     F: FnMut(u8),
 {
     let rendered = format!("{command:?}");
+    let log_path = crate::voice::process::voice_pack_log_path(VOICE_PACK_INSTALL_LOG_FILE);
+    let capture = CommandOutputCapture::start(&rendered, log_path.clone());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::voice::process::apply_background_spawn(command);
     let mut child = command.spawn()?;
+    capture.capture_child_output(&mut child);
     let mut percent = start_percent.min(end_percent);
     progress(percent);
 
     let mut last_progress_tick = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
+            capture.finish();
             if status.success() {
                 progress(end_percent);
                 return Ok(());
@@ -268,6 +318,8 @@ where
             return Err(VoicePackError::CommandFailed {
                 command: rendered,
                 status: status.to_string(),
+                log_path: log_path.map(|path| path.display().to_string()),
+                output_tail: capture.tail(),
             });
         }
 
@@ -278,6 +330,146 @@ where
             last_progress_tick = Instant::now();
         }
     }
+}
+
+#[derive(Clone)]
+struct CommandOutputCapture {
+    tail: Arc<Mutex<OutputTail>>,
+    log: Option<Arc<Mutex<File>>>,
+    readers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+}
+
+impl CommandOutputCapture {
+    fn start(command: &str, log_path: Option<PathBuf>) -> Self {
+        let log = log_path
+            .and_then(|path| {
+                if let Some(parent) = path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                OpenOptions::new().create(true).append(true).open(path).ok()
+            })
+            .map(|file| Arc::new(Mutex::new(file)));
+        let capture = Self {
+            tail: Arc::new(Mutex::new(OutputTail::new(COMMAND_OUTPUT_TAIL_LIMIT))),
+            log,
+            readers: Arc::new(Mutex::new(Vec::new())),
+        };
+        capture.write_log_line(&format!(
+            "\n==> {} voice pack command: {command}\n",
+            unix_timestamp()
+        ));
+        capture
+    }
+
+    fn capture_child_output(&self, child: &mut std::process::Child) {
+        if let Some(stdout) = child.stdout.take() {
+            self.spawn_reader("stdout", stdout);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            self.spawn_reader("stderr", stderr);
+        }
+    }
+
+    fn spawn_reader<R>(&self, label: &'static str, mut reader: R)
+    where
+        R: Read + Send + 'static,
+    {
+        let tail = self.tail.clone();
+        let log = self.log.clone();
+        let handle = thread::spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        let chunk = &buffer[..count];
+                        if let Some(log) = &log
+                            && let Ok(mut log) = log.lock()
+                        {
+                            let _ = log.write_all(chunk);
+                            let _ = log.flush();
+                        }
+                        if let Ok(mut tail) = tail.lock() {
+                            tail.push_labeled(label, chunk);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+        if let Ok(mut readers) = self.readers.lock() {
+            readers.push(handle);
+        }
+    }
+
+    fn finish(&self) {
+        let readers = self
+            .readers
+            .lock()
+            .map(|mut readers| readers.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for reader in readers {
+            let _ = reader.join();
+        }
+    }
+
+    fn tail(&self) -> String {
+        self.tail
+            .lock()
+            .map(|tail| tail.as_string())
+            .unwrap_or_default()
+    }
+
+    fn write_log_line(&self, line: &str) {
+        if let Some(log) = &self.log
+            && let Ok(mut log) = log.lock()
+        {
+            let _ = log.write_all(line.as_bytes());
+            let _ = log.flush();
+        }
+    }
+}
+
+struct OutputTail {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl OutputTail {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    fn push_labeled(&mut self, label: &str, chunk: &[u8]) {
+        self.push(format!("[{label}] ").as_bytes());
+        self.push(chunk);
+        if !chunk.ends_with(b"\n") {
+            self.push(b"\n");
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > self.limit {
+            let excess = self.bytes.len() - self.limit;
+            self.bytes.drain(0..excess);
+        }
+    }
+
+    fn as_string(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 fn system_python_command() -> &'static str {
@@ -402,6 +594,33 @@ mod tests {
 
         assert_eq!(seen.first(), Some(&10));
         assert_eq!(seen.last(), Some(&12));
+    }
+
+    #[test]
+    fn command_progress_captures_failure_output() {
+        let mut seen = Vec::new();
+        let error = run_command_with_progress(
+            Command::new(system_python_command()).arg("-c").arg(
+                "import sys; print('voice stdout'); print('voice stderr', file=sys.stderr); sys.exit(7)",
+            ),
+            10,
+            12,
+            &mut |percent| seen.push(percent),
+        )
+        .unwrap_err();
+
+        let VoicePackError::CommandFailed {
+            status,
+            output_tail,
+            ..
+        } = error
+        else {
+            panic!("expected command failure");
+        };
+        assert!(status.contains('7'));
+        assert!(output_tail.contains("voice stdout"));
+        assert!(output_tail.contains("voice stderr"));
+        assert_eq!(seen.first(), Some(&10));
     }
 
     #[test]

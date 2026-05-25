@@ -47,6 +47,9 @@ const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
+const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
+const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
+const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
     ".terminal-card.is-active-tile",
@@ -758,6 +761,19 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
                 .contains("GTK assets manager will open here once Windows assets are migrated")
             && !WINDOWS_GTK_APP_RS.contains("will be enabled after runtime parity work"),
         "Windows GTK titlebar actions should open the shared GTK settings/assets dialogs with real shared callbacks instead of placeholder toasts"
+    );
+
+    assert!(
+        VOICE_PROCESS_RS.contains("CREATE_NO_WINDOW")
+            && VOICE_PROCESS_RS.contains("CommandExt")
+            && VOICE_PROCESS_RS.contains("apply_background_spawn")
+            && VOICE_PACK_RS.contains("apply_background_spawn(command)")
+            && VOICE_PACK_RS.contains(".stdout(Stdio::piped())")
+            && VOICE_PACK_RS.contains(".stderr(Stdio::piped())")
+            && VOICE_PACK_RS.contains("voice-pack-install.log")
+            && VOICE_ENGINE_RS.contains("apply_background_spawn(&mut command)")
+            && VOICE_ENGINE_RS.contains(".stderr(crate::voice::process::voice_engine_stderr())"),
+        "Windows voice pack install and voice helper launches must run hidden and capture output instead of opening console windows"
     );
 
     assert!(

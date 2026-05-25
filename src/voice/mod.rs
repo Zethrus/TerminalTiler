@@ -13,6 +13,7 @@ pub mod hotkey;
 pub mod linux_global_hotkey;
 pub mod pack;
 pub mod preferences;
+pub(crate) mod process;
 pub mod transcriber;
 
 pub use controller::{TerminalTargetStatus, VoiceController, VoiceControllerOutput, VoiceState};

@@ -4019,7 +4019,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                         }
                         Err(error) => {
                             save_status(VoicePackStatus::Error {
-                                message: format!("{error:?}"),
+                                message: error.to_string(),
                             });
                             logging::error(format!(
                                 "failed to prepare NVIDIA Parakeet Python environment on Windows: {error:?}"
@@ -4030,7 +4030,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
                 Err(error) => {
                     save_status(VoicePackStatus::Error {
-                        message: format!("{error:?}"),
+                        message: error.to_string(),
                     });
                     logging::error(format!(
                         "failed to install bundled NVIDIA Parakeet voice pack on Windows: {error:?}"
