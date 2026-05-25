@@ -1097,6 +1097,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "pub struct TileRuntimeSurface",
         "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
         "send_command_to_active_runtime_surfaces",
+        "send_command_to_active_runtime_surface",
         "BroadcastTarget::AllPanes",
         "BroadcastTarget::SavedGroup",
         "target.includes(tile)",
@@ -1116,6 +1117,11 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "mark_all_read_button",
         "alert_store.mark_all_read()",
         "alert_store.subscribe(refresh.clone())",
+        "bind_preview_terminal_snippets",
+        "refresh_preview_snippet_list",
+        "show_preview_snippet_variable_form",
+        "execute_preview_snippet",
+        "resolve_snippet(snippet, &variables)",
         "active_tab_tile_specs",
     ] {
         assert!(

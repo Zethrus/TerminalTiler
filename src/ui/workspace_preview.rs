@@ -6,13 +6,14 @@ use adw::prelude::AdwDialogExt;
 use gtk::pango;
 use gtk::prelude::*;
 
-use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
+use crate::model::assets::{CliSnippet, Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
 use crate::services::layout_editor::{close_tile, split_web_tile};
 use crate::services::runbooks::resolve_runbook;
+use crate::services::snippets::resolve_snippet;
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
@@ -996,6 +997,286 @@ fn bind_preview_alert_controls(
     refresh();
 }
 
+fn bind_preview_terminal_snippets(
+    snippet_button: &gtk::Button,
+    tile: &TileSpec,
+    render_context: &PreviewRenderContext,
+) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("snippet-popover");
+    popover.set_autohide(true);
+    popover.set_has_arrow(true);
+    popover.set_position(gtk::PositionType::Bottom);
+    popover.set_parent(snippet_button);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(8)
+        .margin_bottom(8)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    popover.set_child(Some(&content));
+
+    let snippet_context = PreviewSnippetContext {
+        tile_id: tile.id.clone(),
+        session: render_context.session.clone(),
+        active_index: render_context.active_index.clone(),
+        runtime_surfaces: render_context.runtime_surfaces.clone(),
+        snippets: Rc::new(render_context.assets.snippets.clone()),
+    };
+
+    {
+        let popover = popover.clone();
+        let content = content.clone();
+        let snippet_context = snippet_context.clone();
+        snippet_button.connect_clicked(move |_| {
+            refresh_preview_snippet_list(&content, &popover, snippet_context.clone());
+            if popover.is_visible() {
+                popover.popdown();
+            } else {
+                popover.popup();
+            }
+        });
+    }
+}
+
+#[derive(Clone)]
+struct PreviewSnippetContext {
+    tile_id: String,
+    session: Rc<RefCell<SavedSession>>,
+    active_index: Rc<Cell<usize>>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    snippets: Rc<Vec<CliSnippet>>,
+}
+
+fn refresh_preview_snippet_list(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    context: PreviewSnippetContext,
+) {
+    clear_box(content);
+    content.append(
+        &gtk::Label::builder()
+            .label("CLI Snippets")
+            .halign(gtk::Align::Start)
+            .css_classes(["tile-header-popover-label"])
+            .build(),
+    );
+
+    if context.snippets.is_empty() {
+        content.append(
+            &gtk::Label::builder()
+                .label("No snippets configured yet. Add them in Assets.")
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["snippet-empty-state"])
+                .build(),
+        );
+        return;
+    }
+
+    for snippet in context.snippets.iter().cloned() {
+        let button = build_preview_snippet_button(&snippet);
+        let content = content.clone();
+        let popover = popover.clone();
+        let context = context.clone();
+        button.connect_clicked(move |_| {
+            if snippet.variables.is_empty() {
+                if execute_preview_snippet(&snippet, TemplateVariableValues::new(), &context)
+                    .is_ok()
+                {
+                    popover.popdown();
+                }
+            } else {
+                show_preview_snippet_variable_form(
+                    &content,
+                    &popover,
+                    snippet.clone(),
+                    context.clone(),
+                );
+            }
+        });
+        content.append(&button);
+    }
+}
+
+fn show_preview_snippet_variable_form(
+    content: &gtk::Box,
+    popover: &gtk::Popover,
+    snippet: CliSnippet,
+    context: PreviewSnippetContext,
+) {
+    clear_box(content);
+
+    content.append(
+        &gtk::Label::builder()
+            .label(&snippet.name)
+            .halign(gtk::Align::Start)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    if !snippet.description.trim().is_empty() {
+        content.append(
+            &gtk::Label::builder()
+                .label(&snippet.description)
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["field-hint"])
+                .build(),
+        );
+    }
+
+    let form = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["snippet-variable-form"])
+        .build();
+    let mut fields = Vec::new();
+    for variable in &snippet.variables {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        row.append(
+            &gtk::Label::builder()
+                .label(&variable.label)
+                .halign(gtk::Align::Start)
+                .css_classes(["tile-header-popover-label"])
+                .build(),
+        );
+        if !variable.description.trim().is_empty() {
+            row.append(
+                &gtk::Label::builder()
+                    .label(&variable.description)
+                    .halign(gtk::Align::Start)
+                    .wrap(true)
+                    .css_classes(["field-hint"])
+                    .build(),
+            );
+        }
+        let entry = gtk::Entry::builder()
+            .hexpand(true)
+            .text(&variable.default_value)
+            .placeholder_text(&variable.id)
+            .build();
+        row.append(&entry);
+        form.append(&row);
+        fields.push((variable.id.clone(), entry));
+    }
+    content.append(&form);
+
+    let feedback = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .visible(false)
+        .css_classes(["snippet-error"])
+        .build();
+    content.append(&feedback);
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    let back_button = icons::labeled_button("Back", icon_name::BACK, &["flat", "surface-button"]);
+    back_button.set_focus_on_click(false);
+    {
+        let content = content.clone();
+        let popover = popover.clone();
+        let context = context.clone();
+        back_button.connect_clicked(move |_| {
+            refresh_preview_snippet_list(&content, &popover, context.clone());
+        });
+    }
+    actions.append(&back_button);
+
+    let run_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
+    run_button.set_focus_on_click(false);
+    {
+        let popover = popover.clone();
+        run_button.connect_clicked(move |_| {
+            let variables = fields
+                .iter()
+                .map(|(id, entry)| (id.clone(), entry.text().to_string()))
+                .collect::<TemplateVariableValues>();
+            match execute_preview_snippet(&snippet, variables, &context) {
+                Ok(()) => popover.popdown(),
+                Err(error) => {
+                    feedback.set_text(&error);
+                    feedback.set_visible(true);
+                }
+            }
+        });
+    }
+    actions.append(&run_button);
+    content.append(&actions);
+}
+
+fn build_preview_snippet_button(snippet: &CliSnippet) -> gtk::Button {
+    let button = gtk::Button::builder()
+        .focus_on_click(false)
+        .css_classes(["flat", "snippet-list-item"])
+        .build();
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .build();
+    shell.append(
+        &gtk::Label::builder()
+            .label(&snippet.name)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .css_classes(["snippet-name"])
+            .build(),
+    );
+
+    let mut summary_parts = Vec::new();
+    if !snippet.description.trim().is_empty() {
+        summary_parts.push(snippet.description.trim().to_string());
+    }
+    if !snippet.tags.is_empty() {
+        summary_parts.push(format!("#{}", snippet.tags.join(" #")));
+    }
+    if !snippet.variables.is_empty() {
+        summary_parts.push(format!("{} args", snippet.variables.len()));
+    }
+    if !summary_parts.is_empty() {
+        shell.append(
+            &gtk::Label::builder()
+                .label(summary_parts.join("  •  "))
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["snippet-description"])
+                .build(),
+        );
+    }
+
+    button.set_child(Some(&shell));
+    button
+}
+
+fn execute_preview_snippet(
+    snippet: &CliSnippet,
+    variables: TemplateVariableValues,
+    context: &PreviewSnippetContext,
+) -> Result<(), String> {
+    let command = resolve_snippet(snippet, &variables).map_err(|error| error.to_string())?;
+    if send_command_to_active_runtime_surface(
+        &context.session,
+        &context.active_index,
+        &context.runtime_surfaces,
+        &context.tile_id,
+        &command,
+    ) {
+        Ok(())
+    } else {
+        Err("This pane is not ready to receive input.".into())
+    }
+}
+
 fn active_tab_tile_specs(
     session: &Rc<RefCell<SavedSession>>,
     active_index: &Rc<Cell<usize>>,
@@ -1230,6 +1511,38 @@ fn send_command_to_active_runtime_surfaces(
         .count()
 }
 
+fn send_command_to_active_runtime_surface(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    tile_id: &str,
+    command: &str,
+) -> bool {
+    let session_ref = session.borrow();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(tab) = session_ref.tabs.get(tab_index) else {
+        return false;
+    };
+    let Some(tile) = tab
+        .preset
+        .layout
+        .tile_specs()
+        .iter()
+        .find(|tile| tile.id == tile_id && tile.tile_kind == TileKind::Terminal)
+        .cloned()
+    else {
+        return false;
+    };
+    let key = runtime_surface_key(tab_index, tab, &tile);
+    runtime_surfaces
+        .borrow()
+        .get(&key)
+        .and_then(|surface| surface.command_sender.as_ref())
+        .is_some_and(|send| send(command))
+}
+
 fn connect_preview_tile_close(
     close_button: &gtk::Button,
     tile: &TileSpec,
@@ -1322,6 +1635,7 @@ fn build_tile(
     match tile.tile_kind {
         TileKind::Terminal => {
             let tile_actions = build_terminal_tile_action_chrome(can_close);
+            bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
             connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
             append_terminal_tile_action_chrome(&actions, &tile_actions);
         }
