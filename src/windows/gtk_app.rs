@@ -1872,6 +1872,38 @@ mod imp {
 
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
             let session = preview.snapshot();
+            for (index, tab) in session.tabs.iter().enumerate() {
+                let label = tab
+                    .custom_title
+                    .as_deref()
+                    .unwrap_or(tab.preset.name.as_str());
+                actions.push(command_palette::PaletteAction {
+                    title: format!("Switch to {label}"),
+                    subtitle: tab.workspace_root.display().to_string(),
+                    on_activate: Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            show_workspace_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                index,
+                            );
+                        }
+                    }),
+                });
+            }
+
             if !shell_state.launch_deck_active.get() {
                 actions.push(command_palette::PaletteAction {
                     title: "Rename Active Tab".into(),
@@ -1945,38 +1977,6 @@ mod imp {
                         }),
                     });
                 }
-            }
-
-            for (index, tab) in session.tabs.iter().enumerate() {
-                let label = tab
-                    .custom_title
-                    .as_deref()
-                    .unwrap_or(tab.preset.name.as_str());
-                actions.push(command_palette::PaletteAction {
-                    title: format!("Switch to {label}"),
-                    subtitle: tab.workspace_root.display().to_string(),
-                    on_activate: Rc::new({
-                        let window = window.clone();
-                        let overlay = overlay.clone();
-                        let title = title.clone();
-                        let launch = launch.clone();
-                        let back_button = back_button.clone();
-                        let fullscreen_button = fullscreen_button.clone();
-                        let shell_state = shell_state.clone();
-                        move || {
-                            show_workspace_preview_tab(
-                                &window,
-                                &overlay,
-                                &title,
-                                &launch,
-                                &back_button,
-                                &fullscreen_button,
-                                &shell_state,
-                                index,
-                            );
-                        }
-                    }),
-                });
             }
         }
 
