@@ -1079,12 +1079,7 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "ShortcutControllerHandle",
         "present_command_palette",
         "command_palette::PaletteAction",
-        "New Tab",
-        "Open a fresh launch deck tab.",
-        "Open Settings",
-        "Open Assets Manager",
-        "About {}",
-        "Open Account / Sync",
+        "command_palette::app_actions(command_palette::AppActionCallbacks",
         "Rename Active Tab",
         "present_windows_tab_rename",
         "Focus Next Alert",
@@ -1110,16 +1105,35 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
     }
 
     assert!(
+        COMMAND_PALETTE_RS.contains("pub struct AppActionCallbacks")
+            && COMMAND_PALETTE_RS.contains("pub fn app_actions(callbacks: AppActionCallbacks)")
+            && source_contains(
+                COMMAND_PALETTE_RS,
+                "title: \"Open Settings\".into(),\n            subtitle: \"Application preferences and shortcuts.\".into(),"
+            )
+            && COMMAND_PALETTE_RS.find("title: \"Open Settings\".into()")
+                < COMMAND_PALETTE_RS.find("title: \"Open Assets Manager\".into()")
+            && COMMAND_PALETTE_RS.find("title: \"Open Assets Manager\".into()")
+                < COMMAND_PALETTE_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
+            && COMMAND_PALETTE_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
+                < COMMAND_PALETTE_RS.find("title: \"New Tab\".into()")
+            && COMMAND_PALETTE_RS.contains("title: \"Open Account / Sync\".into()")
+            && WINDOW_RS
+                .contains("command_palette::app_actions(command_palette::AppActionCallbacks")
+            && WINDOWS_GTK_APP_RS
+                .contains("command_palette::app_actions(command_palette::AppActionCallbacks"),
+        "Linux and Windows GTK command palettes should share one source-of-truth base action ordering and copy"
+    );
+
+    assert!(
         source_contains(
+            WINDOW_RS,
+            "let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks"
+        ) && source_contains(
             WINDOWS_GTK_APP_RS,
-            "title: \"Open Settings\".into(),\n                subtitle: \"Application preferences and shortcuts.\".into(),"
-        ) && WINDOWS_GTK_APP_RS.find("title: \"Open Settings\".into()")
-            < WINDOWS_GTK_APP_RS.find("title: \"Open Assets Manager\".into()")
-            && WINDOWS_GTK_APP_RS.find("title: \"Open Assets Manager\".into()")
-                < WINDOWS_GTK_APP_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
-            && WINDOWS_GTK_APP_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
-                < WINDOWS_GTK_APP_RS.find("title: \"New Tab\".into()"),
-        "Windows GTK command palette should keep Linux's base action copy and Settings/Assets/About/New Tab ordering"
+            "let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks"
+        ),
+        "platform-specific command palettes should only provide callbacks around the shared base action list"
     );
 
     assert!(

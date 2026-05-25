@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
+use crate::product;
 use crate::ui::icons::{self, name as icon_name};
 
 #[derive(Clone)]
@@ -9,6 +10,50 @@ pub struct PaletteAction {
     pub title: String,
     pub subtitle: String,
     pub on_activate: Rc<dyn Fn()>,
+}
+
+#[derive(Clone)]
+pub struct AppActionCallbacks {
+    pub open_settings: Rc<dyn Fn()>,
+    pub open_assets_manager: Rc<dyn Fn()>,
+    pub open_about: Rc<dyn Fn()>,
+    pub new_tab: Rc<dyn Fn()>,
+    pub open_companion: Option<Rc<dyn Fn()>>,
+}
+
+pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
+    let mut actions = vec![
+        PaletteAction {
+            title: "Open Settings".into(),
+            subtitle: "Application preferences and shortcuts.".into(),
+            on_activate: callbacks.open_settings,
+        },
+        PaletteAction {
+            title: "Open Assets Manager".into(),
+            subtitle: "Edit global or workspace scoped assets.".into(),
+            on_activate: callbacks.open_assets_manager,
+        },
+        PaletteAction {
+            title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+            subtitle: "Version, license, source, and open-core model.".into(),
+            on_activate: callbacks.open_about,
+        },
+        PaletteAction {
+            title: "New Tab".into(),
+            subtitle: "Open a fresh launch deck tab.".into(),
+            on_activate: callbacks.new_tab,
+        },
+    ];
+
+    if let Some(open_companion) = callbacks.open_companion {
+        actions.push(PaletteAction {
+            title: "Open Account / Sync".into(),
+            subtitle: "Account, activation, device, and sync controls.".into(),
+            on_activate: open_companion,
+        });
+    }
+
+    actions
 }
 
 pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {

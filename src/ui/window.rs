@@ -17,7 +17,6 @@ use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
-use crate::product;
 use crate::services::session_restore::{
     flatten_window_sessions, session_for_restore_mode, shell_only_session,
 };
@@ -2848,55 +2847,34 @@ fn present_with_initial_workspace(
         Rc::new(move || {
             let snapshot = tabs.borrow().clone();
             let active_id = active_tab_id.get();
-            let mut actions = vec![
-                command_palette::PaletteAction {
-                    title: "Open Settings".into(),
-                    subtitle: "Application preferences and shortcuts.".into(),
-                    on_activate: Rc::new({
-                        let open_settings_dialog = open_settings_dialog.clone();
-                        move || open_settings_dialog()
-                    }),
-                },
-                command_palette::PaletteAction {
-                    title: "Open Assets Manager".into(),
-                    subtitle: "Edit global or workspace scoped assets.".into(),
-                    on_activate: Rc::new({
-                        let open_assets_manager = open_assets_manager.clone();
-                        move || open_assets_manager()
-                    }),
-                },
-                command_palette::PaletteAction {
-                    title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
-                    subtitle: "Version, license, source, and open-core model.".into(),
-                    on_activate: Rc::new({
-                        let open_about_dialog = open_about_dialog.clone();
-                        move || open_about_dialog()
-                    }),
-                },
-                command_palette::PaletteAction {
-                    title: "New Tab".into(),
-                    subtitle: "Open a fresh launch deck tab.".into(),
-                    on_activate: Rc::new({
-                        let add_workspace_tab = add_workspace_tab.clone();
-                        move || {
-                            if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
-                                add_tab();
-                            }
+            let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
+                open_settings: Rc::new({
+                    let open_settings_dialog = open_settings_dialog.clone();
+                    move || open_settings_dialog()
+                }),
+                open_assets_manager: Rc::new({
+                    let open_assets_manager = open_assets_manager.clone();
+                    move || open_assets_manager()
+                }),
+                open_about: Rc::new({
+                    let open_about_dialog = open_about_dialog.clone();
+                    move || open_about_dialog()
+                }),
+                new_tab: Rc::new({
+                    let add_workspace_tab = add_workspace_tab.clone();
+                    move || {
+                        if let Some(add_tab) = add_workspace_tab.borrow().as_ref() {
+                            add_tab();
                         }
-                    }),
-                },
-            ];
-
-            if let Some(open_companion_dialog) = open_companion_dialog.as_ref() {
-                actions.push(command_palette::PaletteAction {
-                    title: "Open Account / Sync".into(),
-                    subtitle: "Account, activation, device, and sync controls.".into(),
-                    on_activate: Rc::new({
+                    }
+                }),
+                open_companion: open_companion_dialog.as_ref().map(|open_companion_dialog| {
+                    Rc::new({
                         let open_companion_dialog = open_companion_dialog.clone();
                         move || open_companion_dialog()
-                    }),
-                });
-            }
+                    }) as Rc<dyn Fn()>
+                }),
+            });
 
             for tab in &snapshot {
                 let tab_id = tab.id;

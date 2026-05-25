@@ -1700,107 +1700,86 @@ mod imp {
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
-        let mut actions = vec![
-            command_palette::PaletteAction {
-                title: "Open Settings".into(),
-                subtitle: "Application preferences and shortcuts.".into(),
-                on_activate: Rc::new({
-                    let window = window.clone();
-                    let overlay = overlay.clone();
-                    let title = title.clone();
-                    let fullscreen_button = fullscreen_button.clone();
-                    let shell_state = shell_state.clone();
-                    let preference_store = preference_store.clone();
-                    let preset_store = preset_store.clone();
-                    let options = options.clone();
-                    let voice_toast_tx = voice_toast_tx.clone();
-                    let workspace_fullscreen_shortcut_controller =
-                        workspace_fullscreen_shortcut_controller.clone();
-                    let workspace_density_shortcut_controller =
-                        workspace_density_shortcut_controller.clone();
-                    let workspace_zoom_in_shortcut_controller =
-                        workspace_zoom_in_shortcut_controller.clone();
-                    let workspace_zoom_out_shortcut_controller =
-                        workspace_zoom_out_shortcut_controller.clone();
-                    let command_palette_shortcut_controller =
-                        command_palette_shortcut_controller.clone();
-                    let open_command_palette_handle = open_command_palette_handle.clone();
-                    move || {
-                        present_settings_dialog(
-                            &window,
-                            &overlay,
-                            &title,
-                            &fullscreen_button,
-                            &shell_state,
-                            preference_store.clone(),
-                            preset_store.clone(),
-                            options.clone(),
-                            voice_toast_tx.clone(),
-                            workspace_fullscreen_shortcut_controller.clone(),
-                            workspace_density_shortcut_controller.clone(),
-                            workspace_zoom_in_shortcut_controller.clone(),
-                            workspace_zoom_out_shortcut_controller.clone(),
-                            command_palette_shortcut_controller.clone(),
-                            open_command_palette_handle.clone(),
-                        );
-                    }
-                }),
-            },
-            command_palette::PaletteAction {
-                title: "Open Assets Manager".into(),
-                subtitle: "Edit global or workspace scoped assets.".into(),
-                on_activate: Rc::new({
-                    let window = window.clone();
-                    let overlay = overlay.clone();
-                    let asset_store = asset_store.clone();
-                    move || present_assets_manager(&window, &overlay, asset_store.clone())
-                }),
-            },
-            command_palette::PaletteAction {
-                title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
-                subtitle: "Version, license, source, and open-core model.".into(),
-                on_activate: Rc::new({
-                    let window = window.clone();
-                    let options = options.clone();
-                    move || about_dialog::present(&window, &options.product)
-                }),
-            },
-            command_palette::PaletteAction {
-                title: "New Tab".into(),
-                subtitle: "Open a fresh launch deck tab.".into(),
-                on_activate: Rc::new({
-                    let window = window.clone();
-                    let overlay = overlay.clone();
-                    let title = title.clone();
-                    let launch = launch.clone();
-                    let back_button = back_button.clone();
-                    let fullscreen_button = fullscreen_button.clone();
-                    let shell_state = shell_state.clone();
-                    move || {
-                        show_launch_deck_tab(
-                            &window,
-                            &overlay,
-                            &title,
-                            &launch,
-                            &back_button,
-                            &fullscreen_button,
-                            &shell_state,
-                        );
-                    }
-                }),
-            },
-        ];
-
-        if let Some(companion) = options.companion.clone() {
-            actions.push(command_palette::PaletteAction {
-                title: "Open Account / Sync".into(),
-                subtitle: "Account, activation, device, and sync controls.".into(),
-                on_activate: Rc::new({
+        let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
+            open_settings: Rc::new({
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let title = title.clone();
+                let fullscreen_button = fullscreen_button.clone();
+                let shell_state = shell_state.clone();
+                let preference_store = preference_store.clone();
+                let preset_store = preset_store.clone();
+                let options = options.clone();
+                let voice_toast_tx = voice_toast_tx.clone();
+                let workspace_fullscreen_shortcut_controller =
+                    workspace_fullscreen_shortcut_controller.clone();
+                let workspace_density_shortcut_controller =
+                    workspace_density_shortcut_controller.clone();
+                let workspace_zoom_in_shortcut_controller =
+                    workspace_zoom_in_shortcut_controller.clone();
+                let workspace_zoom_out_shortcut_controller =
+                    workspace_zoom_out_shortcut_controller.clone();
+                let command_palette_shortcut_controller =
+                    command_palette_shortcut_controller.clone();
+                let open_command_palette_handle = open_command_palette_handle.clone();
+                move || {
+                    present_settings_dialog(
+                        &window,
+                        &overlay,
+                        &title,
+                        &fullscreen_button,
+                        &shell_state,
+                        preference_store.clone(),
+                        preset_store.clone(),
+                        options.clone(),
+                        voice_toast_tx.clone(),
+                        workspace_fullscreen_shortcut_controller.clone(),
+                        workspace_density_shortcut_controller.clone(),
+                        workspace_zoom_in_shortcut_controller.clone(),
+                        workspace_zoom_out_shortcut_controller.clone(),
+                        command_palette_shortcut_controller.clone(),
+                        open_command_palette_handle.clone(),
+                    );
+                }
+            }),
+            open_assets_manager: Rc::new({
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let asset_store = asset_store.clone();
+                move || present_assets_manager(&window, &overlay, asset_store.clone())
+            }),
+            open_about: Rc::new({
+                let window = window.clone();
+                let options = options.clone();
+                move || about_dialog::present(&window, &options.product)
+            }),
+            new_tab: Rc::new({
+                let window = window.clone();
+                let overlay = overlay.clone();
+                let title = title.clone();
+                let launch = launch.clone();
+                let back_button = back_button.clone();
+                let fullscreen_button = fullscreen_button.clone();
+                let shell_state = shell_state.clone();
+                move || {
+                    show_launch_deck_tab(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                    );
+                }
+            }),
+            open_companion: options.companion.clone().map(|companion| {
+                Rc::new({
                     let window = window.clone();
                     move || companion_dialog::present(&window, companion.clone())
-                }),
-            });
-        }
+                }) as Rc<dyn Fn()>
+            }),
+        });
 
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
             let session = preview.snapshot();
