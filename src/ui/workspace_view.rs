@@ -21,6 +21,7 @@ use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::name as icon_name;
+use crate::ui::runbook_controls;
 use crate::ui::runbook_dialog;
 use crate::ui::workspace_alerts::{self, AlertRowAction, WorkspaceAlertListInput};
 use crate::ui::workspace_chrome::{
@@ -498,25 +499,12 @@ impl WorkspaceRuntime {
             .map(|value| value.to_string())
             .unwrap_or_default();
 
-        self.inner.runbook_selector.remove_all();
-        self.inner.runbook_selector.append(Some(""), "Runbook");
-        for runbook in &assets.runbooks {
-            self.inner
-                .runbook_selector
-                .append(Some(&runbook.id), &runbook.name);
-        }
-
-        let keep_selection = !selected_id.is_empty()
-            && assets
-                .runbooks
-                .iter()
-                .any(|runbook| runbook.id == selected_id);
-        self.inner
-            .runbook_selector
-            .set_active_id(Some(if keep_selection { &selected_id } else { "" }));
-        self.inner
-            .runbook_button
-            .set_sensitive(!assets.runbooks.is_empty());
+        runbook_controls::sync_runbook_selector(
+            &self.inner.runbook_selector,
+            &self.inner.runbook_button,
+            &assets.runbooks,
+            Some(&selected_id),
+        );
     }
 
     fn web_tile_settings(&self, tile_id: &str) -> Option<(String, Option<u32>)> {

@@ -19,6 +19,7 @@ use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::appearance::resolved_theme_uses_dark_palette;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
+use crate::ui::runbook_controls;
 use crate::ui::runbook_dialog;
 use crate::ui::snippet_popover::{self, SnippetPopoverInput};
 use crate::ui::tile_chrome::{
@@ -925,17 +926,12 @@ fn bind_preview_runbook_controls(
     render_context: &PreviewRenderContext,
     alert_store: &AlertStore,
 ) {
-    summary.runbook_selector.remove_all();
-    summary.runbook_selector.append(Some(""), "Runbook");
-    for runbook in &render_context.assets.runbooks {
-        summary
-            .runbook_selector
-            .append(Some(&runbook.id), &runbook.name);
-    }
-    summary.runbook_selector.set_active_id(Some(""));
-    summary
-        .runbook_button
-        .set_sensitive(!render_context.assets.runbooks.is_empty());
+    runbook_controls::sync_runbook_selector(
+        &summary.runbook_selector,
+        &summary.runbook_button,
+        &render_context.assets.runbooks,
+        None,
+    );
 
     let session = render_context.session.clone();
     let active_index = render_context.active_index.clone();

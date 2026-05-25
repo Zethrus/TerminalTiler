@@ -21,6 +21,7 @@ const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
+const RUNBOOK_CONTROLS_RS: &str = include_str!("../src/ui/runbook_controls.rs");
 const RUNBOOK_DIALOG_RS: &str = include_str!("../src/ui/runbook_dialog.rs");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const SNIPPET_POPOVER_RS: &str = include_str!("../src/ui/snippet_popover.rs");
@@ -1210,7 +1211,16 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
     );
 
     assert!(
-        UI_MOD_RS.contains("pub(crate) mod runbook_dialog;")
+        UI_MOD_RS.contains("pub(crate) mod runbook_controls;")
+            && UI_MOD_RS.contains("pub(crate) mod runbook_dialog;")
+            && RUNBOOK_CONTROLS_RS.contains("pub(crate) fn sync_runbook_selector")
+            && RUNBOOK_CONTROLS_RS.contains("selector.append(Some(\"\"), \"Runbook\")")
+            && RUNBOOK_CONTROLS_RS.contains("selector.append(Some(&runbook.id), &runbook.name)")
+            && RUNBOOK_CONTROLS_RS.contains("run_button.set_sensitive(!runbooks.is_empty())")
+            && WORKSPACE_VIEW_RS.contains("runbook_controls::sync_runbook_selector(")
+            && WORKSPACE_PREVIEW_RS.contains("runbook_controls::sync_runbook_selector(")
+            && !WORKSPACE_VIEW_RS.contains("runbook_selector.append(Some(\"\"), \"Runbook\")")
+            && !WORKSPACE_PREVIEW_RS.contains("runbook_selector.append(Some(\"\"), \"Runbook\")")
             && RUNBOOK_DIALOG_RS.contains("pub(crate) fn present(")
             && RUNBOOK_DIALOG_RS.contains("RunbookConfirmPolicy::Never")
             && RUNBOOK_DIALOG_RS.contains("execute(TemplateVariableValues::new())")
@@ -1276,6 +1286,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "connect_preview_tile_close",
         "prune_runtime_surfaces",
         "bind_preview_runbook_controls",
+        "runbook_controls::sync_runbook_selector",
         "present_preview_runbook_dialog",
         "execute_preview_runbook",
         "resolve_runbook(runbook, &variables, &tile_specs)",
