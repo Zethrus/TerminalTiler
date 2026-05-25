@@ -159,6 +159,11 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS
                 .contains("let fullscreen_button = titlebar_actions.fullscreen_button")
             && WINDOWS_GTK_APP_RS.contains("fullscreen_button.connect_clicked")
+            && WINDOWS_GTK_APP_RS.contains("workspace_fullscreen_shortcut_controller")
+            && WINDOWS_GTK_APP_RS.contains("install_workspace_fullscreen_shortcut")
+            && WINDOWS_GTK_APP_RS.contains("workspace_fullscreen")
+            && WINDOWS_GTK_APP_RS.contains("save_workspace_fullscreen_shortcut(&shortcut)")
+            && WINDOWS_GTK_APP_RS.contains("Fullscreen shortcut set to {shortcut}")
             && WINDOWS_GTK_APP_RS.contains("window.connect_fullscreened_notify")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_fullscreen_chrome(window")
             && WINDOWS_GTK_APP_RS.contains("fullscreen_button, true")

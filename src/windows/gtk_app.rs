@@ -173,6 +173,8 @@ mod imp {
 
         let shell_state = WindowsGtkShellState::default();
         shell_state.launch_deck_active.set(true);
+        let workspace_fullscreen_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
         let command_palette_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
         let open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
@@ -325,6 +327,7 @@ mod imp {
                         asset_store.clone(),
                         options.clone(),
                         voice_toast_tx.clone(),
+                        workspace_fullscreen_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
                     );
@@ -337,13 +340,24 @@ mod imp {
                 &preferences.command_palette_shortcut,
                 open_command_palette.clone(),
             );
+            install_workspace_fullscreen_shortcut(
+                &window,
+                &workspace_fullscreen_shortcut_controller,
+                &shell_state,
+                &preferences.workspace_fullscreen_shortcut,
+            );
             {
                 let window = window.clone();
                 let overlay = overlay.clone();
+                let title = title.clone();
+                let fullscreen_button = fullscreen_button.clone();
+                let shell_state = shell_state.clone();
                 let preference_store = preference_store.clone();
                 let preset_store = preset_store.clone();
                 let options = options.clone();
                 let voice_toast_tx = voice_toast_tx.clone();
+                let workspace_fullscreen_shortcut_controller =
+                    workspace_fullscreen_shortcut_controller.clone();
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
@@ -351,10 +365,14 @@ mod imp {
                     present_settings_dialog(
                         &window,
                         &overlay,
+                        &title,
+                        &fullscreen_button,
+                        &shell_state,
                         preference_store.clone(),
                         preset_store.clone(),
                         options.clone(),
                         voice_toast_tx.clone(),
+                        workspace_fullscreen_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
                     );
@@ -433,10 +451,14 @@ mod imp {
     fn present_settings_dialog(
         window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
         preference_store: PreferenceStore,
         preset_store: PresetStore,
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
+        workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
@@ -503,7 +525,31 @@ mod imp {
                 }),
                 on_fullscreen_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |shortcut| preference_store.save_workspace_fullscreen_shortcut(&shortcut)
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let title_root = title.root.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
+                    let controller_handle = workspace_fullscreen_shortcut_controller.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_fullscreen_shortcut(&shortcut);
+                        install_workspace_fullscreen_shortcut(
+                            &window,
+                            &controller_handle,
+                            &shell_state,
+                            &shortcut,
+                        );
+                        sync_windows_fullscreen_chrome(
+                            &window,
+                            title_root.upcast_ref(),
+                            &fullscreen_button,
+                            shell_state.preview.borrow().is_some()
+                                && !shell_state.launch_deck_active.get(),
+                        );
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Fullscreen shortcut set to {shortcut}"
+                        )));
+                    }
                 }),
                 on_density_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
@@ -594,7 +640,12 @@ mod imp {
                 on_reset_defaults: Rc::new({
                     let window = window.clone();
                     let overlay = overlay.clone();
+                    let title_root = title.root.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
                     let preference_store = preference_store.clone();
+                    let workspace_fullscreen_shortcut_controller =
+                        workspace_fullscreen_shortcut_controller.clone();
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
@@ -603,6 +654,19 @@ mod imp {
                         preference_store.save(&defaults);
                         apply_theme_mode(&window, defaults.default_theme);
                         apply_window_density(&window, defaults.default_density);
+                        install_workspace_fullscreen_shortcut(
+                            &window,
+                            &workspace_fullscreen_shortcut_controller,
+                            &shell_state,
+                            &defaults.workspace_fullscreen_shortcut,
+                        );
+                        sync_windows_fullscreen_chrome(
+                            &window,
+                            title_root.upcast_ref(),
+                            &fullscreen_button,
+                            shell_state.preview.borrow().is_some()
+                                && !shell_state.launch_deck_active.get(),
+                        );
                         if let Some(open_command_palette) =
                             open_command_palette_handle.borrow().as_ref().cloned()
                         {
@@ -1295,6 +1359,7 @@ mod imp {
         asset_store: AssetStore,
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
+        workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
@@ -1333,6 +1398,8 @@ mod imp {
                     let preset_store = preset_store.clone();
                     let options = options.clone();
                     let voice_toast_tx = voice_toast_tx.clone();
+                    let workspace_fullscreen_shortcut_controller =
+                        workspace_fullscreen_shortcut_controller.clone();
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
@@ -1344,6 +1411,7 @@ mod imp {
                             preset_store.clone(),
                             options.clone(),
                             voice_toast_tx.clone(),
+                            workspace_fullscreen_shortcut_controller.clone(),
                             command_palette_shortcut_controller.clone(),
                             open_command_palette_handle.clone(),
                         );
@@ -1433,6 +1501,35 @@ mod imp {
             &command_palette_shortcut_accelerators(shortcut),
             move || {
                 open_command_palette();
+                glib::Propagation::Stop
+            },
+        );
+    }
+
+    fn install_workspace_fullscreen_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shell_state: &WindowsGtkShellState,
+        shortcut: &str,
+    ) {
+        let window_for_shortcut = window.clone();
+        let shell_state_for_shortcut = shell_state.clone();
+        install_shortcut_controller(
+            window,
+            controller_handle,
+            "workspace_fullscreen",
+            &[
+                shortcut.trim().to_string(),
+                AppPreferences::default().workspace_fullscreen_shortcut,
+            ],
+            move || {
+                if shell_state_for_shortcut.preview.borrow().is_none()
+                    || shell_state_for_shortcut.launch_deck_active.get()
+                {
+                    return glib::Propagation::Proceed;
+                }
+
+                window_for_shortcut.set_fullscreened(!window_for_shortcut.is_fullscreen());
                 glib::Propagation::Stop
             },
         );
