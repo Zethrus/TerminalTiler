@@ -20,6 +20,7 @@ use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::appearance::resolved_theme_uses_dark_palette;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
+use crate::ui::snippet_popover::{self, SnippetPopoverInput};
 use crate::ui::tile_chrome::{
     TERMINAL_HEADER_BADGE_MAX_CHARS, TileHeaderInput, WEB_HEADER_BADGE_MAX_CHARS,
     append_terminal_tile_action_chrome, append_web_tile_action_chrome,
@@ -1236,44 +1237,23 @@ fn bind_preview_terminal_snippets(
     tile: &TileSpec,
     render_context: &PreviewRenderContext,
 ) {
-    let popover = gtk::Popover::new();
-    popover.add_css_class("snippet-popover");
-    popover.set_autohide(true);
-    popover.set_has_arrow(true);
-    popover.set_position(gtk::PositionType::Bottom);
-    popover.set_parent(snippet_button);
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(8)
-        .margin_end(8)
-        .build();
-    popover.set_child(Some(&content));
-
     let snippet_context = PreviewSnippetContext {
         tile_id: tile.id.clone(),
         session: render_context.session.clone(),
         active_index: render_context.active_index.clone(),
         runtime_surfaces: render_context.runtime_surfaces.clone(),
-        snippets: Rc::new(render_context.assets.snippets.clone()),
     };
-
-    {
-        let popover = popover.clone();
-        let content = content.clone();
-        let snippet_context = snippet_context.clone();
-        snippet_button.connect_clicked(move |_| {
-            refresh_preview_snippet_list(&content, &popover, snippet_context.clone());
-            if popover.is_visible() {
-                popover.popdown();
-            } else {
-                popover.popup();
-            }
-        });
-    }
+    let snippets = render_context.assets.snippets.clone();
+    snippet_popover::install(
+        snippet_button,
+        SnippetPopoverInput {
+            snippets_provider: Rc::new(move || snippets.clone()),
+            before_popup: None,
+            execute: Rc::new(move |snippet, variables, _| {
+                execute_preview_snippet(snippet, variables, &snippet_context)
+            }),
+        },
+    );
 }
 
 #[derive(Clone)]
@@ -1282,214 +1262,6 @@ struct PreviewSnippetContext {
     session: Rc<RefCell<SavedSession>>,
     active_index: Rc<Cell<usize>>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
-    snippets: Rc<Vec<CliSnippet>>,
-}
-
-fn refresh_preview_snippet_list(
-    content: &gtk::Box,
-    popover: &gtk::Popover,
-    context: PreviewSnippetContext,
-) {
-    clear_box(content);
-    content.append(
-        &gtk::Label::builder()
-            .label("CLI Snippets")
-            .halign(gtk::Align::Start)
-            .css_classes(["tile-header-popover-label"])
-            .build(),
-    );
-
-    if context.snippets.is_empty() {
-        content.append(
-            &gtk::Label::builder()
-                .label("No snippets configured yet. Add them in Assets.")
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .css_classes(["snippet-empty-state"])
-                .build(),
-        );
-        return;
-    }
-
-    for snippet in context.snippets.iter().cloned() {
-        let button = build_preview_snippet_button(&snippet);
-        let form_content = content.clone();
-        let popover = popover.clone();
-        let context = context.clone();
-        button.connect_clicked(move |_| {
-            if snippet.variables.is_empty() {
-                if execute_preview_snippet(&snippet, TemplateVariableValues::new(), &context)
-                    .is_ok()
-                {
-                    popover.popdown();
-                }
-            } else {
-                show_preview_snippet_variable_form(
-                    &form_content,
-                    &popover,
-                    snippet.clone(),
-                    context.clone(),
-                );
-            }
-        });
-        content.append(&button);
-    }
-}
-
-fn show_preview_snippet_variable_form(
-    content: &gtk::Box,
-    popover: &gtk::Popover,
-    snippet: CliSnippet,
-    context: PreviewSnippetContext,
-) {
-    clear_box(content);
-
-    content.append(
-        &gtk::Label::builder()
-            .label(&snippet.name)
-            .halign(gtk::Align::Start)
-            .css_classes(["card-title"])
-            .build(),
-    );
-    if !snippet.description.trim().is_empty() {
-        content.append(
-            &gtk::Label::builder()
-                .label(&snippet.description)
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .css_classes(["field-hint"])
-                .build(),
-        );
-    }
-
-    let form = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .css_classes(["snippet-variable-form"])
-        .build();
-    let mut fields = Vec::new();
-    for variable in &snippet.variables {
-        let row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(4)
-            .build();
-        row.append(
-            &gtk::Label::builder()
-                .label(&variable.label)
-                .halign(gtk::Align::Start)
-                .css_classes(["tile-header-popover-label"])
-                .build(),
-        );
-        if !variable.description.trim().is_empty() {
-            row.append(
-                &gtk::Label::builder()
-                    .label(&variable.description)
-                    .halign(gtk::Align::Start)
-                    .wrap(true)
-                    .css_classes(["field-hint"])
-                    .build(),
-            );
-        }
-        let entry = gtk::Entry::builder()
-            .hexpand(true)
-            .text(&variable.default_value)
-            .placeholder_text(&variable.id)
-            .build();
-        row.append(&entry);
-        form.append(&row);
-        fields.push((variable.id.clone(), entry));
-    }
-    content.append(&form);
-
-    let feedback = gtk::Label::builder()
-        .halign(gtk::Align::Start)
-        .wrap(true)
-        .visible(false)
-        .css_classes(["snippet-error"])
-        .build();
-    content.append(&feedback);
-
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
-        .build();
-    let back_button = icons::labeled_button("Back", icon_name::BACK, &["flat", "surface-button"]);
-    back_button.set_focus_on_click(false);
-    {
-        let content = content.clone();
-        let popover = popover.clone();
-        let context = context.clone();
-        back_button.connect_clicked(move |_| {
-            refresh_preview_snippet_list(&content, &popover, context.clone());
-        });
-    }
-    actions.append(&back_button);
-
-    let run_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
-    run_button.set_focus_on_click(false);
-    {
-        let popover = popover.clone();
-        run_button.connect_clicked(move |_| {
-            let variables = fields
-                .iter()
-                .map(|(id, entry)| (id.clone(), entry.text().to_string()))
-                .collect::<TemplateVariableValues>();
-            match execute_preview_snippet(&snippet, variables, &context) {
-                Ok(()) => popover.popdown(),
-                Err(error) => {
-                    feedback.set_text(&error);
-                    feedback.set_visible(true);
-                }
-            }
-        });
-    }
-    actions.append(&run_button);
-    content.append(&actions);
-}
-
-fn build_preview_snippet_button(snippet: &CliSnippet) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .focus_on_click(false)
-        .css_classes(["flat", "snippet-list-item"])
-        .build();
-    let shell = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
-        .hexpand(true)
-        .halign(gtk::Align::Fill)
-        .build();
-    shell.append(
-        &gtk::Label::builder()
-            .label(&snippet.name)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .css_classes(["snippet-name"])
-            .build(),
-    );
-
-    let mut summary_parts = Vec::new();
-    if !snippet.description.trim().is_empty() {
-        summary_parts.push(snippet.description.trim().to_string());
-    }
-    if !snippet.tags.is_empty() {
-        summary_parts.push(format!("#{}", snippet.tags.join(" #")));
-    }
-    if !snippet.variables.is_empty() {
-        summary_parts.push(format!("{} args", snippet.variables.len()));
-    }
-    if !summary_parts.is_empty() {
-        shell.append(
-            &gtk::Label::builder()
-                .label(summary_parts.join("  •  "))
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .css_classes(["snippet-description"])
-                .build(),
-        );
-    }
-
-    button.set_child(Some(&shell));
-    button
 }
 
 fn execute_preview_snippet(
@@ -1508,12 +1280,6 @@ fn execute_preview_snippet(
         Ok(())
     } else {
         Err("This pane is not ready to receive input.".into())
-    }
-}
-
-fn clear_box(container: &gtk::Box) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
     }
 }
 

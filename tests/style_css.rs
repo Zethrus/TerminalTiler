@@ -22,6 +22,7 @@ const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
+const SNIPPET_POPOVER_RS: &str = include_str!("../src/ui/snippet_popover.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
 const TERMINAL_CONTEXT_MENU_RS: &str = include_str!("../src/ui/terminal_context_menu.rs");
 const TERMINAL_RECOVERY_POPOVER_RS: &str = include_str!("../src/ui/terminal_recovery_popover.rs");
@@ -568,6 +569,7 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
             source.contains("icons::labeled_button")
                 || source.contains("icons::icon_button")
                 || source.contains("build_header_icon_button(icon_name::")
+                || source.contains("build_terminal_tile_action_chrome")
                 || source.contains("bind_web_tile_settings_popover"),
             "{surface} should use shared symbolic icon helpers for visible actions"
         );
@@ -1256,10 +1258,11 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "alert_store.mark_all_read()",
         "alert_store.subscribe(refresh.clone())",
         "bind_preview_terminal_snippets",
-        "refresh_preview_snippet_list",
-        "show_preview_snippet_variable_form",
+        "snippet_popover::install(",
+        "SnippetPopoverInput",
         "execute_preview_snippet",
         "resolve_snippet(snippet, &variables)",
+        "pub(crate) mod snippet_popover",
         "active_tab_tile_specs",
         "format!(\"{command}\\n\")",
         "pub(crate) mod context_menu;",
@@ -1269,6 +1272,18 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
         );
     }
+    assert!(
+        SNIPPET_POPOVER_RS.contains(".label(\"CLI Snippets\")")
+            && SNIPPET_POPOVER_RS.contains("No snippets configured yet. Add them in Assets.")
+            && SNIPPET_POPOVER_RS.contains("snippet-variable-form")
+            && SNIPPET_POPOVER_RS.contains("icons::labeled_button(\"Back\"")
+            && SNIPPET_POPOVER_RS.contains("icons::labeled_button(\"Run\"")
+            && TILE_VIEW_RS.contains("snippet_popover::install(")
+            && WORKSPACE_PREVIEW_RS.contains("snippet_popover::install(")
+            && !TILE_VIEW_RS.contains("fn build_snippet_popover")
+            && !WORKSPACE_PREVIEW_RS.contains("fn refresh_preview_snippet_list"),
+        "Linux and Windows GTK terminal snippet popovers should share one visual/control implementation"
+    );
 
     assert!(
         WINDOWS_GTK_RUNTIME_RS.contains("TileRuntimeSurface")
