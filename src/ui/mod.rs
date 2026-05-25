@@ -28,7 +28,10 @@ pub mod command_palette;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod companion_dialog;
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod context_menu;
 #[cfg(any(
     target_os = "linux",

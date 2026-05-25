@@ -18,6 +18,7 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::SavedTab;
+    use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::workspace_preview::TileRuntimeSurface;
@@ -25,6 +26,8 @@ mod imp {
 
     const MIN_TERMINAL_FONT_POINTS: i32 = 7;
     const MAX_TERMINAL_FONT_POINTS: i32 = 20;
+    const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
+    const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
 
     pub(crate) fn build_tile_runtime_surface(
         tile: &TileSpec,
@@ -139,6 +142,8 @@ mod imp {
             let stdin_tx = stdin_tx.clone();
             input.connect_activate(move |entry| send_entry_text(entry, &stdin_tx));
         }
+        install_terminal_output_context_menu(&terminal_output, &input, &stdin_tx);
+        install_terminal_output_shortcuts(&terminal_output, &input, &stdin_tx);
 
         let command_sender = Rc::new({
             let stdin_tx = stdin_tx.clone();
@@ -318,6 +323,188 @@ mod imp {
     fn append_buffer_text(buffer: &gtk::TextBuffer, text: &str) {
         let mut end = buffer.end_iter();
         buffer.insert(&mut end, text);
+    }
+
+    fn install_terminal_output_context_menu(
+        output: &gtk::TextView,
+        input: &gtk::Entry,
+        stdin_tx: &mpsc::Sender<String>,
+    ) {
+        let popover = context_menu::popover(output);
+        let menu = context_menu::menu_box();
+
+        let copy_button = context_menu::action_button("Copy", Some("Ctrl+Shift+C"));
+        copy_button.set_sensitive(output.buffer().has_selection());
+        {
+            let output = output.clone();
+            let popover = popover.clone();
+            copy_button.connect_clicked(move |_| {
+                copy_terminal_output_selection(&output);
+                popover.popdown();
+            });
+        }
+        {
+            let copy_button = copy_button.clone();
+            output.buffer().connect_has_selection_notify(move |buffer| {
+                copy_button.set_sensitive(buffer.has_selection());
+            });
+        }
+        menu.append(&copy_button);
+
+        let paste_button = context_menu::action_button("Paste", Some("Ctrl+Shift+V"));
+        {
+            let output = output.clone();
+            let stdin_tx = stdin_tx.clone();
+            let popover = popover.clone();
+            paste_button.connect_clicked(move |_| {
+                paste_clipboard_into_terminal_runtime(&output, &stdin_tx);
+                popover.popdown();
+            });
+        }
+        menu.append(&paste_button);
+
+        let focus_input_button = context_menu::action_button("Focus Command Input", None);
+        {
+            let input = input.clone();
+            let popover = popover.clone();
+            focus_input_button.connect_clicked(move |_| {
+                input.grab_focus();
+                popover.popdown();
+            });
+        }
+        menu.append(&focus_input_button);
+
+        popover.set_child(Some(&menu));
+
+        let right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let output = output.clone();
+            let popover = popover.clone();
+            let copy_button = copy_button.clone();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                output.grab_focus();
+                copy_button.set_sensitive(output.buffer().has_selection());
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        output.add_controller(right_click);
+    }
+
+    fn install_terminal_output_shortcuts(
+        output: &gtk::TextView,
+        input: &gtk::Entry,
+        stdin_tx: &mpsc::Sender<String>,
+    ) {
+        let shortcut_controller = gtk::ShortcutController::new();
+        shortcut_controller.set_scope(gtk::ShortcutScope::Local);
+
+        let output_for_copy = output.clone();
+        let copy_action = gtk::CallbackAction::new(move |_, _| {
+            if copy_terminal_output_selection(&output_for_copy) {
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        add_terminal_output_shortcut(
+            &shortcut_controller,
+            DEFAULT_TERMINAL_COPY_SHORTCUT,
+            "copy",
+            &copy_action,
+        );
+
+        let output_for_paste = output.clone();
+        let stdin_tx_for_paste = stdin_tx.clone();
+        let paste_action = gtk::CallbackAction::new(move |_, _| {
+            paste_clipboard_into_terminal_runtime(&output_for_paste, &stdin_tx_for_paste);
+            gtk::glib::Propagation::Stop
+        });
+        add_terminal_output_shortcut(
+            &shortcut_controller,
+            DEFAULT_TERMINAL_PASTE_SHORTCUT,
+            "paste",
+            &paste_action,
+        );
+
+        output.add_controller(shortcut_controller);
+
+        let input_shortcut_controller = gtk::ShortcutController::new();
+        input_shortcut_controller.set_scope(gtk::ShortcutScope::Local);
+        let output_for_copy = output.clone();
+        let copy_action = gtk::CallbackAction::new(move |_, _| {
+            if copy_terminal_output_selection(&output_for_copy) {
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        add_terminal_output_shortcut(
+            &input_shortcut_controller,
+            DEFAULT_TERMINAL_COPY_SHORTCUT,
+            "copy",
+            &copy_action,
+        );
+        input.add_controller(input_shortcut_controller);
+    }
+
+    fn copy_terminal_output_selection(output: &gtk::TextView) -> bool {
+        let buffer = output.buffer();
+        if !buffer.has_selection() {
+            return false;
+        }
+
+        output.grab_focus();
+        buffer.copy_clipboard(&output.clipboard());
+        true
+    }
+
+    fn paste_clipboard_into_terminal_runtime(
+        output: &gtk::TextView,
+        stdin_tx: &mpsc::Sender<String>,
+    ) {
+        output.grab_focus();
+        let stdin_tx = stdin_tx.clone();
+        output
+            .clipboard()
+            .read_text_async(None::<&gio::Cancellable>, move |result| match result {
+                Ok(Some(text)) => {
+                    let text = text.to_string();
+                    if !text.is_empty() {
+                        let payload = if text.ends_with('\n') {
+                            text
+                        } else {
+                            format!("{text}\r\n")
+                        };
+                        let _ = stdin_tx.send(payload);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    logging::error(format!(
+                        "Windows GTK terminal runtime clipboard paste failed: {error}"
+                    ));
+                }
+            });
+    }
+
+    fn add_terminal_output_shortcut(
+        shortcut_controller: &gtk::ShortcutController,
+        accelerator: &str,
+        shortcut_name: &str,
+        action: &gtk::CallbackAction,
+    ) {
+        let Some(trigger) = gtk::ShortcutTrigger::parse_string(accelerator) else {
+            logging::error(format!(
+                "failed to parse Windows GTK terminal {shortcut_name} shortcut '{accelerator}'"
+            ));
+            return;
+        };
+
+        shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action.clone())));
     }
 
     fn build_web_runtime_surface(tile: &TileSpec) -> TileRuntimeSurface {

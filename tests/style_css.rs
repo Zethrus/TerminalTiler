@@ -1124,15 +1124,25 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "resolve_snippet(snippet, &variables)",
         "active_tab_tile_specs",
         "format!(\"{command}\\n\")",
+        "pub(crate) mod context_menu;",
     ] {
         assert!(
-            WORKSPACE_PREVIEW_RS.contains(token),
+            WORKSPACE_PREVIEW_RS.contains(token) || UI_MOD_RS.contains(token),
             "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
         );
     }
 
     assert!(
         WINDOWS_GTK_RUNTIME_RS.contains("TileRuntimeSurface")
+            && WINDOWS_GTK_RUNTIME_RS.contains("install_terminal_output_context_menu")
+            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::popover(output)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Copy\"")
+            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Paste\"")
+            && WINDOWS_GTK_RUNTIME_RS.contains("copy_terminal_output_selection")
+            && WINDOWS_GTK_RUNTIME_RS.contains("paste_clipboard_into_terminal_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("read_text_async(None::<&gio::Cancellable>")
+            && WINDOWS_GTK_RUNTIME_RS.contains("DEFAULT_TERMINAL_COPY_SHORTCUT")
+            && WINDOWS_GTK_RUNTIME_RS.contains("DEFAULT_TERMINAL_PASTE_SHORTCUT")
             && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
             && WINDOWS_GTK_RUNTIME_RS.contains("stdin_tx.send(command.to_string())")
             && !WINDOWS_GTK_RUNTIME_RS.contains("stdin.write_all(b\"\\r\\n\")")
