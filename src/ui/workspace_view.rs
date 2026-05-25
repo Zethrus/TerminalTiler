@@ -20,8 +20,9 @@ use crate::services::layout_editor::{
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
-use crate::ui::icons::{self, name as icon_name};
+use crate::ui::icons::name as icon_name;
 use crate::ui::runbook_dialog;
+use crate::ui::workspace_alerts::{self, AlertRowAction, WorkspaceAlertListInput};
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
@@ -1141,96 +1142,52 @@ fn bind_alert_ui(
     alert_button: &gtk::Button,
     alert_list: &gtk::Box,
 ) {
-    let alert_button = alert_button.clone();
-    let alert_list = alert_list.clone();
     let runtime = runtime.clone();
-    let alert_store_for_refresh = alert_store.clone();
-    let refresh = Rc::new(move || {
-        icons::set_button_icon_label(
-            &alert_button,
-            &format!("Alerts ({})", alert_store_for_refresh.unread_count()),
-            icon_name::ALERTS,
-        );
-        while let Some(child) = alert_list.first_child() {
-            alert_list.remove(&child);
-        }
+    workspace_alerts::bind_alert_list(WorkspaceAlertListInput {
+        alert_store: alert_store.clone(),
+        alert_button: alert_button.clone(),
+        alert_list: alert_list.clone(),
+        action_provider: Some(Rc::new(move |alert, alert_store| {
+            let Some(pane_id) = alert.pane_id.clone() else {
+                return Vec::new();
+            };
 
-        for alert in alert_store_for_refresh.snapshot().into_iter().rev() {
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(6)
-                .css_classes(["tile-editor-row"])
-                .build();
-            let title = gtk::Label::builder()
-                .label(&alert.title)
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .css_classes(["card-title"])
-                .build();
-            row.append(&title);
-            let detail = gtk::Label::builder()
-                .label(if alert.detail.trim().is_empty() {
-                    "No detail available."
-                } else {
-                    alert.detail.as_str()
-                })
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .css_classes(["field-hint"])
-                .build();
-            row.append(&detail);
-            let actions = gtk::Box::builder()
-                .orientation(gtk::Orientation::Horizontal)
-                .spacing(6)
-                .build();
-            if let Some(pane_id) = alert.pane_id.clone() {
-                let jump_button =
-                    icons::labeled_button("Jump", icon_name::OPEN, &["flat", "surface-button"]);
-                let runtime_for_jump = runtime.clone();
-                let alert_store = alert_store_for_refresh.clone();
-                let alert_id = alert.id;
-                let pane_id_for_jump = pane_id.clone();
-                jump_button.connect_clicked(move |_| {
-                    runtime_for_jump.focus_tile(&pane_id_for_jump);
-                    alert_store.mark_read(alert_id);
-                });
-                actions.append(&jump_button);
-
-                if alert.allows_reconnect {
-                    let reconnect_button = icons::labeled_button(
-                        "Reconnect",
-                        icon_name::RECOVER,
-                        &["flat", "surface-button"],
-                    );
-                    let runtime_for_reconnect = runtime.clone();
-                    let alert_store = alert_store_for_refresh.clone();
+            let mut actions = Vec::new();
+            actions.push(AlertRowAction {
+                label: "Jump",
+                icon_name: icon_name::OPEN,
+                on_activate: Rc::new({
+                    let runtime = runtime.clone();
+                    let alert_store = alert_store.clone();
+                    let pane_id = pane_id.clone();
                     let alert_id = alert.id;
-                    let pane_id_for_reconnect = pane_id.clone();
-                    reconnect_button.connect_clicked(move |_| {
-                        let _ = runtime_for_reconnect.reconnect_tile(&pane_id_for_reconnect);
+                    move || {
+                        runtime.focus_tile(&pane_id);
                         alert_store.mark_read(alert_id);
-                    });
-                    actions.append(&reconnect_button);
-                }
-            }
-            let mark_read_button = icons::labeled_button(
-                if alert.unread { "Mark Read" } else { "Read" },
-                icon_name::APPLY,
-                &["flat", "surface-button"],
-            );
-            mark_read_button.set_sensitive(alert.unread);
-            let alert_store = alert_store_for_refresh.clone();
-            let alert_id = alert.id;
-            mark_read_button.connect_clicked(move |_| {
-                alert_store.mark_read(alert_id);
+                    }
+                }),
             });
-            actions.append(&mark_read_button);
-            row.append(&actions);
-            alert_list.append(&row);
-        }
+
+            if alert.allows_reconnect {
+                actions.push(AlertRowAction {
+                    label: "Reconnect",
+                    icon_name: icon_name::RECOVER,
+                    on_activate: Rc::new({
+                        let runtime = runtime.clone();
+                        let alert_store = alert_store.clone();
+                        let pane_id = pane_id.clone();
+                        let alert_id = alert.id;
+                        move || {
+                            let _ = runtime.reconnect_tile(&pane_id);
+                            alert_store.mark_read(alert_id);
+                        }
+                    }),
+                });
+            }
+
+            actions
+        })),
     });
-    alert_store.subscribe(refresh.clone());
-    refresh();
 }
 
 fn install_tile_alert_hooks(

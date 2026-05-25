@@ -30,6 +30,7 @@ use crate::ui::tile_chrome::{
 };
 use crate::ui::tile_drag::TileDragPayload;
 use crate::ui::title_chrome::{TitleTabInput, build_interactive_title_tab};
+use crate::ui::workspace_alerts::{self, WorkspaceAlertListInput};
 use crate::ui::workspace_chrome::{
     WorkspaceAlertSidebarChrome, WorkspaceSummaryChrome, WorkspaceSummaryInput,
     build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
@@ -1067,62 +1068,12 @@ fn bind_preview_alert_controls(
             });
     }
 
-    let alert_button = summary.alert_button.clone();
-    let alert_list = alert_sidebar.alert_list.clone();
-    let alert_store_for_refresh = alert_store.clone();
-    let refresh = Rc::new(move || {
-        icons::set_button_icon_label(
-            &alert_button,
-            &format!("Alerts ({})", alert_store_for_refresh.unread_count()),
-            icon_name::ALERTS,
-        );
-        while let Some(child) = alert_list.first_child() {
-            alert_list.remove(&child);
-        }
-
-        for alert in alert_store_for_refresh.snapshot().into_iter().rev() {
-            let row = gtk::Box::builder()
-                .orientation(gtk::Orientation::Vertical)
-                .spacing(6)
-                .css_classes(["tile-editor-row"])
-                .build();
-            row.append(
-                &gtk::Label::builder()
-                    .label(&alert.title)
-                    .halign(gtk::Align::Start)
-                    .wrap(true)
-                    .css_classes(["card-title"])
-                    .build(),
-            );
-            row.append(
-                &gtk::Label::builder()
-                    .label(if alert.detail.trim().is_empty() {
-                        "No detail available."
-                    } else {
-                        alert.detail.as_str()
-                    })
-                    .halign(gtk::Align::Start)
-                    .wrap(true)
-                    .css_classes(["field-hint"])
-                    .build(),
-            );
-            let mark_read_button = icons::labeled_button(
-                if alert.unread { "Mark Read" } else { "Read" },
-                icon_name::APPLY,
-                &["flat", "surface-button"],
-            );
-            mark_read_button.set_sensitive(alert.unread);
-            let alert_store = alert_store_for_refresh.clone();
-            let alert_id = alert.id;
-            mark_read_button.connect_clicked(move |_| {
-                alert_store.mark_read(alert_id);
-            });
-            row.append(&mark_read_button);
-            alert_list.append(&row);
-        }
+    workspace_alerts::bind_alert_list(WorkspaceAlertListInput {
+        alert_store: alert_store.clone(),
+        alert_button: summary.alert_button.clone(),
+        alert_list: alert_sidebar.alert_list.clone(),
+        action_provider: None,
     });
-    alert_store.subscribe(refresh.clone());
-    refresh();
 }
 
 fn bind_preview_terminal_snippets(

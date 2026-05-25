@@ -52,6 +52,7 @@ const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.n
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
+const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
@@ -571,7 +572,8 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
                 || source.contains("icons::icon_button")
                 || source.contains("build_header_icon_button(icon_name::")
                 || source.contains("build_terminal_tile_action_chrome")
-                || source.contains("bind_web_tile_settings_popover"),
+                || source.contains("bind_web_tile_settings_popover")
+                || source.contains("workspace_alerts::bind_alert_list"),
             "{surface} should use shared symbolic icon helpers for visible actions"
         );
     }
@@ -1281,7 +1283,8 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "bind_preview_alert_controls",
         "mark_all_read_button",
         "alert_store.mark_all_read()",
-        "alert_store.subscribe(refresh.clone())",
+        "workspace_alerts::bind_alert_list",
+        "WorkspaceAlertListInput",
         "bind_preview_terminal_snippets",
         "snippet_popover::install(",
         "SnippetPopoverInput",
@@ -1293,10 +1296,29 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "pub(crate) mod context_menu;",
     ] {
         assert!(
-            WORKSPACE_PREVIEW_RS.contains(token) || UI_MOD_RS.contains(token),
+            WORKSPACE_PREVIEW_RS.contains(token)
+                || UI_MOD_RS.contains(token)
+                || WORKSPACE_ALERTS_RS.contains(token),
             "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
         );
     }
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod workspace_alerts;")
+            && WORKSPACE_ALERTS_RS.contains("pub(crate) fn bind_alert_list")
+            && WORKSPACE_ALERTS_RS.contains("pub(crate) struct WorkspaceAlertListInput")
+            && WORKSPACE_ALERTS_RS.contains("pub(crate) struct AlertRowAction")
+            && WORKSPACE_ALERTS_RS.contains("alert_store.subscribe(refresh.clone())")
+            && WORKSPACE_ALERTS_RS.contains("No detail available.")
+            && WORKSPACE_ALERTS_RS.contains("icons::labeled_button(")
+            && WORKSPACE_ALERTS_RS.contains("Mark Read")
+            && WORKSPACE_VIEW_RS.contains("action_provider: Some(Rc::new")
+            && WORKSPACE_VIEW_RS.contains("label: \"Jump\"")
+            && WORKSPACE_VIEW_RS.contains("label: \"Reconnect\"")
+            && WORKSPACE_PREVIEW_RS.contains("action_provider: None")
+            && !WORKSPACE_VIEW_RS.contains("No detail available.")
+            && !WORKSPACE_PREVIEW_RS.contains("No detail available."),
+        "Linux and Windows GTK workspace alert lists should share row rendering while Linux supplies runtime-only jump/reconnect actions"
+    );
     assert!(
         SNIPPET_POPOVER_RS.contains(".label(\"CLI Snippets\")")
             && SNIPPET_POPOVER_RS.contains("No snippets configured yet. Add them in Assets.")

@@ -115,6 +115,11 @@ pub mod window;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod workspace_alerts;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 mod workspace_chrome;
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 pub mod workspace_preview;
