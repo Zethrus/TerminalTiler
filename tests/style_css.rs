@@ -1084,8 +1084,13 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "Open Assets Manager",
         "About {}",
         "Open Account / Sync",
+        "Focus Next Alert",
+        "preview.focus_next_alert()",
         "Add Web Tile",
         "preview.add_web_tile(DEFAULT_WEB_URL)",
+        "Run Runbook: {}",
+        "preview.run_runbook(&runbook)",
+        ".runbooks()",
         "Switch to {label}",
         "open_command_palette_handle",
         "save_command_palette_shortcut(&shortcut)",
@@ -1103,8 +1108,14 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     assert!(
         WORKSPACE_PREVIEW_RS.contains("pub fn add_web_tile(&self, initial_url: &str) -> bool")
-            && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added"),
-        "shared GTK workspace preview should expose the same add-web-tile mutation used by Linux toolbar controls and Windows GTK command palette actions"
+            && WORKSPACE_PREVIEW_RS.contains("pub fn focus_next_alert(&self) -> bool")
+            && WORKSPACE_PREVIEW_RS
+                .contains("pub fn run_runbook(&self, runbook: &Runbook) -> bool")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn runbooks(&self) -> Vec<Runbook>")
+            && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added")
+            && WORKSPACE_PREVIEW_RS.contains("AlertSourceKind::Runbook")
+            && WORKSPACE_PREVIEW_RS.contains("send_command_to_active_runtime_surfaces("),
+        "shared GTK workspace preview should expose the same add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette actions"
     );
 }
 

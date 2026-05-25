@@ -1694,6 +1694,17 @@ mod imp {
             let session = preview.snapshot();
             if !shell_state.launch_deck_active.get() {
                 actions.push(command_palette::PaletteAction {
+                    title: "Focus Next Alert".into(),
+                    subtitle: "Jump to the next unread workspace alert.".into(),
+                    on_activate: Rc::new({
+                        let preview = preview.clone();
+                        move || {
+                            let _ = preview.focus_next_alert();
+                        }
+                    }),
+                });
+
+                actions.push(command_palette::PaletteAction {
                     title: "Add Web Tile".into(),
                     subtitle: "Insert a new browser tile beside the focused pane.".into(),
                     on_activate: Rc::new({
@@ -1703,6 +1714,27 @@ mod imp {
                         }
                     }),
                 });
+
+                for runbook in preview
+                    .runbooks()
+                    .into_iter()
+                    .filter(|runbook| runbook.variables.is_empty())
+                {
+                    actions.push(command_palette::PaletteAction {
+                        title: format!("Run Runbook: {}", runbook.name),
+                        subtitle: if runbook.description.trim().is_empty() {
+                            runbook.target.label()
+                        } else {
+                            runbook.description.clone()
+                        },
+                        on_activate: Rc::new({
+                            let preview = preview.clone();
+                            move || {
+                                let _ = preview.run_runbook(&runbook);
+                            }
+                        }),
+                    });
+                }
             }
 
             for (index, tab) in session.tabs.iter().enumerate() {

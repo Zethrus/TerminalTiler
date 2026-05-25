@@ -233,6 +233,10 @@ impl SessionPreview {
         self.session.borrow().clone()
     }
 
+    pub fn runbooks(&self) -> Vec<Runbook> {
+        self.assets.runbooks.clone()
+    }
+
     pub fn push_tab(&self, tab: SavedTab) -> usize {
         let next_index = {
             let mut session = self.session.borrow_mut();
@@ -258,6 +262,26 @@ impl SessionPreview {
         }
     }
 
+    pub fn focus_next_alert(&self) -> bool {
+        let Some(alert) = self
+            .alert_store
+            .snapshot()
+            .into_iter()
+            .find(|alert| alert.unread && alert.pane_id.is_some())
+        else {
+            return false;
+        };
+        let Some(pane_id) = alert.pane_id.clone() else {
+            return false;
+        };
+        if self.focus_tile(&pane_id) {
+            self.alert_store.mark_read(alert.id);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn add_web_tile(&self, initial_url: &str) -> bool {
         if add_web_tile_to_active_session(&self.session, &self.active_index, initial_url) {
             self.prune_runtime_surfaces("workspace preview web tile added");
@@ -266,6 +290,50 @@ impl SessionPreview {
             true
         } else {
             false
+        }
+    }
+
+    pub fn run_runbook(&self, runbook: &Runbook) -> bool {
+        let tile_specs = active_tab_tile_specs(&self.session, &self.active_index);
+        match resolve_runbook(runbook, &TemplateVariableValues::new(), &tile_specs) {
+            Ok(resolved) => {
+                let sent = resolved
+                    .commands
+                    .iter()
+                    .map(|command| {
+                        send_command_to_active_runtime_surfaces(
+                            &self.session,
+                            &self.active_index,
+                            &self.runtime_surfaces,
+                            &resolved.target,
+                            command,
+                        )
+                    })
+                    .sum::<usize>();
+                let mut alert = AlertEventInput::new(
+                    AlertSourceKind::Runbook,
+                    AlertSeverity::Info,
+                    format!("Runbook '{}' executed", runbook.name),
+                );
+                alert.detail = format!(
+                    "Targeted {} pane(s) with {} step(s); delivered to {} active runtime(s).",
+                    resolved.matching_tile_ids.len(),
+                    resolved.commands.len(),
+                    sent
+                );
+                self.alert_store.push(alert);
+                sent > 0
+            }
+            Err(error) => {
+                let mut alert = AlertEventInput::new(
+                    AlertSourceKind::Runbook,
+                    AlertSeverity::Error,
+                    format!("Runbook '{}' failed", runbook.name),
+                );
+                alert.detail = error.to_string();
+                self.alert_store.push(alert);
+                false
+            }
         }
     }
 
@@ -330,6 +398,32 @@ impl SessionPreview {
             .values()
             .filter_map(|surface| surface.active_process_checker.as_ref())
             .any(|is_active| is_active())
+    }
+
+    fn focus_tile(&self, tile_id: &str) -> bool {
+        let session_ref = self.session.borrow();
+        let Some(tab_index) = active_tab_index(&session_ref, self.active_index.get()) else {
+            return false;
+        };
+        let Some(tab) = session_ref.tabs.get(tab_index) else {
+            return false;
+        };
+        let Some(tile) = tab
+            .preset
+            .layout
+            .tile_specs()
+            .into_iter()
+            .find(|tile| tile.id == tile_id)
+        else {
+            return false;
+        };
+        let key = runtime_surface_key(tab_index, tab, &tile);
+        if let Some(surface) = self.runtime_surfaces.borrow().get(&key) {
+            surface.widget.grab_focus();
+            true
+        } else {
+            false
+        }
     }
 
     fn render(&self) {
