@@ -282,7 +282,6 @@ mod imp {
         );
         install_terminal_output_shortcuts(&terminal_output, &input, &state);
         install_terminal_input_key_controller(&terminal_output, &state, terminal_buffer.clone());
-        install_terminal_focus_reporting(&terminal_output, &state, terminal_buffer.clone());
 
         let command_sender = Rc::new({
             let state = state.clone();
@@ -579,32 +578,6 @@ mod imp {
             });
         }
         output.add_controller(focus_click);
-    }
-
-    fn install_terminal_focus_reporting(
-        output: &gtk::TextView,
-        state: &Rc<RefCell<TerminalRuntimeState>>,
-        terminal_buffer: Rc<RefCell<VtBuffer>>,
-    ) {
-        let focus_controller = gtk::EventControllerFocus::new();
-        {
-            let state = state.clone();
-            let terminal_buffer = terminal_buffer.clone();
-            focus_controller.connect_enter(move |_| {
-                if terminal_buffer.borrow().focus_reporting() {
-                    let _ = send_terminal_runtime_payload(&state, "\u{1b}[I".into());
-                }
-            });
-        }
-        {
-            let state = state.clone();
-            focus_controller.connect_leave(move |_| {
-                if terminal_buffer.borrow().focus_reporting() {
-                    let _ = send_terminal_runtime_payload(&state, "\u{1b}[O".into());
-                }
-            });
-        }
-        output.add_controller(focus_controller);
     }
 
     fn terminal_runtime_key_payload(
