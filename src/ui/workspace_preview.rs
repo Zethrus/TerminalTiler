@@ -328,6 +328,10 @@ impl SessionPreview {
     fn prune_runtime_surfaces(&self, reason: &str) {
         prune_runtime_surfaces(&self.runtime_surfaces, &self.session.borrow(), reason);
     }
+
+    fn notify_session_changed(&self, reason: &'static str) {
+        notify_session_changed(&self.on_session_changed, &self.session, reason);
+    }
 }
 
 fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
