@@ -1,6 +1,6 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -21,13 +21,27 @@ mod imp {
     use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
-    use crate::ui::workspace_preview::TileRuntimeSurface;
+    use crate::ui::workspace_preview::{TileRuntimeRecoveryBinder, TileRuntimeSurface};
     use crate::windows::{workspace, wsl};
 
     const MIN_TERMINAL_FONT_POINTS: i32 = 7;
     const MAX_TERMINAL_FONT_POINTS: i32 = 20;
     const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
     const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
+    const TERMINAL_RUNTIME_POLL_MS: u64 = 80;
+
+    #[derive(Default)]
+    struct TerminalRuntimeState {
+        stdin_tx: Option<mpsc::Sender<String>>,
+        active: bool,
+        next_generation: u64,
+        active_generation: u64,
+    }
+
+    enum TerminalRuntimeEvent {
+        Output(String),
+        ProcessEnded { generation: u64 },
+    }
 
     pub(crate) fn build_tile_runtime_surface(
         tile: &TileSpec,
@@ -113,41 +127,79 @@ mod imp {
         input_row.append(&send_button);
         surface.append(&input_row);
 
-        let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
-        let (output_tx, output_rx) = mpsc::channel::<String>();
-        spawn_terminal_process(
+        let state = Rc::new(RefCell::new(TerminalRuntimeState::default()));
+        let recovery_bind_generation = Rc::new(Cell::new(0u64));
+        let (event_tx, event_rx) = mpsc::channel::<TerminalRuntimeEvent>();
+        start_terminal_process(
+            &state,
             tile.clone(),
             tab.clone(),
             assets.clone(),
-            stdin_rx,
-            output_tx,
+            event_tx.clone(),
         );
 
         {
             let buffer = buffer.clone();
-            gtk::glib::timeout_add_local(Duration::from_millis(80), move || {
-                while let Ok(chunk) = output_rx.try_recv() {
-                    append_buffer_text(&buffer, &chunk);
-                }
-                gtk::glib::ControlFlow::Continue
-            });
+            let state = state.clone();
+            gtk::glib::timeout_add_local(
+                Duration::from_millis(TERMINAL_RUNTIME_POLL_MS),
+                move || {
+                    while let Ok(event) = event_rx.try_recv() {
+                        match event {
+                            TerminalRuntimeEvent::Output(chunk) => {
+                                append_buffer_text(&buffer, &chunk)
+                            }
+                            TerminalRuntimeEvent::ProcessEnded { generation } => {
+                                let mut state = state.borrow_mut();
+                                if state.active_generation == generation {
+                                    state.active = false;
+                                    state.stdin_tx = None;
+                                }
+                            }
+                        }
+                    }
+                    gtk::glib::ControlFlow::Continue
+                },
+            );
         }
 
         {
             let input = input.clone();
-            let stdin_tx = stdin_tx.clone();
-            send_button.connect_clicked(move |_| send_entry_text(&input, &stdin_tx));
+            let state = state.clone();
+            send_button.connect_clicked(move |_| send_entry_text(&input, &state));
         }
         {
-            let stdin_tx = stdin_tx.clone();
-            input.connect_activate(move |entry| send_entry_text(entry, &stdin_tx));
+            let state = state.clone();
+            input.connect_activate(move |entry| send_entry_text(entry, &state));
         }
-        install_terminal_output_context_menu(&terminal_output, &input, &stdin_tx);
-        install_terminal_output_shortcuts(&terminal_output, &input, &stdin_tx);
+
+        let restart_runtime = Rc::new({
+            let state = state.clone();
+            let tile = tile.clone();
+            let tab = tab.clone();
+            let assets = assets.clone();
+            let event_tx = event_tx.clone();
+            move || {
+                start_terminal_process(
+                    &state,
+                    tile.clone(),
+                    tab.clone(),
+                    assets.clone(),
+                    event_tx.clone(),
+                );
+            }
+        });
+        install_terminal_output_context_menu(
+            &terminal_output,
+            &input,
+            &state,
+            restart_runtime.clone(),
+        );
+        install_terminal_output_shortcuts(&terminal_output, &input, &state);
 
         let command_sender = Rc::new({
-            let stdin_tx = stdin_tx.clone();
-            move |command: &str| !command.is_empty() && stdin_tx.send(command.to_string()).is_ok()
+            let state = state.clone();
+            move |command: &str| send_terminal_runtime_payload(&state, command.to_string())
         });
 
         let appearance_applier = Rc::new({
@@ -162,6 +214,23 @@ mod imp {
             command_sender: Some(command_sender),
             appearance_applier: Some(appearance_applier),
             url_applier: None,
+            recovery_binder: Some(TileRuntimeRecoveryBinder {
+                bind: Rc::new({
+                    let state = state.clone();
+                    let restart_runtime = restart_runtime.clone();
+                    let recovery_bind_generation = recovery_bind_generation.clone();
+                    move |shell, status, recovery_button| {
+                        bind_terminal_recovery_controls(
+                            shell,
+                            status,
+                            recovery_button,
+                            state.clone(),
+                            restart_runtime.clone(),
+                            recovery_bind_generation.clone(),
+                        );
+                    }
+                }),
+            }),
         }
     }
 
@@ -186,12 +255,40 @@ mod imp {
         density.terminal_font_points() + clamp_terminal_zoom_steps(density, zoom_steps)
     }
 
+    fn start_terminal_process(
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        tile: TileSpec,
+        tab: SavedTab,
+        assets: WorkspaceAssets,
+        event_tx: mpsc::Sender<TerminalRuntimeEvent>,
+    ) {
+        if state.borrow().active {
+            return;
+        }
+        let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
+        let generation = {
+            let mut state = state.borrow_mut();
+            state.next_generation = state.next_generation.saturating_add(1);
+            state.active_generation = state.next_generation;
+            state.active = true;
+            state.stdin_tx = Some(stdin_tx);
+            state.active_generation
+        };
+        if generation > 1 {
+            let _ = event_tx.send(TerminalRuntimeEvent::Output(
+                "\r\n[terminaltiler] reconnecting terminal session\r\n".into(),
+            ));
+        }
+        spawn_terminal_process(tile, tab, assets, generation, stdin_rx, event_tx);
+    }
+
     fn spawn_terminal_process(
         tile: TileSpec,
         tab: SavedTab,
         assets: WorkspaceAssets,
+        generation: u64,
         stdin_rx: mpsc::Receiver<String>,
-        output_tx: mpsc::Sender<String>,
+        event_tx: mpsc::Sender<TerminalRuntimeEvent>,
     ) {
         std::thread::spawn(move || {
             let launch =
@@ -203,8 +300,10 @@ mod imp {
             let command = match launch {
                 Ok(command) => command,
                 Err(error) => {
-                    let _ =
-                        output_tx.send(format!("\r\n[terminaltiler] launch failed: {error}\r\n"));
+                    let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
+                        "\r\n[terminaltiler] launch failed: {error}\r\n"
+                    )));
+                    let _ = event_tx.send(TerminalRuntimeEvent::ProcessEnded { generation });
                     logging::error(format!(
                         "Windows GTK terminal runtime launch failed for tile {}: {error}",
                         tile.id
@@ -213,13 +312,13 @@ mod imp {
                 }
             };
 
-            let _ = output_tx.send(format!(
+            let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
                 "\r\n[terminaltiler] runtime: {:?}; cwd: {}\r\n> {} {}\r\n",
                 command.runtime,
                 command.working_directory,
                 command.program,
                 command.args.join(" ")
-            ));
+            )));
 
             let mut child = match Command::new(&command.program)
                 .args(&command.args)
@@ -231,10 +330,11 @@ mod imp {
             {
                 Ok(child) => child,
                 Err(error) => {
-                    let _ = output_tx.send(format!(
+                    let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
                         "\r\n[terminaltiler] failed to spawn {}: {error}\r\n",
                         command.program
-                    ));
+                    )));
+                    let _ = event_tx.send(TerminalRuntimeEvent::ProcessEnded { generation });
                     logging::error(format!(
                         "Windows GTK terminal runtime failed to spawn '{}': {error}",
                         command.program
@@ -255,28 +355,29 @@ mod imp {
             }
 
             if let Some(stdout) = child.stdout.take() {
-                pipe_reader_to_output(stdout, output_tx.clone());
+                pipe_reader_to_output(stdout, event_tx.clone());
             }
             if let Some(stderr) = child.stderr.take() {
-                pipe_reader_to_output(stderr, output_tx.clone());
+                pipe_reader_to_output(stderr, event_tx.clone());
             }
 
             match child.wait() {
                 Ok(status) => {
-                    let _ = output_tx.send(format!(
+                    let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
                         "\r\n[terminaltiler] terminal process exited with {status}\r\n"
-                    ));
+                    )));
                 }
                 Err(error) => {
-                    let _ = output_tx.send(format!(
+                    let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
                         "\r\n[terminaltiler] terminal wait failed: {error}\r\n"
-                    ));
+                    )));
                 }
             }
+            let _ = event_tx.send(TerminalRuntimeEvent::ProcessEnded { generation });
         });
     }
 
-    fn pipe_reader_to_output<R>(reader: R, output_tx: mpsc::Sender<String>)
+    fn pipe_reader_to_output<R>(reader: R, event_tx: mpsc::Sender<TerminalRuntimeEvent>)
     where
         R: std::io::Read + Send + 'static,
     {
@@ -288,12 +389,12 @@ mod imp {
                 match reader.read_line(&mut line) {
                     Ok(0) => break,
                     Ok(_) => {
-                        let _ = output_tx.send(line.clone());
+                        let _ = event_tx.send(TerminalRuntimeEvent::Output(line.clone()));
                     }
                     Err(error) => {
-                        let _ = output_tx.send(format!(
+                        let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
                             "\r\n[terminaltiler] terminal output read failed: {error}\r\n"
-                        ));
+                        )));
                         break;
                     }
                 }
@@ -301,7 +402,7 @@ mod imp {
         });
     }
 
-    fn send_entry_text(entry: &gtk::Entry, stdin_tx: &mpsc::Sender<String>) {
+    fn send_entry_text(entry: &gtk::Entry, state: &Rc<RefCell<TerminalRuntimeState>>) {
         let text = entry.text().trim().to_string();
         if text.is_empty() {
             return;
@@ -311,8 +412,34 @@ mod imp {
         } else {
             format!("{text}\r\n")
         };
-        if stdin_tx.send(payload).is_ok() {
+        if send_terminal_runtime_payload(state, payload) {
             entry.set_text("");
+        }
+    }
+
+    fn send_terminal_runtime_payload(
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        payload: String,
+    ) -> bool {
+        if payload.is_empty() {
+            return false;
+        }
+
+        let stdin_tx = {
+            let state = state.borrow();
+            if !state.active {
+                return false;
+            }
+            state.stdin_tx.clone()
+        };
+
+        if stdin_tx.is_some_and(|stdin_tx| stdin_tx.send(payload).is_ok()) {
+            true
+        } else {
+            let mut state = state.borrow_mut();
+            state.active = false;
+            state.stdin_tx = None;
+            false
         }
     }
 
@@ -328,7 +455,8 @@ mod imp {
     fn install_terminal_output_context_menu(
         output: &gtk::TextView,
         input: &gtk::Entry,
-        stdin_tx: &mpsc::Sender<String>,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        restart_runtime: Rc<dyn Fn()>,
     ) {
         let popover = context_menu::popover(output);
         let menu = context_menu::menu_box();
@@ -354,14 +482,25 @@ mod imp {
         let paste_button = context_menu::action_button("Paste", Some("Ctrl+Shift+V"));
         {
             let output = output.clone();
-            let stdin_tx = stdin_tx.clone();
+            let state = state.clone();
             let popover = popover.clone();
             paste_button.connect_clicked(move |_| {
-                paste_clipboard_into_terminal_runtime(&output, &stdin_tx);
+                paste_clipboard_into_terminal_runtime(&output, &state);
                 popover.popdown();
             });
         }
         menu.append(&paste_button);
+
+        let reconnect_button = context_menu::action_button("Reconnect", None);
+        {
+            let restart_runtime = restart_runtime.clone();
+            let popover = popover.clone();
+            reconnect_button.connect_clicked(move |_| {
+                restart_runtime();
+                popover.popdown();
+            });
+        }
+        menu.append(&reconnect_button);
 
         let focus_input_button = context_menu::action_button("Focus Command Input", None);
         {
@@ -384,10 +523,16 @@ mod imp {
             let output = output.clone();
             let popover = popover.clone();
             let copy_button = copy_button.clone();
+            let paste_button = paste_button.clone();
+            let reconnect_button = reconnect_button.clone();
+            let state = state.clone();
             right_click.connect_pressed(move |gesture, _, x, y| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
                 output.grab_focus();
                 copy_button.set_sensitive(output.buffer().has_selection());
+                let active = state.borrow().active;
+                paste_button.set_sensitive(active);
+                reconnect_button.set_sensitive(!active);
                 context_menu::popup_at(&popover, x, y);
             });
         }
@@ -397,7 +542,7 @@ mod imp {
     fn install_terminal_output_shortcuts(
         output: &gtk::TextView,
         input: &gtk::Entry,
-        stdin_tx: &mpsc::Sender<String>,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
     ) {
         let shortcut_controller = gtk::ShortcutController::new();
         shortcut_controller.set_scope(gtk::ShortcutScope::Local);
@@ -418,9 +563,9 @@ mod imp {
         );
 
         let output_for_paste = output.clone();
-        let stdin_tx_for_paste = stdin_tx.clone();
+        let state_for_paste = state.clone();
         let paste_action = gtk::CallbackAction::new(move |_, _| {
-            paste_clipboard_into_terminal_runtime(&output_for_paste, &stdin_tx_for_paste);
+            paste_clipboard_into_terminal_runtime(&output_for_paste, &state_for_paste);
             gtk::glib::Propagation::Stop
         });
         add_terminal_output_shortcut(
@@ -464,10 +609,10 @@ mod imp {
 
     fn paste_clipboard_into_terminal_runtime(
         output: &gtk::TextView,
-        stdin_tx: &mpsc::Sender<String>,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
     ) {
         output.grab_focus();
-        let stdin_tx = stdin_tx.clone();
+        let state = state.clone();
         output
             .clipboard()
             .read_text_async(None::<&gio::Cancellable>, move |result| match result {
@@ -479,7 +624,7 @@ mod imp {
                         } else {
                             format!("{text}\r\n")
                         };
-                        let _ = stdin_tx.send(payload);
+                        let _ = send_terminal_runtime_payload(&state, payload);
                     }
                 }
                 Ok(None) => {}
@@ -505,6 +650,152 @@ mod imp {
         };
 
         shortcut_controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action.clone())));
+    }
+
+    fn bind_terminal_recovery_controls(
+        shell: &gtk::Box,
+        status: &gtk::Label,
+        recovery_button: &gtk::Button,
+        state: Rc<RefCell<TerminalRuntimeState>>,
+        restart_runtime: Rc<dyn Fn()>,
+        bind_generation: Rc<Cell<u64>>,
+    ) {
+        let current_generation = bind_generation.get().saturating_add(1);
+        bind_generation.set(current_generation);
+
+        let active_status_line = status.text().to_string();
+        let active_status_tooltip = status.tooltip_text().map(|value| value.to_string());
+        let popover = build_terminal_recovery_popover(
+            recovery_button,
+            restart_runtime,
+            active_status_line.clone(),
+        );
+
+        {
+            let popover = popover.clone();
+            recovery_button.connect_clicked(move |_| {
+                popover.popup();
+            });
+        }
+
+        sync_terminal_recovery_state(
+            shell,
+            status,
+            recovery_button,
+            &state,
+            &active_status_line,
+            &active_status_tooltip,
+        );
+
+        let shell_weak = shell.downgrade();
+        let status_weak = status.downgrade();
+        let recovery_button_weak = recovery_button.downgrade();
+        gtk::glib::timeout_add_local(Duration::from_millis(TERMINAL_RUNTIME_POLL_MS), move || {
+            if bind_generation.get() != current_generation {
+                return gtk::glib::ControlFlow::Break;
+            }
+            let (Some(shell), Some(status), Some(recovery_button)) = (
+                shell_weak.upgrade(),
+                status_weak.upgrade(),
+                recovery_button_weak.upgrade(),
+            ) else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            sync_terminal_recovery_state(
+                &shell,
+                &status,
+                &recovery_button,
+                &state,
+                &active_status_line,
+                &active_status_tooltip,
+            );
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    fn sync_terminal_recovery_state(
+        shell: &gtk::Box,
+        status: &gtk::Label,
+        recovery_button: &gtk::Button,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        active_status_line: &str,
+        active_status_tooltip: &Option<String>,
+    ) {
+        if state.borrow().active {
+            shell.remove_css_class("is-disconnected");
+            status.remove_css_class("recovery-chip");
+            status.set_text(active_status_line);
+            status.set_tooltip_text(active_status_tooltip.as_deref());
+            recovery_button.set_visible(false);
+            recovery_button.set_sensitive(false);
+        } else {
+            shell.add_css_class("is-disconnected");
+            status.add_css_class("recovery-chip");
+            status.set_text("Disconnected  •  Reconnect session");
+            status.set_tooltip_text(Some(
+                "This Windows GTK terminal process exited. Reconnect the configured session.",
+            ));
+            recovery_button.set_visible(true);
+            recovery_button.set_sensitive(true);
+        }
+    }
+
+    fn build_terminal_recovery_popover(
+        recovery_button: &gtk::Button,
+        restart_runtime: Rc<dyn Fn()>,
+        active_status_line: String,
+    ) -> gtk::Popover {
+        let popover = gtk::Popover::new();
+        popover.add_css_class("terminal-recovery-popover");
+        popover.set_autohide(true);
+        popover.set_has_arrow(true);
+        popover.set_position(gtk::PositionType::Bottom);
+        popover.set_parent(recovery_button);
+
+        let shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(10)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(10)
+            .margin_end(10)
+            .build();
+        shell.append(
+            &gtk::Label::builder()
+                .label("Session ended")
+                .halign(gtk::Align::Start)
+                .css_classes(["card-title"])
+                .build(),
+        );
+        shell.append(
+            &gtk::Label::builder()
+                .label(format!(
+                    "{}\nReconnect the configured session in this pane.",
+                    active_status_line
+                ))
+                .halign(gtk::Align::Start)
+                .wrap(true)
+                .css_classes(["field-hint"])
+                .build(),
+        );
+
+        let reconnect_button = icons::labeled_button(
+            "Reconnect Session",
+            icon_name::RECOVER,
+            &["flat", "surface-button"],
+        );
+        reconnect_button.set_focus_on_click(false);
+        {
+            let popover = popover.clone();
+            reconnect_button.connect_clicked(move |_| {
+                restart_runtime();
+                popover.popdown();
+            });
+        }
+        shell.append(&reconnect_button);
+
+        popover.set_child(Some(&shell));
+        popover
     }
 
     fn build_web_runtime_surface(tile: &TileSpec) -> TileRuntimeSurface {
@@ -585,6 +876,7 @@ mod imp {
             command_sender: None,
             appearance_applier: None,
             url_applier: Some(url_applier),
+            recovery_binder: None,
         }
     }
 

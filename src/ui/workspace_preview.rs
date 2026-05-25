@@ -37,6 +37,12 @@ pub struct TileRuntimeSurface {
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
     pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
+    pub recovery_binder: Option<TileRuntimeRecoveryBinder>,
+}
+
+#[derive(Clone)]
+pub struct TileRuntimeRecoveryBinder {
+    pub bind: Rc<dyn Fn(&gtk::Box, &gtk::Label, &gtk::Button)>,
 }
 
 impl TileRuntimeSurface {
@@ -46,6 +52,7 @@ impl TileRuntimeSurface {
             command_sender: None,
             appearance_applier: None,
             url_applier: None,
+            recovery_binder: None,
         }
     }
 }
@@ -1641,31 +1648,13 @@ fn build_tile(
         },
     });
 
-    let actions = header.actions.clone();
-    let can_close = tab.preset.layout.tile_count() > 1;
-    match tile.tile_kind {
-        TileKind::Terminal => {
-            let tile_actions = build_terminal_tile_action_chrome(can_close);
-            bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
-            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
-            append_terminal_tile_action_chrome(&actions, &tile_actions);
-        }
-        TileKind::WebView => {
-            let tile_actions = build_web_tile_action_chrome(can_close);
-            bind_preview_web_tile_settings(&tile_actions.settings_button, tile, render_context);
-            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
-            append_web_tile_action_chrome(&actions, &tile_actions);
-        }
-    }
-    shell.append(&header.widget);
-
     let frame_class = match tile.tile_kind {
         TileKind::Terminal => "terminal-frame",
         TileKind::WebView => "web-tile-frame",
     };
     let frame = build_tile_frame(frame_class);
 
-    let surface = if let Some(runtime_factory) = runtime_factory {
+    let (surface, runtime_surface) = if let Some(runtime_factory) = runtime_factory {
         let key = runtime_surface_key(tab_index, tab, tile);
         let mut surfaces = runtime_surfaces.borrow_mut();
         let surface = surfaces
@@ -1681,10 +1670,35 @@ fn build_tile(
             apply_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
         }
         detach_from_previous_parent(&surface.widget);
-        surface.widget
+        (surface.widget.clone(), Some(surface))
     } else {
-        build_tile_surface(tile).upcast()
+        (build_tile_surface(tile).upcast(), None)
     };
+
+    let actions = header.actions.clone();
+    let can_close = tab.preset.layout.tile_count() > 1;
+    match tile.tile_kind {
+        TileKind::Terminal => {
+            let tile_actions = build_terminal_tile_action_chrome(can_close);
+            if let Some(recovery_binder) = runtime_surface
+                .as_ref()
+                .and_then(|surface| surface.recovery_binder.as_ref())
+            {
+                (recovery_binder.bind)(&shell, &header.status_label, &tile_actions.recovery_button);
+            }
+            bind_preview_terminal_snippets(&tile_actions.snippet_button, tile, render_context);
+            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
+            append_terminal_tile_action_chrome(&actions, &tile_actions);
+        }
+        TileKind::WebView => {
+            let tile_actions = build_web_tile_action_chrome(can_close);
+            bind_preview_web_tile_settings(&tile_actions.settings_button, tile, render_context);
+            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
+            append_web_tile_action_chrome(&actions, &tile_actions);
+        }
+    }
+    shell.append(&header.widget);
+
     frame.append(&surface);
     shell.append(&frame);
 

@@ -1096,6 +1096,8 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     for token in [
         "pub struct TileRuntimeSurface",
         "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
+        "recovery_binder: Option<TileRuntimeRecoveryBinder>",
+        "pub struct TileRuntimeRecoveryBinder",
         "send_command_to_active_runtime_surfaces",
         "send_command_to_active_runtime_surface",
         "BroadcastTarget::AllPanes",
@@ -1144,7 +1146,15 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("DEFAULT_TERMINAL_COPY_SHORTCUT")
             && WINDOWS_GTK_RUNTIME_RS.contains("DEFAULT_TERMINAL_PASTE_SHORTCUT")
             && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
-            && WINDOWS_GTK_RUNTIME_RS.contains("stdin_tx.send(command.to_string())")
+            && WINDOWS_GTK_RUNTIME_RS.contains("send_terminal_runtime_payload(&state")
+            && WINDOWS_GTK_RUNTIME_RS.contains("state.active")
+            && WINDOWS_GTK_RUNTIME_RS.contains("TerminalRuntimeEvent::ProcessEnded")
+            && WINDOWS_GTK_RUNTIME_RS.contains("recovery_binder: Some(TileRuntimeRecoveryBinder")
+            && WINDOWS_GTK_RUNTIME_RS.contains("bind_terminal_recovery_controls")
+            && WINDOWS_GTK_RUNTIME_RS.contains("build_terminal_recovery_popover")
+            && WINDOWS_GTK_RUNTIME_RS.contains("context_menu::action_button(\"Reconnect\"")
+            && WINDOWS_GTK_RUNTIME_RS.contains("Reconnect Session")
+            && WORKSPACE_PREVIEW_RS.contains("(recovery_binder.bind)")
             && !WINDOWS_GTK_RUNTIME_RS.contains("stdin.write_all(b\"\\r\\n\")")
             && WINDOWS_GTK_RUNTIME_RS.contains("format!(\"{text}\\r\\n\")")
             && WINDOWS_GTK_RUNTIME_RS
