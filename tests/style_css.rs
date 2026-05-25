@@ -1110,6 +1110,19 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
     }
 
     assert!(
+        source_contains(
+            WINDOWS_GTK_APP_RS,
+            "title: \"Open Settings\".into(),\n                subtitle: \"Application preferences and shortcuts.\".into(),"
+        ) && WINDOWS_GTK_APP_RS.find("title: \"Open Settings\".into()")
+            < WINDOWS_GTK_APP_RS.find("title: \"Open Assets Manager\".into()")
+            && WINDOWS_GTK_APP_RS.find("title: \"Open Assets Manager\".into()")
+                < WINDOWS_GTK_APP_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
+            && WINDOWS_GTK_APP_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
+                < WINDOWS_GTK_APP_RS.find("title: \"New Tab\".into()"),
+        "Windows GTK command palette should keep Linux's base action copy and Settings/Assets/About/New Tab ordering"
+    );
+
+    assert!(
         WORKSPACE_PREVIEW_RS.contains("pub fn add_web_tile(&self, initial_url: &str) -> bool")
             && WORKSPACE_PREVIEW_RS
                 .contains("pub fn tab_title(&self, index: usize) -> Option<String>")

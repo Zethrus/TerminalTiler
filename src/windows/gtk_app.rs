@@ -1702,32 +1702,8 @@ mod imp {
     ) {
         let mut actions = vec![
             command_palette::PaletteAction {
-                title: "New Tab".into(),
-                subtitle: "Open a fresh launch deck tab.".into(),
-                on_activate: Rc::new({
-                    let window = window.clone();
-                    let overlay = overlay.clone();
-                    let title = title.clone();
-                    let launch = launch.clone();
-                    let back_button = back_button.clone();
-                    let fullscreen_button = fullscreen_button.clone();
-                    let shell_state = shell_state.clone();
-                    move || {
-                        show_launch_deck_tab(
-                            &window,
-                            &overlay,
-                            &title,
-                            &launch,
-                            &back_button,
-                            &fullscreen_button,
-                            &shell_state,
-                        );
-                    }
-                }),
-            },
-            command_palette::PaletteAction {
                 title: "Open Settings".into(),
-                subtitle: "Application preferences, shortcuts, theme, density, and voice.".into(),
+                subtitle: "Application preferences and shortcuts.".into(),
                 on_activate: Rc::new({
                     let window = window.clone();
                     let overlay = overlay.clone();
@@ -1787,6 +1763,30 @@ mod imp {
                     let window = window.clone();
                     let options = options.clone();
                     move || about_dialog::present(&window, &options.product)
+                }),
+            },
+            command_palette::PaletteAction {
+                title: "New Tab".into(),
+                subtitle: "Open a fresh launch deck tab.".into(),
+                on_activate: Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let title = title.clone();
+                    let launch = launch.clone();
+                    let back_button = back_button.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
+                    move || {
+                        show_launch_deck_tab(
+                            &window,
+                            &overlay,
+                            &title,
+                            &launch,
+                            &back_button,
+                            &fullscreen_button,
+                            &shell_state,
+                        );
+                    }
                 }),
             },
         ];
