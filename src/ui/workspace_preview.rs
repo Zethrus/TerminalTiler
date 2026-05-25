@@ -29,7 +29,7 @@ use crate::ui::tile_chrome::{
     make_shrinkable,
 };
 use crate::ui::tile_drag::TileDragPayload;
-use crate::ui::title_chrome::build_title_tab_chrome;
+use crate::ui::title_chrome::{TitleTabInput, build_interactive_title_tab};
 use crate::ui::workspace_chrome::{
     WorkspaceAlertSidebarChrome, WorkspaceSummaryChrome, WorkspaceSummaryInput,
     build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
@@ -737,30 +737,27 @@ fn build_tab_chip(
     on_select: Rc<dyn Fn(usize)>,
     on_close: Rc<dyn Fn(usize)>,
 ) -> gtk::Widget {
-    let chrome = build_title_tab_chrome();
-    let shell = chrome.shell;
-    shell.set_valign(gtk::Align::End);
-    shell.remove_css_class("is-inactive");
-    shell.remove_css_class("is-active");
-    shell.add_css_class(if active { "is-active" } else { "is-inactive" });
-
     let title = tab
         .custom_title
         .as_deref()
         .unwrap_or(tab.preset.name.as_str());
-    chrome.title_label.set_label(title);
-    chrome.title_label.set_tooltip_text(Some(title));
-    {
-        let on_select = on_select.clone();
-        chrome.select_button.connect_clicked(move |_| {
-            on_select(index);
-        });
-    }
-
-    chrome.close_button.connect_clicked(move |_| {
-        on_close(index);
+    let chrome = build_interactive_title_tab(TitleTabInput {
+        label: title.to_string(),
+        tooltip: title.to_string(),
+        active,
+        close_enabled: true,
+        on_select: Some(Rc::new({
+            let on_select = on_select.clone();
+            move || on_select(index)
+        })),
+        on_rename: None,
+        on_close: Some(Rc::new(move || {
+            on_close(index);
+        })),
     });
 
+    let shell = chrome.shell;
+    shell.set_valign(gtk::Align::End);
     shell.upcast()
 }
 

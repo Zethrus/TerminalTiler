@@ -857,8 +857,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         "Windows GTK workspace preview should reuse the same visible workspace classes as the Linux GTK workspace shell"
     );
     assert!(
-        WORKSPACE_PREVIEW_RS.contains("build_title_tab_chrome")
-            && WORKSPACE_PREVIEW_RS.contains("chrome.select_button.connect_clicked")
+        WORKSPACE_PREVIEW_RS.contains("build_interactive_title_tab(TitleTabInput")
+            && WORKSPACE_PREVIEW_RS.contains("on_select: Some(Rc::new")
+            && WORKSPACE_PREVIEW_RS.contains("on_close: Some(Rc::new")
             && WORKSPACE_PREVIEW_RS.contains("pub struct SessionPreview")
             && WORKSPACE_PREVIEW_RS.contains("pub fn select_tab(&self, next_index: usize)")
             && WORKSPACE_PREVIEW_RS.contains("pub fn close_tab(&self, index: usize) -> bool")
@@ -887,6 +888,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && TITLE_CHROME_RS.contains("chrome.close_button.set_sensitive(close_enabled)")
             && APP_CHROME_RS.contains("let title = TitleChrome::new();")
             && WINDOW_RS.contains("build_interactive_title_tab(TitleTabInput")
+            && WORKSPACE_PREVIEW_RS.contains("build_interactive_title_tab(TitleTabInput")
             && WINDOW_RS.contains("apply_title_tab_state(")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_interactive_title_tab(TitleTabInput")
@@ -974,7 +976,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     );
     assert!(
         WORKSPACE_PREVIEW_RS.contains("close_tab_in_preview_state")
-            && WORKSPACE_PREVIEW_RS.contains("chrome.close_button.connect_clicked")
+            && WORKSPACE_PREVIEW_RS.contains("build_interactive_title_tab(TitleTabInput")
+            && WORKSPACE_PREVIEW_RS.contains("on_close: Some(Rc::new")
             && !WORKSPACE_PREVIEW_RS.contains("chrome.close_button.set_sensitive(false)")
             && !WORKSPACE_PREVIEW_RS.contains("add_button.set_sensitive(false)")
             && !WORKSPACE_PREVIEW_RS.contains("tile_actions.snippet_button.set_sensitive(false)")
