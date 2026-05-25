@@ -40,6 +40,7 @@ use crate::ui::workspace_chrome::{
     build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
+use crate::ui::workspace_navigation;
 
 #[derive(Clone)]
 pub struct TileRuntimeSurface {
@@ -782,18 +783,15 @@ fn build_workspace_summary(
         controls_sensitive: true,
     });
 
-    let has_web_tiles = tab
-        .preset
-        .layout
-        .tile_specs()
-        .iter()
-        .any(|tile| tile.tile_kind == TileKind::WebView);
-    summary.path_label.set_visible(!has_web_tiles);
-    summary.url_entry.set_visible(has_web_tiles);
-    summary.url_reload_button.set_visible(has_web_tiles);
-    if let Some(url) = first_web_tile_url(tab) {
-        summary.url_entry.set_text(&url);
-    }
+    let current_url = first_web_tile_url(tab);
+    workspace_navigation::sync_web_navigation_controls(
+        &summary.path_label,
+        &summary.url_entry,
+        &summary.url_reload_button,
+        current_url.is_some(),
+        current_url.as_deref(),
+        current_url.is_some(),
+    );
 
     let alert_store = render_context.alert_store.clone();
     let broadcast_target = Rc::new(RefCell::new(BroadcastTarget::Off));

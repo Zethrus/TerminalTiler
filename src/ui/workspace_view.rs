@@ -31,6 +31,7 @@ use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
+use crate::ui::workspace_navigation;
 use crate::ui::{layout_tree, tile_view, web_tile};
 
 const ACTIVE_TILE_CLASS: &str = "is-active-tile";
@@ -744,23 +745,18 @@ impl WorkspaceRuntime {
 
     fn refresh_navigation_controls(&self) {
         let has_web_tiles = self.has_web_tiles();
-        self.inner.path_label.set_visible(!has_web_tiles);
-        self.inner.url_entry.set_visible(has_web_tiles);
-        self.inner.url_reload_button.set_visible(has_web_tiles);
-
         let focused_web_tile = self.inner.focused_web_tile_id.borrow().clone();
         let current_url = focused_web_tile
             .as_deref()
-            .and_then(|tile_id| self.web_tile_uri(tile_id))
-            .unwrap_or_default();
-        let web_controls_enabled = focused_web_tile.is_some();
-        self.inner.url_entry.set_sensitive(web_controls_enabled);
-        self.inner
-            .url_reload_button
-            .set_sensitive(web_controls_enabled);
-        if has_web_tiles {
-            self.inner.url_entry.set_text(&current_url);
-        }
+            .and_then(|tile_id| self.web_tile_uri(tile_id));
+        workspace_navigation::sync_web_navigation_controls(
+            &self.inner.path_label,
+            &self.inner.url_entry,
+            &self.inner.url_reload_button,
+            has_web_tiles,
+            current_url.as_deref(),
+            focused_web_tile.is_some(),
+        );
     }
 
     fn set_focused_tile(&self, tile_id: Option<String>, is_web: bool) {

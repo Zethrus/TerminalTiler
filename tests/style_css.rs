@@ -54,6 +54,7 @@ const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.n
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
+const WORKSPACE_NAVIGATION_RS: &str = include_str!("../src/ui/workspace_navigation.rs");
 const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
@@ -1318,6 +1319,22 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
         );
     }
+
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod workspace_navigation;")
+            && WORKSPACE_NAVIGATION_RS.contains("pub(crate) fn sync_web_navigation_controls")
+            && WORKSPACE_NAVIGATION_RS.contains("path_label.set_visible(!has_web_tiles)")
+            && WORKSPACE_NAVIGATION_RS.contains("url_entry.set_visible(has_web_tiles)")
+            && WORKSPACE_NAVIGATION_RS.contains("url_reload_button.set_visible(has_web_tiles)")
+            && WORKSPACE_NAVIGATION_RS.contains("url_entry.set_sensitive(controls_enabled)")
+            && WORKSPACE_NAVIGATION_RS
+                .contains("url_reload_button.set_sensitive(controls_enabled)")
+            && WORKSPACE_VIEW_RS.contains("workspace_navigation::sync_web_navigation_controls(")
+            && WORKSPACE_PREVIEW_RS.contains("workspace_navigation::sync_web_navigation_controls(")
+            && !WORKSPACE_VIEW_RS.contains("path_label.set_visible(!has_web_tiles)")
+            && !WORKSPACE_PREVIEW_RS.contains("path_label.set_visible(!has_web_tiles)"),
+        "Linux and Windows GTK workspace summaries should share web navigation visibility/sensitivity syncing"
+    );
 
     assert!(
         BROADCAST_RS.contains("pub fn target_from_selector_id")
