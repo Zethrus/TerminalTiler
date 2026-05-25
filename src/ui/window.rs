@@ -38,7 +38,9 @@ use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
     launch_screen, settings_dialog, tab_rename_dialog,
-    title_chrome::{TitleTabChrome, apply_title_tab_state, build_title_tab_chrome},
+    title_chrome::{
+        TitleTabChrome, TitleTabInput, apply_title_tab_state, build_interactive_title_tab,
+    },
     workspace_view,
 };
 use crate::voice::audio::AudioCapture;
@@ -3542,54 +3544,38 @@ impl TabStripController {
     }
 
     fn build_item(&self, controller: &TabStripControllerHandle, tab_id: usize) -> TabStripItem {
-        let chrome = build_title_tab_chrome();
+        let chrome = build_interactive_title_tab(TitleTabInput {
+            label: String::new(),
+            tooltip: String::new(),
+            active: false,
+            close_enabled: true,
+            on_select: Some(Rc::new({
+                let select_handle = self.select_tab.clone();
+                move || {
+                    if let Some(select) = select_handle.borrow().as_ref() {
+                        select(tab_id);
+                    }
+                }
+            })),
+            on_rename: Some(Rc::new({
+                let rename_handle = self.request_tab_rename.clone();
+                move || {
+                    if let Some(rename) = rename_handle.borrow().as_ref() {
+                        rename(tab_id);
+                    }
+                }
+            })),
+            on_close: Some(Rc::new({
+                let close_handle = self.close_tab.clone();
+                move || {
+                    if let Some(close) = close_handle.borrow().as_ref() {
+                        close(tab_id);
+                    }
+                }
+            })),
+        });
         let shell = chrome.shell.clone();
         let select_button = chrome.select_button.clone();
-        let close_button = chrome.close_button.clone();
-
-        let select_handle = self.select_tab.clone();
-        select_button.connect_clicked(move |_| {
-            if let Some(select) = select_handle.borrow().as_ref() {
-                select(tab_id);
-            }
-        });
-
-        let rename_handle = self.request_tab_rename.clone();
-        let rename_click = gtk::GestureClick::builder()
-            .button(1)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        rename_click.connect_pressed(move |gesture, n_press, _, _| {
-            if n_press != 2 {
-                return;
-            }
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if let Some(rename) = rename_handle.borrow().as_ref() {
-                rename(tab_id);
-            }
-        });
-        select_button.add_controller(rename_click);
-
-        close_button.set_focus_on_click(false);
-        let close_handle = self.close_tab.clone();
-        close_button.connect_clicked(move |_| {
-            if let Some(close) = close_handle.borrow().as_ref() {
-                close(tab_id);
-            }
-        });
-
-        let middle_close = gtk::GestureClick::builder()
-            .button(2)
-            .propagation_phase(gtk::PropagationPhase::Capture)
-            .build();
-        let close_handle = self.close_tab.clone();
-        middle_close.connect_pressed(move |gesture, _, _, _| {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if let Some(close) = close_handle.borrow().as_ref() {
-                close(tab_id);
-            }
-        });
-        shell.add_controller(middle_close);
 
         let popover = context_menu::popover(&shell);
         let menu = context_menu::menu_box();

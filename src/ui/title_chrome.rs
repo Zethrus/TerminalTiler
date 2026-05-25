@@ -1,4 +1,5 @@
 use adw::prelude::*;
+use std::rc::Rc;
 
 use crate::ui::icons::{self, name as icon_name};
 
@@ -15,6 +16,16 @@ pub(crate) struct TitleChrome {
     pub(crate) root: gtk::Box,
     pub(crate) tabs_box: gtk::Box,
     pub(crate) add_button: gtk::Button,
+}
+
+pub(crate) struct TitleTabInput {
+    pub(crate) label: String,
+    pub(crate) tooltip: String,
+    pub(crate) active: bool,
+    pub(crate) close_enabled: bool,
+    pub(crate) on_select: Option<Rc<dyn Fn()>>,
+    pub(crate) on_rename: Option<Rc<dyn Fn()>>,
+    pub(crate) on_close: Option<Rc<dyn Fn()>>,
 }
 
 impl TitleChrome {
@@ -115,4 +126,52 @@ pub(crate) fn apply_title_tab_state(
         .add_css_class(if active { "is-active" } else { "is-inactive" });
     chrome.title_label.set_label(label);
     chrome.close_button.set_sensitive(close_enabled);
+}
+
+pub(crate) fn build_interactive_title_tab(input: TitleTabInput) -> TitleTabChrome {
+    let chrome = build_title_tab_chrome();
+    apply_title_tab_state(
+        &chrome,
+        &input.label,
+        &input.tooltip,
+        input.active,
+        input.close_enabled,
+    );
+
+    if let Some(on_select) = input.on_select {
+        chrome.select_button.connect_clicked(move |_| on_select());
+    }
+
+    if let Some(on_rename) = input.on_rename {
+        let rename_click = gtk::GestureClick::builder()
+            .button(1)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        rename_click.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press != 2 {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            on_rename();
+        });
+        chrome.select_button.add_controller(rename_click);
+    }
+
+    chrome.close_button.set_focus_on_click(false);
+    if let Some(on_close) = input.on_close {
+        let on_middle_close = on_close.clone();
+        chrome.close_button.connect_clicked(move |_| on_close());
+
+        let middle_close = gtk::GestureClick::builder()
+            .button(2)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        middle_close.connect_pressed(move |gesture, _, _, _| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            on_middle_close();
+        });
+        chrome.shell.add_controller(middle_close);
+    }
+
+    chrome
 }

@@ -769,7 +769,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && !WINDOWS_GTK_APP_RS.contains("title.add_button.set_sensitive(false)")
             && WINDOWS_GTK_APP_RS.contains("Windows GTK shell selected launch deck tab")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleChrome")
-            && WINDOW_RS.contains("build_title_tab_chrome")
+            && TITLE_CHROME_RS.contains("build_title_tab_chrome")
             && WINDOWS_GTK_APP_RS.contains("LaunchScreenInput")
             && WINDOWS_GTK_APP_RS.contains("crate::ui::launch_screen::build")
             && WINDOWS_GTK_APP_RS.contains("code.get()")
@@ -876,17 +876,20 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
         TITLE_CHROME_RS.contains("app-tab-strip")
             && TITLE_CHROME_RS.contains("app-tab-add")
             && TITLE_CHROME_RS.contains("pub(crate) fn build_title_tab_chrome")
+            && TITLE_CHROME_RS.contains("pub(crate) fn build_interactive_title_tab")
+            && TITLE_CHROME_RS.contains("pub(crate) struct TitleTabInput")
             && TITLE_CHROME_RS.contains("pub(crate) struct TitleTabChrome")
             && TITLE_CHROME_RS.contains("pub(crate) fn apply_title_tab_state")
+            && TITLE_CHROME_RS.contains("let rename_click = gtk::GestureClick::builder()")
+            && TITLE_CHROME_RS.contains("let middle_close = gtk::GestureClick::builder()")
             && TITLE_CHROME_RS.contains("chrome.shell.remove_css_class(\"is-inactive\")")
             && TITLE_CHROME_RS.contains("chrome.shell.remove_css_class(\"is-active\")")
             && TITLE_CHROME_RS.contains("chrome.close_button.set_sensitive(close_enabled)")
             && APP_CHROME_RS.contains("let title = TitleChrome::new();")
-            && WINDOW_RS.contains("build_title_tab_chrome()")
+            && WINDOW_RS.contains("build_interactive_title_tab(TitleTabInput")
             && WINDOW_RS.contains("apply_title_tab_state(")
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
-            && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
-            && WINDOWS_GTK_APP_RS.contains("apply_title_tab_state(")
+            && WINDOWS_GTK_APP_RS.contains("build_interactive_title_tab(TitleTabInput")
             && WINDOWS_GTK_APP_RS.contains("with_runtime_assets_and_change_handler")
             && WINDOWS_GTK_APP_RS.contains("&session,")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
@@ -1191,11 +1194,11 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && WINDOWS_GTK_APP_RS.contains("tab_rename_dialog::present(window")
             && !WINDOWS_GTK_APP_RS.contains("fn prompt_windows_tab_rename")
             && !WINDOW_RS.contains("fn prompt_tab_rename")
-            && WINDOWS_GTK_APP_RS.contains("let rename_click = gtk::GestureClick::builder()")
-            && WINDOWS_GTK_APP_RS.contains(".propagation_phase(gtk::PropagationPhase::Capture)")
-            && WINDOWS_GTK_APP_RS.contains("let middle_close = gtk::GestureClick::builder()")
-            && WINDOWS_GTK_APP_RS.contains(".button(2)")
-            && WINDOWS_GTK_APP_RS.contains("on_middle_close()")
+            && TITLE_CHROME_RS.contains("let rename_click = gtk::GestureClick::builder()")
+            && TITLE_CHROME_RS.contains(".propagation_phase(gtk::PropagationPhase::Capture)")
+            && TITLE_CHROME_RS.contains("let middle_close = gtk::GestureClick::builder()")
+            && TITLE_CHROME_RS.contains(".button(2)")
+            && TITLE_CHROME_RS.contains("on_middle_close()")
             && WINDOWS_GTK_APP_RS.contains("preview.rename_tab(index, requested_title)"),
         "shared GTK workspace preview should expose the same rename, middle-click close, add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette/title actions"
     );
@@ -1848,7 +1851,8 @@ fn workspace_tab_drag_stays_left_button_and_uses_title_drop_surface() {
             && !WINDOW_RS.contains("gtk::DragIcon::for_drag")
             && !STYLE_CSS.contains(".app-tab-drag-icon")
             && WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
-            && WINDOW_RS.contains("let rename_click = gtk::GestureClick::builder()"),
+            && WINDOW_RS.contains("build_interactive_title_tab(TitleTabInput")
+            && TITLE_CHROME_RS.contains("let rename_click = gtk::GestureClick::builder()"),
         "workspace tab drag should be left-button-only, suppress the native multi-monitor drag ghost, update over the full title chrome, and preserve Detach/Rename handlers"
     );
 }

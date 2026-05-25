@@ -24,7 +24,7 @@ mod imp {
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
-    use crate::ui::title_chrome::{TitleChrome, apply_title_tab_state, build_title_tab_chrome};
+    use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, settings_dialog,
         tab_rename_dialog,
@@ -1568,50 +1568,16 @@ mod imp {
     }
 
     fn build_windows_title_tab(tab: WindowsTitleTab) -> gtk::Widget {
-        let chrome = build_title_tab_chrome();
-        apply_title_tab_state(
-            &chrome,
-            &tab.label,
-            &tab.tooltip,
-            tab.active,
-            tab.on_close.is_some(),
-        );
-
-        if let Some(on_select) = tab.on_select {
-            chrome.select_button.connect_clicked(move |_| on_select());
-        }
-
-        if let Some(on_rename) = tab.on_rename {
-            let rename_click = gtk::GestureClick::builder()
-                .button(1)
-                .propagation_phase(gtk::PropagationPhase::Capture)
-                .build();
-            rename_click.connect_pressed(move |gesture, n_press, _, _| {
-                if n_press != 2 {
-                    return;
-                }
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                on_rename();
-            });
-            chrome.select_button.add_controller(rename_click);
-        }
-
-        chrome.close_button.set_focus_on_click(false);
-        if let Some(on_close) = tab.on_close {
-            let on_middle_close = on_close.clone();
-            chrome.close_button.connect_clicked(move |_| on_close());
-
-            let middle_close = gtk::GestureClick::builder()
-                .button(2)
-                .propagation_phase(gtk::PropagationPhase::Capture)
-                .build();
-            middle_close.connect_pressed(move |gesture, _, _, _| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                on_middle_close();
-            });
-            chrome.shell.add_controller(middle_close);
-        }
-
+        let close_enabled = tab.on_close.is_some();
+        let chrome = build_interactive_title_tab(TitleTabInput {
+            label: tab.label,
+            tooltip: tab.tooltip,
+            active: tab.active,
+            close_enabled,
+            on_select: tab.on_select,
+            on_rename: tab.on_rename,
+            on_close: tab.on_close,
+        });
         chrome.shell.upcast()
     }
 
