@@ -5,8 +5,11 @@ use std::rc::Rc;
 use gtk::pango;
 use gtk::prelude::*;
 
-use crate::model::assets::WorkspaceAssets;
-use crate::model::layout::{DEFAULT_WEB_URL, TileKind, TileSpec, normalize_web_url};
+use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
+use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
+use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
+use crate::services::layout_editor::{close_tile, split_web_tile};
+use crate::services::runbooks::resolve_runbook;
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
@@ -18,11 +21,28 @@ use crate::ui::tile_chrome::{
 };
 use crate::ui::title_chrome::build_title_tab_chrome;
 use crate::ui::workspace_chrome::{
-    WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
-    build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
+    WorkspaceSummaryChrome, WorkspaceSummaryInput, build_workspace_alert_revealer,
+    build_workspace_alert_sidebar_chrome, build_workspace_content_chrome,
+    build_workspace_shell_chrome, build_workspace_summary_chrome,
 };
 
-pub type TileRuntimeFactory = Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> gtk::Widget>;
+#[derive(Clone)]
+pub struct TileRuntimeSurface {
+    pub widget: gtk::Widget,
+    pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
+}
+
+impl TileRuntimeSurface {
+    pub fn widget(widget: gtk::Widget) -> Self {
+        Self {
+            widget,
+            command_sender: None,
+        }
+    }
+}
+
+pub type TileRuntimeFactory =
+    Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
@@ -45,7 +65,37 @@ pub struct SessionPreview {
     active_index: Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
-    runtime_surfaces: Rc<RefCell<HashMap<String, gtk::Widget>>>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+}
+
+#[derive(Clone)]
+struct PreviewRenderContext {
+    shell: gtk::Box,
+    session: Rc<RefCell<SavedSession>>,
+    assets: Rc<WorkspaceAssets>,
+    active_index: Rc<Cell<usize>>,
+    show_inline_tab_strip: bool,
+    runtime_factory: Option<TileRuntimeFactory>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+}
+
+impl PreviewRenderContext {
+    fn rerender(&self) {
+        render_session_preview(
+            &self.shell,
+            &self.session,
+            &self.assets,
+            &self.active_index,
+            self.show_inline_tab_strip,
+            self.runtime_factory.clone(),
+            self.runtime_surfaces.clone(),
+        );
+    }
+
+    fn prune_and_rerender(&self) {
+        prune_runtime_surfaces(&self.runtime_surfaces, &self.session.borrow());
+        self.rerender();
+    }
 }
 
 impl SessionPreview {
@@ -193,7 +243,7 @@ fn render_session_preview(
     active_index: &Rc<Cell<usize>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
-    runtime_surfaces: Rc<RefCell<HashMap<String, gtk::Widget>>>,
+    runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
 ) {
     while let Some(child) = shell.first_child() {
         shell.remove(&child);
@@ -265,13 +315,35 @@ fn render_session_preview(
     }
 
     if let Some(tab) = session_ref.tabs.get(current_index) {
-        shell.append(&build_workspace_summary(tab));
+        let render_context = PreviewRenderContext {
+            shell: shell.clone(),
+            session: session.clone(),
+            assets: assets.clone(),
+            active_index: active_index.clone(),
+            show_inline_tab_strip,
+            runtime_factory: runtime_factory.clone(),
+            runtime_surfaces: runtime_surfaces.clone(),
+        };
+        shell.append(&build_workspace_summary(tab, &render_context));
+        let on_close_tile = {
+            let render_context = render_context.clone();
+            Rc::new(move |tile_id: String| {
+                if close_active_session_tile(
+                    &render_context.session,
+                    &render_context.active_index,
+                    &tile_id,
+                ) {
+                    render_context.prune_and_rerender();
+                }
+            })
+        };
         let layout = build_layout(
             current_index,
             tab,
             assets,
             runtime_factory.as_ref(),
             &runtime_surfaces,
+            on_close_tile,
         );
         let alert_sidebar = build_workspace_alert_sidebar_chrome(true);
         let alert_revealer = build_workspace_alert_revealer(&alert_sidebar.widget);
@@ -392,28 +464,351 @@ fn build_tab_chip(
     shell.upcast()
 }
 
-fn build_workspace_summary(tab: &SavedTab) -> gtk::Widget {
-    build_workspace_summary_chrome(WorkspaceSummaryInput {
+fn build_workspace_summary(tab: &SavedTab, render_context: &PreviewRenderContext) -> gtk::Widget {
+    let summary = build_workspace_summary_chrome(WorkspaceSummaryInput {
         name: &tab.preset.name,
         path: tab.workspace_root.display().to_string(),
         pane_groups: saved_groups(tab),
         controls_sensitive: true,
-    })
-    .widget
-}
+    });
 
-fn saved_groups(tab: &SavedTab) -> Vec<String> {
-    let mut groups = tab
+    let has_web_tiles = tab
         .preset
         .layout
         .tile_specs()
-        .into_iter()
-        .flat_map(|tile| tile.pane_groups)
-        .filter(|group| !group.trim().is_empty())
-        .collect::<Vec<_>>();
-    groups.sort();
-    groups.dedup();
-    groups
+        .iter()
+        .any(|tile| tile.tile_kind == TileKind::WebView);
+    summary.path_label.set_visible(!has_web_tiles);
+    summary.url_entry.set_visible(has_web_tiles);
+    summary.url_reload_button.set_visible(has_web_tiles);
+    if let Some(url) = first_web_tile_url(tab) {
+        summary.url_entry.set_text(&url);
+    }
+
+    let broadcast_target = Rc::new(RefCell::new(BroadcastTarget::Off));
+    {
+        let broadcast_target = broadcast_target.clone();
+        let broadcast_state = summary.broadcast_state.clone();
+        summary.broadcast_selector.connect_changed(move |combo| {
+            let next_target = match combo.active_id().as_deref() {
+                Some("all") => BroadcastTarget::AllPanes,
+                Some(value) if value.starts_with("group:") => {
+                    BroadcastTarget::SavedGroup(value.trim_start_matches("group:").to_string())
+                }
+                _ => BroadcastTarget::Off,
+            };
+            broadcast_state.set_text(&next_target.label());
+            *broadcast_target.borrow_mut() = next_target;
+        });
+    }
+
+    let send_broadcast = Rc::new({
+        let session = render_context.session.clone();
+        let active_index = render_context.active_index.clone();
+        let runtime_surfaces = render_context.runtime_surfaces.clone();
+        let broadcast_target = broadcast_target.clone();
+        let broadcast_entry = summary.broadcast_entry.clone();
+        let broadcast_state = summary.broadcast_state.clone();
+        move || {
+            let command = broadcast_entry.text().trim().to_string();
+            if command.is_empty() {
+                return;
+            }
+            let target = broadcast_target.borrow().clone();
+            let sent = send_command_to_active_runtime_surfaces(
+                &session,
+                &active_index,
+                &runtime_surfaces,
+                &target,
+                &command,
+            );
+            broadcast_state.set_text(&format!("{}  •  sent to {}", target.label(), sent));
+            if sent > 0 {
+                broadcast_entry.set_text("");
+            }
+        }
+    });
+    {
+        let send_broadcast = send_broadcast.clone();
+        summary
+            .broadcast_button
+            .connect_clicked(move |_| send_broadcast());
+    }
+    {
+        let send_broadcast = send_broadcast.clone();
+        summary
+            .broadcast_entry
+            .connect_activate(move |_| send_broadcast());
+    }
+
+    {
+        let render_context = render_context.clone();
+        let url_entry = summary.url_entry.clone();
+        summary.add_web_tile_button.connect_clicked(move |_| {
+            if add_web_tile_to_active_session(
+                &render_context.session,
+                &render_context.active_index,
+                &url_entry.text(),
+            ) {
+                render_context.prune_and_rerender();
+            }
+        });
+    }
+
+    let update_web_url = Rc::new({
+        let render_context = render_context.clone();
+        let url_entry = summary.url_entry.clone();
+        move || {
+            if update_active_web_tile_url(
+                &render_context.session,
+                &render_context.active_index,
+                &url_entry.text(),
+            ) {
+                render_context.prune_and_rerender();
+            }
+        }
+    });
+    {
+        let update_web_url = update_web_url.clone();
+        summary
+            .url_entry
+            .connect_activate(move |_| update_web_url());
+    }
+    {
+        let update_web_url = update_web_url.clone();
+        summary
+            .url_reload_button
+            .connect_clicked(move |_| update_web_url());
+    }
+
+    bind_preview_runbook_controls(&summary, render_context);
+
+    summary.widget
+}
+
+fn saved_groups(tab: &SavedTab) -> Vec<String> {
+    saved_groups_for_tiles(&tab.preset.layout.tile_specs())
+}
+
+fn bind_preview_runbook_controls(
+    summary: &WorkspaceSummaryChrome,
+    render_context: &PreviewRenderContext,
+) {
+    summary.runbook_selector.remove_all();
+    summary.runbook_selector.append(Some(""), "Runbook");
+    for runbook in &render_context.assets.runbooks {
+        summary
+            .runbook_selector
+            .append(Some(&runbook.id), &runbook.name);
+    }
+    summary.runbook_selector.set_active_id(Some(""));
+    summary
+        .runbook_button
+        .set_sensitive(!render_context.assets.runbooks.is_empty());
+
+    let session = render_context.session.clone();
+    let active_index = render_context.active_index.clone();
+    let runtime_surfaces = render_context.runtime_surfaces.clone();
+    let assets = render_context.assets.clone();
+    let runbook_selector = summary.runbook_selector.clone();
+    let broadcast_state = summary.broadcast_state.clone();
+    summary.runbook_button.connect_clicked(move |_| {
+        let Some(runbook_id) = runbook_selector.active_id() else {
+            return;
+        };
+        if runbook_id.is_empty() {
+            return;
+        }
+        let Some(runbook) = assets
+            .runbooks
+            .iter()
+            .find(|runbook| runbook.id == runbook_id)
+        else {
+            return;
+        };
+        if !runbook.variables.is_empty() {
+            broadcast_state.set_text("Runbook requires variables");
+            return;
+        }
+        let tile_specs = active_tab_tile_specs(&session, &active_index);
+        match resolve_runbook(runbook, &TemplateVariableValues::default(), &tile_specs) {
+            Ok(resolved) => {
+                let sent = resolved
+                    .commands
+                    .iter()
+                    .map(|command| {
+                        send_command_to_active_runtime_surfaces(
+                            &session,
+                            &active_index,
+                            &runtime_surfaces,
+                            &resolved.target,
+                            command,
+                        )
+                    })
+                    .sum::<usize>();
+                broadcast_state
+                    .set_text(&format!("{}  •  sent to {}", resolved.target_label, sent));
+            }
+            Err(error) => broadcast_state.set_text(&error.to_string()),
+        }
+    });
+}
+
+fn active_tab_tile_specs(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+) -> Vec<TileSpec> {
+    let session_ref = session.borrow();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return Vec::new();
+    };
+    session_ref
+        .tabs
+        .get(tab_index)
+        .map(|tab| tab.preset.layout.tile_specs())
+        .unwrap_or_default()
+}
+
+fn prune_runtime_surfaces(
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    session: &SavedSession,
+) {
+    let live_keys = runtime_surface_keys(session);
+    runtime_surfaces
+        .borrow_mut()
+        .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
+}
+
+fn active_tab_index(session: &SavedSession, active_index: usize) -> Option<usize> {
+    (!session.tabs.is_empty()).then_some(active_index.min(session.tabs.len() - 1))
+}
+
+fn add_web_tile_to_active_session(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    initial_url: &str,
+) -> bool {
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(target_tile_id) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .tile_specs()
+        .first()
+        .map(|tile| tile.id.clone())
+    else {
+        return false;
+    };
+    let Some((next_layout, _new_tile_id)) = split_web_tile(
+        &session_ref.tabs[tab_index].preset.layout,
+        &target_tile_id,
+        SplitAxis::Horizontal,
+        initial_url,
+    ) else {
+        return false;
+    };
+    session_ref.tabs[tab_index].preset.layout = next_layout;
+    true
+}
+
+fn close_active_session_tile(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    tile_id: &str,
+) -> bool {
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(next_layout) = close_tile(&session_ref.tabs[tab_index].preset.layout, tile_id) else {
+        return false;
+    };
+    session_ref.tabs[tab_index].preset.layout = next_layout;
+    true
+}
+
+fn first_web_tile_url(tab: &SavedTab) -> Option<String> {
+    tab.preset
+        .layout
+        .tile_specs()
+        .iter()
+        .find(|tile| tile.tile_kind == TileKind::WebView)
+        .map(|tile| normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL)))
+}
+
+fn update_active_web_tile_url(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    url: &str,
+) -> bool {
+    let normalized_url = normalize_web_url(url);
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(tile_id) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .tile_specs()
+        .iter()
+        .find(|tile| tile.tile_kind == TileKind::WebView)
+        .map(|tile| tile.id.clone())
+    else {
+        return false;
+    };
+    let Some(tile) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .tile_spec_mut_by_id(&tile_id)
+    else {
+        return false;
+    };
+    if tile.url.as_deref() == Some(normalized_url.as_str()) {
+        return false;
+    }
+    tile.url = Some(normalized_url);
+    true
+}
+
+fn send_command_to_active_runtime_surfaces(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    target: &BroadcastTarget,
+    command: &str,
+) -> usize {
+    let session_ref = session.borrow();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return 0;
+    };
+    let Some(tab) = session_ref.tabs.get(tab_index) else {
+        return 0;
+    };
+    let surfaces = runtime_surfaces.borrow();
+    tab.preset
+        .layout
+        .tile_specs()
+        .iter()
+        .filter(|tile| tile.tile_kind == TileKind::Terminal && target.includes(tile))
+        .filter(|tile| {
+            let key = runtime_surface_key(tab_index, tab, tile);
+            surfaces
+                .get(&key)
+                .and_then(|surface| surface.command_sender.as_ref())
+                .is_some_and(|send| send(command))
+        })
+        .count()
+}
+
+fn connect_preview_tile_close(
+    close_button: &gtk::Button,
+    tile: &TileSpec,
+    on_close_tile: Rc<dyn Fn(String)>,
+) {
+    let tile_id = tile.id.clone();
+    close_button.connect_clicked(move |_| on_close_tile(tile_id.clone()));
 }
 
 fn build_layout(
@@ -421,7 +816,8 @@ fn build_layout(
     tab: &SavedTab,
     assets: &WorkspaceAssets,
     runtime_factory: Option<&TileRuntimeFactory>,
-    runtime_surfaces: &Rc<RefCell<HashMap<String, gtk::Widget>>>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    on_close_tile: Rc<dyn Fn(String)>,
 ) -> gtk::Widget {
     let layout = &tab.preset.layout;
     let shell = crate::ui::layout_tree::build(layout, None);
@@ -437,6 +833,7 @@ fn build_layout(
             index == 0,
             runtime_factory,
             runtime_surfaces,
+            on_close_tile.clone(),
         ));
     }
     shell.widget
@@ -449,7 +846,8 @@ fn build_tile(
     assets: &WorkspaceAssets,
     active: bool,
     runtime_factory: Option<&TileRuntimeFactory>,
-    runtime_surfaces: &Rc<RefCell<HashMap<String, gtk::Widget>>>,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    on_close_tile: Rc<dyn Fn(String)>,
 ) -> gtk::Widget {
     let shell = build_tile_shell(tile);
     if active {
@@ -489,13 +887,16 @@ fn build_tile(
     });
 
     let actions = header.actions.clone();
+    let can_close = tab.preset.layout.tile_count() > 1;
     match tile.tile_kind {
         TileKind::Terminal => {
-            let tile_actions = build_terminal_tile_action_chrome(true);
+            let tile_actions = build_terminal_tile_action_chrome(can_close);
+            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
             append_terminal_tile_action_chrome(&actions, &tile_actions);
         }
         TileKind::WebView => {
-            let tile_actions = build_web_tile_action_chrome(true);
+            let tile_actions = build_web_tile_action_chrome(can_close);
+            connect_preview_tile_close(&tile_actions.close_button, tile, on_close_tile.clone());
             append_web_tile_action_chrome(&actions, &tile_actions);
         }
     }
@@ -514,8 +915,8 @@ fn build_tile(
             .entry(key)
             .or_insert_with(|| runtime_factory(tile, tab, assets))
             .clone();
-        detach_from_previous_parent(&surface);
-        surface
+        detach_from_previous_parent(&surface.widget);
+        surface.widget
     } else {
         build_tile_surface(tile).upcast()
     };

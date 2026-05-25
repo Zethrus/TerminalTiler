@@ -890,8 +890,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && TILE_CHROME_RS.contains("tile-snippet-action")
             && TILE_CHROME_RS.contains("\"Edit URL and refresh settings\"")
             && source_contains(TILE_CHROME_RS, "actions.append(&status_label);",)
-            && WORKSPACE_PREVIEW_RS.contains("build_terminal_tile_action_chrome(true)")
-            && WORKSPACE_PREVIEW_RS.contains("build_web_tile_action_chrome(true)")
+            && WORKSPACE_PREVIEW_RS.contains("let can_close = tab.preset.layout.tile_count() > 1")
+            && WORKSPACE_PREVIEW_RS.contains("build_terminal_tile_action_chrome(can_close)")
+            && WORKSPACE_PREVIEW_RS.contains("build_web_tile_action_chrome(can_close)")
+            && WORKSPACE_PREVIEW_RS.contains("connect_preview_tile_close")
             && TILE_VIEW_RS.contains("build_terminal_tile_action_chrome(can_close)")
             && WEB_TILE_RS.contains("build_web_tile_action_chrome(can_close)")
             && source_contains(
@@ -999,6 +1001,42 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && !WINDOWS_GTK_APP_RS.contains(".default_width(1180)")
             && !WINDOWS_GTK_APP_RS.contains(".default_height(780)"),
         "Linux and Windows GTK shells should share the same default window geometry"
+    );
+}
+
+#[test]
+fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
+    for token in [
+        "pub struct TileRuntimeSurface",
+        "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
+        "send_command_to_active_runtime_surfaces",
+        "BroadcastTarget::AllPanes",
+        "BroadcastTarget::SavedGroup",
+        "target.includes(tile)",
+        "add_web_tile_to_active_session",
+        "split_web_tile(",
+        "update_active_web_tile_url",
+        "close_active_session_tile",
+        "close_tile(&session_ref.tabs[tab_index].preset.layout, tile_id)",
+        "connect_preview_tile_close",
+        "prune_runtime_surfaces",
+        "bind_preview_runbook_controls",
+        "resolve_runbook(runbook, &TemplateVariableValues::default(), &tile_specs)",
+        "active_tab_tile_specs",
+    ] {
+        assert!(
+            WORKSPACE_PREVIEW_RS.contains(token),
+            "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
+        );
+    }
+
+    assert!(
+        WINDOWS_GTK_RUNTIME_RS.contains("TileRuntimeSurface")
+            && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("stdin_tx.send(command.to_string())")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("TileRuntimeSurface::widget(build_web_runtime_surface(tile))"),
+        "Windows GTK terminal runtime surfaces should expose command senders for the shared broadcast toolbar while web panes remain visual runtime widgets"
     );
 }
 

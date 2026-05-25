@@ -3,6 +3,7 @@ mod imp {
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
+    use std::rc::Rc;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -17,16 +18,17 @@ mod imp {
     use crate::storage::session_store::SavedTab;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
+    use crate::ui::workspace_preview::TileRuntimeSurface;
     use crate::windows::{workspace, wsl};
 
     pub(crate) fn build_tile_runtime_surface(
         tile: &TileSpec,
         tab: &SavedTab,
         assets: &WorkspaceAssets,
-    ) -> gtk::Widget {
+    ) -> TileRuntimeSurface {
         match tile.tile_kind {
             TileKind::Terminal => build_terminal_runtime_surface(tile, tab, assets),
-            TileKind::WebView => build_web_runtime_surface(tile),
+            TileKind::WebView => TileRuntimeSurface::widget(build_web_runtime_surface(tile)),
         }
     }
 
@@ -34,7 +36,7 @@ mod imp {
         tile: &TileSpec,
         tab: &SavedTab,
         assets: &WorkspaceAssets,
-    ) -> gtk::Widget {
+    ) -> TileRuntimeSurface {
         let surface = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
@@ -123,7 +125,18 @@ mod imp {
             input.connect_activate(move |entry| send_entry_text(entry, &stdin_tx));
         }
 
-        surface.upcast()
+        let command_sender = Rc::new({
+            let stdin_tx = stdin_tx.clone();
+            move |command: &str| {
+                let command = command.trim();
+                !command.is_empty() && stdin_tx.send(command.to_string()).is_ok()
+            }
+        });
+
+        TileRuntimeSurface {
+            widget: surface.upcast(),
+            command_sender: Some(command_sender),
+        }
     }
 
     fn spawn_terminal_process(
