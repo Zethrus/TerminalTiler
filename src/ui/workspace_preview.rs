@@ -31,6 +31,7 @@ use crate::ui::workspace_chrome::{
 pub struct TileRuntimeSurface {
     pub widget: gtk::Widget,
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
+    pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
 }
 
 impl TileRuntimeSurface {
@@ -38,6 +39,7 @@ impl TileRuntimeSurface {
         Self {
             widget,
             command_sender: None,
+            appearance_applier: None,
         }
     }
 }
@@ -965,6 +967,9 @@ fn build_tile(
             .entry(key)
             .or_insert_with(|| runtime_factory(tile, tab, assets))
             .clone();
+        if let Some(apply_appearance) = &surface.appearance_applier {
+            apply_appearance(tab.preset.density, tab.terminal_zoom_steps);
+        }
         detach_from_previous_parent(&surface.widget);
         surface.widget
     } else {

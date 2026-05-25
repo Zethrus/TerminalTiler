@@ -182,6 +182,13 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("preview.adjust_active_zoom(delta)")
             && WORKSPACE_PREVIEW_RS.contains("pub fn cycle_active_density(&self)")
             && WORKSPACE_PREVIEW_RS.contains("pub fn adjust_active_zoom(&self, delta: i32)")
+            && WORKSPACE_PREVIEW_RS.contains("appearance_applier")
+            && WORKSPACE_PREVIEW_RS
+                .contains("apply_appearance(tab.preset.density, tab.terminal_zoom_steps)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("apply_terminal_runtime_appearance")
+            && WINDOWS_GTK_RUNTIME_RS.contains("effective_terminal_font_points")
+            && WINDOWS_GTK_RUNTIME_RS.contains("font-size: {}pt")
+            && WINDOWS_GTK_RUNTIME_RS.contains("appearance_applier: Some(appearance_applier)")
             && WORKSPACE_PREVIEW_RS.contains("clamp_terminal_zoom_steps")
             && WINDOWS_GTK_APP_RS.contains("window.connect_fullscreened_notify")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_fullscreen_chrome(window")

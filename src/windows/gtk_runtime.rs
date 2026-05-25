@@ -14,12 +14,16 @@ mod imp {
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
     use crate::model::layout::{DEFAULT_WEB_URL, TileKind, TileSpec, normalize_web_url};
+    use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::SavedTab;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::workspace_preview::TileRuntimeSurface;
     use crate::windows::{workspace, wsl};
+
+    const MIN_TERMINAL_FONT_POINTS: i32 = 7;
+    const MAX_TERMINAL_FONT_POINTS: i32 = 20;
 
     pub(crate) fn build_tile_runtime_surface(
         tile: &TileSpec,
@@ -66,6 +70,16 @@ mod imp {
             .css_classes(["terminal-runtime-output"])
             .build();
         make_shrinkable(&terminal_output);
+        let appearance_provider = gtk::CssProvider::new();
+        terminal_output.style_context().add_provider(
+            &appearance_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+        apply_terminal_runtime_appearance(
+            &appearance_provider,
+            tab.preset.density,
+            tab.terminal_zoom_steps,
+        );
 
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
@@ -133,10 +147,39 @@ mod imp {
             }
         });
 
+        let appearance_applier = Rc::new({
+            let appearance_provider = appearance_provider.clone();
+            move |density, zoom_steps| {
+                apply_terminal_runtime_appearance(&appearance_provider, density, zoom_steps);
+            }
+        });
+
         TileRuntimeSurface {
             widget: surface.upcast(),
             command_sender: Some(command_sender),
+            appearance_applier: Some(appearance_applier),
         }
+    }
+
+    fn apply_terminal_runtime_appearance(
+        provider: &gtk::CssProvider,
+        density: ApplicationDensity,
+        zoom_steps: i32,
+    ) {
+        provider.load_from_data(&format!(
+            ".terminal-runtime-output {{ font-family: \"JetBrains Mono\", monospace; font-size: {}pt; }}",
+            effective_terminal_font_points(density, zoom_steps)
+        ));
+    }
+
+    fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+        let base_points = density.terminal_font_points();
+        (base_points + zoom_steps).clamp(MIN_TERMINAL_FONT_POINTS, MAX_TERMINAL_FONT_POINTS)
+            - base_points
+    }
+
+    fn effective_terminal_font_points(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+        density.terminal_font_points() + clamp_terminal_zoom_steps(density, zoom_steps)
     }
 
     fn spawn_terminal_process(
