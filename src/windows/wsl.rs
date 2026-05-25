@@ -180,6 +180,28 @@ pub fn build_launch_command(
     }
 }
 
+#[cfg_attr(not(feature = "windows-gtk-shell"), allow(dead_code))]
+pub fn build_local_shell_command(
+    tile: &TileSpec,
+    workspace_root: &Path,
+    runtime: &WindowsRuntime,
+) -> Result<WindowsLaunchCommand, String> {
+    match runtime {
+        WindowsRuntime::Wsl(runtime) => build_wsl_launch_command(
+            &tile.working_directory,
+            workspace_root,
+            None,
+            &runtime.selected.name,
+        ),
+        WindowsRuntime::PowerShell(runtime) => build_powershell_launch_command(
+            &tile.working_directory,
+            workspace_root,
+            None,
+            &runtime.program,
+        ),
+    }
+}
+
 pub fn collect_session_launch_commands(
     session: &SavedSession,
     runtime: &WindowsRuntime,
@@ -740,10 +762,10 @@ fn looks_like_windows_absolute_path(path: &str) -> bool {
 mod tests {
     use super::{
         CREATE_NO_WINDOW, PowerShellRuntime, RUNTIME_PROBE_TIMEOUT, WindowsLaunchRuntime,
-        WindowsRuntime, WslDistribution, build_launch_command, build_powershell_script,
-        build_wsl_shell_script, collect_session_launch_commands, parse_verbose_list,
-        powershell_probe_command, resolve_powershell_working_directory, resolve_wsl_runtime,
-        ssh_probe_command, wsl_verbose_probe_command,
+        WindowsRuntime, WslDistribution, build_launch_command, build_local_shell_command,
+        build_powershell_script, build_wsl_shell_script, collect_session_launch_commands,
+        parse_verbose_list, powershell_probe_command, resolve_powershell_working_directory,
+        resolve_wsl_runtime, ssh_probe_command, wsl_verbose_probe_command,
     };
     use crate::model::assets::{ConnectionKind, ConnectionProfile, InventoryHost, WorkspaceAssets};
     use crate::model::layout::{ReconnectPolicy, TileKind, TileSpec, WorkingDirectory};
@@ -1065,6 +1087,41 @@ mod tests {
                 "& { $env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; Set-Location -LiteralPath 'C:\\Users\\dev\\project'; cargo test }",
             ]
         );
+    }
+
+    #[test]
+    fn builds_wsl_local_shell_command_without_startup_command() {
+        let tile = sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test"));
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let command = build_local_shell_command(&tile, &root, &sample_wsl_runtime()).unwrap();
+
+        assert_eq!(command.program, "wsl.exe");
+        assert_eq!(command.working_directory, "/mnt/c/Users/dev/project");
+        assert_eq!(
+            command.args.last().map(String::as_str),
+            Some(
+                "export TERM=xterm-256color COLORTERM=truecolor; cd '/mnt/c/Users/dev/project' && exec \"${SHELL:-/bin/bash}\" -l"
+            )
+        );
+        assert!(!command.args.iter().any(|arg| arg.contains("cargo test")));
+    }
+
+    #[test]
+    fn builds_powershell_local_shell_command_without_startup_command() {
+        let tile = sample_tile(WorkingDirectory::WorkspaceRoot, Some("cargo test"));
+        let root = PathBuf::from(r"C:\Users\dev\project");
+        let command =
+            build_local_shell_command(&tile, &root, &sample_powershell_runtime()).unwrap();
+
+        assert_eq!(command.program, "pwsh.exe");
+        assert_eq!(command.working_directory, r"C:\Users\dev\project");
+        assert_eq!(
+            command.args.last().map(String::as_str),
+            Some(
+                "& { $env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; Set-Location -LiteralPath 'C:\\Users\\dev\\project' }"
+            )
+        );
+        assert!(!command.args.iter().any(|arg| arg.contains("cargo test")));
     }
 
     #[test]

@@ -83,6 +83,12 @@ mod imp {
         },
     }
 
+    #[derive(Clone, Copy)]
+    enum TerminalLaunchMode {
+        ConfiguredSession,
+        LocalShell,
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     struct TerminalTextStyleKey {
         use_dark_palette: bool,
@@ -266,6 +272,7 @@ mod imp {
             tile.clone(),
             tab.clone(),
             assets.clone(),
+            TerminalLaunchMode::ConfiguredSession,
             event_tx.clone(),
         );
 
@@ -350,6 +357,24 @@ mod imp {
                     tile.clone(),
                     tab.clone(),
                     assets.clone(),
+                    TerminalLaunchMode::ConfiguredSession,
+                    event_tx.clone(),
+                );
+            }
+        });
+        let open_local_shell = Rc::new({
+            let state = state.clone();
+            let tile = tile.clone();
+            let tab = tab.clone();
+            let assets = assets.clone();
+            let event_tx = event_tx.clone();
+            move || {
+                start_terminal_process(
+                    &state,
+                    tile.clone(),
+                    tab.clone(),
+                    assets.clone(),
+                    TerminalLaunchMode::LocalShell,
                     event_tx.clone(),
                 );
             }
@@ -359,6 +384,7 @@ mod imp {
             &input,
             &state,
             restart_runtime.clone(),
+            open_local_shell.clone(),
         );
         install_terminal_output_shortcuts(&terminal_output, &input, &state);
         install_terminal_input_key_controller(&terminal_output, &state, terminal_buffer.clone());
@@ -424,6 +450,7 @@ mod imp {
                             title_label,
                             state.clone(),
                             restart_runtime.clone(),
+                            open_local_shell.clone(),
                             recovery_bind_generation.clone(),
                             chrome_context.clone(),
                         );
@@ -463,6 +490,7 @@ mod imp {
         tile: TileSpec,
         tab: SavedTab,
         assets: WorkspaceAssets,
+        mode: TerminalLaunchMode,
         event_tx: mpsc::Sender<TerminalRuntimeEvent>,
     ) {
         if state.borrow().active {
@@ -479,27 +507,37 @@ mod imp {
             state.active_generation
         };
         if generation > 1 {
-            let _ = event_tx.send(TerminalRuntimeEvent::Output(
-                "\r\n[terminaltiler] reconnecting terminal session\r\n".into(),
-            ));
+            let notice = match mode {
+                TerminalLaunchMode::ConfiguredSession => {
+                    "\r\n[terminaltiler] reconnecting terminal session\r\n"
+                }
+                TerminalLaunchMode::LocalShell => "\r\n[terminaltiler] opening local shell\r\n",
+            };
+            let _ = event_tx.send(TerminalRuntimeEvent::Output(notice.into()));
         }
-        spawn_terminal_process(tile, tab, assets, generation, stdin_rx, event_tx);
+        spawn_terminal_process(tile, tab, assets, mode, generation, stdin_rx, event_tx);
     }
 
     fn spawn_terminal_process(
         tile: TileSpec,
         tab: SavedTab,
         assets: WorkspaceAssets,
+        mode: TerminalLaunchMode,
         generation: u64,
         stdin_rx: mpsc::Receiver<String>,
         event_tx: mpsc::Sender<TerminalRuntimeEvent>,
     ) {
         std::thread::spawn(move || {
-            let launch =
-                resolve_tile_launch(&tile, &tab.workspace_root, &assets).and_then(|resolved| {
-                    let runtime = wsl::probe_runtime(None)?;
-                    wsl::build_launch_command(&tile, &tab.workspace_root, &resolved, &runtime)
-                });
+            let launch = wsl::probe_runtime(None).and_then(|runtime| match mode {
+                TerminalLaunchMode::ConfiguredSession => {
+                    resolve_tile_launch(&tile, &tab.workspace_root, &assets).and_then(|resolved| {
+                        wsl::build_launch_command(&tile, &tab.workspace_root, &resolved, &runtime)
+                    })
+                }
+                TerminalLaunchMode::LocalShell => {
+                    wsl::build_local_shell_command(&tile, &tab.workspace_root, &runtime)
+                }
+            });
 
             let command = match launch {
                 Ok(command) => command,
@@ -954,6 +992,7 @@ mod imp {
         input: &gtk::Entry,
         state: &Rc<RefCell<TerminalRuntimeState>>,
         restart_runtime: Rc<dyn Fn()>,
+        open_local_shell: Rc<dyn Fn()>,
     ) {
         let popover = context_menu::popover(output);
         let menu = context_menu::menu_box();
@@ -999,6 +1038,17 @@ mod imp {
         }
         menu.append(&reconnect_button);
 
+        let local_shell_button = context_menu::action_button("Open Local Shell", None);
+        {
+            let open_local_shell = open_local_shell.clone();
+            let popover = popover.clone();
+            local_shell_button.connect_clicked(move |_| {
+                open_local_shell();
+                popover.popdown();
+            });
+        }
+        menu.append(&local_shell_button);
+
         let focus_input_button = context_menu::action_button("Focus Command Input", None);
         {
             let input = input.clone();
@@ -1022,6 +1072,7 @@ mod imp {
             let copy_button = copy_button.clone();
             let paste_button = paste_button.clone();
             let reconnect_button = reconnect_button.clone();
+            let local_shell_button = local_shell_button.clone();
             let state = state.clone();
             right_click.connect_pressed(move |gesture, _, x, y| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -1030,6 +1081,7 @@ mod imp {
                 let active = state.borrow().active;
                 paste_button.set_sensitive(active);
                 reconnect_button.set_sensitive(!active);
+                local_shell_button.set_sensitive(!active);
                 context_menu::popup_at(&popover, x, y);
             });
         }
@@ -1156,6 +1208,7 @@ mod imp {
         title_label: &gtk::Label,
         state: Rc<RefCell<TerminalRuntimeState>>,
         restart_runtime: Rc<dyn Fn()>,
+        open_local_shell: Rc<dyn Fn()>,
         bind_generation: Rc<Cell<u64>>,
         chrome_context: TerminalRuntimeChromeContext,
     ) {
@@ -1167,6 +1220,7 @@ mod imp {
         let popover = build_terminal_recovery_popover(
             recovery_button,
             restart_runtime,
+            open_local_shell,
             initial_status_line.clone(),
         );
 
@@ -1241,9 +1295,9 @@ mod imp {
             shell.add_css_class("is-disconnected");
             status.add_css_class("recovery-chip");
             sync_status_severity(status, None);
-            status.set_text("Disconnected  •  Reconnect session");
+            status.set_text("Disconnected  •  Reconnect or open local shell");
             status.set_tooltip_text(Some(
-                "This Windows GTK terminal process exited. Reconnect the configured session.",
+                "This Windows GTK terminal process exited. Reconnect the configured session or open a local shell.",
             ));
             recovery_button.set_visible(true);
             recovery_button.set_sensitive(true);
@@ -1279,15 +1333,25 @@ mod imp {
         }
 
         let title = terminal.window_title();
-        let shell_label = title
-            .filter(|title| !title.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                terminal_recent_output_line(terminal)
-                    .filter(|line| !line.trim().is_empty())
-                    .unwrap_or_else(|| context.tile.agent_label.clone())
-            });
-        let matches = context.output_helpers.scan(&shell_label);
+        let (matches, shell_label) =
+            if let Some(title) = title.filter(|title| !title.trim().is_empty()) {
+                (context.output_helpers.scan(title), title.to_string())
+            } else {
+                let recent = terminal_recent_output(terminal, 32);
+                let matches = context.output_helpers.scan(&recent);
+                let shell_label = if recent.trim().is_empty() {
+                    context.tile.agent_label.clone()
+                } else {
+                    recent
+                        .lines()
+                        .rev()
+                        .find(|line| !line.trim().is_empty())
+                        .map(str::trim)
+                        .unwrap_or(&context.tile.agent_label)
+                        .to_string()
+                };
+                (matches, shell_label)
+            };
         let (helper_label, helper_severity) = helper_summary_text(&matches);
         snapshot.shell_label = shell_label;
         snapshot.helper_label = helper_label;
@@ -1295,18 +1359,23 @@ mod imp {
         snapshot
     }
 
-    fn terminal_recent_output_line(terminal: &VtBuffer) -> Option<String> {
-        for row in (0..terminal.rows()).rev() {
+    fn terminal_recent_output(terminal: &VtBuffer, max_rows: usize) -> String {
+        let total_rows = terminal.total_rows();
+        let start_row = total_rows.saturating_sub(max_rows.max(1));
+        let mut output = String::with_capacity((terminal.columns() + 1) * (total_rows - start_row));
+
+        for row in start_row..total_rows {
             let mut line = String::with_capacity(terminal.columns());
             for column in 0..terminal.columns() {
-                line.push(terminal.visible_cell(row, column).ch);
+                line.push(terminal.display_cell(row, column).ch);
             }
-            let line = line.trim().to_string();
-            if !line.is_empty() {
-                return Some(line);
+            if row > start_row {
+                output.push('\n');
             }
+            output.push_str(line.trim_end());
         }
-        None
+
+        output
     }
 
     fn short_location_from_path(path: &str) -> String {
@@ -1332,6 +1401,7 @@ mod imp {
     fn build_terminal_recovery_popover(
         recovery_button: &gtk::Button,
         restart_runtime: Rc<dyn Fn()>,
+        open_local_shell: Rc<dyn Fn()>,
         active_status_line: String,
     ) -> gtk::Popover {
         let popover = gtk::Popover::new();
@@ -1359,7 +1429,7 @@ mod imp {
         shell.append(
             &gtk::Label::builder()
                 .label(format!(
-                    "{}\nReconnect the configured session in this pane.",
+                    "{}\nReconnect the configured session or open a local shell in this pane.",
                     active_status_line
                 ))
                 .halign(gtk::Align::Start)
@@ -1382,6 +1452,21 @@ mod imp {
             });
         }
         shell.append(&reconnect_button);
+
+        let local_shell_button = icons::labeled_button(
+            "Open Local Shell",
+            icon_name::TERMINAL,
+            &["flat", "surface-button"],
+        );
+        local_shell_button.set_focus_on_click(false);
+        {
+            let popover = popover.clone();
+            local_shell_button.connect_clicked(move |_| {
+                open_local_shell();
+                popover.popdown();
+            });
+        }
+        shell.append(&local_shell_button);
 
         popover.set_child(Some(&shell));
         popover
