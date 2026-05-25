@@ -11,7 +11,10 @@ use crate::model::assets::{CliSnippet, Runbook, TemplateVariableValues, Workspac
 use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
-use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
+use crate::services::broadcast::{
+    BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
+    sent_status_label, target_from_selector_id,
+};
 use crate::services::layout_editor::{close_tile, split_web_tile, update_split_ratio};
 use crate::services::runbooks::resolve_runbook;
 use crate::services::snippets::resolve_snippet;
@@ -798,13 +801,7 @@ fn build_workspace_summary(
         let broadcast_target = broadcast_target.clone();
         let broadcast_state = summary.broadcast_state.clone();
         summary.broadcast_selector.connect_changed(move |combo| {
-            let next_target = match combo.active_id().as_deref() {
-                Some("all") => BroadcastTarget::AllPanes,
-                Some(value) if value.starts_with("group:") => {
-                    BroadcastTarget::SavedGroup(value.trim_start_matches("group:").to_string())
-                }
-                _ => BroadcastTarget::Off,
-            };
+            let next_target = target_from_selector_id(combo.active_id().as_deref());
             broadcast_state.set_text(&next_target.label());
             *broadcast_target.borrow_mut() = next_target;
         });
@@ -819,14 +816,8 @@ fn build_workspace_summary(
         let broadcast_state = summary.broadcast_state.clone();
         let alert_store = alert_store.clone();
         move || {
-            let command = broadcast_entry.text().trim().to_string();
-            if command.is_empty() {
+            let Some(payload) = quick_send_payload(&broadcast_entry.text()) else {
                 return;
-            }
-            let payload = if command.ends_with('\n') {
-                command
-            } else {
-                format!("{command}\n")
             };
             let target = broadcast_target.borrow().clone();
             let sent = send_command_to_active_runtime_surfaces(
@@ -836,15 +827,12 @@ fn build_workspace_summary(
                 &target,
                 &payload,
             );
-            broadcast_state.set_text(&format!("{}  •  sent to {}", target.label(), sent));
-            if sent > 0 {
-                broadcast_entry.set_text("");
-            }
+            broadcast_state.set_text(&sent_status_label(&target.label(), sent));
             alert_store.push(AlertEventInput {
                 source: AlertSourceKind::Runbook,
                 severity: AlertSeverity::Info,
                 title: "Quick send executed".into(),
-                detail: format!("Sent quick command to {} pane(s).", sent),
+                detail: quick_send_detail(sent),
                 pane_id: None,
                 allows_reconnect: false,
             });

@@ -6,6 +6,7 @@ const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
+const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
 const CI_YML: &str = include_str!("../.github/workflows/ci.yml");
 const DESIGN_MD: &str = include_str!("../DESIGN.md");
 const DOC_WINDOWS_GTK_VISUAL_QA: &str = include_str!("../docs/windows-gtk-visual-qa.md");
@@ -1258,6 +1259,9 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         "send_command_to_active_runtime_surface",
         "BroadcastTarget::AllPanes",
         "BroadcastTarget::SavedGroup",
+        "target_from_selector_id(combo.active_id().as_deref())",
+        "quick_send_payload(&broadcast_entry.text())",
+        "sent_status_label(&target.label(), sent)",
         "target.includes(tile)",
         "add_web_tile_to_active_session",
         "split_web_tile(",
@@ -1309,10 +1313,28 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
         assert!(
             WORKSPACE_PREVIEW_RS.contains(token)
                 || UI_MOD_RS.contains(token)
-                || WORKSPACE_ALERTS_RS.contains(token),
+                || WORKSPACE_ALERTS_RS.contains(token)
+                || BROADCAST_RS.contains(token),
             "Windows GTK workspace preview should wire shared toolbar/tile controls through runtime/session state: {token}"
         );
     }
+
+    assert!(
+        BROADCAST_RS.contains("pub fn target_from_selector_id")
+            && BROADCAST_RS.contains("pub fn quick_send_payload")
+            && BROADCAST_RS.contains("pub fn sent_status_label")
+            && BROADCAST_RS.contains("pub fn quick_send_detail")
+            && WORKSPACE_VIEW_RS.contains("target_from_selector_id(combo.active_id().as_deref())")
+            && WORKSPACE_PREVIEW_RS
+                .contains("target_from_selector_id(combo.active_id().as_deref())")
+            && WORKSPACE_VIEW_RS.contains("quick_send_payload(&broadcast_entry.text())")
+            && WORKSPACE_PREVIEW_RS.contains("quick_send_payload(&broadcast_entry.text())")
+            && WORKSPACE_VIEW_RS.contains("sent_status_label(&target.label(), sent)")
+            && WORKSPACE_PREVIEW_RS.contains("sent_status_label(&target.label(), sent)")
+            && !WORKSPACE_PREVIEW_RS.contains("broadcast_entry.set_text(\"\")"),
+        "Linux and Windows GTK quick-send controls should share target parsing, payload/status copy, and preserve the Linux source-of-truth entry retention behavior"
+    );
+
     assert!(
         UI_MOD_RS.contains("pub(crate) mod workspace_alerts;")
             && WORKSPACE_ALERTS_RS.contains("pub(crate) fn bind_alert_list")

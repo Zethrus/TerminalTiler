@@ -31,6 +31,53 @@ impl BroadcastTarget {
     }
 }
 
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell"),
+    test
+))]
+pub fn target_from_selector_id(selector_id: Option<&str>) -> BroadcastTarget {
+    match selector_id {
+        Some("all") => BroadcastTarget::AllPanes,
+        Some(value) if value.starts_with("group:") => {
+            BroadcastTarget::SavedGroup(value.trim_start_matches("group:").to_string())
+        }
+        _ => BroadcastTarget::Off,
+    }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell"),
+    test
+))]
+pub fn quick_send_payload(command: &str) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(format!("{command}\n"))
+    }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell"),
+    test
+))]
+pub fn sent_status_label(target_label: &str, sent: usize) -> String {
+    format!("{target_label}  •  sent to {sent}")
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell"),
+    test
+))]
+pub fn quick_send_detail(sent: usize) -> String {
+    format!("Sent quick command to {sent} pane(s).")
+}
+
 pub fn saved_groups_for_tiles(tiles: &[TileSpec]) -> Vec<String> {
     let mut groups = BTreeSet::new();
     for tile in tiles {
@@ -48,7 +95,10 @@ pub fn saved_groups_for_tiles(tiles: &[TileSpec]) -> Vec<String> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{BroadcastTarget, saved_groups_for_tiles};
+    use super::{
+        BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
+        sent_status_label, target_from_selector_id,
+    };
     use crate::model::layout::{ReconnectPolicy, TileSpec, WorkingDirectory};
 
     fn tile(id: &str, groups: &[&str]) -> TileSpec {
@@ -86,5 +136,43 @@ mod tests {
         assert!(BroadcastTarget::SavedGroup("ops".into()).includes(&tile));
         assert!(!BroadcastTarget::SavedGroup("review".into()).includes(&tile));
         assert!(BroadcastTarget::AdHocSelection(BTreeSet::from(["one".into()])).includes(&tile));
+    }
+
+    #[test]
+    fn broadcast_selector_ids_resolve_to_targets() {
+        assert_eq!(target_from_selector_id(Some("off")), BroadcastTarget::Off);
+        assert_eq!(
+            target_from_selector_id(Some("all")),
+            BroadcastTarget::AllPanes
+        );
+        assert_eq!(
+            target_from_selector_id(Some("group:ops")),
+            BroadcastTarget::SavedGroup("ops".into())
+        );
+        assert_eq!(
+            target_from_selector_id(Some("unknown")),
+            BroadcastTarget::Off
+        );
+        assert_eq!(target_from_selector_id(None), BroadcastTarget::Off);
+    }
+
+    #[test]
+    fn quick_send_payload_matches_workspace_submit_contract() {
+        assert_eq!(quick_send_payload(""), None);
+        assert_eq!(quick_send_payload("   "), None);
+        assert_eq!(quick_send_payload("ls"), Some("ls\n".into()));
+        assert_eq!(
+            quick_send_payload("  cargo test  "),
+            Some("cargo test\n".into())
+        );
+    }
+
+    #[test]
+    fn broadcast_status_copy_stays_shared() {
+        assert_eq!(
+            sent_status_label("Broadcast All Panes", 2),
+            "Broadcast All Panes  •  sent to 2"
+        );
+        assert_eq!(quick_send_detail(1), "Sent quick command to 1 pane(s).");
     }
 }
