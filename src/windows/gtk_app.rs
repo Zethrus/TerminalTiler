@@ -278,15 +278,15 @@ mod imp {
                 default_theme: preferences.default_theme,
                 default_density: preferences.default_density,
                 default_restore_mode: preferences.default_restore_mode,
-                preset_store,
+                preset_store: preset_store.clone(),
             },
             actions,
         );
         *launch_widget_handle.borrow_mut() = Some(launch.clone());
         {
-            let overlay = overlay.clone();
-            let title = title.clone();
-            let launch = launch.clone();
+            let launch_overlay = overlay.clone();
+            let launch_title = title.clone();
+            let launch_widget = launch.clone();
             let back_button_for_click = back_button.clone();
             let fullscreen_for_click = fullscreen_button.clone();
             let window_for_click = window.clone();
@@ -295,9 +295,9 @@ mod imp {
             let show_launch_deck = Rc::new(move || {
                 show_launch_deck_tab(
                     &window_for_click,
-                    &overlay,
-                    &title,
-                    &launch,
+                    &launch_overlay,
+                    &launch_title,
+                    &launch_widget,
                     &back_button_for_click,
                     &fullscreen_for_click,
                     &shell_state_for_launch,
