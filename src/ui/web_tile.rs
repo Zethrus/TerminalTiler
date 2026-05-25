@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gdk::prelude::StaticType;
-use gtk::glib;
 use gtk::prelude::*;
+use gtk::{gio, glib};
 
 use webkit6::prelude::*;
 
@@ -325,6 +325,27 @@ fn install_web_context_menu(web_view: &webkit6::WebView, parent: &gtk::Box) {
         });
     }
     menu.append(&copy_url_button);
+
+    let open_external_button = context_menu::action_button("Open in Browser", None);
+    {
+        let web_view = web_view.clone();
+        let popover = popover.clone();
+        open_external_button.connect_clicked(move |_| {
+            if let Some(uri) = web_view.uri() {
+                let url = uri.to_string();
+                if !url.trim().is_empty()
+                    && let Err(error) =
+                        gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
+                {
+                    logging::error(format!(
+                        "GTK web tile context open failed for '{url}': {error}"
+                    ));
+                }
+            }
+            popover.popdown();
+        });
+    }
+    menu.append(&open_external_button);
 
     popover.set_child(Some(&menu));
 
