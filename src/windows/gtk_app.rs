@@ -13,7 +13,6 @@ mod imp {
     use crate::extension::RuntimeOptions;
     use crate::logging;
     use crate::model::layout::DEFAULT_WEB_URL;
-    use crate::product;
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -1816,78 +1815,66 @@ mod imp {
             }
 
             if !shell_state.launch_deck_active.get() {
-                actions.push(command_palette::PaletteAction {
-                    title: "Rename Active Tab".into(),
-                    subtitle: "Set a custom workspace title.".into(),
-                    on_activate: Rc::new({
-                        let window = window.clone();
-                        let overlay = overlay.clone();
-                        let title = title.clone();
-                        let launch = launch.clone();
-                        let back_button = back_button.clone();
-                        let fullscreen_button = fullscreen_button.clone();
-                        let shell_state = shell_state.clone();
-                        move || {
-                            let preview = shell_state.preview.borrow().clone();
-                            let Some(preview) = preview else {
-                                return;
-                            };
-                            present_windows_tab_rename(
-                                &window,
-                                &overlay,
-                                &title,
-                                &launch,
-                                &back_button,
-                                &fullscreen_button,
-                                &shell_state,
-                                preview.active_index(),
-                            );
-                        }
-                    }),
-                });
+                actions.extend(command_palette::active_tab_actions(Rc::new({
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let title = title.clone();
+                    let launch = launch.clone();
+                    let back_button = back_button.clone();
+                    let fullscreen_button = fullscreen_button.clone();
+                    let shell_state = shell_state.clone();
+                    move || {
+                        let preview = shell_state.preview.borrow().clone();
+                        let Some(preview) = preview else {
+                            return;
+                        };
+                        present_windows_tab_rename(
+                            &window,
+                            &overlay,
+                            &title,
+                            &launch,
+                            &back_button,
+                            &fullscreen_button,
+                            &shell_state,
+                            preview.active_index(),
+                        );
+                    }
+                })));
 
-                actions.push(command_palette::PaletteAction {
-                    title: "Focus Next Alert".into(),
-                    subtitle: "Jump to the next unread workspace alert.".into(),
-                    on_activate: Rc::new({
-                        let preview = preview.clone();
-                        move || {
-                            let _ = preview.focus_next_alert();
-                        }
-                    }),
-                });
-
-                actions.push(command_palette::PaletteAction {
-                    title: "Add Web Tile".into(),
-                    subtitle: "Insert a new browser tile beside the focused pane.".into(),
-                    on_activate: Rc::new({
-                        let preview = preview.clone();
-                        move || {
-                            let _ = preview.add_web_tile(DEFAULT_WEB_URL);
-                        }
-                    }),
-                });
-
-                for runbook in preview
+                let runbooks = preview
                     .runbooks()
                     .into_iter()
                     .filter(|runbook| runbook.variables.is_empty())
-                {
-                    actions.push(command_palette::PaletteAction {
-                        title: format!("Run Runbook: {}", runbook.name),
-                        subtitle: if runbook.description.trim().is_empty() {
-                            runbook.target.label()
-                        } else {
-                            runbook.description.clone()
-                        },
-                        on_activate: Rc::new({
+                    .map(|runbook| {
+                        let runbook_for_action = runbook.clone();
+                        let runbook_for_callback = runbook;
+                        let preview = preview.clone();
+                        command_palette::RunbookAction {
+                            runbook: runbook_for_action,
+                            on_activate: Rc::new(move || {
+                                let _ = preview.run_runbook(&runbook_for_callback);
+                            }),
+                        }
+                    })
+                    .collect();
+
+                actions.extend(command_palette::workspace_actions(
+                    command_palette::WorkspaceActionCallbacks {
+                        focus_next_alert: Rc::new({
                             let preview = preview.clone();
                             move || {
-                                let _ = preview.run_runbook(&runbook);
+                                let _ = preview.focus_next_alert();
                             }
                         }),
-                    });
-                }
+                        add_web_tile: Rc::new({
+                            let preview = preview.clone();
+                            move || {
+                                let _ = preview.add_web_tile(DEFAULT_WEB_URL);
+                            }
+                        }),
+                        runbooks,
+                    },
+                ));
             }
         }
 

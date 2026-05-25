@@ -2895,74 +2895,70 @@ fn present_with_initial_workspace(
             }
 
             if let Some(active_tab) = snapshot.iter().find(|tab| tab.id == active_id) {
-                actions.push(command_palette::PaletteAction {
-                    title: "Rename Active Tab".into(),
-                    subtitle: "Set a custom workspace title.".into(),
-                    on_activate: Rc::new({
-                        let request_tab_rename = request_tab_rename.clone();
-                        move || {
-                            if let Some(rename) = request_tab_rename.borrow().as_ref() {
-                                rename(active_id);
-                            }
+                actions.extend(command_palette::active_tab_actions(Rc::new({
+                    let request_tab_rename = request_tab_rename.clone();
+                    move || {
+                        if let Some(rename) = request_tab_rename.borrow().as_ref() {
+                            rename(active_id);
                         }
-                    }),
-                });
+                    }
+                })));
 
                 if let TabContent::Workspace(workspace) = &active_tab.content {
-                    let runtime_for_alert_focus = workspace.runtime.clone();
-                    actions.push(command_palette::PaletteAction {
-                        title: "Focus Next Alert".into(),
-                        subtitle: "Jump to the next unread workspace alert.".into(),
-                        on_activate: Rc::new(move || {
-                            let alert_store = runtime_for_alert_focus.alert_store();
-                            if let Some(alert) = alert_store
-                                .snapshot()
-                                .into_iter()
-                                .find(|alert| alert.unread && alert.pane_id.is_some())
-                            {
-                                if let Some(pane_id) = alert.pane_id {
-                                    runtime_for_alert_focus.focus_tile(&pane_id);
+                    let runbooks =
+                        workspace
+                            .assets
+                            .runbooks
+                            .iter()
+                            .filter(|runbook| runbook.variables.is_empty())
+                            .map(|runbook| {
+                                let runbook_for_action = runbook.clone();
+                                let runbook_for_callback = runbook.clone();
+                                let runtime = workspace.runtime.clone();
+                                command_palette::RunbookAction {
+                                    runbook: runbook_for_action,
+                                    on_activate: Rc::new(move || {
+                                        if let Ok(resolved) =
+                                            crate::services::runbooks::resolve_runbook(
+                                                &runbook_for_callback,
+                                                &HashMap::new(),
+                                                &runtime.tile_specs(),
+                                            )
+                                        {
+                                            runtime.run_runbook(&resolved);
+                                        }
+                                    }),
                                 }
-                                alert_store.mark_read(alert.id);
-                            }
-                        }),
-                    });
+                            })
+                            .collect();
 
-                    let runtime_for_add_web_tile = workspace.runtime.clone();
-                    actions.push(command_palette::PaletteAction {
-                        title: "Add Web Tile".into(),
-                        subtitle: "Insert a new browser tile beside the focused pane.".into(),
-                        on_activate: Rc::new(move || {
-                            let _ = runtime_for_add_web_tile.add_web_tile();
-                        }),
-                    });
-
-                    for runbook in workspace
-                        .assets
-                        .runbooks
-                        .iter()
-                        .filter(|runbook| runbook.variables.is_empty())
-                    {
-                        let runbook = runbook.clone();
-                        let runtime = workspace.runtime.clone();
-                        actions.push(command_palette::PaletteAction {
-                            title: format!("Run Runbook: {}", runbook.name),
-                            subtitle: if runbook.description.trim().is_empty() {
-                                runbook.target.label()
-                            } else {
-                                runbook.description.clone()
-                            },
-                            on_activate: Rc::new(move || {
-                                if let Ok(resolved) = crate::services::runbooks::resolve_runbook(
-                                    &runbook,
-                                    &HashMap::new(),
-                                    &runtime.tile_specs(),
-                                ) {
-                                    runtime.run_runbook(&resolved);
+                    actions.extend(command_palette::workspace_actions(
+                        command_palette::WorkspaceActionCallbacks {
+                            focus_next_alert: Rc::new({
+                                let runtime_for_alert_focus = workspace.runtime.clone();
+                                move || {
+                                    let alert_store = runtime_for_alert_focus.alert_store();
+                                    if let Some(alert) = alert_store
+                                        .snapshot()
+                                        .into_iter()
+                                        .find(|alert| alert.unread && alert.pane_id.is_some())
+                                    {
+                                        if let Some(pane_id) = alert.pane_id {
+                                            runtime_for_alert_focus.focus_tile(&pane_id);
+                                        }
+                                        alert_store.mark_read(alert.id);
+                                    }
                                 }
                             }),
-                        });
-                    }
+                            add_web_tile: Rc::new({
+                                let runtime_for_add_web_tile = workspace.runtime.clone();
+                                move || {
+                                    let _ = runtime_for_add_web_tile.add_web_tile();
+                                }
+                            }),
+                            runbooks,
+                        },
+                    ));
                 }
             }
 

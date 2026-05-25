@@ -1080,14 +1080,12 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "present_command_palette",
         "command_palette::PaletteAction",
         "command_palette::app_actions(command_palette::AppActionCallbacks",
-        "Rename Active Tab",
+        "command_palette::active_tab_actions",
+        "command_palette::workspace_actions(",
         "present_windows_tab_rename",
-        "Focus Next Alert",
         "preview.focus_next_alert()",
-        "Add Web Tile",
         "preview.add_web_tile(DEFAULT_WEB_URL)",
-        "Run Runbook: {}",
-        "preview.run_runbook(&runbook)",
+        "preview.run_runbook(&runbook_for_callback)",
         ".runbooks()",
         "Switch to {label}",
         "open_command_palette_handle",
@@ -1123,6 +1121,30 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && WINDOWS_GTK_APP_RS
                 .contains("command_palette::app_actions(command_palette::AppActionCallbacks"),
         "Linux and Windows GTK command palettes should share one source-of-truth base action ordering and copy"
+    );
+
+    assert!(
+        COMMAND_PALETTE_RS.contains("pub fn active_tab_actions(rename_active_tab: Rc<dyn Fn()>)")
+            && COMMAND_PALETTE_RS
+                .contains("pub fn workspace_actions(callbacks: WorkspaceActionCallbacks)")
+            && COMMAND_PALETTE_RS.contains("pub struct WorkspaceActionCallbacks")
+            && COMMAND_PALETTE_RS.contains("pub struct RunbookAction")
+            && COMMAND_PALETTE_RS.contains("title: \"Rename Active Tab\".into()")
+            && COMMAND_PALETTE_RS.contains("subtitle: \"Set a custom workspace title.\".into()")
+            && COMMAND_PALETTE_RS.contains("title: \"Focus Next Alert\".into()")
+            && COMMAND_PALETTE_RS
+                .contains("subtitle: \"Jump to the next unread workspace alert.\".into()")
+            && COMMAND_PALETTE_RS.contains("title: \"Add Web Tile\".into()")
+            && COMMAND_PALETTE_RS.contains(
+                "subtitle: \"Insert a new browser tile beside the focused pane.\".into()"
+            )
+            && COMMAND_PALETTE_RS.contains("format!(\"Run Runbook: {}\"")
+            && COMMAND_PALETTE_RS.contains("fn runbook_subtitle(runbook: &Runbook) -> String")
+            && WINDOW_RS.contains("command_palette::active_tab_actions")
+            && WINDOW_RS.contains("command_palette::workspace_actions(")
+            && WINDOWS_GTK_APP_RS.contains("command_palette::active_tab_actions")
+            && WINDOWS_GTK_APP_RS.contains("command_palette::workspace_actions("),
+        "Linux and Windows GTK active workspace palette actions should share copy, ordering, and runbook subtitle rules"
     );
 
     assert!(

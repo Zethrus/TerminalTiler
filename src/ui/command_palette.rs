@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
+use crate::model::assets::Runbook;
 use crate::product;
 use crate::ui::icons::{self, name as icon_name};
 
@@ -19,6 +20,19 @@ pub struct AppActionCallbacks {
     pub open_about: Rc<dyn Fn()>,
     pub new_tab: Rc<dyn Fn()>,
     pub open_companion: Option<Rc<dyn Fn()>>,
+}
+
+#[derive(Clone)]
+pub struct WorkspaceActionCallbacks {
+    pub focus_next_alert: Rc<dyn Fn()>,
+    pub add_web_tile: Rc<dyn Fn()>,
+    pub runbooks: Vec<RunbookAction>,
+}
+
+#[derive(Clone)]
+pub struct RunbookAction {
+    pub runbook: Runbook,
+    pub on_activate: Rc<dyn Fn()>,
 }
 
 pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
@@ -54,6 +68,47 @@ pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
     }
 
     actions
+}
+
+pub fn active_tab_actions(rename_active_tab: Rc<dyn Fn()>) -> Vec<PaletteAction> {
+    vec![PaletteAction {
+        title: "Rename Active Tab".into(),
+        subtitle: "Set a custom workspace title.".into(),
+        on_activate: rename_active_tab,
+    }]
+}
+
+pub fn workspace_actions(callbacks: WorkspaceActionCallbacks) -> Vec<PaletteAction> {
+    let mut actions = vec![
+        PaletteAction {
+            title: "Focus Next Alert".into(),
+            subtitle: "Jump to the next unread workspace alert.".into(),
+            on_activate: callbacks.focus_next_alert,
+        },
+        PaletteAction {
+            title: "Add Web Tile".into(),
+            subtitle: "Insert a new browser tile beside the focused pane.".into(),
+            on_activate: callbacks.add_web_tile,
+        },
+    ];
+
+    for runbook_action in callbacks.runbooks {
+        actions.push(PaletteAction {
+            title: format!("Run Runbook: {}", runbook_action.runbook.name),
+            subtitle: runbook_subtitle(&runbook_action.runbook),
+            on_activate: runbook_action.on_activate,
+        });
+    }
+
+    actions
+}
+
+fn runbook_subtitle(runbook: &Runbook) -> String {
+    if runbook.description.trim().is_empty() {
+        runbook.target.label()
+    } else {
+        runbook.description.clone()
+    }
 }
 
 pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
