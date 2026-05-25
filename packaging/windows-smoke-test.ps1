@@ -362,6 +362,33 @@ function Stop-ProcessTree {
     }
 }
 
+function Stop-TerminalTilerSmokeProcesses {
+    $candidates = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -like "TerminalTiler*.exe" -or
+            $_.ExecutablePath -like "*\TerminalTiler*.exe"
+        }
+
+    foreach ($candidate in $candidates) {
+        Stop-Process -Id ([int]$candidate.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Wait-ProcessOrTimeout {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$Label,
+        [int]$TimeoutSeconds = 180
+    )
+
+    if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        throw "$Label timed out after $TimeoutSeconds seconds"
+    }
+
+    return $Process.ExitCode
+}
+
 function Wait-ForSessionLogPattern {
     param(
         [string]$SandboxRoot,
@@ -490,6 +517,7 @@ function Invoke-LaunchSmoke {
     finally {
         if ($process) {
             Stop-ProcessTree -Process $process
+            Stop-TerminalTilerSmokeProcesses
         }
         $env:APPDATA = $previousEnvironment.APPDATA
         $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
@@ -605,9 +633,10 @@ Invoke-OptionalLaunchSmoke `
 Write-Host "==> smoke-installing NSIS package"
 New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
 $InstallerArgs = @("/S", "/D=$NsisInstallRoot")
-$InstallerProcess = Start-Process -FilePath $InstallerPath -ArgumentList $InstallerArgs -PassThru -Wait
-if ($InstallerProcess.ExitCode -ne 0) {
-    throw "Installer exited with code $($InstallerProcess.ExitCode)"
+$InstallerProcess = Start-Process -FilePath $InstallerPath -ArgumentList $InstallerArgs -PassThru
+$InstallerExitCode = Wait-ProcessOrTimeout -Process $InstallerProcess -Label "NSIS installer" -TimeoutSeconds 180
+if ($InstallerExitCode -ne 0) {
+    throw "Installer exited with code $InstallerExitCode"
 }
 
 $InstalledExe = Join-Path $NsisInstallRoot "TerminalTiler.exe"
@@ -630,9 +659,10 @@ Invoke-OptionalLaunchSmoke `
 Write-Host "==> smoke-installing MSI package"
 Remove-Item -Recurse -Force $MsiInstallRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $MsiInstallRoot | Out-Null
-$MsiInstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru -Wait
-if ($MsiInstallProcess.ExitCode -ne 0) {
-    throw "MSI installer exited with code $($MsiInstallProcess.ExitCode)"
+$MsiInstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru
+$MsiInstallExitCode = Wait-ProcessOrTimeout -Process $MsiInstallProcess -Label "MSI installer" -TimeoutSeconds 180
+if ($MsiInstallExitCode -ne 0) {
+    throw "MSI installer exited with code $MsiInstallExitCode"
 }
 
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
@@ -651,9 +681,10 @@ Invoke-OptionalLaunchSmoke `
     -SkipMessage "skipping MSI-installed executable launch smoke"
 
 Write-Host "==> smoke-uninstalling MSI package"
-$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru -Wait
-if ($MsiUninstallProcess.ExitCode -ne 0) {
-    throw "MSI uninstall exited with code $($MsiUninstallProcess.ExitCode)"
+$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru
+$MsiUninstallExitCode = Wait-ProcessOrTimeout -Process $MsiUninstallProcess -Label "MSI uninstall" -TimeoutSeconds 180
+if ($MsiUninstallExitCode -ne 0) {
+    throw "MSI uninstall exited with code $MsiUninstallExitCode"
 }
 
 if (Test-Path $MsiInstalledExe) {

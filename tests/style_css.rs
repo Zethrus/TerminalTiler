@@ -1566,6 +1566,16 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
                 .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }"),
         "Windows smoke test should validate GTK startup/restored-runtime logs even for self-extracting portable launchers"
     );
+    assert!(
+        WINDOWS_SMOKE_PS1.contains("function Stop-TerminalTilerSmokeProcesses")
+            && WINDOWS_SMOKE_PS1.contains("TerminalTiler*.exe")
+            && WINDOWS_SMOKE_PS1.contains("function Wait-ProcessOrTimeout")
+            && WINDOWS_SMOKE_PS1.contains("timed out after $TimeoutSeconds seconds")
+            && WINDOWS_SMOKE_PS1.contains("Wait-ProcessOrTimeout -Process $InstallerProcess")
+            && WINDOWS_SMOKE_PS1.contains("Wait-ProcessOrTimeout -Process $MsiInstallProcess")
+            && WINDOWS_SMOKE_PS1.contains("Wait-ProcessOrTimeout -Process $MsiUninstallProcess"),
+        "Windows smoke test should bound installer waits and clean up TerminalTiler smoke processes so CI cannot hang indefinitely"
+    );
 
     for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {
         assert!(
