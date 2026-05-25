@@ -1818,6 +1818,7 @@ fn install_preview_dropped_file_target(
     {
         let shell = shell.clone();
         let dropped_paths_sender = dropped_paths_sender.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
         file_list_drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
             let Ok(files) = value.get::<gtk::gdk::FileList>() else {
@@ -1847,6 +1848,7 @@ fn install_preview_dropped_file_target(
     {
         let shell = shell.clone();
         let dropped_paths_sender = dropped_paths_sender.clone();
+        let show_recovery_prompt = show_recovery_prompt.clone();
         single_file_drop_target.connect_drop(move |_, value, _, _| {
             shell.remove_css_class("is-drop-target");
             let Ok(file) = value.get::<gtk::gio::File>() else {

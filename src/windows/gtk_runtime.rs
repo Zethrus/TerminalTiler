@@ -3,7 +3,7 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
