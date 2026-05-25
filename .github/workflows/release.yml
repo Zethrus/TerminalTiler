@@ -124,11 +124,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cache gvsbuild GTK runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\gtk-build\gtk\x64\release
           key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
-          save-always: true
 
       - name: Verify installer toolchain
         shell: pwsh
@@ -152,7 +151,7 @@ jobs:
 
       - name: Upload Windows smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-release
           path: packaging/.build/windows-smoke

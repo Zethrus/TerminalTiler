@@ -67,7 +67,7 @@ jobs:
         run: bash packaging/release-smoke-test.sh
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-linux-${{ needs.resolve-version.outputs.package_version }}
           path: |
@@ -95,11 +95,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Cache gvsbuild GTK runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\gtk-build\gtk\x64\release
           key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
-          save-always: true
 
       - name: Verify installer toolchain
         shell: pwsh
@@ -123,14 +122,14 @@ jobs:
 
       - name: Upload Windows smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-${{ needs.resolve-version.outputs.package_version }}
           path: packaging/.build/windows-smoke
           if-no-files-found: ignore
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-${{ needs.resolve-version.outputs.package_version }}
           path: |

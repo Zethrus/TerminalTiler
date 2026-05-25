@@ -1326,11 +1326,13 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         CI_YML.contains("verify-windows-gtk")
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
             && CI_YML.contains("windows-gtk-runtime-gvsbuild-v4")
-            && CI_YML.contains("save-always: true")
+            && CI_YML.contains("actions/cache@v5")
+            && !CI_YML.contains("save-always:")
+            && CI_YML.contains("actions/upload-artifact@v6")
             && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
-        "CI should include native Windows GTK build, package, and smoke coverage"
+        "CI should include native Windows GTK build, package, smoke coverage, and Node 24-ready artifact/cache actions"
     );
 
     assert!(
@@ -1465,6 +1467,13 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         assert!(
             !workflow.contains("-UseWin32Shell"),
             "release/package workflows must not publish the explicit Win32 fallback path"
+        );
+        assert!(
+            workflow.contains("actions/cache@v5")
+                && !workflow.contains("actions/cache@v4")
+                && !workflow.contains("actions/upload-artifact@v4")
+                && !workflow.contains("save-always:"),
+            "release/package workflows should keep Windows GTK artifact publishing on Node 24-ready cache/artifact actions"
         );
     }
 
