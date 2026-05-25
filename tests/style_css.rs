@@ -1126,8 +1126,11 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && WINDOWS_GTK_APP_RS.contains("prompt_windows_tab_rename")
             && WINDOWS_GTK_APP_RS.contains("let rename_click = gtk::GestureClick::builder()")
             && WINDOWS_GTK_APP_RS.contains(".propagation_phase(gtk::PropagationPhase::Capture)")
+            && WINDOWS_GTK_APP_RS.contains("let middle_close = gtk::GestureClick::builder()")
+            && WINDOWS_GTK_APP_RS.contains(".button(2)")
+            && WINDOWS_GTK_APP_RS.contains("on_middle_close()")
             && WINDOWS_GTK_APP_RS.contains("preview.rename_tab(index, requested_title)"),
-        "shared GTK workspace preview should expose the same rename, add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette/title actions"
+        "shared GTK workspace preview should expose the same rename, middle-click close, add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette/title actions"
     );
 }
 

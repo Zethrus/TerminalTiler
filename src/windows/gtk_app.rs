@@ -1597,8 +1597,20 @@ mod imp {
             chrome.select_button.add_controller(rename_click);
         }
 
+        chrome.close_button.set_focus_on_click(false);
         if let Some(on_close) = tab.on_close {
+            let on_middle_close = on_close.clone();
             chrome.close_button.connect_clicked(move |_| on_close());
+
+            let middle_close = gtk::GestureClick::builder()
+                .button(2)
+                .propagation_phase(gtk::PropagationPhase::Capture)
+                .build();
+            middle_close.connect_pressed(move |gesture, _, _, _| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                on_middle_close();
+            });
+            chrome.shell.add_controller(middle_close);
         }
 
         chrome.shell.upcast()
