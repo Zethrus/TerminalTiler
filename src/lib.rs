@@ -13,6 +13,11 @@ mod services;
 mod storage;
 #[cfg(target_os = "linux")]
 mod terminal;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+mod terminal_palette;
 mod transcript;
 #[cfg(target_os = "linux")]
 mod tray;

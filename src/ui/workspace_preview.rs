@@ -16,6 +16,7 @@ use crate::services::layout_editor::{close_tile, split_web_tile, update_split_ra
 use crate::services::runbooks::resolve_runbook;
 use crate::services::snippets::resolve_snippet;
 use crate::storage::session_store::{SavedSession, SavedTab};
+use crate::ui::appearance::resolved_theme_uses_dark_palette;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::pane_status::initial_status_snapshot;
 use crate::ui::tile_chrome::{
@@ -37,7 +38,7 @@ use crate::ui::workspace_chrome::{
 pub struct TileRuntimeSurface {
     pub widget: gtk::Widget,
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
-    pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
+    pub appearance_applier: Option<Rc<dyn Fn(bool, ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
     pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
     pub shutdown: Option<Rc<dyn Fn(&str)>>,
@@ -1910,7 +1911,11 @@ fn build_tile(
             .or_insert_with(|| runtime_factory(tile, tab, assets))
             .clone();
         if let Some(apply_appearance) = &surface.appearance_applier {
-            apply_appearance(tab.preset.density, tab.terminal_zoom_steps);
+            apply_appearance(
+                resolved_theme_uses_dark_palette(tab.preset.theme),
+                tab.preset.density,
+                tab.terminal_zoom_steps,
+            );
         }
         if tile.tile_kind == TileKind::WebView
             && let Some(apply_url) = &surface.url_applier

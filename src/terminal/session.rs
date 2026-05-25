@@ -14,32 +14,13 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::{ResolvedLaunchTransport, resolve_tile_launch};
+use crate::terminal_palette::terminal_palette;
 use crate::transcript::TranscriptBuffer;
 
 const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
-const DARK_TERMINAL_PALETTE: [&str; 16] = [
-    "#0f1724", "#c9575f", "#78a062", "#d6a04b", "#6b8cff", "#b28cf0", "#5eb8c8", "#d7dde8",
-    "#334155", "#ef7c86", "#91be78", "#e6bb6a", "#8fa7ff", "#c8a6f6", "#7ccad7", "#f8fafc",
-];
-const LIGHT_TERMINAL_PALETTE: [&str; 16] = [
-    "#24313f", "#b24f45", "#617d43", "#9b6d11", "#4168b5", "#8b61a8", "#2f7f8a", "#d6dde8",
-    "#516172", "#cf685d", "#78975a", "#b38622", "#5e81ca", "#a47dc1", "#4f97a2", "#f7f2e8",
-];
-
-#[derive(Clone, Copy)]
-struct TerminalPalette {
-    foreground: &'static str,
-    background: &'static str,
-    cursor: &'static str,
-    cursor_foreground: &'static str,
-    highlight_background: &'static str,
-    highlight_foreground: &'static str,
-    palette: &'static [&'static str; 16],
-}
-
 #[derive(Clone)]
 pub struct TerminalSession {
     terminal: vte4::Terminal,
@@ -491,27 +472,7 @@ fn apply_terminal_appearance(
 }
 
 fn apply_terminal_palette(terminal: &vte4::Terminal, use_dark_palette: bool) {
-    let palette = if use_dark_palette {
-        TerminalPalette {
-            foreground: "#d7dde8",
-            background: "#0f1724",
-            cursor: "#f2b35f",
-            cursor_foreground: "#101923",
-            highlight_background: "#27405f",
-            highlight_foreground: "#f8fafc",
-            palette: &DARK_TERMINAL_PALETTE,
-        }
-    } else {
-        TerminalPalette {
-            foreground: "#223041",
-            background: "#f4efe4",
-            cursor: "#cb7a2b",
-            cursor_foreground: "#fffaf1",
-            highlight_background: "#d7e2f2",
-            highlight_foreground: "#16202b",
-            palette: &LIGHT_TERMINAL_PALETTE,
-        }
-    };
+    let palette = terminal_palette(use_dark_palette);
 
     let foreground = rgba(palette.foreground);
     let background = rgba(palette.background);

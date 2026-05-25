@@ -1,6 +1,7 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
     use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::ffi::c_void;
     use std::io::{Read, Write};
     use std::os::windows::io::AsRawHandle;
@@ -38,11 +39,13 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::storage::session_store::SavedTab;
+    use crate::terminal_palette::{TerminalPalette, terminal_palette};
+    use crate::ui::appearance::resolved_theme_uses_dark_palette;
     use crate::ui::context_menu;
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::workspace_preview::{TileRuntimeRecoveryBinder, TileRuntimeSurface};
-    use crate::windows::vt::VtBuffer;
+    use crate::windows::vt::{VtBuffer, VtColor, VtStyle};
     use crate::windows::{workspace, wsl};
 
     const MIN_TERMINAL_FONT_POINTS: i32 = 7;
@@ -76,6 +79,47 @@ mod imp {
         ProcessEnded {
             generation: u64,
         },
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct TerminalTextStyleKey {
+        use_dark_palette: bool,
+        fg: VtColor,
+        bg: VtColor,
+        bold: bool,
+        underline: bool,
+        inverse: bool,
+        hyperlink: bool,
+    }
+
+    impl TerminalTextStyleKey {
+        fn from_style(style: VtStyle, use_dark_palette: bool) -> Self {
+            Self {
+                use_dark_palette,
+                fg: style.fg,
+                bg: style.bg,
+                bold: style.bold,
+                underline: style.underline,
+                inverse: style.inverse,
+                hyperlink: style.hyperlink_id.is_some(),
+            }
+        }
+
+        fn is_plain(self) -> bool {
+            self.fg == VtColor::DefaultForeground
+                && self.bg == VtColor::DefaultBackground
+                && !self.bold
+                && !self.underline
+                && !self.inverse
+                && !self.hyperlink
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct TerminalTextRange {
+        start: i32,
+        end: i32,
+        style: TerminalTextStyleKey,
     }
 
     #[derive(Default)]
@@ -125,6 +169,10 @@ mod imp {
             TERMINAL_RUNTIME_COLUMNS,
             TERMINAL_RUNTIME_ROWS,
         )));
+        let terminal_style_tags = Rc::new(RefCell::new(HashMap::new()));
+        let use_dark_palette = Rc::new(Cell::new(resolved_theme_uses_dark_palette(
+            tab.preset.theme,
+        )));
         {
             let mut terminal_buffer = terminal_buffer.borrow_mut();
             terminal_buffer.process(&format!(
@@ -132,7 +180,12 @@ mod imp {
                 tile.title,
                 tab.workspace_root.display()
             ));
-            render_terminal_runtime_buffer(&buffer, &terminal_buffer);
+            render_terminal_runtime_buffer(
+                &buffer,
+                &terminal_buffer,
+                &mut terminal_style_tags.borrow_mut(),
+                use_dark_palette.get(),
+            );
         }
 
         let terminal_output = gtk::TextView::builder()
@@ -153,6 +206,7 @@ mod imp {
         );
         apply_terminal_runtime_appearance(
             &appearance_provider,
+            use_dark_palette.get(),
             tab.preset.density,
             tab.terminal_zoom_steps,
         );
@@ -199,6 +253,8 @@ mod imp {
         {
             let buffer = buffer.clone();
             let terminal_buffer = terminal_buffer.clone();
+            let terminal_style_tags = terminal_style_tags.clone();
+            let use_dark_palette = use_dark_palette.clone();
             let state = state.clone();
             let terminal_output = terminal_output.clone();
             gtk::glib::timeout_add_local(
@@ -214,7 +270,12 @@ mod imp {
                                     &state,
                                     &terminal_output,
                                 );
-                                render_terminal_runtime_buffer(&buffer, &terminal_buffer);
+                                render_terminal_runtime_buffer(
+                                    &buffer,
+                                    &terminal_buffer,
+                                    &mut terminal_style_tags.borrow_mut(),
+                                    use_dark_palette.get(),
+                                );
                             }
                             TerminalRuntimeEvent::ProcessStarted {
                                 generation,
@@ -301,8 +362,24 @@ mod imp {
 
         let appearance_applier = Rc::new({
             let appearance_provider = appearance_provider.clone();
-            move |density, zoom_steps| {
-                apply_terminal_runtime_appearance(&appearance_provider, density, zoom_steps);
+            let buffer = buffer.clone();
+            let terminal_buffer = terminal_buffer.clone();
+            let terminal_style_tags = terminal_style_tags.clone();
+            let use_dark_palette_cell = use_dark_palette.clone();
+            move |next_use_dark_palette, density, zoom_steps| {
+                use_dark_palette_cell.set(next_use_dark_palette);
+                apply_terminal_runtime_appearance(
+                    &appearance_provider,
+                    next_use_dark_palette,
+                    density,
+                    zoom_steps,
+                );
+                render_terminal_runtime_buffer(
+                    &buffer,
+                    &terminal_buffer.borrow(),
+                    &mut terminal_style_tags.borrow_mut(),
+                    next_use_dark_palette,
+                );
             }
         });
 
@@ -336,12 +413,16 @@ mod imp {
 
     fn apply_terminal_runtime_appearance(
         provider: &gtk::CssProvider,
+        use_dark_palette: bool,
         density: ApplicationDensity,
         zoom_steps: i32,
     ) {
+        let palette = terminal_palette(use_dark_palette);
         provider.load_from_data(&format!(
-            ".terminal-runtime-output {{ font-family: \"JetBrains Mono\", monospace; font-size: {}pt; }}",
-            effective_terminal_font_points(density, zoom_steps)
+            ".terminal-runtime-output {{ font-family: \"JetBrains Mono\", monospace; font-size: {}pt; color: {}; background: {}; }}",
+            effective_terminal_font_points(density, zoom_steps),
+            palette.foreground,
+            palette.background
         ));
     }
 
@@ -506,9 +587,16 @@ mod imp {
         });
     }
 
-    fn render_terminal_runtime_buffer(buffer: &gtk::TextBuffer, terminal: &VtBuffer) {
+    fn render_terminal_runtime_buffer(
+        buffer: &gtk::TextBuffer,
+        terminal: &VtBuffer,
+        style_tags: &mut HashMap<TerminalTextStyleKey, gtk::TextTag>,
+        use_dark_palette: bool,
+    ) {
         let total_rows = terminal.total_rows();
         let mut rendered = String::with_capacity((terminal.columns() + 1) * total_rows);
+        let mut style_ranges = Vec::new();
+        let mut char_offset = 0i32;
         let cursor = terminal.cursor_visible().then(|| {
             let (column, row) = terminal.cursor();
             (column, terminal.history_len() + row)
@@ -517,17 +605,121 @@ mod imp {
         for row in 0..total_rows {
             if row > 0 {
                 rendered.push('\n');
+                char_offset += 1;
             }
             for column in 0..terminal.columns() {
-                let mut ch = terminal.display_cell(row, column).ch;
+                let mut cell = terminal.display_cell(row, column);
+                let mut ch = cell.ch;
                 if cursor == Some((column, row)) {
                     ch = if ch == ' ' { '█' } else { '▌' };
+                    cell.style.inverse = !cell.style.inverse;
                 }
+
+                let start = char_offset;
                 rendered.push(ch);
+                char_offset += 1;
+                let style = TerminalTextStyleKey::from_style(cell.style, use_dark_palette);
+                if !style.is_plain() {
+                    push_terminal_text_range(&mut style_ranges, start, char_offset, style);
+                }
             }
         }
 
         buffer.set_text(&rendered);
+        apply_terminal_text_ranges(buffer, style_tags, &style_ranges, use_dark_palette);
+    }
+
+    fn push_terminal_text_range(
+        ranges: &mut Vec<TerminalTextRange>,
+        start: i32,
+        end: i32,
+        style: TerminalTextStyleKey,
+    ) {
+        if let Some(last) = ranges.last_mut()
+            && last.end == start
+            && last.style == style
+        {
+            last.end = end;
+            return;
+        }
+        ranges.push(TerminalTextRange { start, end, style });
+    }
+
+    fn apply_terminal_text_ranges(
+        buffer: &gtk::TextBuffer,
+        style_tags: &mut HashMap<TerminalTextStyleKey, gtk::TextTag>,
+        ranges: &[TerminalTextRange],
+        use_dark_palette: bool,
+    ) {
+        if ranges.is_empty() {
+            return;
+        }
+
+        let palette = terminal_palette(use_dark_palette);
+        for range in ranges {
+            let tag = terminal_text_tag(buffer, style_tags, range.style, palette);
+            let start = buffer.iter_at_offset(range.start);
+            let end = buffer.iter_at_offset(range.end);
+            buffer.apply_tag(&tag, &start, &end);
+        }
+    }
+
+    fn terminal_text_tag(
+        buffer: &gtk::TextBuffer,
+        style_tags: &mut HashMap<TerminalTextStyleKey, gtk::TextTag>,
+        style: TerminalTextStyleKey,
+        palette: TerminalPalette,
+    ) -> gtk::TextTag {
+        if let Some(tag) = style_tags.get(&style) {
+            return tag.clone();
+        }
+
+        let mut fg = style.fg;
+        let mut bg = style.bg;
+        if style.inverse {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+
+        let mut builder = gtk::TextTag::builder();
+        if style.bold {
+            builder = builder.weight(700).weight_set(true);
+        }
+        if style.underline || style.hyperlink {
+            builder = builder
+                .underline(gtk::pango::Underline::Single)
+                .underline_set(true);
+        }
+        if fg != VtColor::DefaultForeground || style.inverse {
+            let color = terminal_color_rgba(fg, palette);
+            builder = builder.foreground_rgba(&color).foreground_set(true);
+        }
+        if bg != VtColor::DefaultBackground || style.inverse {
+            let color = terminal_color_rgba(bg, palette);
+            builder = builder.background_rgba(&color).background_set(true);
+        }
+
+        let tag = builder.build();
+        buffer.tag_table().add(&tag);
+        style_tags.insert(style, tag.clone());
+        tag
+    }
+
+    fn terminal_color_rgba(color: VtColor, palette: TerminalPalette) -> gdk::RGBA {
+        match color {
+            VtColor::DefaultForeground => terminal_rgba(palette.foreground),
+            VtColor::DefaultBackground => terminal_rgba(palette.background),
+            VtColor::Indexed(index) => terminal_rgba(palette.palette[index.min(15) as usize]),
+            VtColor::Rgb(red, green, blue) => gdk::RGBA::new(
+                f32::from(red) / 255.0,
+                f32::from(green) / 255.0,
+                f32::from(blue) / 255.0,
+                1.0,
+            ),
+        }
+    }
+
+    fn terminal_rgba(value: &str) -> gdk::RGBA {
+        gdk::RGBA::parse(value).expect("terminal palette color should parse")
     }
 
     fn flush_terminal_runtime_responses(
