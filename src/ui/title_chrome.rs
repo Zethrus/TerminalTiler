@@ -66,13 +66,13 @@ pub(crate) fn build_title_tab_chrome() -> TitleTabChrome {
         .spacing(8)
         .hexpand(true)
         .build();
-    select_row.append(
-        &gtk::Image::builder()
-            .icon_name(icon_name::TERMINAL)
-            .valign(gtk::Align::Center)
-            .css_classes(["app-tab-icon"])
-            .build(),
-    );
+    // Resolve through icons::image so the custom "hover:" scheme loads the bundled
+    // SVG instead of GTK falling back to the missing-icon (exclamation) glyph.
+    let tab_icon = icons::image(icon_name::TERMINAL);
+    tab_icon.set_valign(gtk::Align::Center);
+    tab_icon.set_pixel_size(14);
+    tab_icon.add_css_class("app-tab-icon");
+    select_row.append(&tab_icon);
 
     let title_label = gtk::Label::builder()
         .xalign(0.0)
