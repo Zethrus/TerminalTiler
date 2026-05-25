@@ -1277,6 +1277,12 @@ fn execute_preview_snippet(
     }
 }
 
+fn clear_box(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+}
+
 fn active_tab_tile_specs(
     session: &Rc<RefCell<SavedSession>>,
     active_index: &Rc<Cell<usize>>,
