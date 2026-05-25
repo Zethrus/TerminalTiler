@@ -229,6 +229,15 @@ impl SessionPreview {
         self.active_index.get()
     }
 
+    pub fn tab_title(&self, index: usize) -> Option<String> {
+        self.session.borrow().tabs.get(index).map(|tab| {
+            tab.custom_title
+                .as_deref()
+                .unwrap_or(tab.preset.name.as_str())
+                .to_string()
+        })
+    }
+
     pub fn snapshot(&self) -> SavedSession {
         self.session.borrow().clone()
     }
@@ -260,6 +269,21 @@ impl SessionPreview {
         } else {
             false
         }
+    }
+
+    pub fn rename_tab(&self, index: usize, requested_title: Option<String>) -> bool {
+        let mut session = self.session.borrow_mut();
+        let Some(tab) = session.tabs.get_mut(index) else {
+            return false;
+        };
+        tab.custom_title = requested_title.and_then(|title| {
+            let trimmed = title.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        drop(session);
+        self.notify_session_changed("workspace preview tab renamed");
+        self.render();
+        true
     }
 
     pub fn focus_next_alert(&self) -> bool {

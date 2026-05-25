@@ -24,6 +24,7 @@ mod imp {
         sync_workspace_fullscreen_chrome,
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
+    use crate::ui::icons::{self, name as icon_name};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, apply_title_tab_state, build_title_tab_chrome};
     use crate::ui::{
@@ -1309,6 +1310,7 @@ mod imp {
                     );
                 }
             })),
+            on_rename: None,
             on_close: None,
         });
 
@@ -1337,6 +1339,27 @@ mod imp {
                         let shell_state = shell_state.clone();
                         move || {
                             show_workspace_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                index,
+                            );
+                        }
+                    })),
+                    on_rename: Some(Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            present_windows_tab_rename(
                                 &window,
                                 &overlay,
                                 &title,
@@ -1531,6 +1554,7 @@ mod imp {
         tooltip: String,
         active: bool,
         on_select: Option<Rc<dyn Fn()>>,
+        on_rename: Option<Rc<dyn Fn()>>,
         on_close: Option<Rc<dyn Fn()>>,
     }
 
@@ -1558,11 +1582,164 @@ mod imp {
             chrome.select_button.connect_clicked(move |_| on_select());
         }
 
+        if let Some(on_rename) = tab.on_rename {
+            let rename_click = gtk::GestureClick::builder().button(1).build();
+            rename_click.connect_pressed(move |gesture, n_press, _, _| {
+                if n_press != 2 {
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                on_rename();
+            });
+            chrome.select_button.add_controller(rename_click);
+        }
+
         if let Some(on_close) = tab.on_close {
             chrome.close_button.connect_clicked(move |_| on_close());
         }
 
         chrome.shell.upcast()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn present_windows_tab_rename(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        index: usize,
+    ) {
+        let preview = shell_state.preview.borrow().clone();
+        let Some(preview) = preview else {
+            return;
+        };
+        let Some(current_title) = preview.tab_title(index) else {
+            return;
+        };
+
+        prompt_windows_tab_rename(window, &current_title, {
+            let window = window.clone();
+            let overlay = overlay.clone();
+            let title = title.clone();
+            let launch = launch.clone();
+            let back_button = back_button.clone();
+            let fullscreen_button = fullscreen_button.clone();
+            let shell_state = shell_state.clone();
+            move |requested_title| {
+                let preview = shell_state.preview.borrow().clone();
+                let Some(preview) = preview else {
+                    return;
+                };
+                if !preview.rename_tab(index, requested_title) {
+                    return;
+                }
+                if shell_state.launch_deck_active.get() {
+                    show_launch_deck_tab(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                    );
+                } else {
+                    show_workspace_preview_tab(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                        preview.active_index(),
+                    );
+                }
+            }
+        });
+    }
+
+    fn prompt_windows_tab_rename<F>(
+        window: &adw::ApplicationWindow,
+        current_title: &str,
+        on_submit: F,
+    ) where
+        F: Fn(Option<String>) + 'static,
+    {
+        let dialog = adw::Dialog::new();
+        dialog.set_title("Rename Workspace");
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(18)
+            .margin_end(18)
+            .build();
+
+        content.append(
+            &gtk::Label::builder()
+                .label(
+                    "Enter a new workspace tab name. Leave it blank to restore automatic naming.",
+                )
+                .wrap(true)
+                .halign(gtk::Align::Start)
+                .build(),
+        );
+        let entry = gtk::Entry::builder()
+            .hexpand(true)
+            .text(current_title)
+            .activates_default(true)
+            .build();
+        content.append(&entry);
+
+        let action_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .halign(gtk::Align::End)
+            .build();
+        let cancel_button =
+            icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
+        let apply_button = icons::labeled_button(
+            "Apply",
+            icon_name::APPLY,
+            &["pill-button", "suggested-action"],
+        );
+        action_row.append(&cancel_button);
+        action_row.append(&apply_button);
+        content.append(&action_row);
+        dialog.set_child(Some(&content));
+        dialog.set_default_widget(Some(&apply_button));
+
+        let on_submit = Rc::new(on_submit);
+        {
+            let dialog = dialog.clone();
+            cancel_button.connect_clicked(move |_| {
+                dialog.close();
+            });
+        }
+        {
+            let dialog = dialog.clone();
+            let entry_for_submit = entry.clone();
+            let on_submit = on_submit.clone();
+            apply_button.connect_clicked(move |_| {
+                let requested_title = entry_for_submit.text().trim().to_string();
+                if requested_title.is_empty() {
+                    on_submit(None);
+                } else {
+                    on_submit(Some(requested_title));
+                }
+                dialog.close();
+            });
+        }
+
+        dialog.present(Some(window));
+        entry.grab_focus();
+        entry.set_position(-1);
     }
 
     type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
@@ -1693,6 +1870,36 @@ mod imp {
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
             let session = preview.snapshot();
             if !shell_state.launch_deck_active.get() {
+                actions.push(command_palette::PaletteAction {
+                    title: "Rename Active Tab".into(),
+                    subtitle: "Set a custom workspace title.".into(),
+                    on_activate: Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move || {
+                            let preview = shell_state.preview.borrow().clone();
+                            let Some(preview) = preview else {
+                                return;
+                            };
+                            present_windows_tab_rename(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                preview.active_index(),
+                            );
+                        }
+                    }),
+                });
+
                 actions.push(command_palette::PaletteAction {
                     title: "Focus Next Alert".into(),
                     subtitle: "Jump to the next unread workspace alert.".into(),

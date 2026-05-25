@@ -1084,6 +1084,8 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "Open Assets Manager",
         "About {}",
         "Open Account / Sync",
+        "Rename Active Tab",
+        "present_windows_tab_rename",
         "Focus Next Alert",
         "preview.focus_next_alert()",
         "Add Web Tile",
@@ -1108,14 +1110,23 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     assert!(
         WORKSPACE_PREVIEW_RS.contains("pub fn add_web_tile(&self, initial_url: &str) -> bool")
+            && WORKSPACE_PREVIEW_RS
+                .contains("pub fn tab_title(&self, index: usize) -> Option<String>")
+            && WORKSPACE_PREVIEW_RS.contains(
+                "pub fn rename_tab(&self, index: usize, requested_title: Option<String>) -> bool"
+            )
             && WORKSPACE_PREVIEW_RS.contains("pub fn focus_next_alert(&self) -> bool")
             && WORKSPACE_PREVIEW_RS
                 .contains("pub fn run_runbook(&self, runbook: &Runbook) -> bool")
             && WORKSPACE_PREVIEW_RS.contains("pub fn runbooks(&self) -> Vec<Runbook>")
+            && WORKSPACE_PREVIEW_RS.contains("workspace preview tab renamed")
             && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added")
             && WORKSPACE_PREVIEW_RS.contains("AlertSourceKind::Runbook")
-            && WORKSPACE_PREVIEW_RS.contains("send_command_to_active_runtime_surfaces("),
-        "shared GTK workspace preview should expose the same add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette actions"
+            && WORKSPACE_PREVIEW_RS.contains("send_command_to_active_runtime_surfaces(")
+            && WINDOWS_GTK_APP_RS.contains("prompt_windows_tab_rename")
+            && WINDOWS_GTK_APP_RS.contains("let rename_click = gtk::GestureClick::builder()")
+            && WINDOWS_GTK_APP_RS.contains("preview.rename_tab(index, requested_title)"),
+        "shared GTK workspace preview should expose the same rename, add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette/title actions"
     );
 }
 
