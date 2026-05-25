@@ -1,16 +1,32 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
     use std::cell::{Cell, RefCell};
+    use std::ffi::c_void;
     use std::io::{BufRead, BufReader, Write};
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::rc::Rc;
+    use std::sync::OnceLock;
     use std::sync::mpsc;
     use std::time::Duration;
 
     use adw::prelude::*;
-    use gtk::gio;
+    use gtk::glib::translate::ToGlibPtr;
+    use gtk::{gio, glib};
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
+        ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, ICoreWebView2Environment,
+    };
+    use webview2_com::{
+        CreateCoreWebView2ControllerCompletedHandler,
+        CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
+        NavigationCompletedEventHandler, take_pwstr, wait_with_pump,
+    };
+    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+    use windows::Win32::System::WinRT::EventRegistrationToken;
+    use windows::core::{Error as WindowsError, HSTRING, PCWSTR, PWSTR};
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_sys::Win32::System::Threading::TerminateProcess;
 
@@ -31,6 +47,11 @@ mod imp {
     const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
     const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
     const TERMINAL_RUNTIME_POLL_MS: u64 = 80;
+    const WEBVIEW_RUNTIME_POLL_MS: u64 = 100;
+
+    unsafe extern "C" {
+        fn gdk_win32_surface_get_handle(surface: *mut gdk::ffi::GdkSurface) -> *mut c_void;
+    }
 
     #[derive(Default)]
     struct TerminalRuntimeState {
@@ -50,6 +71,21 @@ mod imp {
         ProcessEnded {
             generation: u64,
         },
+    }
+
+    #[derive(Default)]
+    struct WebRuntimeState {
+        environment: Option<ICoreWebView2Environment>,
+        controller: Option<ICoreWebView2Controller>,
+        webview: Option<ICoreWebView2>,
+        document_title_token: Option<EventRegistrationToken>,
+        navigation_completed_token: Option<EventRegistrationToken>,
+        current_url: String,
+        auto_refresh_seconds: Option<u32>,
+        refresh_tick: u32,
+        last_bounds: Option<WinRect>,
+        initialized: bool,
+        shutdown: bool,
     }
 
     pub(crate) fn build_tile_runtime_surface(
@@ -252,6 +288,7 @@ mod imp {
             command_sender: Some(command_sender),
             appearance_applier: Some(appearance_applier),
             url_applier: None,
+            web_settings_applier: None,
             shutdown: Some(shutdown),
             active_process_checker: Some(active_process_checker),
             recovery_binder: Some(TileRuntimeRecoveryBinder {
@@ -872,9 +909,13 @@ mod imp {
 
     fn build_web_runtime_surface(tile: &TileSpec) -> TileRuntimeSurface {
         let url = normalize_web_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
-        let current_url = Rc::new(RefCell::new(url.clone()));
+        let state = Rc::new(RefCell::new(WebRuntimeState {
+            current_url: url.clone(),
+            auto_refresh_seconds: tile.auto_refresh_seconds,
+            ..WebRuntimeState::default()
+        }));
         let runtime_status = match workspace::probe_webview2_runtime() {
-            Ok(()) => "WebView2 available".to_string(),
+            Ok(()) => "Embedding WebView2 content".to_string(),
             Err(error) => format!("WebView2 unavailable: {error}"),
         };
         let surface = gtk::Box::builder()
@@ -896,7 +937,7 @@ mod imp {
         title.set_tooltip_text(Some(&url));
         surface.append(&title);
 
-        let detail = web_runtime_detail(&runtime_status, &url);
+        let detail = web_runtime_detail(&runtime_status, &url, tile.auto_refresh_seconds);
         let detail_label = gtk::Label::builder()
             .label(&detail)
             .halign(gtk::Align::Start)
@@ -906,14 +947,26 @@ mod imp {
             .build();
         surface.append(&detail_label);
 
-        let open_button =
-            icons::labeled_button("Open Web Tile", icon_name::WEB, &["flat", "surface-button"]);
+        let web_host = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .css_classes(["web-tile-frame", "windows-gtk-webview-host"])
+            .build();
+        make_shrinkable(&web_host);
+        surface.append(&web_host);
+
+        let open_button = icons::labeled_button(
+            "Open Externally",
+            icon_name::WEB,
+            &["flat", "surface-button"],
+        );
         open_button.set_halign(gtk::Align::Start);
         open_button.set_margin_start(12);
         {
-            let current_url = current_url.clone();
+            let state = state.clone();
             open_button.connect_clicked(move |_| {
-                let url = current_url.borrow().clone();
+                let url = state.borrow().current_url.clone();
                 if let Err(error) =
                     gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
                 {
@@ -926,36 +979,478 @@ mod imp {
         surface.append(&open_button);
 
         let url_applier = Rc::new({
-            let current_url = current_url.clone();
+            let state = state.clone();
             let runtime_status = runtime_status.clone();
             let title = title.clone();
             let detail_label = detail_label.clone();
             move |url: &str| {
-                let url = normalize_web_url(url);
-                if current_url.borrow().as_str() == url {
-                    return;
-                }
-                current_url.replace(url.clone());
-                let domain = domain_from_url(&url);
-                title.set_text(&domain);
-                title.set_tooltip_text(Some(&url));
-                detail_label.set_text(&web_runtime_detail(&runtime_status, &url));
+                apply_web_runtime_settings(
+                    &state,
+                    &runtime_status,
+                    &title,
+                    &detail_label,
+                    url,
+                    None,
+                    false,
+                );
             }
         });
+        let web_settings_applier = Rc::new({
+            let state = state.clone();
+            let runtime_status = runtime_status.clone();
+            let title = title.clone();
+            let detail_label = detail_label.clone();
+            move |url: &str, auto_refresh_seconds: Option<u32>| {
+                apply_web_runtime_settings(
+                    &state,
+                    &runtime_status,
+                    &title,
+                    &detail_label,
+                    url,
+                    auto_refresh_seconds,
+                    true,
+                );
+            }
+        });
+        let shutdown = Rc::new({
+            let state = state.clone();
+            move |reason: &str| shutdown_web_runtime(&state, reason)
+        });
+
+        start_web_runtime_pump(
+            &web_host.clone().upcast::<gtk::Widget>(),
+            state.clone(),
+            runtime_status.clone(),
+            title.clone(),
+            detail_label.clone(),
+        );
 
         TileRuntimeSurface {
             widget: surface.upcast(),
             command_sender: None,
             appearance_applier: None,
             url_applier: Some(url_applier),
-            shutdown: None,
+            web_settings_applier: Some(web_settings_applier),
+            shutdown: Some(shutdown),
             active_process_checker: None,
             recovery_binder: None,
         }
     }
 
-    fn web_runtime_detail(runtime_status: &str, url: &str) -> String {
-        format!("{runtime_status}: {url}")
+    fn apply_web_runtime_settings(
+        state: &Rc<RefCell<WebRuntimeState>>,
+        runtime_status: &str,
+        title: &gtk::Label,
+        detail_label: &gtk::Label,
+        url: &str,
+        auto_refresh_seconds: Option<u32>,
+        update_refresh: bool,
+    ) {
+        let url = normalize_web_url(url);
+        let (should_navigate, next_refresh) = {
+            let mut state = state.borrow_mut();
+            let should_navigate = state.current_url != url;
+            if should_navigate {
+                state.current_url = url.clone();
+            }
+            if update_refresh {
+                state.auto_refresh_seconds = auto_refresh_seconds;
+                state.refresh_tick = 0;
+            }
+            (should_navigate, state.auto_refresh_seconds)
+        };
+
+        let domain = domain_from_url(&url);
+        title.set_text(&domain);
+        title.set_tooltip_text(Some(&url));
+        detail_label.set_text(&web_runtime_detail(runtime_status, &url, next_refresh));
+
+        if should_navigate
+            && let Some(webview) = state.borrow().webview.clone()
+            && let Err(error) = unsafe { webview.Navigate(&HSTRING::from(url.as_str())) }
+        {
+            logging::error(format!("Windows GTK WebView2 navigation failed: {error}"));
+        }
+    }
+
+    fn start_web_runtime_pump(
+        host: &gtk::Widget,
+        state: Rc<RefCell<WebRuntimeState>>,
+        runtime_status: String,
+        title: gtk::Label,
+        detail_label: gtk::Label,
+    ) {
+        let host = host.clone();
+        glib::timeout_add_local(Duration::from_millis(WEBVIEW_RUNTIME_POLL_MS), move || {
+            if state.borrow().shutdown {
+                return glib::ControlFlow::Break;
+            }
+
+            if !state.borrow().initialized {
+                if let Some(hwnd) = gtk_widget_hwnd(&host) {
+                    initialize_gtk_webview_runtime(
+                        hwnd,
+                        &host,
+                        &state,
+                        &runtime_status,
+                        &title,
+                        &detail_label,
+                    );
+                }
+            }
+
+            sync_gtk_webview_bounds(&host, &state);
+            tick_gtk_webview_refresh(&state);
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn initialize_gtk_webview_runtime(
+        parent_hwnd: windows_sys::Win32::Foundation::HWND,
+        host: &gtk::Widget,
+        state: &Rc<RefCell<WebRuntimeState>>,
+        runtime_status: &str,
+        title: &gtk::Label,
+        detail_label: &gtk::Label,
+    ) {
+        {
+            let mut state = state.borrow_mut();
+            if state.initialized || state.shutdown {
+                return;
+            }
+            state.initialized = true;
+        }
+
+        let environment = match create_webview_environment() {
+            Ok(environment) => environment,
+            Err(error) => {
+                detail_label.set_text(&web_runtime_detail(
+                    &error,
+                    &state.borrow().current_url,
+                    None,
+                ));
+                logging::error(format!("Windows GTK WebView2 environment failed: {error}"));
+                return;
+            }
+        };
+        let controller = match create_webview_controller(parent_hwnd, &environment) {
+            Ok(controller) => controller,
+            Err(error) => {
+                detail_label.set_text(&web_runtime_detail(
+                    &error,
+                    &state.borrow().current_url,
+                    None,
+                ));
+                logging::error(format!("Windows GTK WebView2 controller failed: {error}"));
+                return;
+            }
+        };
+        let webview = match unsafe { controller.CoreWebView2() } {
+            Ok(webview) => webview,
+            Err(error) => {
+                detail_label.set_text(&web_runtime_detail(
+                    &format!("WebView2 controller access failed: {error}"),
+                    &state.borrow().current_url,
+                    None,
+                ));
+                logging::error(format!(
+                    "Windows GTK WebView2 controller access failed: {error}"
+                ));
+                return;
+            }
+        };
+
+        configure_gtk_webview(&webview);
+        {
+            let mut state = state.borrow_mut();
+            state.environment = Some(environment);
+            state.controller = Some(controller);
+            state.webview = Some(webview.clone());
+        }
+        bind_gtk_webview_status(
+            &webview,
+            state.clone(),
+            runtime_status.to_string(),
+            title.clone(),
+            detail_label.clone(),
+        );
+
+        let (url, auto_refresh_seconds) = {
+            let state = state.borrow();
+            (state.current_url.clone(), state.auto_refresh_seconds)
+        };
+        detail_label.set_text(&web_runtime_detail(
+            runtime_status,
+            &url,
+            auto_refresh_seconds,
+        ));
+        sync_gtk_webview_bounds(host, state);
+        logging::info(format!("Windows GTK WebView2 tile navigating to {url}"));
+        if let Err(error) = unsafe { webview.Navigate(&HSTRING::from(url.as_str())) } {
+            logging::error(format!(
+                "Windows GTK WebView2 initial navigation failed: {error}"
+            ));
+        }
+    }
+
+    fn configure_gtk_webview(webview: &ICoreWebView2) {
+        unsafe {
+            let Ok(settings) = webview.Settings() else {
+                return;
+            };
+            let _ = settings.SetIsStatusBarEnabled(false);
+            let _ = settings.SetIsZoomControlEnabled(false);
+        }
+    }
+
+    fn bind_gtk_webview_status(
+        webview: &ICoreWebView2,
+        state: Rc<RefCell<WebRuntimeState>>,
+        runtime_status: String,
+        title: gtk::Label,
+        detail_label: gtk::Label,
+    ) {
+        let mut title_token = EventRegistrationToken::default();
+        let title_state = state.clone();
+        let title_status = runtime_status.clone();
+        let title_label = title.clone();
+        let title_detail = detail_label.clone();
+        let title_registration = unsafe {
+            webview.add_DocumentTitleChanged(
+                &DocumentTitleChangedEventHandler::create(Box::new(move |webview, _| {
+                    let Some(webview) = webview else {
+                        return Ok(());
+                    };
+                    let mut web_title = PWSTR::null();
+                    webview.DocumentTitle(&mut web_title)?;
+                    let web_title = take_pwstr(web_title);
+                    if !web_title.trim().is_empty() {
+                        title_label.set_text(&web_title);
+                    }
+                    let state = title_state.borrow();
+                    title_detail.set_text(&web_runtime_detail(
+                        &title_status,
+                        &state.current_url,
+                        state.auto_refresh_seconds,
+                    ));
+                    Ok(())
+                })),
+                &mut title_token,
+            )
+        };
+
+        let mut nav_token = EventRegistrationToken::default();
+        let nav_state = state.clone();
+        let nav_status = runtime_status.clone();
+        let nav_title = title;
+        let nav_detail = detail_label;
+        let nav_registration = unsafe {
+            webview.add_NavigationCompleted(
+                &NavigationCompletedEventHandler::create(Box::new(move |webview, _| {
+                    let Some(webview) = webview else {
+                        return Ok(());
+                    };
+                    let mut source = PWSTR::null();
+                    webview.Source(&mut source)?;
+                    let source = normalize_web_url(&take_pwstr(source));
+                    let mut state = nav_state.borrow_mut();
+                    state.current_url = source.clone();
+                    nav_title.set_tooltip_text(Some(&source));
+                    nav_detail.set_text(&web_runtime_detail(
+                        &nav_status,
+                        &source,
+                        state.auto_refresh_seconds,
+                    ));
+                    Ok(())
+                })),
+                &mut nav_token,
+            )
+        };
+
+        let mut state = state.borrow_mut();
+        if let Err(error) = title_registration {
+            logging::error(format!(
+                "Registering Windows GTK WebView2 title handler failed: {error}"
+            ));
+        } else {
+            state.document_title_token = Some(title_token);
+        }
+        if let Err(error) = nav_registration {
+            logging::error(format!(
+                "Registering Windows GTK WebView2 navigation handler failed: {error}"
+            ));
+        } else {
+            state.navigation_completed_token = Some(nav_token);
+        }
+    }
+
+    fn sync_gtk_webview_bounds(host: &gtk::Widget, state: &Rc<RefCell<WebRuntimeState>>) {
+        let Some(bounds) = gtk_widget_root_bounds(host) else {
+            return;
+        };
+        let controller = {
+            let mut state = state.borrow_mut();
+            if state.last_bounds == Some(bounds) {
+                return;
+            }
+            state.last_bounds = Some(bounds);
+            state.controller.clone()
+        };
+        if let Some(controller) = controller {
+            let _ = unsafe { controller.SetBounds(bounds) };
+        }
+    }
+
+    fn tick_gtk_webview_refresh(state: &Rc<RefCell<WebRuntimeState>>) {
+        let webview = {
+            let mut state = state.borrow_mut();
+            let Some(interval_seconds) = state.auto_refresh_seconds.filter(|seconds| *seconds > 0)
+            else {
+                return;
+            };
+            let interval_ticks =
+                ((u64::from(interval_seconds) * 1_000) / WEBVIEW_RUNTIME_POLL_MS).max(1) as u32;
+            state.refresh_tick = state.refresh_tick.saturating_add(1);
+            if state.refresh_tick < interval_ticks {
+                return;
+            }
+            state.refresh_tick = 0;
+            state.webview.clone()
+        };
+        if let Some(webview) = webview
+            && let Err(error) = unsafe { webview.Reload() }
+        {
+            logging::error(format!("Windows GTK WebView2 refresh failed: {error}"));
+        }
+    }
+
+    fn shutdown_web_runtime(state: &Rc<RefCell<WebRuntimeState>>, reason: &str) {
+        let (webview, title_token, navigation_token, controller) = {
+            let mut state = state.borrow_mut();
+            if state.shutdown {
+                return;
+            }
+            logging::info(format!(
+                "closing Windows GTK WebView2 runtime reason='{reason}'"
+            ));
+            state.shutdown = true;
+            let webview = state.webview.take();
+            let title_token = state.document_title_token.take();
+            let navigation_token = state.navigation_completed_token.take();
+            let controller = state.controller.take();
+            state.environment = None;
+            (webview, title_token, navigation_token, controller)
+        };
+        if let Some(webview) = webview {
+            if let Some(token) = title_token {
+                let _ = unsafe { webview.remove_DocumentTitleChanged(token) };
+            }
+            if let Some(token) = navigation_token {
+                let _ = unsafe { webview.remove_NavigationCompleted(token) };
+            }
+        }
+        if let Some(controller) = controller
+            && let Err(error) = unsafe { controller.Close() }
+        {
+            logging::error(format!("Windows GTK WebView2 close failed: {error}"));
+        }
+    }
+
+    fn gtk_widget_hwnd(widget: &gtk::Widget) -> Option<windows_sys::Win32::Foundation::HWND> {
+        let native = widget.native()?;
+        let surface = native.surface()?;
+        let handle = unsafe { gdk_win32_surface_get_handle(surface.to_glib_none().0) };
+        (!handle.is_null()).then_some(handle as windows_sys::Win32::Foundation::HWND)
+    }
+
+    fn gtk_widget_root_bounds(widget: &gtk::Widget) -> Option<WinRect> {
+        let root = widget.root()?.upcast::<gtk::Widget>();
+        let bounds = widget.compute_bounds(&root)?;
+        let left = bounds.x().round().max(0.0) as i32;
+        let top = bounds.y().round().max(0.0) as i32;
+        let width = bounds.width().round().max(1.0) as i32;
+        let height = bounds.height().round().max(1.0) as i32;
+        Some(WinRect {
+            left,
+            top,
+            right: left.saturating_add(width),
+            bottom: top.saturating_add(height),
+        })
+    }
+
+    fn ensure_webview_com_initialized() -> Result<(), String> {
+        static WEBVIEW_COM_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+        WEBVIEW_COM_INIT
+            .get_or_init(|| unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                    .ok()
+                    .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
+            })
+            .clone()
+    }
+
+    fn create_webview_environment() -> Result<ICoreWebView2Environment, String> {
+        ensure_webview_com_initialized()?;
+
+        let (tx, rx) = mpsc::channel();
+        unsafe {
+            CreateCoreWebView2EnvironmentWithOptions(
+                PCWSTR::null(),
+                PCWSTR::null(),
+                None::<
+                    &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
+                >,
+                &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+                    move |error_code, environment| {
+                        error_code?;
+                        tx.send(environment.ok_or_else(|| WindowsError::from(E_POINTER)))
+                            .map_err(|_| WindowsError::from(E_UNEXPECTED))
+                    },
+                )),
+            )
+            .map_err(|error| format!("CreateCoreWebView2EnvironmentWithOptions failed: {error}"))?;
+        }
+
+        wait_with_pump(rx)
+            .map_err(|error| format!("Waiting for WebView2 environment failed: {error}"))?
+            .map_err(|error| format!("Creating WebView2 environment failed: {error}"))
+    }
+
+    fn create_webview_controller(
+        parent_hwnd: windows_sys::Win32::Foundation::HWND,
+        environment: &ICoreWebView2Environment,
+    ) -> Result<ICoreWebView2Controller, String> {
+        let (tx, rx) = mpsc::channel();
+        let handler: ICoreWebView2CreateCoreWebView2ControllerCompletedHandler =
+            CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+                move |error_code, controller| {
+                    error_code?;
+                    tx.send(controller.ok_or_else(|| WindowsError::from(E_POINTER)))
+                        .map_err(|_| WindowsError::from(E_UNEXPECTED))
+                },
+            ));
+
+        unsafe {
+            environment
+                .CreateCoreWebView2Controller(Win32Hwnd(parent_hwnd as _), &handler)
+                .map_err(|error| format!("CreateCoreWebView2Controller failed: {error}"))?;
+        }
+
+        wait_with_pump(rx)
+            .map_err(|error| format!("Waiting for WebView2 controller failed: {error}"))?
+            .map_err(|error| format!("Creating WebView2 controller failed: {error}"))
+    }
+
+    fn web_runtime_detail(
+        runtime_status: &str,
+        url: &str,
+        auto_refresh_seconds: Option<u32>,
+    ) -> String {
+        match auto_refresh_seconds.filter(|seconds| *seconds > 0) {
+            Some(seconds) => format!("{runtime_status}: {url} • refresh {seconds}s"),
+            None => format!("{runtime_status}: {url}"),
+        }
     }
 }
 

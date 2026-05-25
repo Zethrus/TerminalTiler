@@ -37,6 +37,7 @@ pub struct TileRuntimeSurface {
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
     pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
+    pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
     pub shutdown: Option<Rc<dyn Fn(&str)>>,
     pub active_process_checker: Option<Rc<dyn Fn() -> bool>>,
     pub recovery_binder: Option<TileRuntimeRecoveryBinder>,
@@ -54,6 +55,7 @@ impl TileRuntimeSurface {
             command_sender: None,
             appearance_applier: None,
             url_applier: None,
+            web_settings_applier: None,
             shutdown: None,
             active_process_checker: None,
             recovery_binder: None,
@@ -1778,6 +1780,14 @@ fn build_tile(
             && let Some(apply_url) = &surface.url_applier
         {
             apply_url(tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL));
+        }
+        if tile.tile_kind == TileKind::WebView
+            && let Some(apply_settings) = &surface.web_settings_applier
+        {
+            apply_settings(
+                tile.url.as_deref().unwrap_or(DEFAULT_WEB_URL),
+                tile.auto_refresh_seconds,
+            );
         }
         detach_from_previous_parent(&surface.widget);
         (surface.widget.clone(), Some(surface))

@@ -1101,6 +1101,7 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     for token in [
         "pub struct TileRuntimeSurface",
         "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
+        "web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>",
         "shutdown: Option<Rc<dyn Fn(&str)>>",
         "active_process_checker: Option<Rc<dyn Fn() -> bool>>",
         "recovery_binder: Option<TileRuntimeRecoveryBinder>",
@@ -1178,8 +1179,17 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("format!(\"{text}\\r\\n\")")
             && WINDOWS_GTK_RUNTIME_RS
                 .contains("TileKind::WebView => build_web_runtime_surface(tile)")
-            && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)"),
-        "Windows GTK terminal runtime surfaces should expose command senders for the shared broadcast toolbar while web panes remain visual runtime widgets"
+            && WINDOWS_GTK_RUNTIME_RS.contains("url_applier: Some(url_applier)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("web_settings_applier: Some(web_settings_applier)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("CreateCoreWebView2EnvironmentWithOptions")
+            && WINDOWS_GTK_RUNTIME_RS.contains("CreateCoreWebView2ControllerCompletedHandler")
+            && WINDOWS_GTK_RUNTIME_RS.contains("gdk_win32_surface_get_handle")
+            && WINDOWS_GTK_RUNTIME_RS.contains("gtk_widget_root_bounds")
+            && WINDOWS_GTK_RUNTIME_RS.contains("controller.SetBounds(bounds)")
+            && WINDOWS_GTK_RUNTIME_RS.contains("webview.Navigate(&HSTRING::from")
+            && WINDOWS_GTK_RUNTIME_RS.contains("webview.Reload()")
+            && WINDOWS_GTK_RUNTIME_RS.contains("controller.Close()"),
+        "Windows GTK terminal/runtime surfaces should expose shared command controls and embed WebView2-backed web panes instead of leaving browser tiles as external placeholders"
     );
 }
 
