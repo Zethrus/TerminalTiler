@@ -2,7 +2,7 @@
 mod imp {
     use std::cell::{Cell, RefCell};
     use std::ffi::c_void;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{Read, Write};
     use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -42,12 +42,15 @@ mod imp {
     use crate::ui::icons::{self, name as icon_name};
     use crate::ui::tile_chrome::{domain_from_url, make_shrinkable};
     use crate::ui::workspace_preview::{TileRuntimeRecoveryBinder, TileRuntimeSurface};
+    use crate::windows::vt::VtBuffer;
     use crate::windows::{workspace, wsl};
 
     const MIN_TERMINAL_FONT_POINTS: i32 = 7;
     const MAX_TERMINAL_FONT_POINTS: i32 = 20;
     const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
     const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
+    const TERMINAL_RUNTIME_COLUMNS: usize = 80;
+    const TERMINAL_RUNTIME_ROWS: usize = 24;
     const TERMINAL_RUNTIME_POLL_MS: u64 = 80;
     const WEBVIEW_RUNTIME_POLL_MS: u64 = 100;
 
@@ -118,14 +121,19 @@ mod imp {
         make_shrinkable(&surface);
 
         let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
-        append_buffer_line(
-            &buffer,
-            &format!(
-                "[terminaltiler] starting {} in {}",
+        let terminal_buffer = Rc::new(RefCell::new(VtBuffer::new(
+            TERMINAL_RUNTIME_COLUMNS,
+            TERMINAL_RUNTIME_ROWS,
+        )));
+        {
+            let mut terminal_buffer = terminal_buffer.borrow_mut();
+            terminal_buffer.process(&format!(
+                "[terminaltiler] starting {} in {}\r\n",
                 tile.title,
                 tab.workspace_root.display()
-            ),
-        );
+            ));
+            render_terminal_runtime_buffer(&buffer, &terminal_buffer);
+        }
 
         let terminal_output = gtk::TextView::builder()
             .buffer(&buffer)
@@ -189,14 +197,23 @@ mod imp {
 
         {
             let buffer = buffer.clone();
+            let terminal_buffer = terminal_buffer.clone();
             let state = state.clone();
+            let terminal_output = terminal_output.clone();
             gtk::glib::timeout_add_local(
                 Duration::from_millis(TERMINAL_RUNTIME_POLL_MS),
                 move || {
                     while let Ok(event) = event_rx.try_recv() {
                         match event {
                             TerminalRuntimeEvent::Output(chunk) => {
-                                append_buffer_text(&buffer, &chunk)
+                                let mut terminal_buffer = terminal_buffer.borrow_mut();
+                                terminal_buffer.process(&chunk);
+                                flush_terminal_runtime_responses(
+                                    &mut terminal_buffer,
+                                    &state,
+                                    &terminal_output,
+                                );
+                                render_terminal_runtime_buffer(&buffer, &terminal_buffer);
                             }
                             TerminalRuntimeEvent::ProcessStarted {
                                 generation,
@@ -463,19 +480,18 @@ mod imp {
         });
     }
 
-    fn pipe_reader_to_output<R>(reader: R, event_tx: mpsc::Sender<TerminalRuntimeEvent>)
+    fn pipe_reader_to_output<R>(mut reader: R, event_tx: mpsc::Sender<TerminalRuntimeEvent>)
     where
         R: std::io::Read + Send + 'static,
     {
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(reader);
-            let mut line = String::new();
+            let mut chunk = [0u8; 4096];
             loop {
-                line.clear();
-                match reader.read_line(&mut line) {
+                match reader.read(&mut chunk) {
                     Ok(0) => break,
-                    Ok(_) => {
-                        let _ = event_tx.send(TerminalRuntimeEvent::Output(line.clone()));
+                    Ok(bytes_read) => {
+                        let text = String::from_utf8_lossy(&chunk[..bytes_read]).into_owned();
+                        let _ = event_tx.send(TerminalRuntimeEvent::Output(text));
                     }
                     Err(error) => {
                         let _ = event_tx.send(TerminalRuntimeEvent::Output(format!(
@@ -486,6 +502,46 @@ mod imp {
                 }
             }
         });
+    }
+
+    fn render_terminal_runtime_buffer(buffer: &gtk::TextBuffer, terminal: &VtBuffer) {
+        let total_rows = terminal.total_rows();
+        let mut rendered = String::with_capacity((terminal.columns() + 1) * total_rows);
+        let cursor = terminal.cursor_visible().then(|| {
+            let (column, row) = terminal.cursor();
+            (column, terminal.history_len() + row)
+        });
+
+        for row in 0..total_rows {
+            if row > 0 {
+                rendered.push('\n');
+            }
+            for column in 0..terminal.columns() {
+                let mut ch = terminal.display_cell(row, column).ch;
+                if cursor == Some((column, row)) {
+                    ch = if ch == ' ' { '█' } else { '▌' };
+                }
+                rendered.push(ch);
+            }
+        }
+
+        buffer.set_text(&rendered);
+    }
+
+    fn flush_terminal_runtime_responses(
+        terminal: &mut VtBuffer,
+        state: &Rc<RefCell<TerminalRuntimeState>>,
+        output: &gtk::TextView,
+    ) {
+        let pending_input = terminal.take_pending_input();
+        if !pending_input.is_empty() {
+            let response = String::from_utf8_lossy(&pending_input).into_owned();
+            let _ = send_terminal_runtime_payload(state, response);
+        }
+
+        if let Some(clipboard_text) = terminal.take_pending_clipboard_write() {
+            output.clipboard().set_text(&clipboard_text);
+        }
     }
 
     fn send_entry_text(entry: &gtk::Entry, state: &Rc<RefCell<TerminalRuntimeState>>) {
@@ -554,15 +610,6 @@ mod imp {
                 ));
             }
         }
-    }
-
-    fn append_buffer_line(buffer: &gtk::TextBuffer, text: &str) {
-        append_buffer_text(buffer, &format!("{text}\n"));
-    }
-
-    fn append_buffer_text(buffer: &gtk::TextBuffer, text: &str) {
-        let mut end = buffer.end_iter();
-        buffer.insert(&mut end, text);
     }
 
     fn install_terminal_output_context_menu(

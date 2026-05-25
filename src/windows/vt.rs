@@ -246,6 +246,18 @@ impl VtBuffer {
         self.viewport_offset
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn total_rows(&self) -> usize {
+        self.history.len() + self.rows
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn display_cell(&self, row: usize, column: usize) -> VtCell {
+        let row = row.min(self.total_rows().saturating_sub(1));
+        let column = column.min(self.columns.saturating_sub(1));
+        self.global_cell(row, column)
+    }
+
     pub fn take_pending_input(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.pending_input)
     }
@@ -1447,6 +1459,10 @@ mod tests {
         let mut buffer = VtBuffer::new(3, 2);
         buffer.process("abcde");
         buffer.process("fgh");
+
+        assert_eq!(buffer.total_rows(), buffer.history_len() + buffer.rows());
+        assert_eq!(buffer.display_cell(0, 0).ch, 'a');
+        assert_eq!(buffer.display_cell(1, 0).ch, 'd');
 
         assert!(buffer.scroll_viewport(1));
         assert_eq!(buffer.visible_cell(0, 0).ch, 'a');
