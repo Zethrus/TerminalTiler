@@ -171,8 +171,21 @@ mod imp {
 
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
-        let shell_state = WindowsGtkShellState::default();
+        let shell_state = WindowsGtkShellState::new(session_store.clone());
         shell_state.launch_deck_active.set(true);
+        {
+            let shell_state = shell_state.clone();
+            window.connect_close_request(move |_| {
+                if shell_state.has_active_processes() {
+                    logging::info(
+                        "Windows GTK shell closing with active terminal runtimes; terminating preview runtimes",
+                    );
+                }
+                shell_state.save_preview_session("closing Windows GTK application");
+                shell_state.terminate_preview_runtimes("closing Windows GTK application");
+                glib::Propagation::Proceed
+            });
+        }
         let workspace_fullscreen_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
         let workspace_density_shortcut_controller: ShortcutControllerHandle =
@@ -1121,18 +1134,70 @@ mod imp {
         apply_window_density(window, tab.preset.density);
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct WindowsGtkShellState {
         preview: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
         launch_deck_active: Rc<Cell<bool>>,
+        session_store: Rc<SessionStore>,
     }
 
     impl WindowsGtkShellState {
+        fn new(session_store: SessionStore) -> Self {
+            Self {
+                preview: Rc::new(RefCell::new(None)),
+                launch_deck_active: Rc::new(Cell::new(false)),
+                session_store: Rc::new(session_store),
+            }
+        }
+
         fn has_workspace_tabs(&self) -> bool {
             self.preview
                 .borrow()
                 .as_ref()
                 .is_some_and(|preview| !preview.snapshot().tabs.is_empty())
+        }
+
+        fn save_preview_session(&self, reason: &str) {
+            if let Some(preview) = self.preview.borrow().as_ref() {
+                persist_windows_gtk_session(&self.session_store, &preview.snapshot(), reason);
+            } else {
+                logging::info(format!(
+                    "clearing Windows GTK saved session state reason='{reason}'"
+                ));
+                self.session_store.clear();
+            }
+        }
+
+        fn terminate_preview_runtimes(&self, reason: &str) {
+            if let Some(preview) = self.preview.borrow().as_ref() {
+                preview.terminate_all(reason);
+            }
+        }
+
+        fn has_active_processes(&self) -> bool {
+            self.preview
+                .borrow()
+                .as_ref()
+                .is_some_and(|preview| preview.has_active_processes())
+        }
+    }
+
+    fn persist_windows_gtk_session(
+        session_store: &SessionStore,
+        session: &SavedSession,
+        reason: &str,
+    ) {
+        if session.tabs.is_empty() {
+            logging::info(format!(
+                "clearing Windows GTK saved session state reason='{reason}'"
+            ));
+            session_store.clear();
+        } else {
+            logging::info(format!(
+                "saving Windows GTK session state reason='{reason}' tabs={}",
+                session.tabs.len()
+            ));
+            session_store.save(session);
         }
     }
 
@@ -1423,14 +1488,19 @@ mod imp {
         action: &str,
     ) {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
-        let preview = crate::ui::workspace_preview::SessionPreview::with_runtime_assets(
-            &session,
-            false,
-            assets,
-            Some(Rc::new(
-                crate::windows::gtk_runtime::build_tile_runtime_surface,
-            )),
-        );
+        let session_store = shell_state.session_store.clone();
+        let preview =
+            crate::ui::workspace_preview::SessionPreview::with_runtime_assets_and_change_handler(
+                &session,
+                false,
+                assets,
+                Some(Rc::new(
+                    crate::windows::gtk_runtime::build_tile_runtime_surface,
+                )),
+                Some(Rc::new(move |session, reason| {
+                    persist_windows_gtk_session(&session_store, &session, reason);
+                })),
+            );
         *shell_state.preview.borrow_mut() = Some(preview.clone());
         shell_state.launch_deck_active.set(false);
         apply_active_preview_profile(window, &preview);
@@ -1449,6 +1519,7 @@ mod imp {
         logging::info(format!(
             "Windows GTK shell {action} interactive GTK workspace with {tabs} tab(s) and {panes} pane(s)"
         ));
+        shell_state.save_preview_session(&format!("Windows GTK workspace {action}"));
         overlay.add_toast(adw::Toast::new(
             "Workspace opened in the shared interactive GTK shell",
         ));

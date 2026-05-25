@@ -37,6 +37,8 @@ pub struct TileRuntimeSurface {
     pub command_sender: Option<Rc<dyn Fn(&str) -> bool>>,
     pub appearance_applier: Option<Rc<dyn Fn(ApplicationDensity, i32)>>,
     pub url_applier: Option<Rc<dyn Fn(&str)>>,
+    pub shutdown: Option<Rc<dyn Fn(&str)>>,
+    pub active_process_checker: Option<Rc<dyn Fn() -> bool>>,
     pub recovery_binder: Option<TileRuntimeRecoveryBinder>,
 }
 
@@ -52,6 +54,8 @@ impl TileRuntimeSurface {
             command_sender: None,
             appearance_applier: None,
             url_applier: None,
+            shutdown: None,
+            active_process_checker: None,
             recovery_binder: None,
         }
     }
@@ -59,6 +63,7 @@ impl TileRuntimeSurface {
 
 pub type TileRuntimeFactory =
     Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
+pub type SessionChangeHandler = Rc<dyn Fn(SavedSession, &'static str)>;
 
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
@@ -85,6 +90,7 @@ pub struct SessionPreview {
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    on_session_changed: Option<SessionChangeHandler>,
     alert_store: AlertStore,
 }
 
@@ -97,6 +103,7 @@ struct PreviewRenderContext {
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    on_session_changed: Option<SessionChangeHandler>,
     alert_store: AlertStore,
 }
 
@@ -110,13 +117,24 @@ impl PreviewRenderContext {
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
+            self.on_session_changed.clone(),
             self.alert_store.clone(),
         );
     }
 
     fn prune_and_rerender(&self) {
-        prune_runtime_surfaces(&self.runtime_surfaces, &self.session.borrow());
+        prune_runtime_surfaces(
+            &self.runtime_surfaces,
+            &self.session.borrow(),
+            "workspace preview layout changed",
+        );
         self.rerender();
+    }
+
+    fn notify_session_changed(&self, reason: &'static str) {
+        if let Some(on_session_changed) = &self.on_session_changed {
+            on_session_changed(self.session.borrow().clone(), reason);
+        }
     }
 }
 
@@ -139,6 +157,22 @@ impl SessionPreview {
         assets: WorkspaceAssets,
         runtime_factory: Option<TileRuntimeFactory>,
     ) -> Self {
+        Self::with_runtime_assets_and_change_handler(
+            session,
+            show_inline_tab_strip,
+            assets,
+            runtime_factory,
+            None,
+        )
+    }
+
+    pub fn with_runtime_assets_and_change_handler(
+        session: &SavedSession,
+        show_inline_tab_strip: bool,
+        assets: WorkspaceAssets,
+        runtime_factory: Option<TileRuntimeFactory>,
+        on_session_changed: Option<SessionChangeHandler>,
+    ) -> Self {
         let session = Rc::new(RefCell::new(session.clone()));
         let assets = Rc::new(assets);
         let initial_active_index = {
@@ -159,6 +193,7 @@ impl SessionPreview {
             show_inline_tab_strip,
             runtime_factory,
             runtime_surfaces: Rc::new(RefCell::new(HashMap::new())),
+            on_session_changed,
             alert_store: AlertStore::default(),
         };
         preview.render();
@@ -176,6 +211,7 @@ impl SessionPreview {
         };
         self.active_index.set(next_index);
         self.session.borrow_mut().active_tab_index = next_index;
+        self.notify_session_changed("active workspace preview tab changed");
         self.render();
     }
 
@@ -196,13 +232,15 @@ impl SessionPreview {
             next_index
         };
         self.active_index.set(next_index);
+        self.notify_session_changed("workspace preview tab opened");
         self.render();
         next_index
     }
 
     pub fn close_tab(&self, index: usize) -> bool {
         if close_tab_in_preview_state(&self.session, &self.active_index, index) {
-            self.prune_runtime_surfaces();
+            self.prune_runtime_surfaces("workspace preview tab closed");
+            self.notify_session_changed("workspace preview tab closed");
             self.render();
             true
         } else {
@@ -224,6 +262,7 @@ impl SessionPreview {
             tab.preset.density = next_density;
             next_density
         };
+        self.notify_session_changed("workspace preview density changed");
         self.render();
         Some(next_density)
     }
@@ -246,8 +285,30 @@ impl SessionPreview {
             tab.terminal_zoom_steps = next_zoom_steps;
             next_zoom_steps
         };
+        self.notify_session_changed("workspace preview zoom changed");
         self.render();
         Some(next_zoom_steps)
+    }
+
+    pub fn terminate_all(&self, reason: &str) {
+        let shutdowns = self
+            .runtime_surfaces
+            .borrow()
+            .values()
+            .filter_map(|surface| surface.shutdown.clone())
+            .collect::<Vec<_>>();
+
+        for shutdown in shutdowns {
+            shutdown(reason);
+        }
+    }
+
+    pub fn has_active_processes(&self) -> bool {
+        self.runtime_surfaces
+            .borrow()
+            .values()
+            .filter_map(|surface| surface.active_process_checker.as_ref())
+            .any(|is_active| is_active())
     }
 
     fn render(&self) {
@@ -259,15 +320,13 @@ impl SessionPreview {
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
+            self.on_session_changed.clone(),
             self.alert_store.clone(),
         );
     }
 
-    fn prune_runtime_surfaces(&self) {
-        let live_keys = runtime_surface_keys(&self.session.borrow());
-        self.runtime_surfaces
-            .borrow_mut()
-            .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
+    fn prune_runtime_surfaces(&self, reason: &str) {
+        prune_runtime_surfaces(&self.runtime_surfaces, &self.session.borrow(), reason);
     }
 }
 
@@ -314,6 +373,7 @@ fn render_session_preview(
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    on_session_changed: Option<SessionChangeHandler>,
     alert_store: AlertStore,
 ) {
     while let Some(child) = shell.first_child() {
@@ -334,13 +394,20 @@ fn render_session_preview(
             let active_index = active_index.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
+            let on_session_changed = on_session_changed.clone();
             let alert_store = alert_store.clone();
             Rc::new(move |index: usize| {
                 if close_tab_in_preview_state(&session, &active_index, index) {
-                    let live_keys = runtime_surface_keys(&session.borrow());
-                    runtime_surfaces
-                        .borrow_mut()
-                        .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
+                    prune_runtime_surfaces(
+                        &runtime_surfaces,
+                        &session.borrow(),
+                        "workspace preview tab closed",
+                    );
+                    notify_session_changed(
+                        &on_session_changed,
+                        &session,
+                        "workspace preview tab closed",
+                    );
                     render_session_preview(
                         &shell,
                         &session,
@@ -349,6 +416,7 @@ fn render_session_preview(
                         true,
                         runtime_factory.clone(),
                         runtime_surfaces.clone(),
+                        on_session_changed.clone(),
                         alert_store.clone(),
                     );
                 }
@@ -361,6 +429,7 @@ fn render_session_preview(
             let active_index = active_index.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
+            let on_session_changed = on_session_changed.clone();
             let alert_store = alert_store.clone();
             Rc::new(move |next_index: usize| {
                 let next_index = {
@@ -369,6 +438,11 @@ fn render_session_preview(
                 };
                 active_index.set(next_index);
                 session.borrow_mut().active_tab_index = next_index;
+                notify_session_changed(
+                    &on_session_changed,
+                    &session,
+                    "active workspace preview tab changed",
+                );
                 render_session_preview(
                     &shell,
                     &session,
@@ -377,6 +451,7 @@ fn render_session_preview(
                     true,
                     runtime_factory.clone(),
                     runtime_surfaces.clone(),
+                    on_session_changed.clone(),
                     alert_store.clone(),
                 );
             })
@@ -398,6 +473,7 @@ fn render_session_preview(
             show_inline_tab_strip,
             runtime_factory: runtime_factory.clone(),
             runtime_surfaces: runtime_surfaces.clone(),
+            on_session_changed: on_session_changed.clone(),
             alert_store: alert_store.clone(),
         };
         let summary = build_workspace_summary(tab, &render_context);
@@ -411,6 +487,7 @@ fn render_session_preview(
                     &tile_id,
                 ) {
                     render_context.prune_and_rerender();
+                    render_context.notify_session_changed("workspace preview tile closed");
                 }
             })
         };
@@ -653,6 +730,7 @@ fn build_workspace_summary(
                 &url_entry.text(),
             ) {
                 render_context.prune_and_rerender();
+                render_context.notify_session_changed("workspace preview web tile added");
             }
         });
     }
@@ -667,6 +745,7 @@ fn build_workspace_summary(
                 &url_entry.text(),
             ) {
                 render_context.prune_and_rerender();
+                render_context.notify_session_changed("workspace preview web URL changed");
             }
         }
     });
@@ -1313,11 +1392,38 @@ fn active_tab_tile_specs(
 fn prune_runtime_surfaces(
     runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
     session: &SavedSession,
+    reason: &str,
 ) {
     let live_keys = runtime_surface_keys(session);
-    runtime_surfaces
-        .borrow_mut()
-        .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
+    let stale_surfaces = {
+        let mut surfaces = runtime_surfaces.borrow_mut();
+        let stale_keys = surfaces
+            .keys()
+            .filter(|key| !live_keys.iter().any(|live_key| live_key == *key))
+            .cloned()
+            .collect::<Vec<_>>();
+        stale_keys
+            .into_iter()
+            .filter_map(|key| surfaces.remove(&key))
+            .collect::<Vec<_>>()
+    };
+
+    for shutdown in stale_surfaces
+        .into_iter()
+        .filter_map(|surface| surface.shutdown)
+    {
+        shutdown(reason);
+    }
+}
+
+fn notify_session_changed(
+    on_session_changed: &Option<SessionChangeHandler>,
+    session: &Rc<RefCell<SavedSession>>,
+    reason: &'static str,
+) {
+    if let Some(on_session_changed) = on_session_changed {
+        on_session_changed(session.borrow().clone(), reason);
+    }
 }
 
 fn active_tab_index(session: &SavedSession, active_index: usize) -> Option<usize> {
@@ -1727,6 +1833,8 @@ fn bind_preview_web_tile_settings(
                     auto_refresh_seconds,
                 ) {
                     render_context.prune_and_rerender();
+                    render_context
+                        .notify_session_changed("workspace preview web tile settings changed");
                 }
             },
         )

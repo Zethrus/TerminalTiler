@@ -2,6 +2,7 @@
 mod imp {
     use std::cell::{Cell, RefCell};
     use std::io::{BufRead, BufReader, Write};
+    use std::os::windows::io::AsRawHandle;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::rc::Rc;
@@ -11,6 +12,7 @@ mod imp {
     use adw::prelude::*;
     use gtk::gio;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    use windows_sys::Win32::System::Threading::TerminateProcess;
 
     use crate::logging;
     use crate::model::assets::WorkspaceAssets;
@@ -34,13 +36,20 @@ mod imp {
     struct TerminalRuntimeState {
         stdin_tx: Option<mpsc::Sender<String>>,
         active: bool,
+        process_handle: Option<isize>,
         next_generation: u64,
         active_generation: u64,
     }
 
     enum TerminalRuntimeEvent {
         Output(String),
-        ProcessEnded { generation: u64 },
+        ProcessStarted {
+            generation: u64,
+            process_handle: isize,
+        },
+        ProcessEnded {
+            generation: u64,
+        },
     }
 
     pub(crate) fn build_tile_runtime_surface(
@@ -149,11 +158,29 @@ mod imp {
                             TerminalRuntimeEvent::Output(chunk) => {
                                 append_buffer_text(&buffer, &chunk)
                             }
+                            TerminalRuntimeEvent::ProcessStarted {
+                                generation,
+                                process_handle,
+                            } => {
+                                let terminate_stale_process = {
+                                    let mut state = state.borrow_mut();
+                                    if state.active_generation == generation && state.active {
+                                        state.process_handle = Some(process_handle);
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                };
+                                if terminate_stale_process && process_handle != 0 {
+                                    let _ = unsafe { TerminateProcess(process_handle as _, 1) };
+                                }
+                            }
                             TerminalRuntimeEvent::ProcessEnded { generation } => {
                                 let mut state = state.borrow_mut();
                                 if state.active_generation == generation {
                                     state.active = false;
                                     state.stdin_tx = None;
+                                    state.process_handle = None;
                                 }
                             }
                         }
@@ -201,6 +228,17 @@ mod imp {
             let state = state.clone();
             move |command: &str| send_terminal_runtime_payload(&state, command.to_string())
         });
+        let shutdown = Rc::new({
+            let state = state.clone();
+            move |reason: &str| terminate_terminal_runtime(&state, reason)
+        });
+        let active_process_checker = Rc::new({
+            let state = state.clone();
+            move || {
+                let state = state.borrow();
+                state.active || state.process_handle.is_some()
+            }
+        });
 
         let appearance_applier = Rc::new({
             let appearance_provider = appearance_provider.clone();
@@ -214,6 +252,8 @@ mod imp {
             command_sender: Some(command_sender),
             appearance_applier: Some(appearance_applier),
             url_applier: None,
+            shutdown: Some(shutdown),
+            active_process_checker: Some(active_process_checker),
             recovery_binder: Some(TileRuntimeRecoveryBinder {
                 bind: Rc::new({
                     let state = state.clone();
@@ -272,6 +312,7 @@ mod imp {
             state.active_generation = state.next_generation;
             state.active = true;
             state.stdin_tx = Some(stdin_tx);
+            state.process_handle = None;
             state.active_generation
         };
         if generation > 1 {
@@ -342,6 +383,10 @@ mod imp {
                     return;
                 }
             };
+            let _ = event_tx.send(TerminalRuntimeEvent::ProcessStarted {
+                generation,
+                process_handle: child.as_raw_handle() as isize,
+            });
 
             if let Some(mut stdin) = child.stdin.take() {
                 std::thread::spawn(move || {
@@ -437,9 +482,36 @@ mod imp {
             true
         } else {
             let mut state = state.borrow_mut();
-            state.active = false;
             state.stdin_tx = None;
             false
+        }
+    }
+
+    fn terminate_terminal_runtime(state: &Rc<RefCell<TerminalRuntimeState>>, reason: &str) {
+        let process_handle = {
+            let mut state = state.borrow_mut();
+            if !state.active && state.process_handle.is_none() {
+                return;
+            }
+            logging::info(format!(
+                "terminating Windows GTK terminal runtime reason='{reason}' generation={}",
+                state.active_generation
+            ));
+            state.active = false;
+            state.stdin_tx = None;
+            state.process_handle.take()
+        };
+
+        if let Some(process_handle) = process_handle
+            && process_handle != 0
+        {
+            let terminated = unsafe { TerminateProcess(process_handle as _, 1) };
+            if terminated == 0 {
+                logging::error(format!(
+                    "Windows GTK terminal runtime termination failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
         }
     }
 
@@ -876,6 +948,8 @@ mod imp {
             command_sender: None,
             appearance_applier: None,
             url_applier: Some(url_applier),
+            shutdown: None,
+            active_process_checker: None,
             recovery_binder: None,
         }
     }

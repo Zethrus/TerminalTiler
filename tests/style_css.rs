@@ -768,7 +768,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("session_for_restore_mode")
             && WINDOWS_GTK_APP_RS
                 .contains("crate::ui::workspace_preview::SessionPreview::with_runtime_assets")
+            && WINDOWS_GTK_APP_RS.contains("with_runtime_assets_and_change_handler")
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState")
+            && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState::new(session_store.clone())")
+            && WINDOWS_GTK_APP_RS.contains("window.connect_close_request")
+            && WINDOWS_GTK_APP_RS.contains("save_preview_session")
+            && WINDOWS_GTK_APP_RS.contains("terminate_preview_runtimes")
+            && WINDOWS_GTK_APP_RS.contains("persist_windows_gtk_session")
+            && WINDOWS_GTK_APP_RS.contains("session_store.save(session)")
+            && WINDOWS_GTK_APP_RS.contains("session_store.clear()")
             && WINDOWS_GTK_APP_RS.contains("show_launch_deck_tab")
             && WINDOWS_GTK_APP_RS.contains("show_workspace_preview_tab")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_shell_title_tabs")
@@ -871,11 +879,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("build_app_header_chrome()")
             && WINDOWS_GTK_APP_RS.contains("build_title_tab_chrome()")
             && WINDOWS_GTK_APP_RS.contains("apply_title_tab_state(")
-            && source_contains(
-                WINDOWS_GTK_APP_RS,
-                "SessionPreview::with_runtime_assets(
-            &session,"
-            )
+            && WINDOWS_GTK_APP_RS.contains("with_runtime_assets_and_change_handler")
+            && WINDOWS_GTK_APP_RS.contains("&session,")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("build_windows_title_tab"),
         "Linux and Windows GTK shells should share the same titlebar tab chrome builder/state contract while Windows drives workspace-preview tab switching from the titlebar"
@@ -1096,8 +1101,15 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
     for token in [
         "pub struct TileRuntimeSurface",
         "command_sender: Option<Rc<dyn Fn(&str) -> bool>>",
+        "shutdown: Option<Rc<dyn Fn(&str)>>",
+        "active_process_checker: Option<Rc<dyn Fn() -> bool>>",
         "recovery_binder: Option<TileRuntimeRecoveryBinder>",
         "pub struct TileRuntimeRecoveryBinder",
+        "pub type SessionChangeHandler",
+        "with_runtime_assets_and_change_handler",
+        "notify_session_changed",
+        "pub fn terminate_all(&self, reason: &str)",
+        "pub fn has_active_processes(&self) -> bool",
         "send_command_to_active_runtime_surfaces",
         "send_command_to_active_runtime_surface",
         "BroadcastTarget::AllPanes",
@@ -1148,7 +1160,14 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("command_sender: Some(command_sender)")
             && WINDOWS_GTK_RUNTIME_RS.contains("send_terminal_runtime_payload(&state")
             && WINDOWS_GTK_RUNTIME_RS.contains("state.active")
+            && WINDOWS_GTK_RUNTIME_RS.contains("TerminalRuntimeEvent::ProcessStarted")
             && WINDOWS_GTK_RUNTIME_RS.contains("TerminalRuntimeEvent::ProcessEnded")
+            && WINDOWS_GTK_RUNTIME_RS.contains("process_handle")
+            && WINDOWS_GTK_RUNTIME_RS.contains("TerminateProcess")
+            && WINDOWS_GTK_RUNTIME_RS.contains("terminate_terminal_runtime")
+            && WINDOWS_GTK_RUNTIME_RS.contains("shutdown: Some(shutdown)")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("active_process_checker: Some(active_process_checker)")
             && WINDOWS_GTK_RUNTIME_RS.contains("recovery_binder: Some(TileRuntimeRecoveryBinder")
             && WINDOWS_GTK_RUNTIME_RS.contains("bind_terminal_recovery_controls")
             && WINDOWS_GTK_RUNTIME_RS.contains("build_terminal_recovery_popover")
