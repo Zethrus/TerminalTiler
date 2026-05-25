@@ -21,6 +21,7 @@ use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::runbook_dialog;
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
@@ -1356,133 +1357,24 @@ fn present_runbook_dialog(
     alert_store: &AlertStore,
     broadcast_state: &gtk::Label,
 ) {
-    if runbook.variables.is_empty()
-        && runbook.confirm_policy == crate::model::assets::RunbookConfirmPolicy::Never
-    {
-        execute_runbook(
-            runbook,
-            &TemplateVariableValues::new(),
-            runtime,
-            alert_store,
-            broadcast_state,
-        );
-        return;
-    }
-
-    let Some(window) = button
-        .root()
-        .and_then(|root| root.downcast::<gtk::Window>().ok())
-    else {
-        return;
-    };
-    let dialog = adw::Dialog::new();
-    dialog.set_title(&format!("Run {}", runbook.name));
-    let area = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(16)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
-        .build();
-    area.append(
-        &gtk::Label::builder()
-            .label(if runbook.description.trim().is_empty() {
-                format!(
-                    "Target: {}  •  Steps: {}  •  {}",
-                    runbook.target.label(),
-                    runbook.steps.len(),
-                    runbook.confirm_policy.label()
-                )
-            } else {
-                format!(
-                    "{}\nTarget: {}  •  Steps: {}  •  {}",
-                    runbook.description,
-                    runbook.target.label(),
-                    runbook.steps.len(),
-                    runbook.confirm_policy.label()
-                )
-            })
-            .wrap(true)
-            .halign(gtk::Align::Start)
-            .build(),
-    );
-    let entries = runbook
-        .variables
-        .iter()
-        .map(|variable| {
-            let entry = gtk::Entry::builder()
-                .placeholder_text(&variable.label)
-                .text(variable.default_value.clone().unwrap_or_default())
-                .activates_default(true)
-                .build();
-            area.append(
-                &gtk::Label::builder()
-                    .label(&variable.label)
-                    .halign(gtk::Align::Start)
-                    .build(),
-            );
-            area.append(&entry);
-            (variable.id.clone(), entry)
-        })
-        .collect::<Vec<_>>();
-    let preview = runbook
-        .steps
-        .iter()
-        .map(|step| step.command.clone())
-        .collect::<Vec<_>>()
-        .join("\n");
-    area.append(
-        &gtk::Label::builder()
-            .label(format!("Preview:\n{preview}"))
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
-            .build(),
-    );
-
-    let action_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .halign(gtk::Align::End)
-        .build();
-    let cancel_button = icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
-    let run_button =
-        icons::labeled_button("Run", icon_name::RUN, &["pill-button", "suggested-action"]);
-    action_row.append(&cancel_button);
-    action_row.append(&run_button);
-    area.append(&action_row);
-    dialog.set_child(Some(&area));
-    dialog.set_default_widget(Some(&run_button));
-
     let runtime = runtime.clone();
-    let runbook = runbook.clone();
+    let runbook_for_dialog = runbook.clone();
+    let runbook_for_execute = runbook_for_dialog.clone();
     let alert_store = alert_store.clone();
     let broadcast_state = broadcast_state.clone();
-    {
-        let dialog = dialog.clone();
-        cancel_button.connect_clicked(move |_| {
-            dialog.close();
-        });
-    }
-    {
-        let dialog = dialog.clone();
-        run_button.connect_clicked(move |_| {
-            let variables = entries
-                .iter()
-                .map(|(id, entry)| (id.clone(), entry.text().to_string()))
-                .collect::<TemplateVariableValues>();
+    runbook_dialog::present(
+        button,
+        &runbook_for_dialog,
+        Rc::new(move |variables| {
             execute_runbook(
-                &runbook,
+                &runbook_for_execute,
                 &variables,
                 &runtime,
                 &alert_store,
                 &broadcast_state,
             );
-            dialog.close();
-        });
-    }
-    dialog.present(Some(&window));
+        }),
+    );
 }
 
 fn execute_runbook(

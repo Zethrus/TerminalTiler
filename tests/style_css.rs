@@ -21,6 +21,7 @@ const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
+const RUNBOOK_DIALOG_RS: &str = include_str!("../src/ui/runbook_dialog.rs");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const SNIPPET_POPOVER_RS: &str = include_str!("../src/ui/snippet_popover.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
@@ -1204,6 +1205,24 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && TITLE_CHROME_RS.contains("on_middle_close()")
             && WINDOWS_GTK_APP_RS.contains("preview.rename_tab(index, requested_title)"),
         "shared GTK workspace preview should expose the same rename, middle-click close, add-web-tile, alert focus, and runbook mutations used by Linux workspace command palette/title actions"
+    );
+
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod runbook_dialog;")
+            && RUNBOOK_DIALOG_RS.contains("pub(crate) fn present(")
+            && RUNBOOK_DIALOG_RS.contains("RunbookConfirmPolicy::Never")
+            && RUNBOOK_DIALOG_RS.contains("execute(TemplateVariableValues::new())")
+            && RUNBOOK_DIALOG_RS.contains("dialog.set_title(&format!(\"Run {}\", runbook.name))")
+            && RUNBOOK_DIALOG_RS.contains("Target: {}  •  Steps: {}  •  {}")
+            && RUNBOOK_DIALOG_RS.contains("label(format!(\"Preview:\\n{preview}\"))")
+            && RUNBOOK_DIALOG_RS.contains("icons::labeled_button(\"Cancel\"")
+            && RUNBOOK_DIALOG_RS.contains("icons::labeled_button(\"Run\"")
+            && WORKSPACE_VIEW_RS.contains("present_runbook_dialog(button, runbook")
+            && WORKSPACE_VIEW_RS.contains("runbook_dialog::present(")
+            && WORKSPACE_PREVIEW_RS.contains("runbook_dialog::present(")
+            && !WORKSPACE_VIEW_RS.contains("let dialog = adw::Dialog::new()")
+            && !WORKSPACE_PREVIEW_RS.contains("let dialog = adw::Dialog::new()"),
+        "Linux and Windows GTK workspace runbook dialogs should share one GTK dialog implementation while platform surfaces only provide execution callbacks"
     );
 }
 
