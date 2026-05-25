@@ -396,6 +396,7 @@ fn render_session_preview(
             current_index,
             tab,
             assets,
+            &render_context,
             runtime_factory.as_ref(),
             &runtime_surfaces,
             on_close_tile,
@@ -895,10 +896,8 @@ fn reapply_active_web_runtime_url(
     let Some(tab) = session_ref.tabs.get(tab_index) else {
         return false;
     };
-    let Some(tile) = tab
-        .preset
-        .layout
-        .tile_specs()
+    let tile_specs = tab.preset.layout.tile_specs();
+    let Some(tile) = tile_specs
         .iter()
         .find(|tile| tile.id == tile_id && tile.tile_kind == TileKind::WebView)
     else {
@@ -958,6 +957,7 @@ fn build_layout(
     tab_index: usize,
     tab: &SavedTab,
     assets: &WorkspaceAssets,
+    render_context: &PreviewRenderContext,
     runtime_factory: Option<&TileRuntimeFactory>,
     runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
     on_close_tile: Rc<dyn Fn(String)>,
@@ -977,6 +977,7 @@ fn build_layout(
             runtime_factory,
             runtime_surfaces,
             on_close_tile.clone(),
+            render_context,
         ));
     }
     shell.widget
@@ -991,6 +992,7 @@ fn build_tile(
     runtime_factory: Option<&TileRuntimeFactory>,
     runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
     on_close_tile: Rc<dyn Fn(String)>,
+    render_context: &PreviewRenderContext,
 ) -> gtk::Widget {
     let shell = build_tile_shell(tile);
     if active {
