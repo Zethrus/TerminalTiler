@@ -175,6 +175,12 @@ mod imp {
         shell_state.launch_deck_active.set(true);
         let workspace_fullscreen_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
+        let workspace_density_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
+        let workspace_zoom_in_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
+        let workspace_zoom_out_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
         let command_palette_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
         let open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
@@ -312,6 +318,12 @@ mod imp {
                 let voice_toast_tx = voice_toast_tx.clone();
                 let workspace_fullscreen_shortcut_controller =
                     workspace_fullscreen_shortcut_controller.clone();
+                let workspace_density_shortcut_controller =
+                    workspace_density_shortcut_controller.clone();
+                let workspace_zoom_in_shortcut_controller =
+                    workspace_zoom_in_shortcut_controller.clone();
+                let workspace_zoom_out_shortcut_controller =
+                    workspace_zoom_out_shortcut_controller.clone();
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
@@ -330,6 +342,9 @@ mod imp {
                         options.clone(),
                         voice_toast_tx.clone(),
                         workspace_fullscreen_shortcut_controller.clone(),
+                        workspace_density_shortcut_controller.clone(),
+                        workspace_zoom_in_shortcut_controller.clone(),
+                        workspace_zoom_out_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
                     );
@@ -348,6 +363,28 @@ mod imp {
                 &shell_state,
                 &preferences.workspace_fullscreen_shortcut,
             );
+            install_workspace_density_shortcut(
+                &window,
+                &workspace_density_shortcut_controller,
+                &shell_state,
+                &preferences.workspace_density_shortcut,
+            );
+            install_workspace_zoom_shortcut(
+                &window,
+                &workspace_zoom_in_shortcut_controller,
+                &shell_state,
+                &preferences.workspace_zoom_in_shortcut,
+                1,
+                "workspace_zoom_in",
+            );
+            install_workspace_zoom_shortcut(
+                &window,
+                &workspace_zoom_out_shortcut_controller,
+                &shell_state,
+                &preferences.workspace_zoom_out_shortcut,
+                -1,
+                "workspace_zoom_out",
+            );
             {
                 let window = window.clone();
                 let overlay = overlay.clone();
@@ -360,6 +397,12 @@ mod imp {
                 let voice_toast_tx = voice_toast_tx.clone();
                 let workspace_fullscreen_shortcut_controller =
                     workspace_fullscreen_shortcut_controller.clone();
+                let workspace_density_shortcut_controller =
+                    workspace_density_shortcut_controller.clone();
+                let workspace_zoom_in_shortcut_controller =
+                    workspace_zoom_in_shortcut_controller.clone();
+                let workspace_zoom_out_shortcut_controller =
+                    workspace_zoom_out_shortcut_controller.clone();
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
@@ -375,6 +418,9 @@ mod imp {
                         options.clone(),
                         voice_toast_tx.clone(),
                         workspace_fullscreen_shortcut_controller.clone(),
+                        workspace_density_shortcut_controller.clone(),
+                        workspace_zoom_in_shortcut_controller.clone(),
+                        workspace_zoom_out_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
                     );
@@ -461,6 +507,9 @@ mod imp {
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
         workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
+        workspace_density_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
@@ -555,15 +604,64 @@ mod imp {
                 }),
                 on_density_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |shortcut| preference_store.save_workspace_density_shortcut(&shortcut)
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let shell_state = shell_state.clone();
+                    let controller_handle = workspace_density_shortcut_controller.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_density_shortcut(&shortcut);
+                        install_workspace_density_shortcut(
+                            &window,
+                            &controller_handle,
+                            &shell_state,
+                            &shortcut,
+                        );
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Density shortcut set to {shortcut}"
+                        )));
+                    }
                 }),
                 on_zoom_in_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |shortcut| preference_store.save_workspace_zoom_in_shortcut(&shortcut)
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let shell_state = shell_state.clone();
+                    let controller_handle = workspace_zoom_in_shortcut_controller.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_zoom_in_shortcut(&shortcut);
+                        install_workspace_zoom_shortcut(
+                            &window,
+                            &controller_handle,
+                            &shell_state,
+                            &shortcut,
+                            1,
+                            "workspace_zoom_in",
+                        );
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Zoom in shortcut set to {shortcut}"
+                        )));
+                    }
                 }),
                 on_zoom_out_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |shortcut| preference_store.save_workspace_zoom_out_shortcut(&shortcut)
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let shell_state = shell_state.clone();
+                    let controller_handle = workspace_zoom_out_shortcut_controller.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_zoom_out_shortcut(&shortcut);
+                        install_workspace_zoom_shortcut(
+                            &window,
+                            &controller_handle,
+                            &shell_state,
+                            &shortcut,
+                            -1,
+                            "workspace_zoom_out",
+                        );
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Zoom out shortcut set to {shortcut}"
+                        )));
+                    }
                 }),
                 on_command_palette_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
@@ -648,6 +746,12 @@ mod imp {
                     let preference_store = preference_store.clone();
                     let workspace_fullscreen_shortcut_controller =
                         workspace_fullscreen_shortcut_controller.clone();
+                    let workspace_density_shortcut_controller =
+                        workspace_density_shortcut_controller.clone();
+                    let workspace_zoom_in_shortcut_controller =
+                        workspace_zoom_in_shortcut_controller.clone();
+                    let workspace_zoom_out_shortcut_controller =
+                        workspace_zoom_out_shortcut_controller.clone();
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
@@ -661,6 +765,28 @@ mod imp {
                             &workspace_fullscreen_shortcut_controller,
                             &shell_state,
                             &defaults.workspace_fullscreen_shortcut,
+                        );
+                        install_workspace_density_shortcut(
+                            &window,
+                            &workspace_density_shortcut_controller,
+                            &shell_state,
+                            &defaults.workspace_density_shortcut,
+                        );
+                        install_workspace_zoom_shortcut(
+                            &window,
+                            &workspace_zoom_in_shortcut_controller,
+                            &shell_state,
+                            &defaults.workspace_zoom_in_shortcut,
+                            1,
+                            "workspace_zoom_in",
+                        );
+                        install_workspace_zoom_shortcut(
+                            &window,
+                            &workspace_zoom_out_shortcut_controller,
+                            &shell_state,
+                            &defaults.workspace_zoom_out_shortcut,
+                            -1,
+                            "workspace_zoom_out",
                         );
                         sync_windows_fullscreen_chrome(
                             &window,
@@ -1362,6 +1488,9 @@ mod imp {
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
         workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
+        workspace_density_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
@@ -1405,6 +1534,12 @@ mod imp {
                     let voice_toast_tx = voice_toast_tx.clone();
                     let workspace_fullscreen_shortcut_controller =
                         workspace_fullscreen_shortcut_controller.clone();
+                    let workspace_density_shortcut_controller =
+                        workspace_density_shortcut_controller.clone();
+                    let workspace_zoom_in_shortcut_controller =
+                        workspace_zoom_in_shortcut_controller.clone();
+                    let workspace_zoom_out_shortcut_controller =
+                        workspace_zoom_out_shortcut_controller.clone();
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
@@ -1420,6 +1555,9 @@ mod imp {
                             options.clone(),
                             voice_toast_tx.clone(),
                             workspace_fullscreen_shortcut_controller.clone(),
+                            workspace_density_shortcut_controller.clone(),
+                            workspace_zoom_in_shortcut_controller.clone(),
+                            workspace_zoom_out_shortcut_controller.clone(),
                             command_palette_shortcut_controller.clone(),
                             open_command_palette_handle.clone(),
                         );
@@ -1543,6 +1681,78 @@ mod imp {
         );
     }
 
+    fn install_workspace_density_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shell_state: &WindowsGtkShellState,
+        shortcut: &str,
+    ) {
+        let window_for_shortcut = window.clone();
+        let shell_state_for_shortcut = shell_state.clone();
+        install_shortcut_controller(
+            window,
+            controller_handle,
+            "workspace_density",
+            &[
+                shortcut.trim().to_string(),
+                AppPreferences::default().workspace_density_shortcut,
+            ],
+            move || {
+                if shell_state_for_shortcut.launch_deck_active.get() {
+                    return glib::Propagation::Proceed;
+                }
+                let preview = shell_state_for_shortcut.preview.borrow().clone();
+                let Some(preview) = preview else {
+                    return glib::Propagation::Proceed;
+                };
+                let Some(next_density) = preview.cycle_active_density() else {
+                    return glib::Propagation::Proceed;
+                };
+
+                apply_window_density(&window_for_shortcut, next_density);
+                logging::info(format!(
+                    "Windows GTK cycled workspace density={}",
+                    next_density.label()
+                ));
+                glib::Propagation::Stop
+            },
+        );
+    }
+
+    fn install_workspace_zoom_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shell_state: &WindowsGtkShellState,
+        shortcut: &str,
+        delta: i32,
+        shortcut_name: &str,
+    ) {
+        let shell_state_for_shortcut = shell_state.clone();
+        install_shortcut_controller(
+            window,
+            controller_handle,
+            shortcut_name,
+            &workspace_zoom_shortcut_accelerators(shortcut, delta),
+            move || {
+                if shell_state_for_shortcut.launch_deck_active.get() {
+                    return glib::Propagation::Proceed;
+                }
+                let preview = shell_state_for_shortcut.preview.borrow().clone();
+                let Some(preview) = preview else {
+                    return glib::Propagation::Proceed;
+                };
+                let Some(zoom_steps) = preview.adjust_active_zoom(delta) else {
+                    return glib::Propagation::Proceed;
+                };
+
+                logging::info(format!(
+                    "Windows GTK adjusted workspace terminal zoom_steps={zoom_steps}"
+                ));
+                glib::Propagation::Stop
+            },
+        );
+    }
+
     fn install_shortcut_controller<F>(
         window: &adw::ApplicationWindow,
         controller_handle: &ShortcutControllerHandle,
@@ -1607,6 +1817,38 @@ mod imp {
                 &["<Ctrl>P", "<Primary>P", "<Control>P"],
             ],
         )
+    }
+
+    fn workspace_zoom_shortcut_accelerators(shortcut: &str, delta: i32) -> Vec<String> {
+        if delta > 0 {
+            equivalent_shortcut_accelerators(
+                shortcut,
+                &[
+                    &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
+                    &["<Control>plus", "<Control>equal", "<Control>KP_Add"],
+                    &["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"],
+                    &["<Alt>plus", "<Alt>equal", "<Alt>KP_Add"],
+                    &["<Ctrl><Alt>plus", "<Ctrl><Alt>equal", "<Ctrl><Alt>KP_Add"],
+                    &[
+                        "<Control><Alt>plus",
+                        "<Control><Alt>equal",
+                        "<Control><Alt>KP_Add",
+                    ],
+                ],
+            )
+        } else {
+            equivalent_shortcut_accelerators(
+                shortcut,
+                &[
+                    &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
+                    &["<Control>minus", "<Control>KP_Subtract"],
+                    &["<Primary>minus", "<Primary>KP_Subtract"],
+                    &["<Alt>minus", "<Alt>KP_Subtract"],
+                    &["<Ctrl><Alt>minus", "<Ctrl><Alt>KP_Subtract"],
+                    &["<Control><Alt>minus", "<Control><Alt>KP_Subtract"],
+                ],
+            )
+        }
     }
 
     fn equivalent_shortcut_accelerators(shortcut: &str, families: &[&[&str]]) -> Vec<String> {

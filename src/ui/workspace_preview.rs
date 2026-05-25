@@ -7,6 +7,7 @@ use gtk::prelude::*;
 
 use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
+use crate::model::preset::ApplicationDensity;
 use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
 use crate::services::layout_editor::{close_tile, split_web_tile};
 use crate::services::runbooks::resolve_runbook;
@@ -43,6 +44,9 @@ impl TileRuntimeSurface {
 
 pub type TileRuntimeFactory =
     Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
+
+const MIN_TERMINAL_FONT_POINTS: i32 = 7;
+const MAX_TERMINAL_FONT_POINTS: i32 = 20;
 
 /// Build a GTK workspace shell that mirrors the Linux workspace chrome without
 /// binding to a platform-specific terminal/web runtime.
@@ -187,6 +191,46 @@ impl SessionPreview {
         }
     }
 
+    pub fn cycle_active_density(&self) -> Option<ApplicationDensity> {
+        let next_density = {
+            let mut session = self.session.borrow_mut();
+            let active_index = self
+                .active_index
+                .get()
+                .min(session.tabs.len().saturating_sub(1));
+            let tab = session.tabs.get_mut(active_index)?;
+            let next_density = tab.preset.density.next();
+            tab.terminal_zoom_steps =
+                clamp_terminal_zoom_steps(next_density, tab.terminal_zoom_steps);
+            tab.preset.density = next_density;
+            next_density
+        };
+        self.render();
+        Some(next_density)
+    }
+
+    pub fn adjust_active_zoom(&self, delta: i32) -> Option<i32> {
+        let next_zoom_steps = {
+            let mut session = self.session.borrow_mut();
+            let active_index = self
+                .active_index
+                .get()
+                .min(session.tabs.len().saturating_sub(1));
+            let tab = session.tabs.get_mut(active_index)?;
+            let next_zoom_steps = clamp_terminal_zoom_steps(
+                tab.preset.density,
+                tab.terminal_zoom_steps.saturating_add(delta),
+            );
+            if next_zoom_steps == tab.terminal_zoom_steps {
+                return None;
+            }
+            tab.terminal_zoom_steps = next_zoom_steps;
+            next_zoom_steps
+        };
+        self.render();
+        Some(next_zoom_steps)
+    }
+
     fn render(&self) {
         render_session_preview(
             &self.shell,
@@ -205,6 +249,12 @@ impl SessionPreview {
             .borrow_mut()
             .retain(|key, _| live_keys.iter().any(|live_key| live_key == key));
     }
+}
+
+fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
+    let base_points = density.terminal_font_points();
+    (base_points + zoom_steps).clamp(MIN_TERMINAL_FONT_POINTS, MAX_TERMINAL_FONT_POINTS)
+        - base_points
 }
 
 fn close_tab_in_preview_state(
