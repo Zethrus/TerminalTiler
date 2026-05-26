@@ -1593,22 +1593,23 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
     }
 
     let normalized_style = STYLE_CSS.replace("\r\n", "\n");
+    let normalized_settings_dialog = SETTINGS_DIALOG_RS.replace("\r\n", "\n");
     assert!(
         normalized_style.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
             && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
             && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
-            && SETTINGS_DIALOG_RS.contains("\"windows-gtk-shell\"")
-            && SETTINGS_DIALOG_RS.contains("window.has_css_class(class_name)"),
+            && normalized_settings_dialog.contains("\"windows-gtk-shell\"")
+            && normalized_settings_dialog.contains("window.has_css_class(class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
     assert!(
-        SETTINGS_DIALOG_RS.contains(
+        normalized_settings_dialog.contains(
             "let min_width = if window.has_css_class(\"windows-gtk-shell\") {\n        640"
-        ) && SETTINGS_DIALOG_RS.contains(
+        ) && normalized_settings_dialog.contains(
             "let min_height = if window.has_css_class(\"windows-gtk-shell\") {\n        620"
-        ) && SETTINGS_DIALOG_RS.contains("saved_width.max(min_width)")
-            && SETTINGS_DIALOG_RS.contains("saved_height.max(min_height)"),
+        ) && normalized_settings_dialog.contains("saved_width.max(min_width)")
+            && normalized_settings_dialog.contains("saved_height.max(min_height)"),
         "Windows GTK settings dialogs should keep a Linux-like readable footprint even when older saved Windows preferences are narrower"
     );
 }
