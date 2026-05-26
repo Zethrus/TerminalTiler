@@ -1643,6 +1643,7 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && DIALOG_CHROME_RS.contains("\"windows-gtk-shell\"")
             && ABOUT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"about-dialog-window\")")
             && ASSETS_MANAGER_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"assets-manager-window\")")
+            && ASSETS_MANAGER_RS.matches("dialog_chrome::sync_dialog_chrome_classes(dialog, &prompt, \"assets-discard-prompt-window\")").count() == 2
             && COMMAND_PALETTE_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"command-palette-window\")")
             && COMPANION_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"companion-dialog-window\")")
             && COMPANION_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"companion-input-dialog-window\")")

@@ -3513,6 +3513,7 @@ where
     }
     let prompt = adw::Dialog::new();
     prompt.set_title("Discard invalid raw TOML changes?");
+    dialog_chrome::sync_dialog_chrome_classes(dialog, &prompt, "assets-discard-prompt-window");
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
@@ -3570,6 +3571,7 @@ where
     }
     let prompt = adw::Dialog::new();
     prompt.set_title("Discard unsaved assets changes?");
+    dialog_chrome::sync_dialog_chrome_classes(dialog, &prompt, "assets-discard-prompt-window");
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
