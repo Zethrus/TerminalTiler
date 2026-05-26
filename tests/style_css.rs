@@ -1726,6 +1726,15 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_SMOKE_PS1.contains("windows GTK shell startup")
             && WINDOWS_SMOKE_PS1.contains("windows GTK shell loaded canonical GTK CSS")
+            && LAUNCH_SCREEN_RS.contains("GTK launch deck default workspace root resolved to")
+            && WINDOWS_SMOKE_PS1.contains("GTK launch deck default workspace root resolved to")
+            && WINDOWS_SMOKE_PS1.contains("[string]$ExpectedLaunchRoot = \"\"")
+            && WINDOWS_SMOKE_PS1
+                .contains("did not launch from the expected stable wrapper directory")
+            && WINDOWS_SMOKE_PS1.contains("temporary NSIS extraction directory")
+            && WINDOWS_SMOKE_PS1.contains(
+                "-ExpectedLaunchRoot (Split-Path -Parent (Resolve-Path $PortableExePath).Path)"
+            )
             && WINDOWS_SMOKE_PS1
                 .contains("Windows GTK shell restored interactive GTK workspace with")
             && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
@@ -1828,6 +1837,12 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
                 .contains("Comfortable, standard, and compact density modes")
             && DOC_WINDOWS_GTK_VISUAL_QA.contains(
                 "Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`"
+            )
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains(
+                "Taskbar, window, installer, and portable-exe icons all show the TerminalTiler icon"
+            )
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains(
+                "never an `nsx*.tmp` self-extraction directory"
             )
             && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`"),
         "visual QA documentation should define baseline, capture command, and required comparison screens"

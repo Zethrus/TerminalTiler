@@ -224,6 +224,17 @@ function Find-SmokeLogs {
     return Get-ChildItem -Path $SandboxRoot -Include "terminaltiler-session.log", "terminaltiler.log" -Recurse -ErrorAction SilentlyContinue
 }
 
+function Get-SmokeSessionLogText {
+    param([string]$SandboxRoot)
+
+    $sessionLog = Find-SessionLog -SandboxRoot $SandboxRoot
+    if ([string]::IsNullOrWhiteSpace($sessionLog) -or -not (Test-Path $sessionLog)) {
+        return ""
+    }
+
+    return Get-Content -Path $sessionLog -Raw
+}
+
 function Format-ExitCode {
     param([int]$ExitCode)
 
@@ -425,7 +436,8 @@ function Invoke-LaunchSmoke {
         [string]$ExePath,
         [string]$SandboxRoot,
         [string]$Label,
-        [string]$ProfileKind
+        [string]$ProfileKind,
+        [string]$ExpectedLaunchRoot = ""
     )
 
     $expectGtkShell = -not $UseWin32Shell
@@ -479,10 +491,27 @@ function Invoke-LaunchSmoke {
         $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
 
         Stop-ProcessTree -Process $process
+        $finalLogText = Get-SmokeSessionLogText -SandboxRoot $SandboxRoot
+        if (-not [string]::IsNullOrWhiteSpace($finalLogText)) {
+            $logText = $finalLogText
+        }
 
         if ($expectGtkShell) {
             if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
                 throw "$Label did not complete GTK launcher initialization.`n$logText"
+            }
+            if ($ProfileKind -eq "clean-first-run" -and $logText -notmatch "GTK launch deck default workspace root resolved to") {
+                throw "$Label did not log the GTK launch deck default workspace root.`n$logText"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ExpectedLaunchRoot)) {
+                $expectedRoot = $ExpectedLaunchRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+                $expectedRootPattern = [regex]::Escape($expectedRoot)
+                if ($logText -notmatch $expectedRootPattern) {
+                    throw "$Label did not launch from the expected stable wrapper directory '$ExpectedLaunchRoot'.`n$logText"
+                }
+                if ($logText -match '\\nsx[0-9A-Fa-f]+\.tmp' -or $logText -match '\\AppData\\Local\\Temp\\nsx') {
+                    throw "$Label launched from a temporary NSIS extraction directory instead of a stable workspace root.`n$logText"
+                }
             }
             if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored interactive GTK workspace with") {
                 throw "$Label did not restore inside the shared interactive GTK workspace.`n$logText"
@@ -534,6 +563,7 @@ function Invoke-OptionalLaunchSmoke {
         [string]$SandboxRoot,
         [string]$Label,
         [string]$ProfileKind,
+        [string]$ExpectedLaunchRoot = "",
         [bool]$SkipLaunchSmoke,
         [string]$SkipMessage
     )
@@ -544,7 +574,7 @@ function Invoke-OptionalLaunchSmoke {
     }
 
     Write-Host "==> smoke-launching $Label"
-    Invoke-LaunchSmoke -ExePath $ExePath -SandboxRoot $SandboxRoot -Label $Label -ProfileKind $ProfileKind
+    Invoke-LaunchSmoke -ExePath $ExePath -SandboxRoot $SandboxRoot -Label $Label -ProfileKind $ProfileKind -ExpectedLaunchRoot $ExpectedLaunchRoot
 }
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -599,6 +629,7 @@ Invoke-OptionalLaunchSmoke `
     -SandboxRoot (Join-Path $SmokeRoot "portable-direct-clean-profile") `
     -Label "Portable executable clean first-run" `
     -ProfileKind "clean-first-run" `
+    -ExpectedLaunchRoot (Split-Path -Parent (Resolve-Path $PortableExePath).Path) `
     -SkipLaunchSmoke $SkipLaunchSmoke `
     -SkipMessage "skipping direct portable executable clean first-run launch smoke"
 

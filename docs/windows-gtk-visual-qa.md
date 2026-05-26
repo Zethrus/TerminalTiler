@@ -108,6 +108,8 @@ Capture these Windows GTK screens and pair each with the current Ubuntu referenc
 10. Dark and light themes.
 11. Comfortable, standard, and compact density modes.
 12. Release artifact parity across `portable-exe`, `portable-zip`, `nsis-install`, and `msi-install`.
+13. Taskbar, window, installer, and portable-exe icons all show the TerminalTiler icon instead of the generic GTK/Windows fallback.
+14. Portable-exe clean first-run uses the wrapper directory/current working folder as the launch deck workspace root, never an `nsx*.tmp` self-extraction directory.
 
 ## Naming convention for review bundles
 

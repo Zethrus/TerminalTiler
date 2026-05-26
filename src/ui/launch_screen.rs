@@ -86,6 +86,10 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         .ok()
         .or_else(home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
+    logging::info(format!(
+        "GTK launch deck default workspace root resolved to {}",
+        current_dir.display()
+    ));
     let templates = builtin_templates();
     let presets = Rc::new(presets);
     let assets = Rc::new(assets);
