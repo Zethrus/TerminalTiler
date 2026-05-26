@@ -36,8 +36,8 @@ use crate::ui::appearance::{
 };
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
-    about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_smoke,
-    launch_screen, settings_dialog, tab_rename_dialog,
+    about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_chrome,
+    dialog_smoke, launch_screen, settings_dialog, tab_rename_dialog,
     title_chrome::{
         TitleTabChrome, TitleTabInput, apply_title_tab_state, build_interactive_title_tab,
     },
@@ -5704,6 +5704,7 @@ fn confirm_destructive_action<F>(
         .heading(heading)
         .body(body)
         .build();
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "destructive-confirm-dialog");
 
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("confirm", confirm_label);
@@ -5736,6 +5737,7 @@ fn confirm_tab_close<F>(
         .heading(heading)
         .body(body)
         .build();
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "tab-close-confirm-dialog");
 
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("confirm", confirm_label);
@@ -5782,6 +5784,7 @@ fn prompt_session_resume<F, G, H>(
         .heading("Resume Previous Session?")
         .body(body)
         .build();
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "session-resume-dialog");
 
     dialog.add_response("fresh", "Start Fresh");
     dialog.add_response("shells", "Resume As Shells");
@@ -5809,6 +5812,7 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
         .heading(heading)
         .body(body)
         .build();
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "startup-notice-dialog");
     dialog.add_response("ok", "OK");
     dialog.set_default_response(Some("ok"));
     dialog.set_close_response("ok");

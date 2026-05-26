@@ -23,6 +23,7 @@ use crate::services::tile_draft::{
     resolve_role,
 };
 use crate::storage::preset_store::PresetStore;
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 #[derive(Clone, Copy, Debug)]
@@ -1887,6 +1888,7 @@ fn present_delete_preset_confirmation(
 
     if let Some(win) = window {
         dialog.set_transient_for(Some(win));
+        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-delete-preset-dialog");
     }
 
     dialog.add_response("cancel", "Cancel");
@@ -2900,6 +2902,9 @@ fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
             ("Select", gtk::ResponseType::Accept),
         ],
     );
+    if let Some(win) = window.as_ref() {
+        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-folder-picker-dialog");
+    }
 
     let initial = PathBuf::from(entry.text().as_str());
     if initial.is_dir() {
@@ -2986,6 +2991,7 @@ where
 
     if let Some(win) = window {
         dialog.set_transient_for(Some(win));
+        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-save-preset-dialog");
     }
 
     let entry = gtk::Entry::builder()

@@ -2772,7 +2772,7 @@ window.windows-gtk-shell .settings-section {
   padding: 12px;
 }
 
-.parity-dialog-window.windows-gtk-shell button.pill-button {
+.parity-dialog-window.windows-gtk-shell button {
   min-height: 30px;
   padding-left: 12px;
   padding-right: 12px;

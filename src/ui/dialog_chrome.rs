@@ -12,9 +12,10 @@ const INHERITED_CHROME_CLASSES: &[&str] = &[
 
 pub(crate) fn sync_dialog_chrome_classes(
     parent: &impl IsA<gtk::Widget>,
-    dialog: &adw::Dialog,
+    dialog: &impl IsA<gtk::Widget>,
     surface_class: &str,
 ) {
+    let dialog = dialog.as_ref();
     dialog.add_css_class(PARITY_DIALOG_CLASS);
     dialog.add_css_class(surface_class);
     for class_name in INHERITED_CHROME_CLASSES {

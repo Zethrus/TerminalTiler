@@ -1602,7 +1602,7 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         "window.windows-gtk-shell .terminal-header",
         "window.windows-gtk-shell .saved-workspace-card",
         "window.windows-gtk-shell .settings-section",
-        ".parity-dialog-window.windows-gtk-shell button.pill-button",
+        ".parity-dialog-window.windows-gtk-shell button",
         ".parity-dialog-window.windows-gtk-shell entry",
         ".parity-dialog-window.windows-gtk-shell .field-hint",
         ".settings-dialog-window.windows-gtk-shell .settings-section",
@@ -1639,6 +1639,7 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
     assert!(
         UI_MOD_RS.contains("pub(crate) mod dialog_chrome;")
             && DIALOG_CHROME_RS.contains("PARITY_DIALOG_CLASS")
+            && DIALOG_CHROME_RS.contains("dialog.as_ref()")
             && DIALOG_CHROME_RS.contains("\"parity-dialog-window\"")
             && DIALOG_CHROME_RS.contains("\"windows-gtk-shell\"")
             && ABOUT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"about-dialog-window\")")
@@ -1650,8 +1651,15 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && RUNBOOK_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, \"runbook-dialog-window\")")
             && TAB_RENAME_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-rename-dialog-window\")")
             && TRANSCRIPT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, \"transcript-dialog-window\")")
-            && SETTINGS_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, dialog, \"settings-dialog-window\")"),
-        "shared GTK dialogs should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"
+            && SETTINGS_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, dialog, \"settings-dialog-window\")")
+            && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-delete-preset-dialog\")")
+            && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-folder-picker-dialog\")")
+            && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-save-preset-dialog\")")
+            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"destructive-confirm-dialog\")")
+            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-close-confirm-dialog\")")
+            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"session-resume-dialog\")")
+            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"startup-notice-dialog\")"),
+        "shared GTK dialogs and prompts should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"
     );
 }
 
