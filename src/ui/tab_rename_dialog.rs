@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub(crate) fn present<F>(window: &adw::ApplicationWindow, current_title: &str, on_submit: F)
@@ -10,6 +11,7 @@ where
 {
     let dialog = adw::Dialog::new();
     dialog.set_title("Rename Workspace");
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "tab-rename-dialog-window");
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

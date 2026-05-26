@@ -8,6 +8,7 @@ use crate::extension::{
     CompanionPanelSnapshot, CompanionRow, CompanionTextInput,
 };
 use crate::logging;
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionIntegration>) {
@@ -17,6 +18,7 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
     dialog.set_follows_content_size(false);
     dialog.set_content_width(640);
     dialog.set_content_height(620);
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "companion-dialog-window");
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -196,6 +198,7 @@ fn present_input_prompt(
     let dialog = adw::Dialog::new();
     dialog.set_title(&action.label);
     dialog.set_content_width(520);
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "companion-input-dialog-window");
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)

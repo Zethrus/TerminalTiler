@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
 use crate::storage::preference_store::AppPreferences;
+use crate::ui::dialog_chrome;
 use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
 use crate::voice::audio::MicrophoneDevice;
@@ -351,20 +352,7 @@ fn persist_dialog_size(dialog: &adw::Dialog, on_size_changed: &Rc<dyn Fn(i32, i3
 }
 
 fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &adw::Dialog) {
-    dialog.add_css_class("settings-dialog-window");
-    for class_name in [
-        "theme-light",
-        "theme-dark",
-        "profile-comfortable",
-        "profile-standard",
-        "profile-compact",
-        "windows-gtk-shell",
-    ] {
-        dialog.remove_css_class(class_name);
-        if window.has_css_class(class_name) {
-            dialog.add_css_class(class_name);
-        }
-    }
+    dialog_chrome::sync_dialog_chrome_classes(window, dialog, "settings-dialog-window");
 }
 
 pub fn present(

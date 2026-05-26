@@ -3,6 +3,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use crate::model::assets::{Runbook, RunbookConfirmPolicy, TemplateVariableValues};
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub(crate) fn present(
@@ -24,6 +25,7 @@ pub(crate) fn present(
 
     let dialog = adw::Dialog::new();
     dialog.set_title(&format!("Run {}", runbook.name));
+    dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, "runbook-dialog-window");
 
     let area = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

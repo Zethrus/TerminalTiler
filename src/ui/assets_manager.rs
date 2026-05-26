@@ -19,6 +19,7 @@ use crate::services::assets_editor::{
     effective_assets_for_scope, prune_blank_drafts, validate_assets,
 };
 use crate::storage::asset_store::AssetStore;
+use crate::ui::dialog_chrome;
 use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
 
@@ -161,7 +162,7 @@ pub fn present(
     dialog.set_content_width(1120);
     dialog.set_content_height(760);
     dialog.set_can_close(false);
-    dialog.add_css_class("assets-manager-window");
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "assets-manager-window");
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

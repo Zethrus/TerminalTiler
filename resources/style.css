@@ -2772,6 +2772,31 @@ window.windows-gtk-shell .settings-section {
   padding: 12px;
 }
 
+.parity-dialog-window.windows-gtk-shell button.pill-button {
+  min-height: 30px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.parity-dialog-window.windows-gtk-shell entry,
+.parity-dialog-window.windows-gtk-shell textview,
+.parity-dialog-window.windows-gtk-shell combobox.surface-select-control button.combo {
+  border-radius: 10px;
+}
+
+.parity-dialog-window.windows-gtk-shell entry {
+  min-height: 34px;
+}
+
+.parity-dialog-window.windows-gtk-shell .card-title,
+.parity-dialog-window.windows-gtk-shell .section-title {
+  font-size: 12px;
+}
+
+.parity-dialog-window.windows-gtk-shell .field-hint {
+  font-size: 10px;
+}
+
 .settings-dialog-window.windows-gtk-shell .settings-section {
   padding: 12px;
   border-radius: 18px;

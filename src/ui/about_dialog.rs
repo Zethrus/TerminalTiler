@@ -4,6 +4,7 @@ use gtk::gio;
 use crate::extension::ProductInfo;
 use crate::logging;
 use crate::product;
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub fn present(window: &adw::ApplicationWindow, product_info: &ProductInfo) {
@@ -11,6 +12,7 @@ pub fn present(window: &adw::ApplicationWindow, product_info: &ProductInfo) {
     dialog.set_title(&format!("About {}", product_info.display_name));
     dialog.set_follows_content_size(false);
     dialog.set_content_width(560);
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "about-dialog-window");
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

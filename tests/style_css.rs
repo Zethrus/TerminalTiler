@@ -4,7 +4,9 @@ const APP_CHROME_RS: &str = include_str!("../src/ui/app_chrome.rs");
 const APPEARANCE_RS: &str = include_str!("../src/ui/appearance.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
+const COMPANION_DIALOG_RS: &str = include_str!("../src/ui/companion_dialog.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
+const DIALOG_CHROME_RS: &str = include_str!("../src/ui/dialog_chrome.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
 const BUILD_RS: &str = include_str!("../build.rs");
@@ -1582,6 +1584,9 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         "window.windows-gtk-shell .terminal-header",
         "window.windows-gtk-shell .saved-workspace-card",
         "window.windows-gtk-shell .settings-section",
+        ".parity-dialog-window.windows-gtk-shell button.pill-button",
+        ".parity-dialog-window.windows-gtk-shell entry",
+        ".parity-dialog-window.windows-gtk-shell .field-hint",
         ".settings-dialog-window.windows-gtk-shell .settings-section",
         ".settings-dialog-window.windows-gtk-shell .settings-dialog-content .config-panel",
         ".settings-dialog-window.windows-gtk-shell .settings-shortcut-chip",
@@ -1599,8 +1604,9 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
             && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
             && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
+            && normalized_style.contains(".parity-dialog-window.windows-gtk-shell entry {\n  min-height: 34px;")
             && normalized_settings_dialog.contains("\"windows-gtk-shell\"")
-            && normalized_settings_dialog.contains("window.has_css_class(class_name)"),
+            && DIALOG_CHROME_RS.contains("parent.as_ref().has_css_class(class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
     assert!(
@@ -1611,6 +1617,22 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         ) && normalized_settings_dialog.contains("saved_width.max(min_width)")
             && normalized_settings_dialog.contains("saved_height.max(min_height)"),
         "Windows GTK settings dialogs should keep a Linux-like readable footprint even when older saved Windows preferences are narrower"
+    );
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod dialog_chrome;")
+            && DIALOG_CHROME_RS.contains("PARITY_DIALOG_CLASS")
+            && DIALOG_CHROME_RS.contains("\"parity-dialog-window\"")
+            && DIALOG_CHROME_RS.contains("\"windows-gtk-shell\"")
+            && ABOUT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"about-dialog-window\")")
+            && ASSETS_MANAGER_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"assets-manager-window\")")
+            && COMMAND_PALETTE_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"command-palette-window\")")
+            && COMPANION_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"companion-dialog-window\")")
+            && COMPANION_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"companion-input-dialog-window\")")
+            && RUNBOOK_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, \"runbook-dialog-window\")")
+            && TAB_RENAME_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-rename-dialog-window\")")
+            && TRANSCRIPT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, \"transcript-dialog-window\")")
+            && SETTINGS_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, dialog, \"settings-dialog-window\")"),
+        "shared GTK dialogs should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"
     );
 }
 

@@ -37,6 +37,11 @@ pub(crate) mod context_menu;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod dialog_chrome;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod dialog_smoke;
 pub(crate) mod icons;
 pub mod launch_screen;
