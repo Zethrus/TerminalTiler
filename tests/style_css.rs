@@ -1568,6 +1568,12 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_PORTABLE_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("UninstallIcon \"${ICON_FILE}\"")
+            && WINDOWS_INSTALLER_NSI.contains(
+                "CreateShortcut \"$SMPROGRAMS\\TerminalTiler\\TerminalTiler.lnk\" \"$INSTDIR\\TerminalTiler.exe\" \"\" \"$INSTDIR\\share\\terminaltiler.ico\""
+            )
+            && WINDOWS_INSTALLER_NSI.contains(
+                "WriteRegStr HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TerminalTiler\" \"DisplayIcon\" \"$INSTDIR\\share\\terminaltiler.ico\""
+            )
             && WINDOWS_INSTALLER_WXS
                 .contains(r#"<Icon Id="TerminalTilerIcon" SourceFile="$(var.IconFile)" />"#)
             && WINDOWS_INSTALLER_WXS.contains(r#"ARPPRODUCTICON"#)
