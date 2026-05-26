@@ -318,13 +318,25 @@ fn default_settings_dialog_size(
     saved_width: i32,
     saved_height: i32,
 ) -> (i32, i32) {
+    let min_width = if window.has_css_class("windows-gtk-shell") {
+        640
+    } else {
+        200
+    };
+    let min_height = if window.has_css_class("windows-gtk-shell") {
+        620
+    } else {
+        240
+    };
     let width = match window.width() {
-        width if width > 0 => (width - 32).min(saved_width).max(200),
-        _ => saved_width.max(200),
+        width if width > 0 => (width - 32).min(saved_width.max(min_width)).max(min_width),
+        _ => saved_width.max(min_width),
     };
     let height = match window.height() {
-        height if height > 0 => (height - 48).min(saved_height).max(240),
-        _ => saved_height.max(240),
+        height if height > 0 => (height - 48)
+            .min(saved_height.max(min_height))
+            .max(min_height),
+        _ => saved_height.max(min_height),
     };
 
     (width, height)

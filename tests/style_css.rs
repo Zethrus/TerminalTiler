@@ -1602,6 +1602,15 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && SETTINGS_DIALOG_RS.contains("window.has_css_class(class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
+    assert!(
+        SETTINGS_DIALOG_RS.contains(
+            "let min_width = if window.has_css_class(\"windows-gtk-shell\") {\n        640"
+        ) && SETTINGS_DIALOG_RS.contains(
+            "let min_height = if window.has_css_class(\"windows-gtk-shell\") {\n        620"
+        ) && SETTINGS_DIALOG_RS.contains("saved_width.max(min_width)")
+            && SETTINGS_DIALOG_RS.contains("saved_height.max(min_height)"),
+        "Windows GTK settings dialogs should keep a Linux-like readable footprint even when older saved Windows preferences are narrower"
+    );
 }
 
 #[test]
