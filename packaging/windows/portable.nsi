@@ -29,6 +29,12 @@ Section "Run"
   SetOutPath "$PLUGINSDIR"
   File /r "${STAGE_DIR}\*"
 
+  ; Launch from the directory that contains the portable wrapper, not from
+  ; $PLUGINSDIR. The GTK app treats the process working directory as the
+  ; default workspace root; using the temp extraction folder makes saved
+  ; workspaces unrestorable once this self-extractor exits.
+  SetOutPath "$EXEDIR"
+
   ClearErrors
   ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0
   IfErrors 0 +2

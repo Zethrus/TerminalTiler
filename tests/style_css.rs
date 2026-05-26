@@ -1674,10 +1674,12 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_PORTABLE_NSI.contains("InitPluginsDir")
             && WINDOWS_PORTABLE_NSI.contains(r#"File /r "${STAGE_DIR}\*""#)
+            && WINDOWS_PORTABLE_NSI.contains(r#"SetOutPath "$EXEDIR""#)
+            && WINDOWS_PORTABLE_NSI.contains("default workspace root")
             && WINDOWS_PORTABLE_NSI.contains(r#"ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0"#)
             && WINDOWS_PORTABLE_NSI.contains(r#"RMDir /r "$PLUGINSDIR""#)
             && WINDOWS_PORTABLE_NSI.contains("SetErrorLevel $0"),
-        "direct portable exe should be a self-extracting launcher for the full staged payload and clean its temp extraction root"
+        "direct portable exe should self-extract the staged payload, launch with a stable wrapper-directory cwd instead of the temp extraction root, and clean its temp extraction root"
     );
 
     assert!(
