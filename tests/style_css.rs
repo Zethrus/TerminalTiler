@@ -1667,6 +1667,10 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && SNIPPET_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(button, &popover, \"snippet-popover-window\")")
             && TERMINAL_RECOVERY_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
             && TERMINAL_RECOVERY_POPOVER_RS.contains("\"terminal-recovery-popover-window\"")
+            && SETTINGS_DIALOG_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
+            && SETTINGS_DIALOG_RS.contains("\"settings-help-popover-window\"")
+            && source_contains(SETTINGS_DIALOG_RS, "build_shortcut_recorder_row(\n        &dialog,")
+            && SETTINGS_DIALOG_RS.contains("build_shortcut_entry_row(parent,")
             && TILE_CHROME_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
             && TILE_CHROME_RS.contains("\"web-tile-settings-popover-window\""),
         "shared GTK dialogs, prompts, and popovers should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"

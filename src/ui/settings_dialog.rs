@@ -196,6 +196,7 @@ impl ShortcutRecorderRow {
 }
 
 fn build_shortcut_recorder_row(
+    parent: &impl IsA<gtk::Widget>,
     label: &str,
     note: &str,
     examples: &[&str],
@@ -302,7 +303,7 @@ fn build_shortcut_recorder_row(
     }
 
     ShortcutRecorderRow {
-        row: build_shortcut_entry_row(label, note, &control, &status, examples),
+        row: build_shortcut_entry_row(parent, label, note, &control, &status, examples),
         status,
         capture_label,
         record_button,
@@ -1011,6 +1012,7 @@ pub fn present(
 
     let voice_hotkey = Rc::new(RefCell::new(current_voice.borrow().hotkey.clone()));
     let voice_hotkey_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Voice hotkey",
         "Push-to-talk starts on key down and flushes on key up. Toggle mode starts and stops on repeated presses.",
         &["<Ctrl><Shift>space", "<Alt>space", "F9"],
@@ -1160,6 +1162,7 @@ pub fn present(
         "Choose default workspace shortcuts that fit your desktop environment. Click Record, then press the shortcut you want. Changes take effect in the current window immediately.",
     ));
     let fullscreen_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Toggle workspace fullscreen",
         "Available only while a workspace tab is active.",
         &["F11", "<Shift>F11", "<Ctrl>F11"],
@@ -1170,6 +1173,7 @@ pub fn present(
     shortcuts_section.append(&fullscreen_recorder.row);
 
     let density_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Cycle active workspace density",
         "Rotates only the current workspace without changing the saved app default.",
         &["<Ctrl><Shift>D", "<Shift>F8", "<Alt><Super>D"],
@@ -1180,6 +1184,7 @@ pub fn present(
     shortcuts_section.append(&density_recorder.row);
 
     let zoom_in_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Zoom in terminal text",
         "Applies only to the active workspace and is restored with saved workspace sessions.",
         &["<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add"],
@@ -1190,6 +1195,7 @@ pub fn present(
     shortcuts_section.append(&zoom_in_recorder.row);
 
     let zoom_out_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Zoom out terminal text",
         "Applies only to the active workspace and is restored with saved workspace sessions.",
         &["<Ctrl>minus", "<Ctrl>KP_Subtract"],
@@ -1200,6 +1206,7 @@ pub fn present(
     shortcuts_section.append(&zoom_out_recorder.row);
 
     let command_palette_recorder = build_shortcut_recorder_row(
+        &dialog,
         "Open command palette",
         "Available in launch tabs and workspaces for fast navigation and actions.",
         &["<Ctrl><Shift>P", "<Ctrl>P", "<Super>P"],
@@ -1344,6 +1351,7 @@ fn build_shortcut_capture_control(
 }
 
 fn build_shortcut_entry_row(
+    parent: &impl IsA<gtk::Widget>,
     label: &str,
     note: &str,
     control: &impl IsA<gtk::Widget>,
@@ -1387,7 +1395,7 @@ fn build_shortcut_entry_row(
             .build(),
     );
     top.append(&text);
-    top.append(&build_shortcut_help_button(label, examples));
+    top.append(&build_shortcut_help_button(parent, label, examples));
     shell.append(&top);
 
     let controls = gtk::Box::builder()
@@ -1403,7 +1411,11 @@ fn build_shortcut_entry_row(
     shell.upcast()
 }
 
-fn build_shortcut_help_button(title: &str, examples: &[&str]) -> gtk::Widget {
+fn build_shortcut_help_button(
+    parent: &impl IsA<gtk::Widget>,
+    title: &str,
+    examples: &[&str],
+) -> gtk::Widget {
     let button = gtk::MenuButton::new();
     button.set_icon_name("dialog-question-symbolic");
     button.set_tooltip_text(Some("Show shortcut syntax examples"));
@@ -1414,6 +1426,7 @@ fn build_shortcut_help_button(title: &str, examples: &[&str]) -> gtk::Widget {
 
     let popover = gtk::Popover::new();
     popover.add_css_class("settings-help-popover");
+    dialog_chrome::sync_popover_chrome_classes(parent, &popover, "settings-help-popover-window");
 
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
