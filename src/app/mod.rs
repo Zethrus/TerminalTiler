@@ -35,6 +35,7 @@ pub fn run_with_options(options: RuntimeOptions) -> adw::glib::ExitCode {
         let tray_controller = tray_controller.clone();
         app.connect_startup(move |app| {
             crate::gtk_shell::load_css_for_default_display();
+            crate::gtk_shell::configure_application_icons();
             if let Some(receiver) = tray_rx.borrow_mut().take() {
                 install_tray_command_pump(app, receiver, tray_controller.clone());
             }

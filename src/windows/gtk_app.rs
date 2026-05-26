@@ -49,7 +49,8 @@ mod imp {
 
         app.connect_startup(|_| {
             crate::gtk_shell::load_css_for_default_display();
-            logging::info("windows GTK shell loaded canonical GTK CSS");
+            crate::gtk_shell::configure_application_icons();
+            logging::info("windows GTK shell loaded canonical GTK CSS and app icon contract");
         });
 
         app.connect_activate(move |app| {
@@ -109,6 +110,7 @@ mod imp {
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(&options.product.app_title)
+            .icon_name(crate::gtk_shell::APP_ICON_NAME)
             .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
             .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
             .content(&window_shell)

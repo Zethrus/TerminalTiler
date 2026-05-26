@@ -55,6 +55,7 @@ const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-ins
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
 const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.nsi");
+const WINDOWS_RC: &str = include_str!("../resources/windows/terminaltiler.rc");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
@@ -1548,7 +1549,8 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && BUILD_RS.contains("find_windows_kit_resource_compiler")
             && BUILD_RS.contains("Windows Kits")
             && BUILD_RS.contains("cargo:rustc-link-arg-bin=terminaltiler=")
-            && BUILD_RS.contains("host.contains(\"windows\")"),
+            && BUILD_RS.contains("host.contains(\"windows\")")
+            && WINDOWS_RC.contains("1 ICON \"terminaltiler.ico\""),
         "Cargo should embed the TerminalTiler icon in Windows MSVC binaries while letting non-Windows cross-checks skip rc.exe"
     );
 
@@ -1558,7 +1560,11 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_BUILD_PS1.contains("/DICON_FILE=$WindowsIconPath")
             && WINDOWS_BUILD_PS1.contains("-dIconFile=$WindowsIconPath")
             && WINDOWS_BUILD_PS1.contains("share\\terminaltiler.ico")
+            && WINDOWS_BUILD_PS1
+                .contains("share\\icons\\hicolor\\scalable\\apps\\terminaltiler.svg")
             && WINDOWS_SMOKE_PS1.contains("share\\terminaltiler.ico")
+            && WINDOWS_SMOKE_PS1
+                .contains("share\\icons\\hicolor\\scalable\\apps\\terminaltiler.svg")
             && WINDOWS_PORTABLE_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("UninstallIcon \"${ICON_FILE}\"")
@@ -1567,6 +1573,18 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_INSTALLER_WXS.contains(r#"ARPPRODUCTICON"#)
             && WINDOWS_INSTALLER_WXS.contains(r#"Icon="TerminalTilerIcon""#),
         "Windows portable exe, installer, MSI shortcut, staged payload, and smoke checks should all carry the TerminalTiler icon"
+    );
+
+    assert!(
+        GTK_SHELL_RS.contains("pub const APP_ICON_NAME: &str = \"terminaltiler\"")
+            && GTK_SHELL_RS.contains("pub fn configure_application_icons()")
+            && GTK_SHELL_RS.contains("gtk::IconTheme::for_display")
+            && GTK_SHELL_RS.contains("icon_theme.add_search_path(path)")
+            && GTK_SHELL_RS.contains("gtk::Window::set_default_icon_name(APP_ICON_NAME)")
+            && WINDOW_RS.contains(".icon_name(gtk_shell::APP_ICON_NAME)")
+            && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::configure_application_icons()")
+            && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)"),
+        "GTK windows should set the same app icon-name that Windows portable packages stage in the icon theme, so taskbar icon parity does not depend only on installer metadata"
     );
 }
 

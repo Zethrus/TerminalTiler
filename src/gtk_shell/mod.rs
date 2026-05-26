@@ -7,6 +7,9 @@
 /// Canonical GTK/libadwaita stylesheet shared by every GTK shell.
 pub const STYLE_CSS: &str = include_str!("../../resources/style.css");
 
+/// Stable icon-name used by desktop files, GTK windows, and packaged icon themes.
+pub const APP_ICON_NAME: &str = "terminaltiler";
+
 /// Canonical default GTK shell size shared by Linux and Windows GTK frontends.
 ///
 /// Keeping the startup window geometry in the shared GTK contract prevents the
@@ -78,6 +81,41 @@ pub const PLATFORM_RUNTIME_ADAPTERS: &[&str] = &[
     "workspace-runtime-actions",
     "runtime-capability-checks",
 ];
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub fn configure_application_icons() {
+    if let Some(display) = gtk::gdk::Display::default() {
+        let icon_theme = gtk::IconTheme::for_display(&display);
+        for path in bundled_icon_search_paths() {
+            if path.exists() {
+                icon_theme.add_search_path(path);
+            }
+        }
+    }
+    gtk::Window::set_default_icon_name(APP_ICON_NAME);
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+fn bundled_icon_search_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")];
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        paths.push(exe_dir.join("share").join("icons"));
+        if let Some(prefix) = exe_dir.parent() {
+            paths.push(prefix.join("share").join("icons"));
+        }
+    }
+
+    paths
+}
 
 #[cfg(any(
     target_os = "linux",

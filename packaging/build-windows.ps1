@@ -91,10 +91,13 @@ function Copy-WindowsGtkResources {
 
     $ShareRoot = Join-Path $PortableRoot "share"
     $HoverIconRoot = Join-Path $ShareRoot "hover-icons"
+    $AppIconRoot = Join-Path $ShareRoot "icons\hicolor\scalable\apps"
     New-Item -ItemType Directory -Force -Path $HoverIconRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $AppIconRoot | Out-Null
 
     Copy-Item -Path (Join-Path $RootDir "resources\style.css") -Destination (Join-Path $ShareRoot "style.css") -Force
     Copy-Item -Path (Join-Path $RootDir "resources\terminaltiler.svg") -Destination (Join-Path $ShareRoot "terminaltiler.svg") -Force
+    Copy-Item -Path (Join-Path $RootDir "resources\terminaltiler.svg") -Destination (Join-Path $AppIconRoot "terminaltiler.svg") -Force
     Copy-Item -Path (Join-Path $RootDir "resources\windows\terminaltiler.ico") -Destination (Join-Path $ShareRoot "terminaltiler.ico") -Force
     Copy-Item -Path (Join-Path $RootDir "resources\hover-icons\*.svg") -Destination $HoverIconRoot -Force
 }
@@ -206,6 +209,7 @@ function Assert-WindowsStagedPayload {
     Assert-Path -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Description "Staged TerminalTiler executable"
     Assert-Path -Path (Join-Path $PortableRoot "share\style.css") -Description "Staged canonical GTK CSS"
     Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.svg") -Description "Staged TerminalTiler logo"
+    Assert-Path -Path (Join-Path $PortableRoot "share\icons\hicolor\scalable\apps\terminaltiler.svg") -Description "Staged TerminalTiler icon theme logo"
     Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.ico") -Description "Staged TerminalTiler Windows icon"
     Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\terminal.svg") -Description "Staged terminal hover icon"
     Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\layout-dashboard.svg") -Description "Staged dashboard hover icon"
