@@ -346,6 +346,7 @@ fn sync_dialog_chrome_classes(window: &adw::ApplicationWindow, dialog: &adw::Dia
         "profile-comfortable",
         "profile-standard",
         "profile-compact",
+        "windows-gtk-shell",
     ] {
         dialog.remove_css_class(class_name);
         if window.has_css_class(class_name) {

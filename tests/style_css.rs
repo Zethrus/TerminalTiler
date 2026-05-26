@@ -1582,6 +1582,9 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         "window.windows-gtk-shell .terminal-header",
         "window.windows-gtk-shell .saved-workspace-card",
         "window.windows-gtk-shell .settings-section",
+        ".settings-dialog-window.windows-gtk-shell .settings-section",
+        ".settings-dialog-window.windows-gtk-shell .settings-dialog-content .config-panel",
+        ".settings-dialog-window.windows-gtk-shell .settings-shortcut-chip",
     ] {
         assert!(
             STYLE_CSS.contains(selector),
@@ -1593,7 +1596,10 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
     assert!(
         normalized_style.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
-            && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;"),
+            && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
+            && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
+            && SETTINGS_DIALOG_RS.contains("\"windows-gtk-shell\"")
+            && SETTINGS_DIALOG_RS.contains("window.has_css_class(class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
 }
