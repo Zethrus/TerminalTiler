@@ -3,6 +3,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use crate::model::assets::{CliSnippet, TemplateVariableValues};
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub(crate) type BeforeSnippetPopoverPopup = Rc<dyn Fn(&gtk::Popover) -> bool>;
@@ -23,6 +24,7 @@ pub(crate) fn install(button: &gtk::Button, input: SnippetPopoverInput) -> gtk::
     popover.set_has_arrow(true);
     popover.set_position(gtk::PositionType::Bottom);
     popover.set_parent(button);
+    dialog_chrome::sync_popover_chrome_classes(button, &popover, "snippet-popover-window");
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

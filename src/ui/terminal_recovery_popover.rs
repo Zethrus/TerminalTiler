@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 pub(crate) fn build(
@@ -15,6 +16,11 @@ pub(crate) fn build(
     popover.set_has_arrow(true);
     popover.set_position(gtk::PositionType::Bottom);
     popover.set_parent(parent);
+    dialog_chrome::sync_popover_chrome_classes(
+        parent,
+        &popover,
+        "terminal-recovery-popover-window",
+    );
 
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

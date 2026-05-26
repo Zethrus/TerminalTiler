@@ -1622,9 +1622,10 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
             && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
             && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
+            && normalized_style.contains(".parity-dialog-window.windows-gtk-shell button {\n  min-height: 30px;")
             && normalized_style.contains(".parity-dialog-window.windows-gtk-shell entry {\n  min-height: 34px;")
             && normalized_settings_dialog.contains("\"windows-gtk-shell\"")
-            && DIALOG_CHROME_RS.contains("parent.as_ref().has_css_class(class_name)"),
+            && DIALOG_CHROME_RS.contains("source_has_chrome_class(parent.as_ref(), class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
     assert!(
@@ -1640,6 +1641,9 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         UI_MOD_RS.contains("pub(crate) mod dialog_chrome;")
             && DIALOG_CHROME_RS.contains("PARITY_DIALOG_CLASS")
             && DIALOG_CHROME_RS.contains("dialog.as_ref()")
+            && DIALOG_CHROME_RS.contains("source_has_chrome_class")
+            && DIALOG_CHROME_RS.contains("root.has_css_class(class_name)")
+            && DIALOG_CHROME_RS.contains("pub(crate) fn sync_popover_chrome_classes")
             && DIALOG_CHROME_RS.contains("\"parity-dialog-window\"")
             && DIALOG_CHROME_RS.contains("\"windows-gtk-shell\"")
             && ABOUT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"about-dialog-window\")")
@@ -1658,8 +1662,14 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"destructive-confirm-dialog\")")
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-close-confirm-dialog\")")
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"session-resume-dialog\")")
-            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"startup-notice-dialog\")"),
-        "shared GTK dialogs and prompts should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"
+            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"startup-notice-dialog\")")
+            && CONTEXT_MENU_RS.contains("dialog_chrome::sync_popover_chrome_classes(parent, &popover, \"terminal-context-popover-window\")")
+            && SNIPPET_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(button, &popover, \"snippet-popover-window\")")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
+            && TERMINAL_RECOVERY_POPOVER_RS.contains("\"terminal-recovery-popover-window\"")
+            && TILE_CHROME_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
+            && TILE_CHROME_RS.contains("\"web-tile-settings-popover-window\""),
+        "shared GTK dialogs, prompts, and popovers should inherit platform/theme/density classes so Windows parity fixes apply beyond the main shell"
     );
 }
 

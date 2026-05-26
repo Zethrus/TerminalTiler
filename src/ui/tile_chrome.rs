@@ -1,4 +1,5 @@
 use crate::model::layout::{DEFAULT_WEB_URL, TileSpec};
+use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 use gtk::prelude::*;
 use std::rc::Rc;
@@ -105,6 +106,11 @@ pub(crate) fn bind_web_tile_settings_popover(
     settings_popover.set_has_arrow(true);
     settings_popover.set_position(gtk::PositionType::Bottom);
     settings_popover.set_parent(settings_button);
+    dialog_chrome::sync_popover_chrome_classes(
+        settings_button,
+        &settings_popover,
+        "web-tile-settings-popover-window",
+    );
 
     let settings_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

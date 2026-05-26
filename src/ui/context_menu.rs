@@ -1,5 +1,7 @@
 use gtk::{gdk, prelude::*};
 
+use crate::ui::dialog_chrome;
+
 pub(crate) fn popover(parent: &impl IsA<gtk::Widget>) -> gtk::Popover {
     let popover = gtk::Popover::new();
     popover.add_css_class("terminal-context-popover");
@@ -7,6 +9,7 @@ pub(crate) fn popover(parent: &impl IsA<gtk::Widget>) -> gtk::Popover {
     popover.set_has_arrow(true);
     popover.set_position(gtk::PositionType::Bottom);
     popover.set_parent(parent);
+    dialog_chrome::sync_popover_chrome_classes(parent, &popover, "terminal-context-popover-window");
     popover
 }
 
