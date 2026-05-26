@@ -1589,10 +1589,11 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         );
     }
 
+    let normalized_style = STYLE_CSS.replace("\r\n", "\n");
     assert!(
-        STYLE_CSS.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
-            && STYLE_CSS.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
-            && STYLE_CSS.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;"),
+        normalized_style.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
+            && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
+            && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
 }
