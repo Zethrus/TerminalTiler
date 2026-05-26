@@ -35,6 +35,7 @@ mod imp {
     use crate::voice::pack::{self, VoicePackHealth};
 
     const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
+    const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
 
     pub fn run() -> ExitCode {
         run_with_options(RuntimeOptions::default())
@@ -43,6 +44,7 @@ mod imp {
     pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
         logging::init();
         logging::info("windows GTK shell startup");
+        configure_windows_taskbar_identity();
 
         let app_id = options.product.app_id.as_deref().unwrap_or(GTK_APP_ID);
         let app = adw::Application::builder().application_id(app_id).build();
@@ -66,6 +68,24 @@ mod imp {
             ExitCode::SUCCESS
         } else {
             ExitCode::from(value)
+        }
+    }
+
+    fn configure_windows_taskbar_identity() {
+        let app_user_model_id = WINDOWS_APP_USER_MODEL_ID
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>();
+        let status = unsafe {
+            windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
+                app_user_model_id.as_ptr(),
+            )
+        };
+        if status < 0 {
+            logging::info(format!(
+                "Windows taskbar AppUserModelID setup warning: HRESULT 0x{:08X}",
+                status as u32
+            ));
         }
     }
 

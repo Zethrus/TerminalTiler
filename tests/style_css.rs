@@ -1583,8 +1583,14 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && GTK_SHELL_RS.contains("gtk::Window::set_default_icon_name(APP_ICON_NAME)")
             && WINDOW_RS.contains(".icon_name(gtk_shell::APP_ICON_NAME)")
             && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::configure_application_icons()")
-            && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)"),
-        "GTK windows should set the same app icon-name that Windows portable packages stage in the icon theme, so taskbar icon parity does not depend only on installer metadata"
+            && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)")
+            && WINDOWS_GTK_APP_RS
+                .contains("const WINDOWS_APP_USER_MODEL_ID: &str = \"Zethrus.TerminalTiler\"")
+            && WINDOWS_GTK_APP_RS.contains("configure_windows_taskbar_identity()")
+            && WINDOWS_GTK_APP_RS
+                .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
+            && CARGO_TOML.contains("\"Win32_UI_Shell\""),
+        "GTK windows should set the same app icon-name that Windows portable packages stage in the icon theme, and Windows builds should set a stable taskbar AppUserModelID so icon parity does not depend only on installer metadata"
     );
 }
 
