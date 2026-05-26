@@ -19,6 +19,8 @@
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPURLINFOABOUT" Value="https://terminaltiler.app" />
+    <Property Id="ARPPRODUCTICON" Value="TerminalTilerIcon" />
+    <Icon Id="TerminalTilerIcon" SourceFile="$(var.IconFile)" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
@@ -38,7 +40,9 @@
           Name="TerminalTiler"
           Description="Launch TerminalTiler"
           Target="[INSTALLFOLDER]TerminalTiler.exe"
-          WorkingDirectory="INSTALLFOLDER" />
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="TerminalTilerIcon"
+          IconIndex="0" />
         <RemoveFolder Id="ApplicationProgramsFolderRemove" On="uninstall" />
         <RegistryValue
           Root="HKCU"

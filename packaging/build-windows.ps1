@@ -95,6 +95,7 @@ function Copy-WindowsGtkResources {
 
     Copy-Item -Path (Join-Path $RootDir "resources\style.css") -Destination (Join-Path $ShareRoot "style.css") -Force
     Copy-Item -Path (Join-Path $RootDir "resources\terminaltiler.svg") -Destination (Join-Path $ShareRoot "terminaltiler.svg") -Force
+    Copy-Item -Path (Join-Path $RootDir "resources\windows\terminaltiler.ico") -Destination (Join-Path $ShareRoot "terminaltiler.ico") -Force
     Copy-Item -Path (Join-Path $RootDir "resources\hover-icons\*.svg") -Destination $HoverIconRoot -Force
 }
 
@@ -205,6 +206,7 @@ function Assert-WindowsStagedPayload {
     Assert-Path -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Description "Staged TerminalTiler executable"
     Assert-Path -Path (Join-Path $PortableRoot "share\style.css") -Description "Staged canonical GTK CSS"
     Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.svg") -Description "Staged TerminalTiler logo"
+    Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.ico") -Description "Staged TerminalTiler Windows icon"
     Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\terminal.svg") -Description "Staged terminal hover icon"
     Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\layout-dashboard.svg") -Description "Staged dashboard hover icon"
     Assert-Path -Path (Join-Path $PortableRoot "share\hover-icons\save.svg") -Description "Staged save hover icon"
@@ -244,6 +246,9 @@ $MsiLatestPath = Join-Path $DistDir "TerminalTiler-setup-latest-x86_64.msi"
 $NsisScript = Join-Path $RootDir "packaging\windows\installer.nsi"
 $PortableNsisScript = Join-Path $RootDir "packaging\windows\portable.nsi"
 $WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
+$WindowsIconPath = Join-Path $RootDir "resources\windows\terminaltiler.ico"
+
+Assert-Path -Path $WindowsIconPath -Description "TerminalTiler Windows icon"
 
 if ($UseGtkShell -and $UseWin32Shell) {
     throw "Use either the canonical GTK shell or the explicit Win32 fallback, not both."
@@ -331,6 +336,7 @@ Remove-Item -Force $PortableExePath, $PortableExeLatestPath -ErrorAction Silentl
     "/DAPP_VERSION=$ResolvedVersion" `
     "/DSTAGE_DIR=$PortableRoot" `
     "/DOUT_FILE=$PortableExePath" `
+    "/DICON_FILE=$WindowsIconPath" `
     $PortableNsisScript
 
 if ($LASTEXITCODE -ne 0) {
@@ -354,6 +360,7 @@ if ($Makensis) {
         "/DAPP_VERSION=$ResolvedVersion" `
         "/DSTAGE_DIR=$PortableRoot" `
         "/DOUT_FILE=$InstallerPath" `
+        "/DICON_FILE=$WindowsIconPath" `
         $NsisScript
 
     if (-not (Test-Path $InstallerPath)) {
@@ -398,6 +405,7 @@ if ($Candle -and $Light -and $Heat) {
         "-arch" "x64" `
         "-dProductVersion=$ResolvedVersion" `
         "-dStageDir=$PortableRoot" `
+        "-dIconFile=$WindowsIconPath" `
         "-out" $WixObjectPath `
         $WixScript
 

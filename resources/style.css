@@ -2671,6 +2671,114 @@ window.profile-standard .settings-shortcut-chip {
   min-width: 88px;
 }
 
+/* Windows GTK uses the same visual roles as Linux, but native GTK control
+   metrics render a few pixels taller on Windows. Scope the correction to the
+   Windows GTK shell so Linux remains the source-of-truth implementation while
+   Windows standard/compact profiles read at the same practical density. */
+window.windows-gtk-shell.profile-standard headerbar.app-headerbar {
+  min-height: 38px;
+  padding: 2px 8px;
+}
+
+window.windows-gtk-shell.profile-standard headerbar.app-headerbar button {
+  min-height: 26px;
+  min-width: 26px;
+  border-radius: 8px;
+}
+
+window.windows-gtk-shell.profile-standard headerbar.app-headerbar button.titlebar-action-button {
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+window.windows-gtk-shell.profile-standard .app-tab-strip {
+  margin: 0 4px;
+}
+
+window.windows-gtk-shell.profile-standard .app-tab-shell {
+  min-width: 142px;
+  min-height: 30px;
+  border-radius: 10px 10px 0 0 / 7px 7px 0 0;
+}
+
+window.windows-gtk-shell.profile-standard button.app-tab-select {
+  min-height: 30px;
+  padding: 2px 7px 2px 10px;
+}
+
+window.windows-gtk-shell button.primary-cta-button,
+window.windows-gtk-shell button.suggested-action {
+  min-height: 32px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+window.windows-gtk-shell button.new-workspace-layout-button {
+  min-height: 34px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+window.windows-gtk-shell button.pill-button.compact-action-button {
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
+window.windows-gtk-shell button.pill-button.compact-icon-button {
+  min-width: 28px;
+  min-height: 28px;
+}
+
+window.windows-gtk-shell button.surface-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 9px;
+}
+
+window.windows-gtk-shell button.surface-button.surface-button-icon {
+  min-width: 28px;
+}
+
+window.windows-gtk-shell combobox.surface-select-control button.combo {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+}
+
+window.windows-gtk-shell .workspace-summary {
+  padding: 8px 12px;
+  border-radius: 14px;
+  margin-bottom: 4px;
+}
+
+window.windows-gtk-shell .terminal-header {
+  padding: 8px 10px;
+}
+
+window.windows-gtk-shell .terminal-frame {
+  padding: 5px;
+}
+
+window.windows-gtk-shell .saved-workspaces-panel {
+  padding: 14px;
+}
+
+window.windows-gtk-shell .saved-workspace-card {
+  min-height: 118px;
+  padding: 13px;
+}
+
+window.windows-gtk-shell .settings-section {
+  padding: 12px;
+}
+
+window.windows-gtk-shell .settings-reset-button,
+window.windows-gtk-shell .settings-close-button {
+  min-height: 30px;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
 window.window-shell.theme-light {
   background:
     radial-gradient(circle at top, rgba(108, 139, 196, 0.12), transparent 28%),

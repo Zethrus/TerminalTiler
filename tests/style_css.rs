@@ -7,6 +7,7 @@ const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
+const BUILD_RS: &str = include_str!("../build.rs");
 const CI_YML: &str = include_str!("../.github/workflows/ci.yml");
 const DESIGN_MD: &str = include_str!("../DESIGN.md");
 const DOC_WINDOWS_GTK_VISUAL_QA: &str = include_str!("../docs/windows-gtk-visual-qa.md");
@@ -47,6 +48,7 @@ const WINDOWS_CAPTURE_RELEASE_VISUALS_PS1: &str =
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
 const WINDOWS_GTK_RUNTIME_RS: &str = include_str!("../src/windows/gtk_runtime.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
+const WINDOWS_INSTALLER_NSI: &str = include_str!("../packaging/windows/installer.nsi");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
@@ -1526,6 +1528,72 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("remove_ContextMenuRequested")
             && WINDOWS_GTK_RUNTIME_RS.contains("controller.Close()"),
         "Windows GTK terminal/runtime surfaces should expose shared command controls and match Linux web pane context actions while embedding WebView2-backed web panes instead of leaving browser tiles as external placeholders"
+    );
+}
+
+#[test]
+fn windows_builds_embed_and_package_terminaltiler_icon() {
+    assert!(
+        std::path::Path::new("resources/windows/terminaltiler.ico").exists()
+            && std::path::Path::new("resources/windows/terminaltiler.rc").exists(),
+        "Windows builds should keep a checked-in multi-size TerminalTiler .ico and rc resource for taskbar/shortcut parity"
+    );
+
+    assert!(
+        BUILD_RS.contains("resources/windows/terminaltiler.rc")
+            && BUILD_RS.contains("resources/windows/terminaltiler.ico")
+            && BUILD_RS.contains("rc.exe")
+            && BUILD_RS.contains("find_windows_kit_resource_compiler")
+            && BUILD_RS.contains("Windows Kits")
+            && BUILD_RS.contains("cargo:rustc-link-arg-bin=terminaltiler=")
+            && BUILD_RS.contains("host.contains(\"windows\")"),
+        "Cargo should embed the TerminalTiler icon in Windows MSVC binaries while letting non-Windows cross-checks skip rc.exe"
+    );
+
+    assert!(
+        WINDOWS_BUILD_PS1.contains("resources\\windows\\terminaltiler.ico")
+            && WINDOWS_BUILD_PS1.contains("$WindowsIconPath")
+            && WINDOWS_BUILD_PS1.contains("/DICON_FILE=$WindowsIconPath")
+            && WINDOWS_BUILD_PS1.contains("-dIconFile=$WindowsIconPath")
+            && WINDOWS_BUILD_PS1.contains("share\\terminaltiler.ico")
+            && WINDOWS_SMOKE_PS1.contains("share\\terminaltiler.ico")
+            && WINDOWS_PORTABLE_NSI.contains("Icon \"${ICON_FILE}\"")
+            && WINDOWS_INSTALLER_NSI.contains("Icon \"${ICON_FILE}\"")
+            && WINDOWS_INSTALLER_NSI.contains("UninstallIcon \"${ICON_FILE}\"")
+            && WINDOWS_INSTALLER_WXS
+                .contains(r#"<Icon Id="TerminalTilerIcon" SourceFile="$(var.IconFile)" />"#)
+            && WINDOWS_INSTALLER_WXS.contains(r#"ARPPRODUCTICON"#)
+            && WINDOWS_INSTALLER_WXS.contains(r#"Icon="TerminalTilerIcon""#),
+        "Windows portable exe, installer, MSI shortcut, staged payload, and smoke checks should all carry the TerminalTiler icon"
+    );
+}
+
+#[test]
+fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux() {
+    for selector in [
+        "window.windows-gtk-shell.profile-standard headerbar.app-headerbar",
+        "window.windows-gtk-shell.profile-standard .app-tab-shell",
+        "window.windows-gtk-shell button.primary-cta-button",
+        "window.windows-gtk-shell button.pill-button.compact-action-button",
+        "window.windows-gtk-shell button.pill-button.compact-icon-button",
+        "window.windows-gtk-shell button.surface-button",
+        "window.windows-gtk-shell combobox.surface-select-control button.combo",
+        "window.windows-gtk-shell .workspace-summary",
+        "window.windows-gtk-shell .terminal-header",
+        "window.windows-gtk-shell .saved-workspace-card",
+        "window.windows-gtk-shell .settings-section",
+    ] {
+        assert!(
+            STYLE_CSS.contains(selector),
+            "Windows GTK density normalization should be scoped to the Windows shell selector: {selector}"
+        );
+    }
+
+    assert!(
+        STYLE_CSS.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
+            && STYLE_CSS.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
+            && STYLE_CSS.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;"),
+        "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
 }
 

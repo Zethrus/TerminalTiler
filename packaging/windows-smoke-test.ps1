@@ -59,6 +59,7 @@ function Assert-WindowsGtkPayload {
 
     Assert-Path -Path (Join-Path $PayloadRoot "share\style.css") -Description "Shared GTK CSS"
     Assert-Path -Path (Join-Path $PayloadRoot "share\terminaltiler.svg") -Description "TerminalTiler GTK logo"
+    Assert-Path -Path (Join-Path $PayloadRoot "share\terminaltiler.ico") -Description "TerminalTiler Windows icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\terminal.svg") -Description "GTK terminal hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\layout-dashboard.svg") -Description "GTK dashboard hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\save.svg") -Description "GTK save hover icon"

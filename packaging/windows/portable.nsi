@@ -16,7 +16,12 @@ ShowInstDetails nevershow
   !error "OUT_FILE define is required"
 !endif
 
+!ifndef ICON_FILE
+  !error "ICON_FILE define is required"
+!endif
+
 Name "TerminalTiler Portable"
+Icon "${ICON_FILE}"
 OutFile "${OUT_FILE}"
 
 Section "Run"

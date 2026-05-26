@@ -13,7 +13,13 @@ RequestExecutionLevel user
   !error "OUT_FILE define is required"
 !endif
 
+!ifndef ICON_FILE
+  !error "ICON_FILE define is required"
+!endif
+
 Name "TerminalTiler"
+Icon "${ICON_FILE}"
+UninstallIcon "${ICON_FILE}"
 OutFile "${OUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\TerminalTiler"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "InstallLocation"

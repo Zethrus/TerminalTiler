@@ -19,6 +19,7 @@ pub const DEFAULT_WINDOW_HEIGHT: i32 = 680;
 pub const WINDOWS_GTK_RESOURCE_PAYLOAD: &[&str] = &[
     "resources/style.css",
     "resources/terminaltiler.svg",
+    "resources/windows/terminaltiler.ico",
     "resources/hover-icons/arrow-back.svg",
     "resources/hover-icons/arrow-narrow-right.svg",
     "resources/hover-icons/checked.svg",
