@@ -1593,6 +1593,11 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
     for selector in [
         "window.windows-gtk-shell.profile-standard headerbar.app-headerbar",
         "window.windows-gtk-shell.profile-standard .app-tab-shell",
+        "window.windows-gtk-shell.profile-standard .app-tab-icon",
+        "window.windows-gtk-shell.profile-standard .app-tab-title",
+        "window.windows-gtk-shell.profile-standard button.app-tab-close",
+        "window.windows-gtk-shell.profile-standard button.app-tab-add",
+        "window.windows-gtk-shell.profile-standard headerbar.app-headerbar button.titlebar-icon-button",
         "window.windows-gtk-shell button.primary-cta-button",
         "window.windows-gtk-shell button.pill-button.compact-action-button",
         "window.windows-gtk-shell button.pill-button.compact-icon-button",
@@ -1619,6 +1624,9 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
     let normalized_settings_dialog = SETTINGS_DIALOG_RS.replace("\r\n", "\n");
     assert!(
         normalized_style.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
+            && normalized_style.contains("window.windows-gtk-shell.profile-standard button.app-tab-add {\n  min-width: 24px;\n  min-height: 24px;\n  padding: 0;")
+            && normalized_style.contains("window.windows-gtk-shell.profile-standard button.app-tab-close {\n  min-width: 18px;\n  min-height: 18px;")
+            && normalized_style.contains("window.windows-gtk-shell.profile-standard headerbar.app-headerbar button.titlebar-icon-button {\n  min-width: 28px;\n  padding: 0;")
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
             && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
             && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
