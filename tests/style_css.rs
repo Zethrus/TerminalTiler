@@ -1649,6 +1649,7 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
 
     let normalized_style = STYLE_CSS.replace("\r\n", "\n");
     let normalized_settings_dialog = SETTINGS_DIALOG_RS.replace("\r\n", "\n");
+    let normalized_icons = ICONS_RS.replace("\r\n", "\n");
     assert!(
         normalized_style.contains("window.windows-gtk-shell .saved-workspace-card {\n  min-height: 118px;\n  padding: 13px;")
             && normalized_style.contains("window.windows-gtk-shell.profile-standard button.app-tab-add {\n  min-width: 24px;\n  min-height: 24px;\n  padding: 0;")
@@ -1666,11 +1667,11 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && normalized_style.contains(".parity-dialog-window.windows-gtk-shell button {\n  min-height: 30px;")
             && normalized_style.contains(".parity-dialog-window.windows-gtk-shell entry {\n  min-height: 34px;")
             && normalized_settings_dialog.contains("\"windows-gtk-shell\"")
-            && ICONS_RS.contains("fn button_icon_pixel_size() -> i32")
-            && ICONS_RS.contains("target_os = \"windows\", feature = \"windows-gtk-shell\"")
-            && ICONS_RS.contains("13\n    } else {\n        15")
-            && ICONS_RS.contains("fn button_icon_spacing() -> i32")
-            && ICONS_RS.contains("5\n    } else {\n        6")
+            && normalized_icons.contains("fn button_icon_pixel_size() -> i32")
+            && normalized_icons.contains("target_os = \"windows\", feature = \"windows-gtk-shell\"")
+            && normalized_icons.contains("13\n    } else {\n        15")
+            && normalized_icons.contains("fn button_icon_spacing() -> i32")
+            && normalized_icons.contains("5\n    } else {\n        6")
             && DIALOG_CHROME_RS.contains("source_has_chrome_class(parent.as_ref(), class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );
