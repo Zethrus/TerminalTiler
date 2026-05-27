@@ -52,7 +52,7 @@ pub(crate) fn icon_button(icon_name: &str, tooltip: &str, css_classes: &[&str]) 
         button.add_css_class(class_name);
     }
     let icon = image(icon_name);
-    icon.set_pixel_size(15);
+    icon.set_pixel_size(button_icon_pixel_size());
     icon.set_valign(gtk::Align::Center);
     icon.add_css_class("button-leading-icon");
     button.set_child(Some(&icon));
@@ -86,14 +86,14 @@ fn set_button_icon_label_with_alignment(
 ) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
+        .spacing(button_icon_spacing())
         .halign(halign)
         .valign(gtk::Align::Center)
         .css_classes(["button-icon-label-content"])
         .build();
 
     let icon = image(icon_name);
-    icon.set_pixel_size(15);
+    icon.set_pixel_size(button_icon_pixel_size());
     icon.set_valign(gtk::Align::Center);
     icon.add_css_class("button-leading-icon");
     let _ = icon.pango_context();
@@ -110,6 +110,22 @@ fn set_button_icon_label_with_alignment(
     );
 
     button.set_child(Some(&row));
+}
+
+fn button_icon_pixel_size() -> i32 {
+    if cfg!(all(target_os = "windows", feature = "windows-gtk-shell")) {
+        13
+    } else {
+        15
+    }
+}
+
+fn button_icon_spacing() -> i32 {
+    if cfg!(all(target_os = "windows", feature = "windows-gtk-shell")) {
+        5
+    } else {
+        6
+    }
 }
 
 pub(crate) fn image(icon_name: &str) -> gtk::Image {

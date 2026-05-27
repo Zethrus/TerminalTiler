@@ -1624,8 +1624,15 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
         "window.windows-gtk-shell button.surface-button",
         "window.windows-gtk-shell combobox.surface-select-control button.combo",
         "window.windows-gtk-shell .workspace-summary",
+        "window.windows-gtk-shell .launch-dashboard-hero",
+        "window.windows-gtk-shell .launch-dashboard-title",
+        "window.windows-gtk-shell .launch-dashboard-copy",
         "window.windows-gtk-shell .terminal-header",
+        "window.windows-gtk-shell .saved-workspaces-panel .section-title",
         "window.windows-gtk-shell .saved-workspace-card",
+        "window.windows-gtk-shell .saved-workspace-card .card-meta",
+        "window.windows-gtk-shell .saved-workspace-root",
+        "window.windows-gtk-shell .saved-workspace-tile-chip",
         "window.windows-gtk-shell .settings-section",
         ".parity-dialog-window.windows-gtk-shell button",
         ".parity-dialog-window.windows-gtk-shell entry",
@@ -1649,10 +1656,21 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && normalized_style.contains("window.windows-gtk-shell.profile-standard headerbar.app-headerbar button.titlebar-icon-button {\n  min-width: 28px;\n  padding: 0;")
             && normalized_style.contains("window.windows-gtk-shell button.pill-button.compact-icon-button {\n  min-width: 28px;\n  min-height: 28px;")
             && normalized_style.contains("window.windows-gtk-shell combobox.surface-select-control button.combo {\n  min-height: 34px;")
+            && normalized_style.contains("window.windows-gtk-shell .launch-dashboard-hero {\n  padding: 12px 15px;")
+            && normalized_style.contains("window.windows-gtk-shell .launch-dashboard-title {\n  font-size: 20px;")
+            && normalized_style.contains("window.windows-gtk-shell .saved-workspaces-panel {\n  padding: 12px;")
+            && normalized_style.contains("window.windows-gtk-shell .saved-workspaces-panel .section-title {\n  font-size: 17px;")
+            && normalized_style.contains("window.windows-gtk-shell .saved-workspace-card .card-meta,\nwindow.windows-gtk-shell .saved-workspace-root {\n  font-size: 11px;")
+            && normalized_style.contains("window.windows-gtk-shell .saved-workspace-tile-chip {\n  padding: 3px 8px;")
             && normalized_style.contains(".settings-dialog-window.windows-gtk-shell .settings-section {\n  padding: 12px;\n  border-radius: 18px;")
             && normalized_style.contains(".parity-dialog-window.windows-gtk-shell button {\n  min-height: 30px;")
             && normalized_style.contains(".parity-dialog-window.windows-gtk-shell entry {\n  min-height: 34px;")
             && normalized_settings_dialog.contains("\"windows-gtk-shell\"")
+            && ICONS_RS.contains("fn button_icon_pixel_size() -> i32")
+            && ICONS_RS.contains("target_os = \"windows\", feature = \"windows-gtk-shell\"")
+            && ICONS_RS.contains("13\n    } else {\n        15")
+            && ICONS_RS.contains("fn button_icon_spacing() -> i32")
+            && ICONS_RS.contains("5\n    } else {\n        6")
             && DIALOG_CHROME_RS.contains("source_has_chrome_class(parent.as_ref(), class_name)"),
         "Windows-only CSS should trim the card/action/select metrics that made the screenshots look chunkier than Linux"
     );

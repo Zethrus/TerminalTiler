@@ -2780,6 +2780,18 @@ window.windows-gtk-shell .workspace-summary {
   margin-bottom: 4px;
 }
 
+window.windows-gtk-shell .launch-dashboard-hero {
+  padding: 12px 15px;
+}
+
+window.windows-gtk-shell .launch-dashboard-title {
+  font-size: 20px;
+}
+
+window.windows-gtk-shell .launch-dashboard-copy {
+  font-size: 12px;
+}
+
 window.windows-gtk-shell .terminal-header {
   padding: 8px 10px;
 }
@@ -2789,12 +2801,25 @@ window.windows-gtk-shell .terminal-frame {
 }
 
 window.windows-gtk-shell .saved-workspaces-panel {
-  padding: 14px;
+  padding: 12px;
+}
+
+window.windows-gtk-shell .saved-workspaces-panel .section-title {
+  font-size: 17px;
 }
 
 window.windows-gtk-shell .saved-workspace-card {
   min-height: 118px;
   padding: 13px;
+}
+
+window.windows-gtk-shell .saved-workspace-card .card-meta,
+window.windows-gtk-shell .saved-workspace-root {
+  font-size: 11px;
+}
+
+window.windows-gtk-shell .saved-workspace-tile-chip {
+  padding: 3px 8px;
 }
 
 window.windows-gtk-shell .settings-section {
