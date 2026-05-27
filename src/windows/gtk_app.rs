@@ -26,8 +26,8 @@ mod imp {
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
-        about_dialog, assets_manager, command_palette, companion_dialog, settings_dialog,
-        tab_rename_dialog,
+        about_dialog, assets_manager, command_palette, companion_dialog, dialog_smoke,
+        settings_dialog, tab_rename_dialog,
     };
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
@@ -151,23 +151,43 @@ mod imp {
             });
         }
 
-        {
+        let open_assets_manager: Rc<dyn Fn()> = {
             let window = window.clone();
             let overlay = overlay.clone();
             let asset_store = asset_store.clone();
-            assets_button.connect_clicked(move |_| {
-                present_assets_manager(&window, &overlay, asset_store.clone());
-            });
+            Rc::new(move || present_assets_manager(&window, &overlay, asset_store.clone()))
+        };
+
+        {
+            let open_assets_manager = open_assets_manager.clone();
+            assets_button.connect_clicked(move |_| open_assets_manager());
+        }
+        {
+            let open_assets_manager = open_assets_manager.clone();
+            let action = gio::SimpleAction::new("open-assets", None);
+            action.connect_activate(move |_, _| open_assets_manager());
+            window.add_action(&action);
         }
 
-        if let (Some(button), Some(companion)) =
-            (companion_button.as_ref(), options.companion.as_ref())
-        {
-            let window = window.clone();
-            let companion = companion.clone();
-            button.connect_clicked(move |_| {
-                companion_dialog::present(&window, companion.clone());
+        let open_companion_dialog: Option<Rc<dyn Fn()>> =
+            options.companion.as_ref().map(|companion| {
+                let window = window.clone();
+                let companion = companion.clone();
+                Rc::new(move || companion_dialog::present(&window, companion.clone()))
+                    as Rc<dyn Fn()>
             });
+
+        if let (Some(button), Some(open_companion_dialog)) =
+            (companion_button.as_ref(), open_companion_dialog.as_ref())
+        {
+            let open_companion_dialog = open_companion_dialog.clone();
+            button.connect_clicked(move |_| open_companion_dialog());
+        }
+        if let Some(open_companion_dialog) = open_companion_dialog.as_ref() {
+            let open_companion_dialog = open_companion_dialog.clone();
+            let action = gio::SimpleAction::new("open-companion", None);
+            action.connect_activate(move |_, _| open_companion_dialog());
+            window.add_action(&action);
         }
 
         {
@@ -387,6 +407,12 @@ mod imp {
                 }
             });
             *open_command_palette_handle.borrow_mut() = Some(open_command_palette.clone());
+            {
+                let open_command_palette = open_command_palette.clone();
+                let action = gio::SimpleAction::new("open-command-palette", None);
+                action.connect_activate(move |_, _| open_command_palette());
+                window.add_action(&action);
+            }
             install_command_palette_shortcut(
                 &window,
                 &command_palette_shortcut_controller,
@@ -421,7 +447,7 @@ mod imp {
                 -1,
                 "workspace_zoom_out",
             );
-            {
+            let open_settings_dialog: Rc<dyn Fn()> = Rc::new({
                 let window = window.clone();
                 let overlay = overlay.clone();
                 let title = title.clone();
@@ -442,7 +468,7 @@ mod imp {
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
-                settings_button.connect_clicked(move |_| {
+                move || {
                     present_settings_dialog(
                         &window,
                         &overlay,
@@ -460,7 +486,17 @@ mod imp {
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
                     );
-                });
+                }
+            });
+            {
+                let open_settings_dialog = open_settings_dialog.clone();
+                settings_button.connect_clicked(move |_| open_settings_dialog());
+            }
+            {
+                let open_settings_dialog = open_settings_dialog.clone();
+                let action = gio::SimpleAction::new("open-settings", None);
+                action.connect_activate(move |_, _| open_settings_dialog());
+                window.add_action(&action);
             }
         }
         overlay.set_child(Some(&launch));
@@ -474,6 +510,11 @@ mod imp {
             &shell_state,
         );
         window.present();
+
+        if dialog_smoke::is_enabled() {
+            dialog_smoke::start(&window);
+            return;
+        }
 
         if let Some(session) = session_outcome
             .session

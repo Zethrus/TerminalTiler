@@ -2243,6 +2243,197 @@ combobox.microphone-select-control button.combo {
   min-width: 0;
 }
 
+/* ── Companion Account / Sync dialog ─────────────────────── */
+.companion-dialog-content {
+  background: transparent;
+}
+
+.companion-summary {
+  border-color: alpha(@tt_amber, 0.16);
+  background:
+    linear-gradient(180deg, rgba(16, 16, 21, 0.98), rgba(8, 8, 12, 0.98)),
+    radial-gradient(circle at left, alpha(@tt_amber, 0.08), transparent 38%);
+}
+
+.companion-summary-icon image {
+  color: rgba(245, 196, 111, 0.96);
+}
+
+.companion-summary-body {
+  min-width: 0;
+  margin-right: 12px;
+}
+
+.companion-status-chip {
+  min-height: 24px;
+  padding: 0 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.companion-status-chip.is-ok,
+.companion-status-chip.is-syncing {
+  color: rgba(255, 246, 221, 0.94);
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.17), alpha(@tt_amber, 0.08));
+  border-color: alpha(@tt_amber, 0.24);
+}
+
+.companion-status-chip.is-warning {
+  color: rgba(255, 224, 163, 0.96);
+  background: linear-gradient(180deg, rgba(190, 97, 45, 0.22), rgba(95, 48, 24, 0.18));
+  border-color: rgba(240, 179, 75, 0.28);
+}
+
+.companion-status-chip.is-error {
+  color: #ffb3b3;
+  background: linear-gradient(180deg, alpha(@tt_danger, 0.16), rgba(95, 28, 28, 0.16));
+  border-color: alpha(@tt_danger, 0.28);
+}
+
+.companion-status-chip.is-inactive {
+  color: alpha(@tt_white, 0.58);
+}
+
+.companion-section {
+  padding: 16px;
+}
+
+.companion-section-heading {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.companion-row-list {
+  border-radius: 16px;
+  background: alpha(@tt_white, 0.026);
+  border: 1px solid alpha(@tt_white, 0.065);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.025);
+}
+
+.companion-row {
+  padding: 11px 12px;
+  border-bottom: 1px solid alpha(@tt_white, 0.055);
+}
+
+.settings-dialog-content .companion-row-label {
+  min-width: 112px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(241, 193, 104, 0.78);
+}
+
+.companion-row-value {
+  color: #fbfaf6;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.companion-row-detail {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.companion-footer {
+  padding-top: 12px;
+  border-top: 1px solid alpha(@tt_white, 0.055);
+}
+
+.companion-actions {
+  min-width: 0;
+}
+
+button.companion-action-button,
+button.companion-close-button {
+  min-height: 34px;
+  padding-left: 15px;
+  padding-right: 15px;
+}
+
+.companion-input-panel {
+  padding: 18px;
+}
+
+entry.companion-input-entry {
+  min-height: 42px;
+  border-radius: 14px;
+  background: alpha(@tt_white, 0.035);
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
+}
+
+.companion-dialog-window.windows-gtk-shell .companion-section,
+.companion-input-dialog-window.windows-gtk-shell .companion-input-panel {
+  padding: 12px;
+  border-radius: 18px;
+}
+
+.companion-dialog-window.windows-gtk-shell button.companion-action-button,
+.companion-dialog-window.windows-gtk-shell button.companion-close-button,
+.companion-input-dialog-window.windows-gtk-shell button.companion-action-button {
+  min-height: 30px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.companion-dialog-window.windows-gtk-shell .companion-row {
+  padding: 9px 10px;
+}
+
+.companion-dialog-window.windows-gtk-shell .companion-row-value {
+  font-size: 11px;
+}
+
+.companion-dialog-window.theme-light .companion-summary {
+  background:
+    linear-gradient(180deg, rgba(251, 247, 241, 0.99), rgba(238, 243, 249, 0.99)),
+    radial-gradient(circle at left, rgba(196, 112, 54, 0.08), transparent 36%);
+  border-color: rgba(196, 112, 54, 0.18);
+}
+
+.companion-dialog-window.theme-light .companion-row-list,
+.companion-input-dialog-window.theme-light entry.companion-input-entry {
+  background: linear-gradient(180deg, alpha(@tt_white, 0.76), rgba(245, 248, 252, 0.88));
+  border-color: rgba(101, 119, 151, 0.15);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.72);
+}
+
+.companion-dialog-window.theme-light .companion-row {
+  border-bottom-color: rgba(101, 119, 151, 0.12);
+}
+
+window.companion-dialog-window.theme-light .settings-dialog-content .companion-row-label {
+  color: rgba(158, 100, 16, 0.92);
+}
+
+.companion-dialog-window.theme-light .companion-row-value {
+  color: #192332;
+}
+
+.companion-dialog-window.theme-light .companion-status-chip.is-ok,
+.companion-dialog-window.theme-light .companion-status-chip.is-syncing {
+  color: rgba(97, 52, 16, 0.94);
+  background: rgba(196, 112, 54, 0.12);
+  border-color: rgba(196, 112, 54, 0.22);
+}
+
+.companion-dialog-window.theme-light .companion-status-chip.is-warning {
+  color: rgba(117, 72, 10, 0.96);
+  background: rgba(240, 179, 75, 0.15);
+  border-color: rgba(196, 112, 54, 0.24);
+}
+
+.companion-dialog-window.theme-light .companion-status-chip.is-error {
+  color: rgba(127, 29, 29, 0.92);
+  background: rgba(220, 38, 38, 0.08);
+  border-color: rgba(220, 38, 38, 0.20);
+}
+
+.companion-dialog-window.theme-light .companion-footer {
+  border-top-color: rgba(101, 119, 151, 0.12);
+}
+
 .launch-setting-title {
   font-size: 11px;
   letter-spacing: 0.12em;

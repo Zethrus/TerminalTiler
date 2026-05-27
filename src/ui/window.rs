@@ -2988,6 +2988,13 @@ fn present_with_initial_workspace(
         window.add_action(&action);
     }
 
+    if let Some(open_companion_dialog) = open_companion_dialog.as_ref() {
+        let open_companion_dialog = open_companion_dialog.clone();
+        let action = gio::SimpleAction::new("open-companion", None);
+        action.connect_activate(move |_, _| open_companion_dialog());
+        window.add_action(&action);
+    }
+
     {
         let open_command_palette = open_command_palette.clone();
         let action = gio::SimpleAction::new("open-command-palette", None);

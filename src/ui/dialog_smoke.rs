@@ -8,6 +8,7 @@ use gtk::{gio, glib};
 use crate::logging;
 
 const DIALOG_SMOKE_ENV: &str = "TERMINALTILER_DIALOG_CLOSE_SMOKE";
+const COMPANION_SMOKE_ENV: &str = "TERMINALTILER_DIALOG_COMPANION_SMOKE";
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const SETTLE_DELAY: Duration = Duration::from_millis(120);
 const STEP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -18,6 +19,7 @@ struct DialogSmokeState {
     settings_close: RefCell<Option<Rc<dyn Fn()>>>,
     assets_dialog: RefCell<Option<adw::Dialog>>,
     assets_prompt: RefCell<Option<adw::Dialog>>,
+    companion_dialog: RefCell<Option<adw::Dialog>>,
 }
 
 thread_local! {
@@ -85,6 +87,19 @@ pub(crate) fn register_assets_prompt(dialog: &adw::Dialog) {
     let dialog_for_closed = dialog.clone();
     dialog.connect_closed(move |_| {
         clear_if_current(&state_for_closed.assets_prompt, &dialog_for_closed);
+    });
+}
+
+pub(crate) fn register_companion_dialog(dialog: &adw::Dialog) {
+    let Some(state) = state() else {
+        return;
+    };
+
+    state.companion_dialog.replace(Some(dialog.clone()));
+    let state_for_closed = state.clone();
+    let dialog_for_closed = dialog.clone();
+    dialog.connect_closed(move |_| {
+        clear_if_current(&state_for_closed.companion_dialog, &dialog_for_closed);
     });
 }
 
@@ -230,6 +245,23 @@ async fn run(window: adw::ApplicationWindow) -> Result<(), String> {
     .await?;
     println!("PASS assets dirty close-attempt");
 
+    if companion_smoke_required() {
+        println!("TEST companion close-attempt");
+        gtk::prelude::WidgetExt::activate_action(&window, "win.open-companion", None)
+            .map_err(|error| format!("failed to open Account / Sync companion dialog: {error}"))?;
+        let companion_dialog =
+            wait_for_dialog(current_companion_dialog, "Account / Sync companion dialog").await?;
+        glib::timeout_future(SETTLE_DELAY).await;
+        gtk::prelude::WidgetExt::activate_action(&companion_dialog, "window.close", None)
+            .map_err(|error| format!("failed to request Account / Sync close: {error}"))?;
+        wait_until(
+            || companion_dialog.parent().is_none(),
+            "Account / Sync companion dialog to close",
+        )
+        .await?;
+        println!("PASS companion close-attempt");
+    }
+
     Ok(())
 }
 
@@ -283,6 +315,14 @@ fn current_assets_dialog() -> Option<adw::Dialog> {
 
 fn current_assets_prompt() -> Option<adw::Dialog> {
     state().and_then(|state| visible_dialog(&state.assets_prompt))
+}
+
+fn current_companion_dialog() -> Option<adw::Dialog> {
+    state().and_then(|state| visible_dialog(&state.companion_dialog))
+}
+
+fn companion_smoke_required() -> bool {
+    std::env::var_os(COMPANION_SMOKE_ENV).is_some()
 }
 
 fn clear_if_current(slot: &RefCell<Option<adw::Dialog>>, dialog: &adw::Dialog) {

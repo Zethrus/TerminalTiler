@@ -7,6 +7,7 @@ const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
 const COMPANION_DIALOG_RS: &str = include_str!("../src/ui/companion_dialog.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const DIALOG_CHROME_RS: &str = include_str!("../src/ui/dialog_chrome.rs");
+const DIALOG_SMOKE_RS: &str = include_str!("../src/ui/dialog_smoke.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
 const BUILD_RS: &str = include_str!("../build.rs");
@@ -177,6 +178,13 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("options.companion.as_ref()")
             && WINDOWS_GTK_APP_RS.contains("companion_dialog::present(&window, companion.clone())"),
         "Windows GTK should expose the same shared Account / Sync companion titlebar action as Linux when an integration is provided"
+    );
+    assert!(
+        WINDOW_RS.contains("gio::SimpleAction::new(\"open-companion\", None)")
+            && WINDOWS_GTK_APP_RS.contains("gio::SimpleAction::new(\"open-companion\", None)")
+            && WINDOW_RS.contains("window.add_action(&action);")
+            && WINDOWS_GTK_APP_RS.contains("window.add_action(&action);"),
+        "Linux and Windows GTK shells should expose win.open-companion when RuntimeOptions carries a companion integration"
     );
     assert!(
         WINDOW_RS.contains("sync_workspace_fullscreen_chrome(")
@@ -1091,6 +1099,86 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
 }
 
 #[test]
+fn companion_account_sync_dialog_uses_settings_quality_chrome() {
+    assert!(
+        COMPANION_DIALOG_RS.contains(
+            "css_classes([\"settings-dialog-content\", \"companion-dialog-content\"])"
+        ) && COMPANION_DIALOG_RS.contains("fn build_companion_summary(")
+            && COMPANION_DIALOG_RS.contains(
+                "\"config-panel\",\n            \"settings-section\",\n            \"settings-summary\",\n            \"companion-summary\""
+            )
+            && COMPANION_DIALOG_RS.contains("\"companion-section\"")
+            && COMPANION_DIALOG_RS.contains("\"companion-row-list\"")
+            && COMPANION_DIALOG_RS.contains("\"companion-row-label\"")
+            && COMPANION_DIALOG_RS.contains("\"companion-row-value\"")
+            && COMPANION_DIALOG_RS.contains("\"companion-footer\"")
+            && COMPANION_DIALOG_RS.contains("fn action_icon(action: &CompanionAction)")
+            && COMPANION_DIALOG_RS.contains("icon_name::REFRESH")
+            && COMPANION_DIALOG_RS.contains("icon_name::APPLY")
+            && COMPANION_DIALOG_RS.contains("icon_name::WEB")
+            && COMPANION_DIALOG_RS.contains("fn status_class(status: CompanionStatus)")
+            && COMPANION_DIALOG_RS.contains("dialog_smoke::register_companion_dialog(&dialog)")
+            && COMPANION_DIALOG_RS.contains("\"companion-status-chip\""),
+        "Account / Sync should reuse the premium settings dialog shell with a summary hero, structured sections, readable rows, status chips, and action icons"
+    );
+
+    for selector in [
+        ".companion-summary",
+        ".companion-summary-icon image",
+        ".companion-status-chip.is-ok",
+        ".companion-status-chip.is-warning",
+        ".companion-status-chip.is-error",
+        ".companion-section",
+        ".companion-row-list",
+        ".companion-row",
+        ".settings-dialog-content .companion-row-label",
+        ".companion-row-value",
+        ".companion-footer",
+        "button.companion-action-button",
+        "entry.companion-input-entry",
+        ".companion-dialog-window.windows-gtk-shell .companion-section",
+        ".companion-dialog-window.theme-light .companion-summary",
+        "window.companion-dialog-window.theme-light .settings-dialog-content .companion-row-label",
+        ".companion-dialog-window.theme-light .companion-row-value",
+    ] {
+        assert!(
+            STYLE_CSS.contains(selector),
+            "companion dialog visual contract should include selector: {selector}"
+        );
+    }
+
+    assert_css_declaration(
+        ".settings-dialog-content .companion-row-label",
+        "color",
+        "rgba(241, 193, 104, 0.78)",
+        "companion row labels should beat generic settings field-hint styling in the dark theme",
+    );
+    assert_css_declaration(
+        "window.companion-dialog-window.theme-light .settings-dialog-content .companion-row-label",
+        "color",
+        "rgba(158, 100, 16, 0.92)",
+        "companion row labels should beat generic settings field-hint styling in the light theme",
+    );
+}
+
+#[test]
+fn dialog_smoke_can_require_companion_dialog_for_pro_builds() {
+    assert!(
+        UI_MOD_RS.contains("pub(crate) mod dialog_smoke;")
+            && COMPANION_DIALOG_RS.contains("use crate::ui::dialog_smoke;")
+            && COMPANION_DIALOG_RS.contains("dialog_smoke::register_companion_dialog(&dialog)")
+            && WINDOW_RS.contains("gio::SimpleAction::new(\"open-companion\", None)")
+            && WINDOWS_GTK_APP_RS.contains("gio::SimpleAction::new(\"open-companion\", None)")
+            && DIALOG_SMOKE_RS.contains("TERMINALTILER_DIALOG_COMPANION_SMOKE")
+            && DIALOG_SMOKE_RS.contains("register_companion_dialog")
+            && DIALOG_SMOKE_RS.contains("\"win.open-companion\"")
+            && DIALOG_SMOKE_RS.contains("PASS companion close-attempt")
+            && WINDOWS_GTK_APP_RS.contains("dialog_smoke::start(&window)"),
+        "dialog smoke should optionally require Account / Sync to open/close through the shared win.open-companion action for Pro GTK builds"
+    );
+}
+
+#[test]
 fn windows_gtk_shell_exposes_shared_command_palette() {
     assert!(
         UI_MOD_RS.contains("pub mod about_dialog;")
@@ -1104,7 +1192,8 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     for token in [
         "use crate::ui::{",
-        "about_dialog, assets_manager, command_palette, companion_dialog, settings_dialog",
+        "about_dialog, assets_manager, command_palette, companion_dialog, dialog_smoke",
+        "settings_dialog, tab_rename_dialog",
         "ShortcutControllerHandle",
         "present_command_palette",
         "command_palette::PaletteAction",

@@ -5,10 +5,11 @@ use gtk::gio;
 
 use crate::extension::{
     CompanionAction, CompanionActionInput, CompanionActionStyle, CompanionIntegration,
-    CompanionPanelSnapshot, CompanionRow, CompanionTextInput,
+    CompanionPanelSnapshot, CompanionRow, CompanionStatus, CompanionTextInput,
 };
 use crate::logging;
 use crate::ui::dialog_chrome;
+use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
 
 pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionIntegration>) {
@@ -16,49 +17,69 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
     let dialog = adw::Dialog::new();
     dialog.set_title(&snapshot.title);
     dialog.set_follows_content_size(false);
-    dialog.set_content_width(640);
+    dialog.set_content_width(680);
     dialog.set_content_height(620);
     dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "companion-dialog-window");
+    dialog_smoke::register_companion_dialog(&dialog);
+
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .css_classes(["companion-dialog-scroller"])
+        .build();
+    scroller.set_has_frame(false);
+    root.append(&scroller);
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(14)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .css_classes(["settings-dialog-content", "companion-dialog-content"])
         .build();
+    scroller.set_child(Some(&content));
 
-    content.append(
-        &gtk::Label::builder()
-            .label(&snapshot.title)
-            .halign(gtk::Align::Start)
-            .css_classes(["section-title"])
-            .build(),
-    );
-    content.append(
-        &gtk::Label::builder()
-            .label(format!(
-                "{} · {}",
-                snapshot.status.label(),
-                snapshot.subtitle
-            ))
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["field-hint"])
-            .build(),
-    );
-
+    content.append(&build_companion_summary(&snapshot));
     append_section(&content, "Account", &snapshot.account_rows);
     append_section(&content, "Sync", &snapshot.sync_rows);
     append_section(&content, "Devices and teams", &snapshot.device_rows);
-    append_actions(&content, window, &dialog, companion, &snapshot);
 
-    let close_button = icons::labeled_button("Close", icon_name::CLOSE, &["pill-button", "flat"]);
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(12)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .css_classes(["companion-footer"])
+        .build();
+    let action_bar = build_action_bar(window, &dialog, companion, &snapshot);
+    footer.append(&action_bar);
+
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &[
+            "pill-button",
+            "ghost-link-button",
+            "settings-close-button",
+            "companion-close-button",
+        ],
+    );
     close_button.set_halign(gtk::Align::End);
-    content.append(&close_button);
+    footer.append(&close_button);
+    root.append(&footer);
 
-    dialog.set_child(Some(&content));
+    dialog.set_child(Some(&root));
     dialog.set_default_widget(Some(&close_button));
     {
         let dialog = dialog.clone();
@@ -70,68 +91,175 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
     dialog.present(Some(window));
 }
 
+fn build_companion_summary(snapshot: &CompanionPanelSnapshot) -> gtk::Widget {
+    let shell = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(14)
+        .css_classes([
+            "config-panel",
+            "settings-section",
+            "settings-summary",
+            "companion-summary",
+        ])
+        .build();
+
+    let icon = gtk::Box::builder()
+        .width_request(40)
+        .height_request(40)
+        .valign(gtk::Align::Start)
+        .css_classes(["settings-summary-icon", "companion-summary-icon"])
+        .build();
+    let account_icon = icons::image(icon_name::SETTINGS);
+    account_icon.set_valign(gtk::Align::Center);
+    icon.append(&account_icon);
+    shell.append(&icon);
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .css_classes(["settings-summary-body", "companion-summary-body"])
+        .build();
+    body.append(
+        &gtk::Label::builder()
+            .label(&snapshot.title)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["section-title", "settings-title", "settings-summary-title"])
+            .build(),
+    );
+    body.append(
+        &gtk::Label::builder()
+            .label(&snapshot.subtitle)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-copy", "settings-summary-copy"])
+            .build(),
+    );
+    shell.append(&body);
+
+    let status_chip = gtk::Label::builder()
+        .label(snapshot.status.label())
+        .valign(gtk::Align::Center)
+        .halign(gtk::Align::End)
+        .css_classes([
+            "status-chip",
+            "settings-meta-chip",
+            "companion-status-chip",
+            status_class(snapshot.status),
+        ])
+        .build();
+    shell.append(&status_chip);
+
+    shell.upcast()
+}
+
 fn append_section(content: &gtk::Box, title: &str, rows: &[CompanionRow]) {
     if rows.is_empty() {
         return;
     }
-    content.append(
+
+    let section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "settings-section", "companion-section"])
+        .build();
+    section.append(
         &gtk::Label::builder()
-            .label(title)
+            .label(title.to_uppercase())
             .halign(gtk::Align::Start)
-            .css_classes(["card-title"])
+            .css_classes([
+                "eyebrow",
+                "settings-section-heading",
+                "companion-section-heading",
+            ])
             .build(),
     );
+
     let list = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .css_classes(["card"])
+        .spacing(0)
+        .css_classes(["companion-row-list"])
         .build();
     for row in rows {
-        let item = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(2)
-            .halign(gtk::Align::Fill)
-            .hexpand(true)
-            .build();
-        item.append(
-            &gtk::Label::builder()
-                .label(format!("{}: {}", row.label, row.value))
-                .halign(gtk::Align::Start)
-                .wrap(true)
-                .build(),
-        );
-        if let Some(detail) = &row.detail {
-            item.append(
-                &gtk::Label::builder()
-                    .label(detail)
-                    .halign(gtk::Align::Start)
-                    .wrap(true)
-                    .css_classes(["field-hint"])
-                    .build(),
-            );
-        }
-        list.append(&item);
+        list.append(&build_row(row));
     }
-    content.append(&list);
+    section.append(&list);
+    content.append(&section);
 }
 
-fn append_actions(
-    content: &gtk::Box,
+fn build_row(row: &CompanionRow) -> gtk::Widget {
+    let item = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(5)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .css_classes(["companion-row"])
+        .build();
+
+    let primary = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .build();
+    primary.append(
+        &gtk::Label::builder()
+            .label(&row.label)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .css_classes(["field-hint", "companion-row-label"])
+            .build(),
+    );
+    primary.append(
+        &gtk::Label::builder()
+            .label(&row.value)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::Char)
+            .selectable(true)
+            .css_classes(["companion-row-value"])
+            .build(),
+    );
+    item.append(&primary);
+
+    if let Some(detail) = &row.detail {
+        item.append(
+            &gtk::Label::builder()
+                .label(detail)
+                .halign(gtk::Align::Start)
+                .hexpand(true)
+                .wrap(true)
+                .css_classes([
+                    "field-hint",
+                    "settings-section-copy",
+                    "companion-row-detail",
+                ])
+                .build(),
+        );
+    }
+
+    item.upcast()
+}
+
+fn build_action_bar(
     window: &adw::ApplicationWindow,
     dialog: &adw::Dialog,
     companion: Arc<dyn CompanionIntegration>,
     snapshot: &CompanionPanelSnapshot,
-) {
-    if snapshot.actions.is_empty() {
-        return;
-    }
+) -> gtk::Widget {
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .halign(gtk::Align::Start)
+        .hexpand(true)
+        .css_classes(["companion-actions"])
         .build();
     for action in &snapshot.actions {
-        let button = icons::labeled_button(&action.label, icon_name::NEXT, &button_classes(action));
+        let button =
+            icons::labeled_button(&action.label, action_icon(action), &button_classes(action));
         let action = action.clone();
         let companion = companion.clone();
         let parent = window.clone();
@@ -141,14 +269,49 @@ fn append_actions(
         });
         actions.append(&button);
     }
-    content.append(&actions);
+    actions.upcast()
+}
+
+fn action_icon(action: &CompanionAction) -> &'static str {
+    let id = action.id.to_ascii_lowercase();
+    if action.external_url.is_some() || id.contains("manage") || id.contains("portal") {
+        icon_name::WEB
+    } else if id.contains("refresh") {
+        icon_name::REFRESH
+    } else if id.contains("sync") {
+        icon_name::APPLY
+    } else if matches!(action.style, CompanionActionStyle::Destructive) {
+        icon_name::DELETE
+    } else {
+        icon_name::NEXT
+    }
 }
 
 fn button_classes(action: &CompanionAction) -> Vec<&'static str> {
     match action.style {
-        CompanionActionStyle::Primary => vec!["pill-button", "suggested-action"],
-        CompanionActionStyle::Destructive => vec!["pill-button", "destructive-action"],
-        CompanionActionStyle::Normal => vec!["pill-button", "flat"],
+        CompanionActionStyle::Primary => {
+            vec!["pill-button", "suggested-action", "companion-action-button"]
+        }
+        CompanionActionStyle::Destructive => {
+            vec![
+                "pill-button",
+                "destructive-action",
+                "companion-action-button",
+            ]
+        }
+        CompanionActionStyle::Normal => {
+            vec!["pill-button", "secondary-button", "companion-action-button"]
+        }
+    }
+}
+
+fn status_class(status: CompanionStatus) -> &'static str {
+    match status {
+        CompanionStatus::Ok => "is-ok",
+        CompanionStatus::Warning => "is-warning",
+        CompanionStatus::Error => "is-error",
+        CompanionStatus::Syncing => "is-syncing",
+        CompanionStatus::Inactive => "is-inactive",
     }
 }
 
@@ -199,41 +362,67 @@ fn present_input_prompt(
     dialog.set_title(&action.label);
     dialog.set_content_width(520);
     dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "companion-input-dialog-window");
+
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
-        .margin_top(18)
-        .margin_bottom(18)
-        .margin_start(18)
-        .margin_end(18)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .css_classes(["settings-dialog-content", "companion-dialog-content"])
         .build();
-    content.append(
+
+    let panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .css_classes(["config-panel", "settings-section", "companion-input-panel"])
+        .build();
+    panel.append(
+        &gtk::Label::builder()
+            .label(&action.label)
+            .halign(gtk::Align::Start)
+            .css_classes(["section-title", "settings-title"])
+            .build(),
+    );
+    panel.append(
         &gtk::Label::builder()
             .label(&input.prompt)
             .wrap(true)
             .halign(gtk::Align::Start)
+            .css_classes(["field-hint", "settings-copy"])
             .build(),
     );
+
     let entry = gtk::Entry::builder()
         .placeholder_text(input.placeholder.as_deref().unwrap_or(""))
         .visibility(!input.secret)
         .hexpand(true)
+        .css_classes(["companion-input-entry"])
         .build();
-    content.append(&entry);
+    panel.append(&entry);
+    content.append(&panel);
+
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .halign(gtk::Align::End)
+        .css_classes(["companion-actions"])
         .build();
-    let cancel = icons::labeled_button("Cancel", icon_name::CLOSE, &["pill-button", "flat"]);
+    let cancel = icons::labeled_button(
+        "Cancel",
+        icon_name::CLOSE,
+        &["pill-button", "ghost-link-button"],
+    );
     let submit = icons::labeled_button(
         &action.label,
-        icon_name::NEXT,
-        &["pill-button", "suggested-action"],
+        action_icon(&action),
+        &["pill-button", "suggested-action", "companion-action-button"],
     );
     actions.append(&cancel);
     actions.append(&submit);
     content.append(&actions);
+
     dialog.set_child(Some(&content));
     dialog.set_default_widget(Some(&submit));
     {
