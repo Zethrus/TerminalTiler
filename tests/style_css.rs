@@ -1100,25 +1100,26 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
 
 #[test]
 fn companion_account_sync_dialog_uses_settings_quality_chrome() {
+    let companion_dialog = COMPANION_DIALOG_RS.replace("\r\n", "\n");
     assert!(
-        COMPANION_DIALOG_RS.contains(
+        companion_dialog.contains(
             "css_classes([\"settings-dialog-content\", \"companion-dialog-content\"])"
-        ) && COMPANION_DIALOG_RS.contains("fn build_companion_summary(")
-            && COMPANION_DIALOG_RS.contains(
+        ) && companion_dialog.contains("fn build_companion_summary(")
+            && companion_dialog.contains(
                 "\"config-panel\",\n            \"settings-section\",\n            \"settings-summary\",\n            \"companion-summary\""
             )
-            && COMPANION_DIALOG_RS.contains("\"companion-section\"")
-            && COMPANION_DIALOG_RS.contains("\"companion-row-list\"")
-            && COMPANION_DIALOG_RS.contains("\"companion-row-label\"")
-            && COMPANION_DIALOG_RS.contains("\"companion-row-value\"")
-            && COMPANION_DIALOG_RS.contains("\"companion-footer\"")
-            && COMPANION_DIALOG_RS.contains("fn action_icon(action: &CompanionAction)")
-            && COMPANION_DIALOG_RS.contains("icon_name::REFRESH")
-            && COMPANION_DIALOG_RS.contains("icon_name::APPLY")
-            && COMPANION_DIALOG_RS.contains("icon_name::WEB")
-            && COMPANION_DIALOG_RS.contains("fn status_class(status: CompanionStatus)")
-            && COMPANION_DIALOG_RS.contains("dialog_smoke::register_companion_dialog(&dialog)")
-            && COMPANION_DIALOG_RS.contains("\"companion-status-chip\""),
+            && companion_dialog.contains("\"companion-section\"")
+            && companion_dialog.contains("\"companion-row-list\"")
+            && companion_dialog.contains("\"companion-row-label\"")
+            && companion_dialog.contains("\"companion-row-value\"")
+            && companion_dialog.contains("\"companion-footer\"")
+            && companion_dialog.contains("fn action_icon(action: &CompanionAction)")
+            && companion_dialog.contains("icon_name::REFRESH")
+            && companion_dialog.contains("icon_name::APPLY")
+            && companion_dialog.contains("icon_name::WEB")
+            && companion_dialog.contains("fn status_class(status: CompanionStatus)")
+            && companion_dialog.contains("dialog_smoke::register_companion_dialog(&dialog)")
+            && companion_dialog.contains("\"companion-status-chip\""),
         "Account / Sync should reuse the premium settings dialog shell with a summary hero, structured sections, readable rows, status chips, and action icons"
     );
 
