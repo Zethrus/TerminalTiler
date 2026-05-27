@@ -1565,6 +1565,14 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_SMOKE_PS1.contains("share\\terminaltiler.ico")
             && WINDOWS_SMOKE_PS1
                 .contains("share\\icons\\hicolor\\scalable\\apps\\terminaltiler.svg")
+            && WINDOWS_SMOKE_PS1.contains("function Assert-NsisIconMetadata")
+            && WINDOWS_SMOKE_PS1.contains("WScript.Shell")
+            && WINDOWS_SMOKE_PS1
+                .contains("TerminalTiler\\Uninstall TerminalTiler.lnk")
+            && WINDOWS_SMOKE_PS1.contains("IconLocation")
+            && WINDOWS_SMOKE_PS1.contains("DisplayIcon")
+            && WINDOWS_SMOKE_PS1
+                .contains("Assert-NsisIconMetadata -InstallRoot $NsisInstallRoot")
             && WINDOWS_PORTABLE_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("Icon \"${ICON_FILE}\"")
             && WINDOWS_INSTALLER_NSI.contains("UninstallIcon \"${ICON_FILE}\"")

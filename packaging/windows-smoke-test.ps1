@@ -88,6 +88,59 @@ function Assert-WindowsGtkRuntimePayload {
     Assert-Path -Path (Join-Path $PayloadRoot "share\themes") -Description "GTK runtime resource share\themes"
 }
 
+function Assert-NsisIconMetadata {
+    param([string]$InstallRoot)
+
+    $iconPath = Join-Path $InstallRoot "share\terminaltiler.ico"
+    Assert-Path -Path $iconPath -Description "Installed TerminalTiler Windows icon"
+
+    $programsPath = [Environment]::GetFolderPath("Programs")
+    if ([string]::IsNullOrWhiteSpace($programsPath)) {
+        throw "Could not resolve current-user Start Menu Programs folder"
+    }
+
+    $shell = $null
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        foreach ($shortcut in @(
+                @{
+                    Path = Join-Path $programsPath "TerminalTiler\TerminalTiler.lnk"
+                    Description = "TerminalTiler Start Menu shortcut"
+                },
+                @{
+                    Path = Join-Path $programsPath "TerminalTiler\Uninstall TerminalTiler.lnk"
+                    Description = "TerminalTiler uninstaller Start Menu shortcut"
+                }
+            )) {
+            $shortcutPath = $shortcut["Path"]
+            $shortcutDescription = $shortcut["Description"]
+            Assert-Path -Path $shortcutPath -Description $shortcutDescription
+            $shortcutMetadata = $shell.CreateShortcut($shortcutPath)
+            $shortcutIcon = ($shortcutMetadata.IconLocation -replace ',\d+$', '')
+            if ([string]::IsNullOrWhiteSpace($shortcutIcon)) {
+                throw "$shortcutDescription did not define IconLocation"
+            }
+            if ([System.IO.Path]::GetFullPath($shortcutIcon) -ne [System.IO.Path]::GetFullPath($iconPath)) {
+                throw "$shortcutDescription IconLocation '$($shortcutMetadata.IconLocation)' did not point at $iconPath"
+            }
+        }
+    }
+    finally {
+        if ($shell) {
+            [System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+        }
+    }
+
+    $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler"
+    if (-not (Test-Path $uninstallKey)) {
+        throw "TerminalTiler uninstall registry key was not found at $uninstallKey"
+    }
+    $displayIcon = (Get-ItemProperty -Path $uninstallKey -Name "DisplayIcon").DisplayIcon
+    if ([System.IO.Path]::GetFullPath($displayIcon) -ne [System.IO.Path]::GetFullPath($iconPath)) {
+        throw "TerminalTiler uninstall DisplayIcon '$displayIcon' did not point at $iconPath"
+    }
+}
+
 function Convert-ToTomlPath {
     param([string]$Path)
 
@@ -680,6 +733,7 @@ Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $NsisInstallRoot
 }
+Assert-NsisIconMetadata -InstallRoot $NsisInstallRoot
 
 Invoke-OptionalLaunchSmoke `
     -ExePath $InstalledExe `
