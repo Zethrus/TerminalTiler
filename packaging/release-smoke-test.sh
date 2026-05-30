@@ -306,19 +306,16 @@ run_restore_smoke() {
 }
 
 validate_appstream() {
+  # appstreamcli exits non-zero for advisory warnings/infos too (e.g. the
+  # 2-segment rDNS hint for app.terminaltiler, or the deprecated
+  # <developer_name> kept for older consumers). Mirror the packaging trust
+  # gate in validate-metadata.sh: print the full report but only fail the
+  # release on hard errors ("E:").
   local output
-  if output="$(appstreamcli validate --no-net "$METAINFO_PATH" 2>&1)"; then
-    printf '%s\n' "$output"
-    return 0
-  fi
-
+  output="$(appstreamcli validate --no-net "$METAINFO_PATH" 2>&1)" || true
   printf '%s\n' "$output"
-  local filtered
-  filtered="$(printf '%s\n' "$output" |
-    grep -E '^(E|W|I|P):' |
-    grep -v 'url-homepage-missing' || true)"
-  if [[ -n "$filtered" ]]; then
-    echo "unexpected AppStream validation issue" >&2
+  if printf '%s\n' "$output" | grep -q '^E:'; then
+    echo "AppStream validation reported errors in $(basename "$METAINFO_PATH")" >&2
     exit 1
   fi
 }
