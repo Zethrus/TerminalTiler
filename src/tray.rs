@@ -83,7 +83,7 @@ struct AppTray {
 
 impl ksni::Tray for AppTray {
     fn id(&self) -> String {
-        "dev.zethrus.terminaltiler".into()
+        crate::app::APP_ID.into()
     }
 
     fn title(&self) -> String {

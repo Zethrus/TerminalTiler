@@ -3,8 +3,10 @@ Version: 0.2.0
 Section: utils
 Priority: optional
 Architecture: amd64
-Maintainer: Zethrus
+Maintainer: BootKode Corp. <support@terminaltiler.app>
+Homepage: https://terminaltiler.app
 Depends: libc6 (>= @GLIBC_FLOOR@)
+XB-AppStream-Id: app.terminaltiler
 Description: Native tiling terminal workspace launcher
  TerminalTiler launches polished split-terminal workspaces with preset
  layouts, startup commands, and project-aware working directories.

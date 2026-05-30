@@ -36,7 +36,7 @@ CI pins Rust through `rust-toolchain.toml`/`dtolnay/rust-toolchain` to 1.92.0 wi
 ## Key conventions
 
 - Preserve the open-core boundary from `README.md` and `docs/core-boundary.md`: this public Core repo must stay buildable and useful without external code, external credentials, external services, or unpublished build steps.
-- Keep stable public identity unless there is a deliberate migration plan: display wording `TerminalTiler Core`, binary/package name `terminaltiler`, app ID/desktop ID `dev.zethrus.terminaltiler`, and existing config/state paths.
+- Keep stable public identity unless there is a deliberate migration plan: display wording `TerminalTiler Core`, binary/package name `terminaltiler`, icon theme name `terminaltiler`, app ID/desktop ID `app.terminaltiler` (AppStream component `app.terminaltiler`), publisher `BootKode Corp.`, and existing config/state paths.
 - Prefer shared model/service/storage modules for cross-platform behavior, then adapt platform presentation separately in `src/ui/` and `src/windows/`.
 - Serialized user-facing documents commonly use Serde kebab-case enums/fields, tagged enums with `#[serde(tag = "...", content = "...")]`, defaults for newly added fields, and aliases for migrations. Preserve backward compatibility when changing preset, preference, asset, session, or workspace config formats.
 - Store documents carry a `version` and should return explicit warnings or `io::Result` errors when config directories, reads, writes, or parsing fail. Do not silently ignore persistence failures; follow the existing logging and recovery-copy pattern.

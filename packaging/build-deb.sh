@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
+. "$ROOT_DIR/packaging/render-icons.sh"
+. "$ROOT_DIR/packaging/validate-metadata.sh"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 TARGET_BIN="$TARGET_DIR/release/terminaltiler"
@@ -34,12 +36,16 @@ echo "packaging Debian artifact version $PACKAGE_VERSION"
 rm -rf "$STAGE_ROOT"
 mkdir -p "$STAGE_ROOT/DEBIAN" "$APP_ROOT/bin" "$APP_ROOT/share/hover-icons" "$STAGE_ROOT/usr/bin" "$STAGE_ROOT/usr/share/applications" "$STAGE_ROOT/usr/share/icons/hicolor/scalable/apps" "$STAGE_ROOT/usr/share/metainfo"
 
+DESKTOP_FILE="$STAGE_ROOT/usr/share/applications/app.terminaltiler.desktop"
+METAINFO_FILE="$STAGE_ROOT/usr/share/metainfo/app.terminaltiler.metainfo.xml"
 cp "$ROOT_DIR/packaging/deb/DEBIAN/control" "$STAGE_ROOT/DEBIAN/control"
-cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.desktop" "$STAGE_ROOT/usr/share/applications/dev.zethrus.terminaltiler.desktop"
-cp "$ROOT_DIR/resources/terminaltiler.svg" "$STAGE_ROOT/usr/share/icons/hicolor/scalable/apps/terminaltiler.svg"
-cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.appdata.xml" "$STAGE_ROOT/usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
+cp "$ROOT_DIR/resources/app.terminaltiler.desktop" "$DESKTOP_FILE"
+cp "$ROOT_DIR/resources/app.terminaltiler.metainfo.xml" "$METAINFO_FILE"
+# Install raster + scalable icons under the stable "terminaltiler" theme name
+# so software centers can build their icon cache (SVG-only does not render).
+render_app_icons "$ROOT_DIR/resources/terminaltiler.svg" "$STAGE_ROOT/usr/share/icons/hicolor" "terminaltiler"
 set_control_version "$STAGE_ROOT/DEBIAN/control"
-set_appdata_release "$STAGE_ROOT/usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
+set_appdata_release "$METAINFO_FILE"
 cp "$TARGET_BIN" "$APP_ROOT/bin/terminaltiler-bin"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_ROOT/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_ROOT/bin/terminaltiler"
@@ -63,6 +69,8 @@ fi
 
 set_control_glibc_floor "$STAGE_ROOT/DEBIAN/control" "$GLIBC_FLOOR"
 chmod 0755 "$APP_ROOT/bin/terminaltiler-bin" "$APP_ROOT/bin/terminaltiler" "$STAGE_ROOT/usr/bin/terminaltiler"
+
+validate_app_metadata "$DESKTOP_FILE" "$METAINFO_FILE"
 
 rm -f "$OUTPUT_DEB"
 dpkg-deb --build "$STAGE_ROOT" "$OUTPUT_DEB"

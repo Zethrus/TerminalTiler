@@ -8,13 +8,16 @@ TERMINALTILER_LINUX_BUILD_PREREQS_LOADED=1
 
 linux_packaging_dependency_help() {
   local -a apt_packages=(
+    appstream
     build-essential
+    desktop-file-utils
     dpkg-dev
     libadwaita-1-dev
     libasound2-dev
     libgraphene-1.0-dev
     libgtk-4-dev
     libjavascriptcoregtk-6.0-dev
+    librsvg2-bin
     libsoup-3.0-dev
     libvte-2.91-gtk4-dev
     libwebkitgtk-6.0-dev
@@ -106,6 +109,15 @@ check_linux_packaging_dependencies() {
       missing_tools+=("$tool")
     fi
   done
+
+  # Icon rasterizer: software centers need raster PNG icons, rendered from the
+  # SVG by render-icons.sh. Any one of these renderers satisfies the build.
+  if ! command -v rsvg-convert >/dev/null 2>&1 \
+    && ! command -v inkscape >/dev/null 2>&1 \
+    && ! command -v magick >/dev/null 2>&1 \
+    && ! command -v convert >/dev/null 2>&1; then
+    missing_tools+=("an SVG rasterizer (install librsvg2-bin for rsvg-convert, or inkscape/imagemagick)")
+  fi
 
   case "$artifact_kind" in
     deb)

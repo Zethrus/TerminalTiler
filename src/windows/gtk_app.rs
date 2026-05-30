@@ -34,7 +34,7 @@ mod imp {
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
 
-    const GTK_APP_ID: &str = "dev.zethrus.terminaltiler.windows.gtk";
+    const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
     const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
 
     pub fn run() -> ExitCode {

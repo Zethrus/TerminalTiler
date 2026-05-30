@@ -11,7 +11,7 @@ SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-30s}"
 
 APPIMAGE_PATH="$(appimage_output_path)"
 DEB_PATH="$(deb_output_path)"
-METAINFO_PATH="$ROOT_DIR/resources/dev.zethrus.terminaltiler.appdata.xml"
+METAINFO_PATH="$ROOT_DIR/resources/app.terminaltiler.metainfo.xml"
 
 dump_smoke_logs() {
   local sandbox_root="$1"
@@ -351,8 +351,9 @@ mkdir -p "$BUILD_DIR/deb" "$BUILD_DIR/appimage"
 
 echo "==> checking Debian package payload"
 dpkg-deb -x "$DEB_PATH" "$BUILD_DIR/deb"
-test -f "$BUILD_DIR/deb/usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
-test -f "$BUILD_DIR/deb/usr/share/applications/dev.zethrus.terminaltiler.desktop"
+test -f "$BUILD_DIR/deb/usr/share/metainfo/app.terminaltiler.metainfo.xml"
+test -f "$BUILD_DIR/deb/usr/share/applications/app.terminaltiler.desktop"
+test -f "$BUILD_DIR/deb/usr/share/icons/hicolor/128x128/apps/terminaltiler.png"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libvte-2.91-gtk4.so.0"
@@ -372,8 +373,9 @@ fi
 echo "==> checking AppImage payload"
 cd "$BUILD_DIR/appimage"
 "$APPIMAGE_PATH" --appimage-extract >/dev/null
-test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
-test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/applications/dev.zethrus.terminaltiler.desktop"
+test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/metainfo/app.terminaltiler.metainfo.xml"
+test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/applications/app.terminaltiler.desktop"
+test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/icons/hicolor/128x128/apps/terminaltiler.png"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libvte-2.91-gtk4.so.0"

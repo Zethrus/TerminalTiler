@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
+. "$ROOT_DIR/packaging/render-icons.sh"
+. "$ROOT_DIR/packaging/validate-metadata.sh"
 
 APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppDir"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
@@ -43,11 +45,13 @@ mkdir -p "$APP_PREFIX/bin" "$APP_PREFIX/share/hover-icons" "$APP_PREFIX/share/ap
 cp "$TARGET_BIN" "$APP_PREFIX/bin/terminaltiler-bin"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_PREFIX/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_PREFIX/bin/terminaltiler"
-cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.desktop" "$APP_PREFIX/share/applications/dev.zethrus.terminaltiler.desktop"
-cp "$ROOT_DIR/resources/terminaltiler.svg" "$APP_PREFIX/share/icons/hicolor/scalable/apps/terminaltiler.svg"
-cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.appdata.xml" "$APP_PREFIX/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
-set_appdata_release "$APP_PREFIX/share/metainfo/dev.zethrus.terminaltiler.appdata.xml"
-cp "$ROOT_DIR/resources/dev.zethrus.terminaltiler.desktop" "$APPDIR/dev.zethrus.terminaltiler.desktop"
+DESKTOP_FILE="$APP_PREFIX/share/applications/app.terminaltiler.desktop"
+METAINFO_FILE="$APP_PREFIX/share/metainfo/app.terminaltiler.metainfo.xml"
+cp "$ROOT_DIR/resources/app.terminaltiler.desktop" "$DESKTOP_FILE"
+cp "$ROOT_DIR/resources/app.terminaltiler.metainfo.xml" "$METAINFO_FILE"
+render_app_icons "$ROOT_DIR/resources/terminaltiler.svg" "$APP_PREFIX/share/icons/hicolor" "terminaltiler"
+set_appdata_release "$METAINFO_FILE"
+cp "$ROOT_DIR/resources/app.terminaltiler.desktop" "$APPDIR/app.terminaltiler.desktop"
 cp "$ROOT_DIR/resources/terminaltiler.svg" "$APPDIR/terminaltiler.svg"
 cp "$ROOT_DIR/packaging/appimage/AppRun" "$APPDIR/AppRun"
 ln -sf terminaltiler.svg "$APPDIR/.DirIcon"
@@ -56,6 +60,8 @@ bash "$ROOT_DIR/packaging/bundle-runtime.sh" "$TARGET_BIN" "$APP_PREFIX"
 
 chmod +x "$APP_PREFIX/bin/terminaltiler" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
+
+validate_app_metadata "$DESKTOP_FILE" "$METAINFO_FILE"
 
 rm -f "$TEMP_APPIMAGE" "$OUTPUT_APPIMAGE"
 (

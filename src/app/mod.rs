@@ -13,7 +13,7 @@ use crate::storage::session_store::SessionStore;
 use crate::tray;
 use crate::ui::window;
 
-pub const APP_ID: &str = "dev.zethrus.terminaltiler";
+pub const APP_ID: &str = "app.terminaltiler";
 
 pub fn run() -> adw::glib::ExitCode {
     run_with_options(RuntimeOptions::default())

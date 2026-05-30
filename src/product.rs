@@ -4,7 +4,7 @@ pub const PRODUCT_HOMEPAGE: &str = "https://terminaltiler.app";
 pub const PRODUCT_SOURCE_URL: &str = "https://github.com/Zethrus/TerminalTiler";
 pub const PRODUCT_ISSUES_URL: &str = "https://github.com/Zethrus/TerminalTiler/issues";
 pub const PRODUCT_LICENSE: &str = "MIT License";
-pub const PRODUCT_COPYRIGHT: &str = "Copyright (c) 2026 Zethrus Victor";
+pub const PRODUCT_COPYRIGHT: &str = "Copyright (c) 2026 Victor (Zethrus)";
 
 pub const OPEN_CORE_STATEMENT: &str = "TerminalTiler Core is the public, MIT-licensed foundation of TerminalTiler. TerminalTiler follows an open-core product model: the core app stays public and useful, while this repository stays focused on the public desktop application. The public repository remains the source of truth for the open-source core.";
 
