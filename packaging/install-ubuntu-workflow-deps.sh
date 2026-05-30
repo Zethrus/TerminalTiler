@@ -6,12 +6,14 @@ sudo apt-get install -y \
   appstream \
   build-essential \
   dbus-x11 \
+  desktop-file-utils \
   dpkg-dev \
   libadwaita-1-dev \
   libasound2-dev \
   libgraphene-1.0-dev \
   libgtk-4-dev \
   libjavascriptcoregtk-6.0-dev \
+  librsvg2-bin \
   libsoup-3.0-dev \
   libvte-2.91-gtk4-dev \
   libwebkitgtk-6.0-dev \

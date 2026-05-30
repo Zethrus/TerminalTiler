@@ -3,15 +3,18 @@ FROM debian:13
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
+    appstream \
     build-essential \
     ca-certificates \
     curl \
+    desktop-file-utils \
     file \
     libadwaita-1-dev \
     libasound2-dev \
     libgraphene-1.0-dev \
     libgtk-4-dev \
     libjavascriptcoregtk-6.0-dev \
+    librsvg2-bin \
     libvte-2.91-gtk4-dev \
     libwebkitgtk-6.0-dev \
     libsoup-3.0-dev \
