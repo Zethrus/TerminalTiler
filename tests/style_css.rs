@@ -26,6 +26,7 @@ const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
+const RELEASE_SMOKE_TEST_SH: &str = include_str!("../packaging/release-smoke-test.sh");
 const RUNBOOK_CONTROLS_RS: &str = include_str!("../src/ui/runbook_controls.rs");
 const RUNBOOK_DIALOG_RS: &str = include_str!("../src/ui/runbook_dialog.rs");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
@@ -2051,6 +2052,13 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
     assert!(
         !PACKAGE_ARTIFACTS_YML.contains("\n  push:"),
         "Package Artifacts should not race CI by triggering directly on push"
+    );
+
+    assert!(
+        RELEASE_SMOKE_TEST_SH.contains(r#"SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-60s}""#)
+            && RELEASE_SMOKE_TEST_SH
+                .contains("did not complete restore within $SMOKE_LAUNCH_TIMEOUT"),
+        "Linux release smoke tests should leave enough hosted-runner budget after xvfb/dbus startup before declaring restore failed"
     );
 }
 
