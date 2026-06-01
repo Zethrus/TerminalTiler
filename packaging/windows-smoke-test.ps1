@@ -523,9 +523,6 @@ function Invoke-LaunchSmoke {
         if ($process.HasExited -and $process.ExitCode -ne 0) {
             throw "Process $ExePath exited with code $(Format-ExitCode -ExitCode $process.ExitCode)"
         }
-        if (-not $hasMainWindow) {
-            throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
-        }
 
         if ($expectGtkShell -and $ProfileKind -eq "clean-first-run") {
             $requiredPattern = "windows GTK shell loaded canonical GTK CSS"
@@ -542,6 +539,15 @@ function Invoke-LaunchSmoke {
         else {
             $requiredPattern = "opened 1 restored Windows workspace host window\(s\)"
         }
+
+        if (-not $hasMainWindow) {
+            if (-not $expectGtkShell) {
+                throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
+            }
+
+            Write-Host "$Label did not expose a Win32 MainWindowHandle before the smoke timeout; continuing with GTK session-log validation."
+        }
+
         $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
 
         Stop-ProcessTree -Process $process

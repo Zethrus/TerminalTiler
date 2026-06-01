@@ -1975,7 +1975,8 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1.contains("unexpectedly opened the legacy Win32 workspace host")
             && WINDOWS_SMOKE_PS1.contains("Test-ProcessTreeHasMainWindow")
             && WINDOWS_SMOKE_PS1
-                .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }"),
+                .contains("$mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }")
+            && WINDOWS_SMOKE_PS1.contains("continuing with GTK session-log validation."),
         "Windows smoke test should validate GTK startup/restored-runtime logs even for self-extracting portable launchers"
     );
     assert!(
