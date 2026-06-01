@@ -393,6 +393,23 @@ fn linux_workspace_reattach_reflows_existing_layout_tree() {
 }
 
 #[test]
+fn windows_gtk_workspace_tab_close_confirms_active_runtimes_like_linux() {
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("pub fn tab_has_active_processes(&self, index: usize)")
+            && WORKSPACE_PREVIEW_RS.contains("fn tab_runtime_surfaces(")
+            && WORKSPACE_PREVIEW_RS.contains("surface.active_process_checker")
+            && WINDOWS_GTK_APP_RS.contains("fn close_windows_preview_tab(")
+            && WINDOWS_GTK_APP_RS.contains("preview.tab_has_active_processes(index)")
+            && WINDOWS_GTK_APP_RS.contains("dialog_chrome::confirm_destructive_action")
+            && WINDOWS_GTK_APP_RS.contains("\"Close Workspace?\"")
+            && WINDOWS_GTK_APP_RS
+                .contains("\"Running terminal sessions in this workspace will be terminated.\"")
+            && WINDOWS_GTK_APP_RS.contains("fn close_windows_preview_tab_now("),
+        "Windows GTK title-tab close should use Linux's destructive workspace close confirmation before terminating active terminal runtimes"
+    );
+}
+
+#[test]
 fn voice_pack_install_uses_inline_progress_replacement() {
     assert!(
         SETTINGS_DIALOG_RS.contains("fn build_voice_pack_install_row")

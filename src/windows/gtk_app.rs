@@ -1577,46 +1577,16 @@ mod imp {
                         let fullscreen_button = fullscreen_button.clone();
                         let shell_state = shell_state.clone();
                         move || {
-                            let preview = shell_state.preview.borrow().clone();
-                            let Some(preview) = preview else {
-                                return;
-                            };
-                            if !preview.close_tab(index) {
-                                return;
-                            }
-                            if preview.snapshot().tabs.is_empty() {
-                                *shell_state.preview.borrow_mut() = None;
-                                show_launch_deck_tab(
-                                    &window,
-                                    &overlay,
-                                    &title,
-                                    &launch,
-                                    &back_button,
-                                    &fullscreen_button,
-                                    &shell_state,
-                                );
-                            } else if shell_state.launch_deck_active.get() {
-                                show_launch_deck_tab(
-                                    &window,
-                                    &overlay,
-                                    &title,
-                                    &launch,
-                                    &back_button,
-                                    &fullscreen_button,
-                                    &shell_state,
-                                );
-                            } else {
-                                show_workspace_preview_tab(
-                                    &window,
-                                    &overlay,
-                                    &title,
-                                    &launch,
-                                    &back_button,
-                                    &fullscreen_button,
-                                    &shell_state,
-                                    preview.active_index(),
-                                );
-                            }
+                            close_windows_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                index,
+                            );
                         }
                     })),
                 });
@@ -1624,6 +1594,116 @@ mod imp {
         }
 
         sync_windows_title_tabs(title, tabs);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn close_windows_preview_tab(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        index: usize,
+    ) {
+        let Some(preview) = shell_state.preview.borrow().clone() else {
+            return;
+        };
+
+        if preview.tab_has_active_processes(index) {
+            let confirm_window = window.clone();
+            let window = confirm_window.clone();
+            let overlay = overlay.clone();
+            let title = title.clone();
+            let launch = launch.clone();
+            let back_button = back_button.clone();
+            let fullscreen_button = fullscreen_button.clone();
+            let shell_state = shell_state.clone();
+            dialog_chrome::confirm_destructive_action(
+                &confirm_window,
+                "Close Workspace?",
+                "Running terminal sessions in this workspace will be terminated.",
+                "Close",
+                move || {
+                    close_windows_preview_tab_now(
+                        &window,
+                        &overlay,
+                        &title,
+                        &launch,
+                        &back_button,
+                        &fullscreen_button,
+                        &shell_state,
+                        index,
+                    );
+                },
+            );
+            return;
+        }
+
+        close_windows_preview_tab_now(
+            window,
+            overlay,
+            title,
+            launch,
+            back_button,
+            fullscreen_button,
+            shell_state,
+            index,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn close_windows_preview_tab_now(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        index: usize,
+    ) {
+        let preview = shell_state.preview.borrow().clone();
+        let Some(preview) = preview else {
+            return;
+        };
+        if !preview.close_tab(index) {
+            return;
+        }
+        if preview.snapshot().tabs.is_empty() {
+            *shell_state.preview.borrow_mut() = None;
+            show_launch_deck_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+        } else if shell_state.launch_deck_active.get() {
+            show_launch_deck_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+        } else {
+            show_workspace_preview_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+                preview.active_index(),
+            );
+        }
     }
 
     fn present_workspace_preview_from_launch(

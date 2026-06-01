@@ -279,6 +279,13 @@ impl SessionPreview {
         }
     }
 
+    pub fn tab_has_active_processes(&self, index: usize) -> bool {
+        tab_runtime_surfaces(&self.session.borrow(), &self.runtime_surfaces, index)
+            .into_iter()
+            .filter_map(|surface| surface.active_process_checker)
+            .any(|is_active| is_active())
+    }
+
     pub fn rename_tab(&self, index: usize, requested_title: Option<String>) -> bool {
         let mut session = self.session.borrow_mut();
         let Some(tab) = session.tabs.get_mut(index) else {
@@ -693,6 +700,27 @@ fn runtime_surface_key(tab_index: usize, tab: &SavedTab, tile: &TileSpec) -> Str
         tab.preset.id,
         tile.id
     )
+}
+
+fn tab_runtime_surfaces(
+    session: &SavedSession,
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    index: usize,
+) -> Vec<TileRuntimeSurface> {
+    let Some(tab) = session.tabs.get(index) else {
+        return Vec::new();
+    };
+    let surfaces = runtime_surfaces.borrow();
+    tab.preset
+        .layout
+        .tile_specs()
+        .into_iter()
+        .filter_map(|tile| {
+            surfaces
+                .get(&runtime_surface_key(index, tab, &tile))
+                .cloned()
+        })
+        .collect()
 }
 
 fn detach_from_previous_parent(widget: &gtk::Widget) {
