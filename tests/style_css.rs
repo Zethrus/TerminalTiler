@@ -1697,9 +1697,12 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)")
             && WINDOWS_GTK_APP_RS
                 .contains("const WINDOWS_APP_USER_MODEL_ID: &str = \"Zethrus.TerminalTiler\"")
-            && WINDOWS_GTK_APP_RS.contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
             && WINDOWS_GTK_APP_RS
-                .contains(".app_id\n            .as_deref()\n            .unwrap_or(WINDOWS_APP_USER_MODEL_ID)")
+                .contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
+            && source_contains(
+                WINDOWS_GTK_APP_RS,
+                ".app_id\n            .as_deref()\n            .unwrap_or(WINDOWS_APP_USER_MODEL_ID)",
+            )
             && WINDOWS_GTK_APP_RS
                 .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
             && CARGO_TOML.contains("\"Win32_UI_Shell\""),
