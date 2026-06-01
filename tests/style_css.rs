@@ -800,8 +800,14 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState")
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState::new(session_store.clone())")
             && WINDOWS_GTK_APP_RS.contains("window.connect_close_request")
+            && WINDOWS_GTK_APP_RS.contains("let force_quit_requested = Rc::new(Cell::new(false))")
+            && WINDOWS_GTK_APP_RS.contains("dialog_chrome::confirm_destructive_action")
+            && DIALOG_CHROME_RS.contains("pub(crate) fn confirm_destructive_action")
+            && WINDOWS_GTK_APP_RS.contains("glib::Propagation::Stop")
             && WINDOWS_GTK_APP_RS.contains("save_preview_session")
             && WINDOWS_GTK_APP_RS.contains("terminate_preview_runtimes")
+            && WINDOWS_GTK_APP_RS.contains("gio::SimpleAction::new(\"quit-app\", None)")
+            && WINDOWS_GTK_APP_RS.contains("window_for_quit_action.close()")
             && WINDOWS_GTK_APP_RS.contains("persist_windows_gtk_session")
             && WINDOWS_GTK_APP_RS.contains("session_store.save(session)")
             && WINDOWS_GTK_APP_RS.contains("session_store.clear()")
@@ -1193,8 +1199,8 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     for token in [
         "use crate::ui::{",
-        "about_dialog, assets_manager, command_palette, companion_dialog, dialog_smoke",
-        "settings_dialog, tab_rename_dialog",
+        "about_dialog, assets_manager, command_palette, companion_dialog, dialog_chrome",
+        "dialog_smoke, settings_dialog, tab_rename_dialog",
         "ShortcutControllerHandle",
         "present_command_palette",
         "command_palette::PaletteAction",
@@ -1808,7 +1814,8 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-delete-preset-dialog\")")
             && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-folder-picker-dialog\")")
             && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-save-preset-dialog\")")
-            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"destructive-confirm-dialog\")")
+            && DIALOG_CHROME_RS.contains("sync_dialog_chrome_classes(window, &dialog, \"destructive-confirm-dialog\")")
+            && WINDOW_RS.contains("dialog_chrome::confirm_destructive_action")
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-close-confirm-dialog\")")
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"session-resume-dialog\")")
             && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"startup-notice-dialog\")")

@@ -26,8 +26,8 @@ mod imp {
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
-        about_dialog, assets_manager, command_palette, companion_dialog, dialog_smoke,
-        settings_dialog, tab_rename_dialog,
+        about_dialog, assets_manager, command_palette, companion_dialog, dialog_chrome,
+        dialog_smoke, settings_dialog, tab_rename_dialog,
     };
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
@@ -220,17 +220,35 @@ mod imp {
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
         let shell_state = WindowsGtkShellState::new(session_store.clone());
+        let force_quit_requested = Rc::new(Cell::new(false));
         shell_state.launch_deck_active.set(true);
         {
             let shell_state = shell_state.clone();
-            window.connect_close_request(move |_| {
-                if shell_state.has_active_processes() {
-                    logging::info(
-                        "Windows GTK shell closing with active terminal runtimes; terminating preview runtimes",
-                    );
+            let force_quit_requested = force_quit_requested.clone();
+            window.connect_close_request(move |window| {
+                if force_quit_requested.replace(false) {
+                    shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
+                    return glib::Propagation::Proceed;
                 }
-                shell_state.save_preview_session("closing Windows GTK application");
-                shell_state.terminate_preview_runtimes("closing Windows GTK application");
+
+                if shell_state.has_active_processes() {
+                    let confirm_window = window.clone();
+                    let window_for_confirm = confirm_window.clone();
+                    let force_quit_requested = force_quit_requested.clone();
+                    dialog_chrome::confirm_destructive_action(
+                        &confirm_window,
+                        "Quit Application?",
+                        "One or more terminal sessions are still running. Quitting TerminalTiler now will close the application immediately even if those processes are still active.",
+                        "Quit Application",
+                        move || {
+                            force_quit_requested.set(true);
+                            window_for_confirm.close();
+                        },
+                    );
+                    return glib::Propagation::Stop;
+                }
+
+                shutdown_windows_gtk_shell(&shell_state, "closing Windows GTK application");
                 glib::Propagation::Proceed
             });
         }
@@ -501,6 +519,12 @@ mod imp {
                 let open_settings_dialog = open_settings_dialog.clone();
                 let action = gio::SimpleAction::new("open-settings", None);
                 action.connect_activate(move |_, _| open_settings_dialog());
+                window.add_action(&action);
+            }
+            {
+                let window_for_quit_action = window.clone();
+                let action = gio::SimpleAction::new("quit-app", None);
+                action.connect_activate(move |_, _| window_for_quit_action.close());
                 window.add_action(&action);
             }
         }
@@ -1167,6 +1191,16 @@ mod imp {
         app.windows()
             .into_iter()
             .find_map(|window| window.downcast::<adw::ApplicationWindow>().ok())
+    }
+
+    fn shutdown_windows_gtk_shell(shell_state: &WindowsGtkShellState, reason: &str) {
+        if shell_state.has_active_processes() {
+            logging::info(format!(
+                "Windows GTK shell closing with active terminal runtimes; terminating preview runtimes: {reason}",
+            ));
+        }
+        shell_state.save_preview_session(reason);
+        shell_state.terminate_preview_runtimes(reason);
     }
 
     fn sync_windows_fullscreen_chrome(

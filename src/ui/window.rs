@@ -3020,7 +3020,7 @@ fn present_with_initial_workspace(
                 let session_store = session_store_for_quit_action.clone();
                 let active_tab_id = active_for_quit_action.clone();
                 let force_quit_requested = force_quit_requested.clone();
-                confirm_destructive_action(
+                dialog_chrome::confirm_destructive_action(
                     &window_for_quit_action,
                     "Quit Application?",
                     "One or more terminal sessions are still running. Quitting TerminalTiler now will close the application immediately even if those processes are still active.",
@@ -3162,7 +3162,7 @@ fn present_with_initial_workspace(
         };
 
         if is_workspace {
-            confirm_destructive_action(
+            dialog_chrome::confirm_destructive_action(
                 &window_for_back,
                 "Return to Templates?",
                 "Running terminal sessions in this workspace will be terminated.",
@@ -3208,7 +3208,7 @@ fn present_with_initial_workspace(
                 let session_store = session_store.clone();
                 let active_tab_id = active_for_save.clone();
                 let force_quit_requested = force_quit_requested.clone();
-                confirm_destructive_action(
+                dialog_chrome::confirm_destructive_action(
                     &confirm_window,
                     "Quit Application?",
                     "One or more terminal sessions are still running. Quitting TerminalTiler now will close the application immediately even if those processes are still active.",
@@ -5486,7 +5486,7 @@ fn present_detached_workspace_window(
                 let window = window.clone();
                 let window_for_confirm = window.clone();
                 let force_close = force_close_for_confirm.clone();
-                confirm_destructive_action(
+                dialog_chrome::confirm_destructive_action(
                     &window,
                     "Close Detached Workspace?",
                     "Running terminal sessions in this detached workspace will be terminated.",
@@ -5695,39 +5695,6 @@ fn force_quit_application(
     } else {
         window.close();
     }
-}
-
-fn confirm_destructive_action<F>(
-    window: &adw::ApplicationWindow,
-    heading: &str,
-    body: &str,
-    confirm_label: &str,
-    on_confirm: F,
-) where
-    F: Fn() + 'static,
-{
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "destructive-confirm-dialog");
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("confirm", confirm_label);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "confirm" {
-            on_confirm();
-        }
-        dialog.close();
-    });
-
-    dialog.present();
 }
 
 fn confirm_tab_close<F>(

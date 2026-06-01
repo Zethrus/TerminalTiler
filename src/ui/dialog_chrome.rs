@@ -34,6 +34,39 @@ pub(crate) fn sync_popover_chrome_classes(
     sync_dialog_chrome_classes(parent, popover, surface_class);
 }
 
+pub(crate) fn confirm_destructive_action<F>(
+    window: &adw::ApplicationWindow,
+    heading: &str,
+    body: &str,
+    confirm_label: &str,
+    on_confirm: F,
+) where
+    F: Fn() + 'static,
+{
+    let dialog = adw::MessageDialog::builder()
+        .modal(true)
+        .transient_for(window)
+        .heading(heading)
+        .body(body)
+        .build();
+    sync_dialog_chrome_classes(window, &dialog, "destructive-confirm-dialog");
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("confirm", confirm_label);
+    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "confirm" {
+            on_confirm();
+        }
+        dialog.close();
+    });
+
+    dialog.present();
+}
+
 fn source_has_chrome_class(source: &gtk::Widget, class_name: &str) -> bool {
     source.has_css_class(class_name)
         || source
