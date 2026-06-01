@@ -83,6 +83,11 @@ pub type TileRuntimeFactory =
     Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
 pub type SessionChangeHandler = Rc<dyn Fn(SavedSession, &'static str)>;
 
+pub struct DetachedPreviewTab {
+    tab: SavedTab,
+    runtime_surfaces: HashMap<String, TileRuntimeSurface>,
+}
+
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
 
@@ -191,6 +196,24 @@ impl SessionPreview {
         runtime_factory: Option<TileRuntimeFactory>,
         on_session_changed: Option<SessionChangeHandler>,
     ) -> Self {
+        Self::with_runtime_parts(
+            session,
+            show_inline_tab_strip,
+            assets,
+            runtime_factory,
+            on_session_changed,
+            Rc::new(RefCell::new(HashMap::new())),
+        )
+    }
+
+    fn with_runtime_parts(
+        session: &SavedSession,
+        show_inline_tab_strip: bool,
+        assets: WorkspaceAssets,
+        runtime_factory: Option<TileRuntimeFactory>,
+        on_session_changed: Option<SessionChangeHandler>,
+        runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    ) -> Self {
         let session = Rc::new(RefCell::new(session.clone()));
         let assets = Rc::new(assets);
         let initial_active_index = {
@@ -210,7 +233,7 @@ impl SessionPreview {
             active_index,
             show_inline_tab_strip,
             runtime_factory,
-            runtime_surfaces: Rc::new(RefCell::new(HashMap::new())),
+            runtime_surfaces,
             on_session_changed,
             alert_store: AlertStore::default(),
         };
@@ -283,6 +306,72 @@ impl SessionPreview {
         } else {
             false
         }
+    }
+
+    pub fn detach_tab_as_preview(
+        &self,
+        index: usize,
+        on_session_changed: Option<SessionChangeHandler>,
+    ) -> Option<Self> {
+        let (detached_tab, key_update) =
+            detach_tab_in_preview_state(&self.session, &self.active_index, index)?;
+        let detached_runtime_surfaces =
+            detach_runtime_surfaces_for_tab(&self.runtime_surfaces, &detached_tab, key_update);
+        self.notify_session_changed("workspace preview tab detached");
+        self.render();
+
+        Some(Self::from_detached_tab(
+            DetachedPreviewTab {
+                tab: detached_tab,
+                runtime_surfaces: detached_runtime_surfaces,
+            },
+            self.assets.as_ref().clone(),
+            self.runtime_factory.clone(),
+            on_session_changed,
+        ))
+    }
+
+    pub fn take_single_tab_for_transfer(&self) -> Option<DetachedPreviewTab> {
+        let tab = {
+            let mut session = self.session.borrow_mut();
+            if session.tabs.len() != 1 {
+                return None;
+            }
+            session.active_tab_index = 0;
+            session.tabs.pop()?
+        };
+        self.active_index.set(0);
+        let runtime_surfaces = take_runtime_surfaces_for_tab(&self.runtime_surfaces, 0, &tab);
+        self.notify_session_changed("detached workspace preview tab transferred");
+        self.render();
+        Some(DetachedPreviewTab {
+            tab,
+            runtime_surfaces,
+        })
+    }
+
+    pub fn push_detached_tab(&self, detached_tab: DetachedPreviewTab) -> usize {
+        let DetachedPreviewTab {
+            tab,
+            runtime_surfaces: mut detached_runtime_surfaces,
+        } = detached_tab;
+        let next_index = {
+            let mut session = self.session.borrow_mut();
+            session.tabs.push(tab.clone());
+            let next_index = session.tabs.len() - 1;
+            session.active_tab_index = next_index;
+            next_index
+        };
+        self.active_index.set(next_index);
+        insert_runtime_surfaces_for_tab(
+            &self.runtime_surfaces,
+            &tab,
+            next_index,
+            &mut detached_runtime_surfaces,
+        );
+        self.notify_session_changed("detached workspace preview tab reattached");
+        self.render();
+        next_index
     }
 
     pub fn move_tab(&self, index: usize, position: usize) -> bool {
@@ -504,6 +593,30 @@ impl SessionPreview {
     fn notify_session_changed(&self, reason: &'static str) {
         notify_session_changed(&self.on_session_changed, &self.session, reason);
     }
+
+    fn from_detached_tab(
+        detached_tab: DetachedPreviewTab,
+        assets: WorkspaceAssets,
+        runtime_factory: Option<TileRuntimeFactory>,
+        on_session_changed: Option<SessionChangeHandler>,
+    ) -> Self {
+        let DetachedPreviewTab {
+            tab,
+            runtime_surfaces,
+        } = detached_tab;
+        let session = SavedSession {
+            tabs: vec![tab],
+            active_tab_index: 0,
+        };
+        Self::with_runtime_parts(
+            &session,
+            false,
+            assets,
+            runtime_factory,
+            on_session_changed,
+            Rc::new(RefCell::new(runtime_surfaces)),
+        )
+    }
 }
 
 fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
@@ -548,6 +661,41 @@ fn close_tab_in_preview_state(
             removed_index,
         ),
     })
+}
+
+fn detach_tab_in_preview_state(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    index: usize,
+) -> Option<(SavedTab, RuntimeSurfaceKeyUpdate)> {
+    let mut session = session.borrow_mut();
+    if session.tabs.len() <= 1 {
+        return None;
+    }
+
+    let before_tabs = session.tabs.clone();
+    let removed_index = index.min(session.tabs.len() - 1);
+    let removed_tab = session.tabs.remove(removed_index);
+    let current_active_index = active_index.get();
+    let next_index = if current_active_index == removed_index {
+        removed_index.min(session.tabs.len() - 1)
+    } else if current_active_index > removed_index {
+        current_active_index - 1
+    } else {
+        current_active_index.min(session.tabs.len() - 1)
+    };
+    session.active_tab_index = next_index;
+    active_index.set(next_index);
+
+    let key_update = RuntimeSurfaceKeyUpdate {
+        stale_keys: runtime_surface_keys_for_tab(removed_index, &removed_tab),
+        key_moves: runtime_surface_key_moves_after_tab_close(
+            &before_tabs,
+            &session.tabs,
+            removed_index,
+        ),
+    };
+    Some((removed_tab, key_update))
 }
 
 fn move_tab_in_preview_state(
@@ -793,6 +941,25 @@ fn runtime_surface_keys_for_tab(tab_index: usize, tab: &SavedTab) -> Vec<String>
         .collect()
 }
 
+fn runtime_surface_key_moves_for_tab_index(
+    tab: &SavedTab,
+    old_index: usize,
+    new_index: usize,
+) -> Vec<(String, String)> {
+    tab.preset
+        .layout
+        .tile_specs()
+        .into_iter()
+        .map(|tile| {
+            (
+                runtime_surface_key(old_index, tab, &tile),
+                runtime_surface_key(new_index, tab, &tile),
+            )
+        })
+        .filter(|(old_key, new_key)| old_key != new_key)
+        .collect()
+}
+
 fn runtime_surface_key_moves_after_tab_close(
     before_tabs: &[SavedTab],
     after_tabs: &[SavedTab],
@@ -857,6 +1024,70 @@ fn runtime_surface_key_moves_for_tab_reorder(
         .flatten()
         .filter(|(old_key, new_key)| old_key != new_key)
         .collect()
+}
+
+fn detach_runtime_surfaces_for_tab(
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    detached_tab: &SavedTab,
+    key_update: RuntimeSurfaceKeyUpdate,
+) -> HashMap<String, TileRuntimeSurface> {
+    let RuntimeSurfaceKeyUpdate {
+        stale_keys,
+        key_moves,
+    } = key_update;
+    let mut surfaces = runtime_surfaces.borrow_mut();
+    let mut detached_surfaces = HashMap::new();
+    for (old_key, new_key) in stale_keys
+        .into_iter()
+        .zip(runtime_surface_keys_for_tab(0, detached_tab))
+    {
+        if let Some(surface) = surfaces.remove(&old_key) {
+            detached_surfaces.insert(new_key, surface);
+        }
+    }
+
+    let mut moved_surfaces = Vec::new();
+    for (old_key, new_key) in key_moves {
+        if let Some(surface) = surfaces.remove(&old_key) {
+            moved_surfaces.push((new_key, surface));
+        }
+    }
+    for (new_key, surface) in moved_surfaces {
+        surfaces.insert(new_key, surface);
+    }
+
+    detached_surfaces
+}
+
+fn take_runtime_surfaces_for_tab(
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    tab_index: usize,
+    tab: &SavedTab,
+) -> HashMap<String, TileRuntimeSurface> {
+    let mut surfaces = runtime_surfaces.borrow_mut();
+    runtime_surface_keys_for_tab(tab_index, tab)
+        .into_iter()
+        .filter_map(|key| surfaces.remove(&key).map(|surface| (key, surface)))
+        .collect()
+}
+
+fn insert_runtime_surfaces_for_tab(
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    tab: &SavedTab,
+    tab_index: usize,
+    detached_runtime_surfaces: &mut HashMap<String, TileRuntimeSurface>,
+) {
+    let mut surfaces = runtime_surfaces.borrow_mut();
+    for (old_key, new_key) in runtime_surface_key_moves_for_tab_index(tab, 0, tab_index) {
+        if let Some(surface) = detached_runtime_surfaces.remove(&old_key) {
+            surfaces.insert(new_key, surface);
+        }
+    }
+    if tab_index == 0 {
+        for (key, surface) in detached_runtime_surfaces.drain() {
+            surfaces.insert(key, surface);
+        }
+    }
 }
 
 fn apply_runtime_surface_key_update(
@@ -2243,4 +2474,127 @@ fn build_empty_state() -> gtk::Widget {
         .css_classes(["workspace-summary-subtitle"])
         .build()
         .upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{detach_tab_in_preview_state, runtime_surface_keys_for_tab};
+    use crate::model::layout::{SplitAxis, WorkingDirectory, split, tile};
+    use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
+    use crate::storage::session_store::{SavedSession, SavedTab};
+    use std::cell::{Cell, RefCell};
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    fn test_tab(preset_id: &str, tile_ids: &[&str]) -> SavedTab {
+        let layout = match tile_ids {
+            [only] => tile(
+                only,
+                only,
+                "Shell",
+                "accent-cyan",
+                WorkingDirectory::WorkspaceRoot,
+                None,
+            ),
+            [first, second] => split(
+                SplitAxis::Horizontal,
+                0.5,
+                tile(
+                    first,
+                    first,
+                    "Shell",
+                    "accent-cyan",
+                    WorkingDirectory::WorkspaceRoot,
+                    None,
+                ),
+                tile(
+                    second,
+                    second,
+                    "Shell",
+                    "accent-cyan",
+                    WorkingDirectory::WorkspaceRoot,
+                    None,
+                ),
+            ),
+            _ => panic!("test helper supports one or two tiles"),
+        };
+
+        SavedTab {
+            preset: WorkspacePreset {
+                id: preset_id.into(),
+                name: preset_id.into(),
+                description: String::new(),
+                tags: Vec::new(),
+                root_label: "Workspace root".into(),
+                workspace_root: None,
+                theme: ThemeMode::System,
+                density: ApplicationDensity::Standard,
+                layout,
+            },
+            workspace_root: PathBuf::from(format!("/tmp/{preset_id}")),
+            custom_title: None,
+            terminal_zoom_steps: 0,
+        }
+    }
+
+    #[test]
+    fn detach_preview_tab_preserves_following_surface_key_moves() {
+        let first = test_tab("first", &["a"]);
+        let detached = test_tab("detached", &["b1", "b2"]);
+        let following = test_tab("following", &["c"]);
+        let session = Rc::new(RefCell::new(SavedSession {
+            tabs: vec![first.clone(), detached.clone(), following.clone()],
+            active_tab_index: 2,
+        }));
+        let active_index = Rc::new(Cell::new(2));
+
+        let (removed_tab, key_update) =
+            detach_tab_in_preview_state(&session, &active_index, 1).expect("detaches middle tab");
+
+        assert_eq!(removed_tab.preset.id, "detached");
+        assert_eq!(
+            session
+                .borrow()
+                .tabs
+                .iter()
+                .map(|tab| tab.preset.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "following"]
+        );
+        assert_eq!(session.borrow().active_tab_index, 1);
+        assert_eq!(active_index.get(), 1);
+        assert_eq!(
+            key_update.stale_keys,
+            runtime_surface_keys_for_tab(1, &detached)
+        );
+        assert_eq!(
+            key_update.key_moves,
+            vec![(
+                runtime_surface_keys_for_tab(2, &following)
+                    .into_iter()
+                    .next()
+                    .expect("following tab has a tile"),
+                runtime_surface_keys_for_tab(1, &following)
+                    .into_iter()
+                    .next()
+                    .expect("following tab has a tile"),
+            )]
+        );
+    }
+
+    #[test]
+    fn detach_preview_tab_keeps_single_tab_sessions_intact() {
+        let only = test_tab("only", &["a"]);
+        let session = Rc::new(RefCell::new(SavedSession {
+            tabs: vec![only.clone()],
+            active_tab_index: 0,
+        }));
+        let active_index = Rc::new(Cell::new(0));
+
+        assert!(detach_tab_in_preview_state(&session, &active_index, 0).is_none());
+        assert_eq!(session.borrow().tabs.len(), 1);
+        assert_eq!(session.borrow().tabs[0].preset.id, "only");
+        assert_eq!(session.borrow().active_tab_index, 0);
+        assert_eq!(active_index.get(), 0);
+    }
 }

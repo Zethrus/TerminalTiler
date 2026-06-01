@@ -20,15 +20,15 @@ mod imp {
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
     use crate::ui::app_chrome::{
-        build_app_header_chrome, build_main_titlebar_actions, build_window_shell,
-        sync_workspace_fullscreen_chrome,
+        apply_app_headerbar_class, build_app_header_chrome, build_main_titlebar_actions,
+        build_window_shell, sync_workspace_fullscreen_chrome,
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
-        about_dialog, assets_manager, command_palette, companion_dialog, dialog_chrome,
-        dialog_smoke, settings_dialog, tab_rename_dialog,
+        about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
+        dialog_chrome, dialog_smoke, settings_dialog, tab_rename_dialog,
     };
     use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
@@ -1512,11 +1512,13 @@ mod imp {
             on_rename: None,
             on_close: None,
             on_reorder: None,
+            on_detach: None,
         });
 
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
             let session = preview.snapshot();
             let active_index = preview.active_index();
+            let can_detach = session.tabs.len() > 1;
             for (index, tab) in session.tabs.iter().enumerate() {
                 let label = tab
                     .custom_title
@@ -1615,6 +1617,31 @@ mod imp {
                             );
                         }
                     })),
+                    on_detach: if can_detach {
+                        Some(Rc::new({
+                            let window = window.clone();
+                            let overlay = overlay.clone();
+                            let title = title.clone();
+                            let launch = launch.clone();
+                            let back_button = back_button.clone();
+                            let fullscreen_button = fullscreen_button.clone();
+                            let shell_state = shell_state.clone();
+                            move || {
+                                detach_windows_preview_tab(
+                                    &window,
+                                    &overlay,
+                                    &title,
+                                    &launch,
+                                    &back_button,
+                                    &fullscreen_button,
+                                    &shell_state,
+                                    index,
+                                );
+                            }
+                        }) as Rc<dyn Fn()>)
+                    } else {
+                        None
+                    },
                 });
             }
         }
@@ -1724,6 +1751,266 @@ mod imp {
                 preview.active_index(),
             );
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn detach_windows_preview_tab(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        index: usize,
+    ) {
+        let Some(app) = window
+            .application()
+            .and_then(|app| app.downcast::<adw::Application>().ok())
+        else {
+            return;
+        };
+        let Some(preview) = shell_state.preview.borrow().clone() else {
+            return;
+        };
+        let Some(detached_preview) = preview.detach_tab_as_preview(index, None) else {
+            return;
+        };
+        let detached_title = detached_preview
+            .tab_title(0)
+            .unwrap_or_else(|| "Detached Workspace".into());
+
+        logging::info(format!(
+            "Windows GTK shell detached workspace tab {index} to a new window",
+        ));
+        overlay.add_toast(adw::Toast::new("Workspace detached to a new window"));
+
+        if shell_state.launch_deck_active.get() {
+            sync_windows_shell_title_tabs(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+        } else {
+            show_workspace_preview_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+                preview.active_index(),
+            );
+        }
+
+        present_detached_windows_preview_window(
+            &app,
+            window,
+            overlay,
+            title,
+            launch,
+            back_button,
+            fullscreen_button,
+            shell_state,
+            detached_preview,
+            &detached_title,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn present_detached_windows_preview_window(
+        app: &adw::Application,
+        origin_window: &adw::ApplicationWindow,
+        origin_overlay: &adw::ToastOverlay,
+        origin_title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        detached_preview: crate::ui::workspace_preview::SessionPreview,
+        detached_title: &str,
+    ) {
+        let header = adw::HeaderBar::new();
+        header.set_show_start_title_buttons(true);
+        header.set_show_end_title_buttons(true);
+        apply_app_headerbar_class(&header);
+
+        let title_label = gtk::Label::builder()
+            .label(detached_title)
+            .single_line_mode(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        let title_shell = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(0)
+            .build();
+        title_shell.append(&title_label);
+        header.set_title_widget(Some(&title_shell));
+
+        let detached_fullscreen_button = crate::ui::icons::labeled_button(
+            "Fullscreen",
+            crate::ui::icons::name::FULLSCREEN,
+            &["flat"],
+        );
+        header.pack_end(&detached_fullscreen_button);
+        let reattach_button = crate::ui::icons::labeled_button(
+            "Reattach",
+            crate::ui::icons::name::RESTORE,
+            &["flat"],
+        );
+        reattach_button.set_tooltip_text(Some("Reattach workspace to the main tab strip"));
+        header.pack_end(&reattach_button);
+
+        let detached_window_shell = build_window_shell();
+        detached_window_shell.append(&header);
+        detached_window_shell.append(&detached_preview.widget());
+
+        let detached_window = adw::ApplicationWindow::builder()
+            .application(app)
+            .title(detached_title)
+            .icon_name(crate::gtk_shell::APP_ICON_NAME)
+            .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
+            .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
+            .resizable(true)
+            .content(&detached_window_shell)
+            .build();
+        detached_window.add_css_class("window-shell");
+        detached_window.add_css_class("windows-gtk-shell");
+        apply_active_preview_profile(&detached_window, &detached_preview);
+        sync_windows_fullscreen_chrome(
+            &detached_window,
+            title_shell.upcast_ref(),
+            &detached_fullscreen_button,
+            true,
+        );
+
+        {
+            let detached_window = detached_window.clone();
+            detached_fullscreen_button.connect_clicked(move |_| {
+                detached_window.set_fullscreened(!detached_window.is_fullscreen());
+            });
+        }
+        {
+            let detached_window = detached_window.clone();
+            let title_shell = title_shell.clone();
+            let detached_fullscreen_button = detached_fullscreen_button.clone();
+            detached_window.connect_fullscreened_notify(move |window| {
+                sync_windows_fullscreen_chrome(
+                    window,
+                    title_shell.upcast_ref(),
+                    &detached_fullscreen_button,
+                    true,
+                );
+            });
+        }
+
+        let reattaching = Rc::new(Cell::new(false));
+        let do_reattach: Rc<dyn Fn()> = Rc::new({
+            let detached_preview = detached_preview.clone();
+            let detached_window = detached_window.clone();
+            let origin_window = origin_window.clone();
+            let origin_overlay = origin_overlay.clone();
+            let origin_title = origin_title.clone();
+            let launch = launch.clone();
+            let back_button = back_button.clone();
+            let fullscreen_button = fullscreen_button.clone();
+            let shell_state = shell_state.clone();
+            let reattaching = reattaching.clone();
+            move || {
+                let Some(main_preview) = shell_state.preview.borrow().clone() else {
+                    return;
+                };
+                let Some(detached_tab) = detached_preview.take_single_tab_for_transfer() else {
+                    return;
+                };
+                let next_index = main_preview.push_detached_tab(detached_tab);
+                shell_state.launch_deck_active.set(false);
+                show_workspace_preview_tab(
+                    &origin_window,
+                    &origin_overlay,
+                    &origin_title,
+                    &launch,
+                    &back_button,
+                    &fullscreen_button,
+                    &shell_state,
+                    next_index,
+                );
+                origin_window.present();
+                reattaching.set(true);
+                detached_window.close();
+            }
+        });
+        {
+            let do_reattach = do_reattach.clone();
+            reattach_button.connect_clicked(move |_| do_reattach());
+        }
+
+        let popover = context_menu::popover(&title_shell);
+        let menu = context_menu::menu_box();
+        let menu_reattach_button = context_menu::action_button("Reattach", None);
+        {
+            let popover = popover.clone();
+            let do_reattach = do_reattach.clone();
+            menu_reattach_button.connect_clicked(move |_| {
+                popover.popdown();
+                do_reattach();
+            });
+        }
+        menu.append(&menu_reattach_button);
+        popover.set_child(Some(&menu));
+        let right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let popover = popover.clone();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        header.add_controller(right_click);
+
+        let force_close = Rc::new(Cell::new(false));
+        {
+            let detached_preview = detached_preview.clone();
+            let reattaching = reattaching.clone();
+            let force_close_for_confirm = force_close.clone();
+            detached_window.connect_close_request(move |window| {
+                if reattaching.get() {
+                    return glib::Propagation::Proceed;
+                }
+                if force_close_for_confirm.replace(false) {
+                    detached_preview.terminate_all("closing detached Windows GTK workspace");
+                    return glib::Propagation::Proceed;
+                }
+                if detached_preview.has_active_processes() {
+                    let window = window.clone();
+                    let window_for_confirm = window.clone();
+                    let force_close = force_close_for_confirm.clone();
+                    dialog_chrome::confirm_destructive_action(
+                        &window,
+                        "Close Detached Workspace?",
+                        "Running terminal sessions in this detached workspace will be terminated.",
+                        "Close",
+                        move || {
+                            force_close.set(true);
+                            window_for_confirm.close();
+                        },
+                    );
+                    return glib::Propagation::Stop;
+                }
+                detached_preview.terminate_all("closing detached Windows GTK workspace");
+                glib::Propagation::Proceed
+            });
+        }
+
+        detached_window.present();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1908,6 +2195,7 @@ mod imp {
         on_rename: Option<Rc<dyn Fn()>>,
         on_close: Option<Rc<dyn Fn()>>,
         on_reorder: Option<Rc<dyn Fn(usize, usize)>>,
+        on_detach: Option<Rc<dyn Fn()>>,
     }
 
     fn sync_windows_title_tabs(title: &TitleChrome, tabs: Vec<WindowsTitleTab>) {
@@ -1939,7 +2227,38 @@ mod imp {
                 on_reorder,
             );
         }
+        if let Some(on_detach) = tab.on_detach {
+            install_windows_title_tab_context_menu(&chrome.shell, on_detach);
+        }
         chrome.shell.upcast()
+    }
+
+    fn install_windows_title_tab_context_menu(shell: &gtk::Box, on_detach: Rc<dyn Fn()>) {
+        let popover = context_menu::popover(shell);
+        let menu = context_menu::menu_box();
+        let detach_button = context_menu::action_button("Detach", None);
+        {
+            let popover = popover.clone();
+            detach_button.connect_clicked(move |_| {
+                popover.popdown();
+                on_detach();
+            });
+        }
+        menu.append(&detach_button);
+        popover.set_child(Some(&menu));
+
+        let right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let popover = popover.clone();
+            right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        shell.add_controller(right_click);
     }
 
     fn install_windows_title_tab_reorder(

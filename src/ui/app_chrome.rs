@@ -23,13 +23,17 @@ pub(crate) fn build_app_header_chrome() -> AppHeaderChrome {
         .show_end_title_buttons(true)
         .build();
     header.set_centering_policy(adw::CenteringPolicy::Loose);
-    header.add_css_class("app-headerbar");
+    apply_app_headerbar_class(&header);
 
     let title = TitleChrome::new();
     title.root.add_css_class("app-title-handle");
     header.set_title_widget(Some(&title.root));
 
     AppHeaderChrome { header, title }
+}
+
+pub(crate) fn apply_app_headerbar_class(header: &adw::HeaderBar) {
+    header.add_css_class("app-headerbar");
 }
 
 pub(crate) fn sync_workspace_fullscreen_chrome(

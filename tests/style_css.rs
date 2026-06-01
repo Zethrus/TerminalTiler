@@ -436,6 +436,30 @@ fn windows_gtk_workspace_title_tabs_reorder_like_linux_tabs() {
 }
 
 #[test]
+fn windows_gtk_workspace_tabs_detach_and_reattach_like_linux_tabs() {
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("pub struct DetachedPreviewTab")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn detach_tab_as_preview(")
+            && WORKSPACE_PREVIEW_RS.contains("fn detach_tab_in_preview_state(")
+            && WORKSPACE_PREVIEW_RS.contains("fn detach_runtime_surfaces_for_tab(")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn take_single_tab_for_transfer(")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn push_detached_tab(")
+            && WINDOWS_GTK_APP_RS.contains("fn detach_windows_preview_tab(")
+            && WINDOWS_GTK_APP_RS.contains("fn present_detached_windows_preview_window(")
+            && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Detach\", None)")
+            && WINDOWS_GTK_APP_RS.contains("Workspace detached to a new window")
+            && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Reattach\", None)")
+            && WINDOWS_GTK_APP_RS.contains("Close Detached Workspace?")
+            && WINDOWS_GTK_APP_RS.contains("detached_preview.take_single_tab_for_transfer()")
+            && WINDOWS_GTK_APP_RS.contains("main_preview.push_detached_tab(detached_tab)")
+            && WINDOWS_GTK_APP_RS.contains(
+                "detached_preview.terminate_all(\"closing detached Windows GTK workspace\")"
+            ),
+        "Windows GTK workspace tabs should expose Linux-style Detach/Reattach windows while preserving live runtime surfaces"
+    );
+}
+
+#[test]
 fn voice_pack_install_uses_inline_progress_replacement() {
     assert!(
         SETTINGS_DIALOG_RS.contains("fn build_voice_pack_install_row")
@@ -1248,7 +1272,7 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     for token in [
         "use crate::ui::{",
-        "about_dialog, assets_manager, command_palette, companion_dialog, dialog_chrome",
+        "about_dialog, assets_manager, command_palette, companion_dialog, context_menu",
         "dialog_smoke, settings_dialog, tab_rename_dialog",
         "ShortcutControllerHandle",
         "present_command_palette",
