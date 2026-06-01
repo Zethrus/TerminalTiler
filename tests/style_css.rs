@@ -1223,7 +1223,11 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     assert!(
         COMMAND_PALETTE_RS.contains("pub struct AppActionCallbacks")
+            && COMMAND_PALETTE_RS.contains("pub product_display_name: String")
             && COMMAND_PALETTE_RS.contains("pub fn app_actions(callbacks: AppActionCallbacks)")
+            && COMMAND_PALETTE_RS.contains(
+                "let about_title = format!(\"About {}\", callbacks.product_display_name)"
+            )
             && source_contains(
                 COMMAND_PALETTE_RS,
                 "title: \"Open Settings\".into(),\n            subtitle: \"Application preferences and shortcuts.\".into(),"
@@ -1231,15 +1235,18 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && COMMAND_PALETTE_RS.find("title: \"Open Settings\".into()")
                 < COMMAND_PALETTE_RS.find("title: \"Open Assets Manager\".into()")
             && COMMAND_PALETTE_RS.find("title: \"Open Assets Manager\".into()")
-                < COMMAND_PALETTE_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
-            && COMMAND_PALETTE_RS.find("format!(\"About {}\", product::PRODUCT_DISPLAY_NAME)")
+                < COMMAND_PALETTE_RS.find("title: about_title")
+            && COMMAND_PALETTE_RS.find("title: about_title")
                 < COMMAND_PALETTE_RS.find("title: \"New Tab\".into()")
             && COMMAND_PALETTE_RS.contains("title: \"Open Account / Sync\".into()")
             && WINDOW_RS
                 .contains("command_palette::app_actions(command_palette::AppActionCallbacks")
+            && WINDOW_RS.contains("product_display_name: options.product.display_name.clone()")
             && WINDOWS_GTK_APP_RS
-                .contains("command_palette::app_actions(command_palette::AppActionCallbacks"),
-        "Linux and Windows GTK command palettes should share one source-of-truth base action ordering and copy"
+                .contains("command_palette::app_actions(command_palette::AppActionCallbacks")
+            && WINDOWS_GTK_APP_RS
+                .contains("product_display_name: options.product.display_name.clone()"),
+        "Linux and Windows GTK command palettes should share one source-of-truth base action ordering and copy while honoring Pro product branding"
     );
 
     assert!(
@@ -1690,11 +1697,13 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)")
             && WINDOWS_GTK_APP_RS
                 .contains("const WINDOWS_APP_USER_MODEL_ID: &str = \"Zethrus.TerminalTiler\"")
-            && WINDOWS_GTK_APP_RS.contains("configure_windows_taskbar_identity()")
+            && WINDOWS_GTK_APP_RS.contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
+            && WINDOWS_GTK_APP_RS
+                .contains(".app_id\n            .as_deref()\n            .unwrap_or(WINDOWS_APP_USER_MODEL_ID)")
             && WINDOWS_GTK_APP_RS
                 .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
             && CARGO_TOML.contains("\"Win32_UI_Shell\""),
-        "GTK windows should set the same app icon-name that Windows portable packages stage in the icon theme, and Windows builds should set a stable taskbar AppUserModelID so icon parity does not depend only on installer metadata"
+        "GTK windows should set the same app icon-name that Windows portable packages stage in the icon theme, and Windows builds should set a stable product-aware taskbar AppUserModelID so icon parity does not depend only on installer metadata"
     );
 }
 

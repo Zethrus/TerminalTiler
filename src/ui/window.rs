@@ -2851,6 +2851,7 @@ fn present_with_initial_workspace(
             let snapshot = tabs.borrow().clone();
             let active_id = active_tab_id.get();
             let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
+                product_display_name: options.product.display_name.clone(),
                 open_settings: Rc::new({
                     let open_settings_dialog = open_settings_dialog.clone();
                     move || open_settings_dialog()

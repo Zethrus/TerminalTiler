@@ -44,7 +44,12 @@ mod imp {
     pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
         logging::init();
         logging::info("windows GTK shell startup");
-        configure_windows_taskbar_identity();
+        let taskbar_app_user_model_id = options
+            .product
+            .app_id
+            .as_deref()
+            .unwrap_or(WINDOWS_APP_USER_MODEL_ID);
+        configure_windows_taskbar_identity(taskbar_app_user_model_id);
 
         let app_id = options.product.app_id.as_deref().unwrap_or(GTK_APP_ID);
         let app = adw::Application::builder().application_id(app_id).build();
@@ -71,8 +76,8 @@ mod imp {
         }
     }
 
-    fn configure_windows_taskbar_identity() {
-        let app_user_model_id = WINDOWS_APP_USER_MODEL_ID
+    fn configure_windows_taskbar_identity(app_user_model_id: &str) {
+        let app_user_model_id = app_user_model_id
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect::<Vec<u16>>();
@@ -1729,6 +1734,7 @@ mod imp {
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
     ) {
         let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
+            product_display_name: options.product.display_name.clone(),
             open_settings: Rc::new({
                 let window = window.clone();
                 let overlay = overlay.clone();

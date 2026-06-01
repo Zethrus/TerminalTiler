@@ -3,7 +3,6 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use crate::model::assets::Runbook;
-use crate::product;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
@@ -16,6 +15,7 @@ pub struct PaletteAction {
 
 #[derive(Clone)]
 pub struct AppActionCallbacks {
+    pub product_display_name: String,
     pub open_settings: Rc<dyn Fn()>,
     pub open_assets_manager: Rc<dyn Fn()>,
     pub open_about: Rc<dyn Fn()>,
@@ -37,6 +37,7 @@ pub struct RunbookAction {
 }
 
 pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
+    let about_title = format!("About {}", callbacks.product_display_name);
     let mut actions = vec![
         PaletteAction {
             title: "Open Settings".into(),
@@ -49,7 +50,7 @@ pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
             on_activate: callbacks.open_assets_manager,
         },
         PaletteAction {
-            title: format!("About {}", product::PRODUCT_DISPLAY_NAME),
+            title: about_title,
             subtitle: "Version, license, source, and open-core model.".into(),
             on_activate: callbacks.open_about,
         },
