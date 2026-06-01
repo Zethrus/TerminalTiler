@@ -455,6 +455,32 @@ function Wait-ProcessOrTimeout {
     return $Process.ExitCode
 }
 
+function Invoke-MsiExecWithRetry {
+    param(
+        [string[]]$ArgumentList,
+        [string]$Label,
+        [int]$TimeoutSeconds = 180,
+        [int]$MaxAttempts = 3
+    )
+
+    $lastExitCode = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $ArgumentList -PassThru
+        $lastExitCode = Wait-ProcessOrTimeout -Process $process -Label $Label -TimeoutSeconds $TimeoutSeconds
+        if ($lastExitCode -eq 0) {
+            return
+        }
+
+        if ($attempt -lt $MaxAttempts) {
+            Write-Warning "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode) on attempt $attempt/$MaxAttempts; retrying after runner cleanup."
+            Stop-TerminalTilerSmokeProcesses
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    }
+
+    throw "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode)"
+}
+
 function Wait-ForSessionLogPattern {
     param(
         [string]$SandboxRoot,
@@ -752,11 +778,7 @@ Invoke-OptionalLaunchSmoke `
 Write-Host "==> smoke-installing MSI package"
 Remove-Item -Recurse -Force $MsiInstallRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $MsiInstallRoot | Out-Null
-$MsiInstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru
-$MsiInstallExitCode = Wait-ProcessOrTimeout -Process $MsiInstallProcess -Label "MSI installer" -TimeoutSeconds 180
-if ($MsiInstallExitCode -ne 0) {
-    throw "MSI installer exited with code $MsiInstallExitCode"
-}
+Invoke-MsiExecWithRetry -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -Label "MSI installer"
 
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
@@ -774,11 +796,9 @@ Invoke-OptionalLaunchSmoke `
     -SkipMessage "skipping MSI-installed executable launch smoke"
 
 Write-Host "==> smoke-uninstalling MSI package"
-$MsiUninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -PassThru
-$MsiUninstallExitCode = Wait-ProcessOrTimeout -Process $MsiUninstallProcess -Label "MSI uninstall" -TimeoutSeconds 180
-if ($MsiUninstallExitCode -ne 0) {
-    throw "MSI uninstall exited with code $MsiUninstallExitCode"
-}
+Stop-TerminalTilerSmokeProcesses
+Start-Sleep -Seconds 2
+Invoke-MsiExecWithRetry -ArgumentList @("/x", $MsiPath, "/qn", "/norestart", "INSTALLFOLDER=$MsiInstallRoot") -Label "MSI uninstall"
 
 if (Test-Path $MsiInstalledExe) {
     throw "MSI uninstall left $MsiInstalledExe behind"
