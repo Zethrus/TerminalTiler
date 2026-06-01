@@ -410,6 +410,29 @@ fn windows_gtk_workspace_tab_close_confirms_active_runtimes_like_linux() {
 }
 
 #[test]
+fn windows_gtk_workspace_title_tabs_reorder_like_linux_tabs() {
+    assert!(
+        WORKSPACE_PREVIEW_RS.contains("pub fn move_tab(&self, index: usize, position: usize)")
+            && WORKSPACE_PREVIEW_RS.contains("fn move_tab_in_preview_state(")
+            && WORKSPACE_PREVIEW_RS.contains("fn rekey_runtime_surfaces_after_tab_move(")
+            && WORKSPACE_PREVIEW_RS.contains("runtime_surface_key_moves_for_tab_reorder")
+            && WINDOWS_GTK_APP_RS.contains("fn reorder_windows_preview_tab(")
+            && WINDOWS_GTK_APP_RS.contains("fn install_windows_title_tab_reorder(")
+            && WINDOWS_GTK_APP_RS.contains("gtk::DragSource::builder()")
+            && WINDOWS_GTK_APP_RS.contains(".actions(gdk::DragAction::MOVE)")
+            && WINDOWS_GTK_APP_RS.contains(".button(1)")
+            && WINDOWS_GTK_APP_RS
+                .contains("gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE)")
+            && WINDOWS_GTK_APP_RS
+                .contains("drop_target.set_propagation_phase(gtk::PropagationPhase::Capture)")
+            && WINDOWS_GTK_APP_RS.contains("windows_title_tab_drop_position")
+            && WINDOWS_GTK_APP_RS.contains("gdk::Paintable::new_empty(1, 1)")
+            && WINDOWS_GTK_APP_RS.contains("preview.move_tab(from_index, position)"),
+        "Windows GTK title tabs should support Linux-style left-button drag/drop reordering while preserving live runtime surfaces"
+    );
+}
+
+#[test]
 fn voice_pack_install_uses_inline_progress_replacement() {
     assert!(
         SETTINGS_DIALOG_RS.contains("fn build_voice_pack_install_row")

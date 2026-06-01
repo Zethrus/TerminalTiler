@@ -8,7 +8,8 @@ mod imp {
     use std::time::Duration;
 
     use adw::prelude::*;
-    use gtk::{gio, glib};
+    use glib::value::ToValue;
+    use gtk::{gdk, gio, glib};
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
@@ -1487,6 +1488,7 @@ mod imp {
             label: "Templates".into(),
             tooltip: "Workspace launch deck".into(),
             active: launch_active,
+            reorder_index: None,
             on_select: Some(Rc::new({
                 let window = window.clone();
                 let overlay = overlay.clone();
@@ -1509,6 +1511,7 @@ mod imp {
             })),
             on_rename: None,
             on_close: None,
+            on_reorder: None,
         });
 
         if let Some(preview) = shell_state.preview.borrow().as_ref() {
@@ -1526,6 +1529,7 @@ mod imp {
                     label,
                     tooltip,
                     active: !launch_active && index == active_index,
+                    reorder_index: Some(index),
                     on_select: Some(Rc::new({
                         let window = window.clone();
                         let overlay = overlay.clone();
@@ -1586,6 +1590,28 @@ mod imp {
                                 &fullscreen_button,
                                 &shell_state,
                                 index,
+                            );
+                        }
+                    })),
+                    on_reorder: Some(Rc::new({
+                        let window = window.clone();
+                        let overlay = overlay.clone();
+                        let title = title.clone();
+                        let launch = launch.clone();
+                        let back_button = back_button.clone();
+                        let fullscreen_button = fullscreen_button.clone();
+                        let shell_state = shell_state.clone();
+                        move |from_index, position| {
+                            reorder_windows_preview_tab(
+                                &window,
+                                &overlay,
+                                &title,
+                                &launch,
+                                &back_button,
+                                &fullscreen_button,
+                                &shell_state,
+                                from_index,
+                                position,
                             );
                         }
                     })),
@@ -1651,6 +1677,53 @@ mod imp {
             shell_state,
             index,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reorder_windows_preview_tab(
+        window: &adw::ApplicationWindow,
+        overlay: &adw::ToastOverlay,
+        title: &TitleChrome,
+        launch: &gtk::Widget,
+        back_button: &gtk::Button,
+        fullscreen_button: &gtk::Button,
+        shell_state: &WindowsGtkShellState,
+        from_index: usize,
+        position: usize,
+    ) {
+        let Some(preview) = shell_state.preview.borrow().clone() else {
+            return;
+        };
+        if !preview.move_tab(from_index, position) {
+            return;
+        }
+
+        logging::info(format!(
+            "Windows GTK shell reordered workspace tab from {from_index} to position {position}"
+        ));
+
+        if shell_state.launch_deck_active.get() {
+            sync_windows_shell_title_tabs(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+            );
+        } else {
+            show_workspace_preview_tab(
+                window,
+                overlay,
+                title,
+                launch,
+                back_button,
+                fullscreen_button,
+                shell_state,
+                preview.active_index(),
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1830,9 +1903,11 @@ mod imp {
         label: String,
         tooltip: String,
         active: bool,
+        reorder_index: Option<usize>,
         on_select: Option<Rc<dyn Fn()>>,
         on_rename: Option<Rc<dyn Fn()>>,
         on_close: Option<Rc<dyn Fn()>>,
+        on_reorder: Option<Rc<dyn Fn(usize, usize)>>,
     }
 
     fn sync_windows_title_tabs(title: &TitleChrome, tabs: Vec<WindowsTitleTab>) {
@@ -1856,7 +1931,62 @@ mod imp {
             on_rename: tab.on_rename,
             on_close: tab.on_close,
         });
+        if let (Some(index), Some(on_reorder)) = (tab.reorder_index, tab.on_reorder) {
+            install_windows_title_tab_reorder(
+                &chrome.shell,
+                &chrome.select_button,
+                index,
+                on_reorder,
+            );
+        }
         chrome.shell.upcast()
+    }
+
+    fn install_windows_title_tab_reorder(
+        shell: &gtk::Box,
+        select_button: &gtk::Button,
+        index: usize,
+        on_reorder: Rc<dyn Fn(usize, usize)>,
+    ) {
+        let drag_source = gtk::DragSource::builder()
+            .actions(gdk::DragAction::MOVE)
+            .button(1)
+            .build();
+        drag_source.connect_prepare(move |source, _, _| {
+            suppress_windows_title_tab_drag_icon(source);
+            Some(gdk::ContentProvider::for_value(&(index as u32).to_value()))
+        });
+        select_button.add_controller(drag_source);
+
+        let drop_target = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
+        drop_target.set_propagation_phase(gtk::PropagationPhase::Capture);
+        drop_target.connect_drop(move |target, value, x, _| {
+            let Ok(from_index) = value.get::<u32>() else {
+                return false;
+            };
+            let width = target
+                .widget()
+                .map(|widget| f64::from(widget.allocation().width()))
+                .unwrap_or_default();
+            let raw_position = index + usize::from(x >= width / 2.0);
+            let position = windows_title_tab_drop_position(from_index as usize, raw_position);
+            on_reorder(from_index as usize, position);
+            true
+        });
+        shell.add_controller(drop_target);
+    }
+
+    fn windows_title_tab_drop_position(from_index: usize, raw_position: usize) -> usize {
+        if from_index < raw_position {
+            raw_position.saturating_sub(1)
+        } else {
+            raw_position
+        }
+    }
+
+    fn suppress_windows_title_tab_drag_icon(source: &gtk::DragSource) {
+        let empty_icon = gdk::Paintable::new_empty(1, 1);
+        source.set_icon(Some(&empty_icon), 0, 0);
     }
 
     #[allow(clippy::too_many_arguments)]

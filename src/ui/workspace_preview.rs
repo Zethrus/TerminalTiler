@@ -279,6 +279,18 @@ impl SessionPreview {
         }
     }
 
+    pub fn move_tab(&self, index: usize, position: usize) -> bool {
+        let Some(key_moves) =
+            move_tab_in_preview_state(&self.session, &self.active_index, index, position)
+        else {
+            return false;
+        };
+        rekey_runtime_surfaces_after_tab_move(&self.runtime_surfaces, key_moves);
+        self.notify_session_changed("workspace preview tabs reordered");
+        self.render();
+        true
+    }
+
     pub fn tab_has_active_processes(&self, index: usize) -> bool {
         tab_runtime_surfaces(&self.session.borrow(), &self.runtime_surfaces, index)
             .into_iter()
@@ -523,6 +535,55 @@ fn close_tab_in_preview_state(
     true
 }
 
+fn move_tab_in_preview_state(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+    index: usize,
+    position: usize,
+) -> Option<Vec<(String, String)>> {
+    let mut session = session.borrow_mut();
+    if index >= session.tabs.len() {
+        return None;
+    }
+
+    let before_tabs = session.tabs.clone();
+    let tab = session.tabs.remove(index);
+    let insert_index = position.min(session.tabs.len());
+    session.tabs.insert(insert_index, tab);
+    if index == insert_index {
+        return None;
+    }
+
+    let key_moves =
+        runtime_surface_key_moves_for_tab_reorder(&before_tabs, &session.tabs, index, insert_index);
+    let next_active_index = moved_tab_position(
+        active_index.get().min(before_tabs.len().saturating_sub(1)),
+        index,
+        insert_index,
+    );
+    session.active_tab_index = next_active_index;
+    active_index.set(next_active_index);
+    Some(key_moves)
+}
+
+fn moved_tab_position(current_index: usize, from_index: usize, insert_index: usize) -> usize {
+    if current_index == from_index {
+        insert_index
+    } else if from_index < insert_index
+        && current_index > from_index
+        && current_index <= insert_index
+    {
+        current_index - 1
+    } else if insert_index < from_index
+        && current_index >= insert_index
+        && current_index < from_index
+    {
+        current_index + 1
+    } else {
+        current_index
+    }
+}
+
 fn render_session_preview(
     shell: &gtk::Box,
     session: &Rc<RefCell<SavedSession>>,
@@ -700,6 +761,57 @@ fn runtime_surface_key(tab_index: usize, tab: &SavedTab, tile: &TileSpec) -> Str
         tab.preset.id,
         tile.id
     )
+}
+
+fn runtime_surface_key_moves_for_tab_reorder(
+    before_tabs: &[SavedTab],
+    after_tabs: &[SavedTab],
+    from_index: usize,
+    insert_index: usize,
+) -> Vec<(String, String)> {
+    before_tabs
+        .iter()
+        .enumerate()
+        .filter_map(|(old_index, tab)| {
+            let new_index = moved_tab_position(old_index, from_index, insert_index);
+            let moved_tab = after_tabs.get(new_index)?;
+            Some(
+                tab.preset
+                    .layout
+                    .tile_specs()
+                    .into_iter()
+                    .map(move |tile| {
+                        (
+                            runtime_surface_key(old_index, tab, &tile),
+                            runtime_surface_key(new_index, moved_tab, &tile),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .filter(|(old_key, new_key)| old_key != new_key)
+        .collect()
+}
+
+fn rekey_runtime_surfaces_after_tab_move(
+    runtime_surfaces: &Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
+    key_moves: Vec<(String, String)>,
+) {
+    if key_moves.is_empty() {
+        return;
+    }
+
+    let mut surfaces = runtime_surfaces.borrow_mut();
+    let mut moved_surfaces = Vec::new();
+    for (old_key, new_key) in key_moves {
+        if let Some(surface) = surfaces.remove(&old_key) {
+            moved_surfaces.push((new_key, surface));
+        }
+    }
+    for (new_key, surface) in moved_surfaces {
+        surfaces.insert(new_key, surface);
+    }
 }
 
 fn tab_runtime_surfaces(
