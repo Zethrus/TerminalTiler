@@ -3,7 +3,7 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::path::PathBuf;
     use std::process::ExitCode;
-    use std::rc::Rc;
+    use std::rc::{Rc, Weak};
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -264,114 +264,62 @@ mod imp {
             Rc::new(RefCell::new(None));
         let open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
             Rc::new(RefCell::new(None));
-        let launch_widget_handle: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+        let launch_widget_handle: LaunchWidgetHandle = Rc::new(RefCell::new(None));
+        let refresh_launch_deck_handle: VoidCallbackHandle = Rc::new(RefCell::new(None));
 
-        let launch_preferences = preferences.clone();
-        let launch_overlay = overlay.clone();
-        let launch_title = title.clone();
-        let launch_assets = workspace_assets.clone();
-        let launch_back_button = back_button.clone();
-        let launch_fullscreen_button = fullscreen_button.clone();
-        let launch_window = window.clone();
-        let launch_shell_state = shell_state.clone();
-        let launch_widget_for_action = launch_widget_handle.clone();
-        let cancel_shell_state = shell_state.clone();
-        let cancel_launch_widget = launch_widget_handle.clone();
-        let cancel_window = window.clone();
-        let cancel_overlay = overlay.clone();
-        let cancel_title = title.clone();
-        let cancel_back_button = back_button.clone();
-        let cancel_fullscreen_button = fullscreen_button.clone();
-        let actions = LaunchScreenActions {
-            on_theme_preview: Rc::new({
-                let window = window.clone();
-                move |theme| apply_theme_mode(&window, theme)
-            }),
-            on_density_preview: Rc::new({
-                let window = window.clone();
-                move |density| apply_window_density(&window, density)
-            }),
-            on_launch: Rc::new(move |preset, workspace_root| {
-                if let Some(launch_widget) = launch_widget_for_action.borrow().as_ref() {
-                    present_workspace_preview_from_launch(
-                        &launch_window,
-                        &launch_overlay,
-                        &launch_title,
-                        &launch_preferences,
-                        &launch_back_button,
-                        &launch_fullscreen_button,
-                        &launch_shell_state,
-                        launch_widget,
-                        launch_assets.clone(),
-                        preset,
-                        workspace_root,
-                    );
-                }
-            }),
-            on_cancel: Rc::new({
-                let app = app.clone();
-                move || {
-                    if cancel_shell_state.has_workspace_tabs()
-                        && let Some(launch_widget) = cancel_launch_widget.borrow().as_ref()
-                    {
-                        let active_index = cancel_shell_state
-                            .preview
-                            .borrow()
-                            .as_ref()
-                            .map(|preview| preview.active_index())
-                            .unwrap_or(0);
-                        show_workspace_preview_tab(
-                            &cancel_window,
-                            &cancel_overlay,
-                            &cancel_title,
-                            launch_widget,
-                            &cancel_back_button,
-                            &cancel_fullscreen_button,
-                            &cancel_shell_state,
-                            active_index,
-                        );
-                    } else {
-                        app.quit();
-                    }
-                }
-            }),
-            on_presets_changed: Rc::new(|| {
-                logging::info("Windows GTK shell preset list changed; relaunch to refresh deck");
-            }),
+        let launch_context = WindowsLaunchDeckContext {
+            app: app.clone(),
+            window: window.clone(),
+            overlay: overlay.clone(),
+            title: title.clone(),
+            preference_store: preference_store.clone(),
+            preset_store: preset_store.clone(),
+            asset_store: asset_store.clone(),
+            back_button: back_button.clone(),
+            fullscreen_button: fullscreen_button.clone(),
+            shell_state: shell_state.clone(),
+            launch_widget_handle: launch_widget_handle.clone(),
+            refresh_launch_deck_handle: refresh_launch_deck_handle.clone(),
         };
+        let refresh_launch_deck_weak = Rc::downgrade(&launch_context.refresh_launch_deck_handle);
 
-        let launch = crate::ui::launch_screen::build(
-            LaunchScreenInput {
-                load_warning,
-                presets: preset_outcome.presets,
-                assets: asset_outcome.assets,
-                default_theme: preferences.default_theme,
-                default_density: preferences.default_density,
-                default_restore_mode: preferences.default_restore_mode,
-                preset_store: preset_store.clone(),
-            },
-            actions,
+        let launch = build_windows_launch_deck(
+            &launch_context,
+            &refresh_launch_deck_weak,
+            load_warning,
+            preset_outcome.presets,
+            asset_outcome.assets,
+            &preferences,
         );
         *launch_widget_handle.borrow_mut() = Some(launch.clone());
         {
+            let launch_context = launch_context.clone();
+            let refresh_launch_deck_weak = refresh_launch_deck_weak.clone();
+            *refresh_launch_deck_handle.borrow_mut() = Some(Rc::new(move || {
+                refresh_windows_launch_deck(&launch_context, &refresh_launch_deck_weak)
+            }));
+        }
+        {
             let launch_overlay = overlay.clone();
             let launch_title = title.clone();
-            let launch_widget = launch.clone();
+            let launch_widget_handle = launch_widget_handle.clone();
             let back_button_for_click = back_button.clone();
             let fullscreen_for_click = fullscreen_button.clone();
             let window_for_click = window.clone();
             let title_add_button = title.add_button.clone();
             let shell_state_for_launch = shell_state.clone();
             let show_launch_deck = Rc::new(move || {
-                show_launch_deck_tab(
-                    &window_for_click,
-                    &launch_overlay,
-                    &launch_title,
-                    &launch_widget,
-                    &back_button_for_click,
-                    &fullscreen_for_click,
-                    &shell_state_for_launch,
-                );
+                if let Some(launch_widget) = launch_widget_handle.borrow().as_ref().cloned() {
+                    show_launch_deck_tab(
+                        &window_for_click,
+                        &launch_overlay,
+                        &launch_title,
+                        &launch_widget,
+                        &back_button_for_click,
+                        &fullscreen_for_click,
+                        &shell_state_for_launch,
+                    );
+                }
             });
             {
                 let show_launch_deck = show_launch_deck.clone();
@@ -386,7 +334,7 @@ mod imp {
                 let window = window.clone();
                 let overlay = overlay.clone();
                 let title = title.clone();
-                let launch = launch.clone();
+                let launch_widget_handle = launch_widget_handle.clone();
                 let back_button = back_button.clone();
                 let fullscreen_button = fullscreen_button.clone();
                 let shell_state = shell_state.clone();
@@ -395,6 +343,7 @@ mod imp {
                 let asset_store = asset_store.clone();
                 let options = options.clone();
                 let voice_toast_tx = voice_toast_tx.clone();
+                let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
                 let workspace_fullscreen_shortcut_controller =
                     workspace_fullscreen_shortcut_controller.clone();
                 let workspace_density_shortcut_controller =
@@ -407,6 +356,9 @@ mod imp {
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
                 move || {
+                    let Some(launch) = launch_widget_handle.borrow().as_ref().cloned() else {
+                        return;
+                    };
                     present_command_palette(
                         &window,
                         &overlay,
@@ -426,6 +378,7 @@ mod imp {
                         workspace_zoom_out_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
+                        refresh_launch_deck_handle.clone(),
                     );
                 }
             });
@@ -491,6 +444,7 @@ mod imp {
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
+                let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
                 move || {
                     present_settings_dialog(
                         &window,
@@ -508,6 +462,7 @@ mod imp {
                         workspace_zoom_out_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
+                        refresh_launch_deck_handle.clone(),
                     );
                 }
             });
@@ -618,6 +573,7 @@ mod imp {
         workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+        refresh_launch_deck_handle: WeakVoidCallbackHandle,
     ) {
         let preferences = preference_store.load();
         settings_dialog::present(
@@ -645,9 +601,11 @@ mod imp {
                     let window = window.clone();
                     let overlay = overlay.clone();
                     let preference_store = preference_store.clone();
+                    let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
                     move |theme| {
                         preference_store.save_default_theme(theme);
                         apply_theme_mode(&window, theme);
+                        request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
                         overlay.add_toast(adw::Toast::new(&format!(
                             "Default theme set to {}",
                             theme.label()
@@ -658,9 +616,11 @@ mod imp {
                     let window = window.clone();
                     let overlay = overlay.clone();
                     let preference_store = preference_store.clone();
+                    let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
                     move |density| {
                         preference_store.save_default_density(density);
                         apply_window_density(&window, density);
+                        request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
                         overlay.add_toast(adw::Toast::new(&format!(
                             "Default density set to {}",
                             density.label()
@@ -861,6 +821,7 @@ mod imp {
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
+                    let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
@@ -911,14 +872,17 @@ mod imp {
                                 open_command_palette,
                             );
                         }
+                        request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
                         overlay.add_toast(adw::Toast::new("Application defaults reset"));
                     }
                 }),
                 on_reset_builtin_presets: Rc::new({
                     let overlay = overlay.clone();
+                    let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
                     move || match preset_store.reset_builtin_presets() {
                         Ok(()) => {
                             logging::info("reset builtin saved presets to factory defaults");
+                            request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
                             overlay.add_toast(adw::Toast::new("Default saved presets restored"));
                         }
                         Err(error) => {
@@ -1191,6 +1155,135 @@ mod imp {
         app.windows()
             .into_iter()
             .find_map(|window| window.downcast::<adw::ApplicationWindow>().ok())
+    }
+
+    fn build_windows_launch_deck(
+        context: &WindowsLaunchDeckContext,
+        refresh_launch_deck_handle: &WeakVoidCallbackHandle,
+        load_warning: Option<String>,
+        presets: Vec<crate::model::preset::WorkspacePreset>,
+        assets: crate::model::assets::WorkspaceAssets,
+        preferences: &AppPreferences,
+    ) -> gtk::Widget {
+        let actions = LaunchScreenActions {
+            on_theme_preview: Rc::new({
+                let window = context.window.clone();
+                move |theme| apply_theme_mode(&window, theme)
+            }),
+            on_density_preview: Rc::new({
+                let window = context.window.clone();
+                move |density| apply_window_density(&window, density)
+            }),
+            on_launch: Rc::new({
+                let context = context.clone();
+                let preferences = preferences.clone();
+                let assets = assets.clone();
+                move |preset, workspace_root| {
+                    if let Some(launch_widget) =
+                        context.launch_widget_handle.borrow().as_ref().cloned()
+                    {
+                        present_workspace_preview_from_launch(
+                            &context.window,
+                            &context.overlay,
+                            &context.title,
+                            &preferences,
+                            &context.back_button,
+                            &context.fullscreen_button,
+                            &context.shell_state,
+                            &launch_widget,
+                            assets.clone(),
+                            preset,
+                            workspace_root,
+                        );
+                    }
+                }
+            }),
+            on_cancel: Rc::new({
+                let context = context.clone();
+                move || {
+                    if context.shell_state.has_workspace_tabs()
+                        && let Some(launch_widget) =
+                            context.launch_widget_handle.borrow().as_ref().cloned()
+                    {
+                        let active_index = context
+                            .shell_state
+                            .preview
+                            .borrow()
+                            .as_ref()
+                            .map(|preview| preview.active_index())
+                            .unwrap_or(0);
+                        show_workspace_preview_tab(
+                            &context.window,
+                            &context.overlay,
+                            &context.title,
+                            &launch_widget,
+                            &context.back_button,
+                            &context.fullscreen_button,
+                            &context.shell_state,
+                            active_index,
+                        );
+                    } else {
+                        context.app.quit();
+                    }
+                }
+            }),
+            on_presets_changed: Rc::new({
+                let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
+                move || request_windows_launch_deck_refresh(&refresh_launch_deck_handle)
+            }),
+        };
+
+        crate::ui::launch_screen::build(
+            LaunchScreenInput {
+                load_warning,
+                presets,
+                assets,
+                default_theme: preferences.default_theme,
+                default_density: preferences.default_density,
+                default_restore_mode: preferences.default_restore_mode,
+                preset_store: context.preset_store.clone(),
+            },
+            actions,
+        )
+    }
+
+    fn refresh_windows_launch_deck(
+        context: &WindowsLaunchDeckContext,
+        refresh_launch_deck_handle: &WeakVoidCallbackHandle,
+    ) {
+        let preset_outcome = context.preset_store.load_presets_with_status();
+        let asset_outcome = context.asset_store.load_assets_with_status();
+        let preferences = context.preference_store.load();
+        let launch = build_windows_launch_deck(
+            context,
+            refresh_launch_deck_handle,
+            combine_warnings(preset_outcome.warning, asset_outcome.warning),
+            preset_outcome.presets,
+            asset_outcome.assets,
+            &preferences,
+        );
+        *context.launch_widget_handle.borrow_mut() = Some(launch.clone());
+        if context.shell_state.launch_deck_active.get() {
+            show_launch_deck_tab(
+                &context.window,
+                &context.overlay,
+                &context.title,
+                &launch,
+                &context.back_button,
+                &context.fullscreen_button,
+                &context.shell_state,
+            );
+        }
+        logging::info("Windows GTK shell refreshed launch deck after preset/default change");
+    }
+
+    fn request_windows_launch_deck_refresh(refresh_launch_deck_handle: &WeakVoidCallbackHandle) {
+        if let Some(refresh_launch_deck_handle) = refresh_launch_deck_handle.upgrade() {
+            let refresh = refresh_launch_deck_handle.borrow().as_ref().cloned();
+            if let Some(refresh) = refresh {
+                glib::idle_add_local_once(move || refresh());
+            }
+        }
     }
 
     fn shutdown_windows_gtk_shell(shell_state: &WindowsGtkShellState, reason: &str) {
@@ -1745,6 +1838,25 @@ mod imp {
     }
 
     type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
+    type LaunchWidgetHandle = Rc<RefCell<Option<gtk::Widget>>>;
+    type VoidCallbackHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+    type WeakVoidCallbackHandle = Weak<RefCell<Option<Rc<dyn Fn()>>>>;
+
+    #[derive(Clone)]
+    struct WindowsLaunchDeckContext {
+        app: adw::Application,
+        window: adw::ApplicationWindow,
+        overlay: adw::ToastOverlay,
+        title: TitleChrome,
+        preference_store: PreferenceStore,
+        preset_store: PresetStore,
+        asset_store: AssetStore,
+        back_button: gtk::Button,
+        fullscreen_button: gtk::Button,
+        shell_state: WindowsGtkShellState,
+        launch_widget_handle: LaunchWidgetHandle,
+        refresh_launch_deck_handle: VoidCallbackHandle,
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn present_command_palette(
@@ -1766,6 +1878,7 @@ mod imp {
         workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+        refresh_launch_deck_handle: WeakVoidCallbackHandle,
     ) {
         let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
             product_display_name: options.product.display_name.clone(),
@@ -1790,6 +1903,7 @@ mod imp {
                 let command_palette_shortcut_controller =
                     command_palette_shortcut_controller.clone();
                 let open_command_palette_handle = open_command_palette_handle.clone();
+                let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
                 move || {
                     present_settings_dialog(
                         &window,
@@ -1807,6 +1921,7 @@ mod imp {
                         workspace_zoom_out_shortcut_controller.clone(),
                         command_palette_shortcut_controller.clone(),
                         open_command_palette_handle.clone(),
+                        refresh_launch_deck_handle.clone(),
                     );
                 }
             }),

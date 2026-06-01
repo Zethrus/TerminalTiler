@@ -238,7 +238,7 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("&fullscreen_button, false")
             && source_contains(
                 WINDOWS_GTK_APP_RS,
-                "&fullscreen_for_click,\n                    &shell_state_for_launch"
+                "&fullscreen_for_click,\n                        &shell_state_for_launch"
             ),
         "Windows GTK should use the same shared workspace fullscreen chrome behavior as Linux for workspace previews and hide it on the launch deck"
     );
@@ -813,6 +813,11 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("session_store.clear()")
             && WINDOWS_GTK_APP_RS.contains("show_launch_deck_tab")
             && WINDOWS_GTK_APP_RS.contains("show_workspace_preview_tab")
+            && WINDOWS_GTK_APP_RS.contains("refresh_windows_launch_deck")
+            && WINDOWS_GTK_APP_RS.contains("request_windows_launch_deck_refresh")
+            && WINDOWS_GTK_APP_RS
+                .contains("Windows GTK shell refreshed launch deck after preset/default change")
+            && !WINDOWS_GTK_APP_RS.contains("relaunch to refresh deck")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_shell_title_tabs")
             && WINDOWS_GTK_APP_RS.contains("preview.push_tab(saved_tab)")
             && WORKSPACE_PREVIEW_RS.contains("pub fn push_tab(&self, tab: SavedTab)")
@@ -933,7 +938,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS
                 .contains("initial_status_snapshot(tile, &tab.workspace_root, assets).to_line()")
             && WINDOWS_GTK_APP_RS.contains("let workspace_assets = asset_outcome.assets.clone()")
-            && WINDOWS_GTK_APP_RS.contains("launch_assets.clone()"),
+            && WINDOWS_GTK_APP_RS.contains("assets.clone()"),
         "Windows GTK preview headers should share Linux launch-resolution status text instead of reducing terminal status to only the working-directory label"
     );
     assert!(
