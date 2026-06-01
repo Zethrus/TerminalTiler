@@ -303,13 +303,16 @@ mod imp {
             let launch_overlay = overlay.clone();
             let launch_title = title.clone();
             let launch_widget_handle = launch_widget_handle.clone();
+            let launch_widget_handle_for_show = launch_widget_handle.clone();
             let back_button_for_click = back_button.clone();
             let fullscreen_for_click = fullscreen_button.clone();
             let window_for_click = window.clone();
             let title_add_button = title.add_button.clone();
             let shell_state_for_launch = shell_state.clone();
             let show_launch_deck = Rc::new(move || {
-                if let Some(launch_widget) = launch_widget_handle.borrow().as_ref().cloned() {
+                if let Some(launch_widget) =
+                    launch_widget_handle_for_show.borrow().as_ref().cloned()
+                {
                     show_launch_deck_tab(
                         &window_for_click,
                         &launch_overlay,
