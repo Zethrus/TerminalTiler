@@ -161,7 +161,7 @@ $env:PACKAGE_VERSION = "0.2.0"
 
 The resulting AppImage and `.deb` are intended to run on supported Ubuntu and Debian desktops without separately installing GTK, libadwaita, or VTE runtime packages.
 
-The resulting Windows installer artifacts, MSI, portable `.exe`, and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise. Browser tiles on Windows require Microsoft Edge WebView2 Runtime (Evergreen): install it before opening any preset or restored session that contains web tiles.
+The resulting Windows installer artifacts, MSI, portable `.exe`, and portable zip target Windows 11. At runtime they prefer WSL2 when a valid distro is available and fall back to PowerShell otherwise. Browser tiles on Windows use Microsoft Edge WebView2 Runtime (Evergreen). The setup `.exe` installs the Evergreen runtime automatically when it is missing; portable and MSI artifacts require WebView2 to already be installed.
 
 Both artifact formats now also ship reverse-DNS desktop metadata at `usr/share/applications/app.terminaltiler.desktop`, AppStream metadata at `usr/share/metainfo/app.terminaltiler.metainfo.xml`, and rasterized hicolor icons (64/128/256 px) so GNOME Software / Ubuntu App Center render the icon, publisher (BootKode Corp.), and license correctly.
 

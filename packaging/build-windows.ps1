@@ -200,6 +200,33 @@ function Assert-Path {
     }
 }
 
+function Assert-NonEmptyFile {
+    param([string]$Path, [string]$Description)
+
+    Assert-Path -Path $Path -Description $Description
+    if ((Get-Item -Path $Path).Length -le 0) {
+        throw "$Description at $Path was empty"
+    }
+}
+
+function Save-WebView2Bootstrapper {
+    param(
+        [string]$OutputPath,
+        [string]$Uri
+    )
+
+    if ((Test-Path $OutputPath) -and ((Get-Item -Path $OutputPath).Length -gt 0)) {
+        Write-Host "==> using cached Microsoft Edge WebView2 Evergreen Bootstrapper at $OutputPath"
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
+    Remove-Item -Force $OutputPath -ErrorAction SilentlyContinue
+    Write-Host "==> downloading Microsoft Edge WebView2 Evergreen Bootstrapper"
+    Invoke-WebRequest -Uri $Uri -OutFile $OutputPath -UseBasicParsing -TimeoutSec 120
+    Assert-NonEmptyFile -Path $OutputPath -Description "Microsoft Edge WebView2 Evergreen Bootstrapper"
+}
+
 function Assert-WindowsStagedPayload {
     param(
         [string]$PortableRoot,
@@ -251,6 +278,9 @@ $NsisScript = Join-Path $RootDir "packaging\windows\installer.nsi"
 $PortableNsisScript = Join-Path $RootDir "packaging\windows\portable.nsi"
 $WixScript = Join-Path $RootDir "packaging\windows\installer.wxs"
 $WindowsIconPath = Join-Path $RootDir "resources\windows\terminaltiler.ico"
+$PrereqRoot = Join-Path $RootDir "packaging\.build\windows-prereqs"
+$WebView2BootstrapperUrl = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+$WebView2BootstrapperPath = Join-Path $PrereqRoot "MicrosoftEdgeWebview2Setup.exe"
 
 Assert-Path -Path $WindowsIconPath -Description "TerminalTiler Windows icon"
 
@@ -310,9 +340,10 @@ Runtime selection:
 - TerminalTiler falls back to PowerShell when WSL2 is unavailable.
 
 Browser tiles:
-- Web tiles require Microsoft Edge WebView2 Runtime (Evergreen).
-- Install it before opening any preset or restored session that includes browser tiles.
-- Download: https://go.microsoft.com/fwlink/p/?LinkId=2124703
+- Web tiles use Microsoft Edge WebView2 Runtime (Evergreen).
+- The TerminalTiler setup installer installs the Evergreen runtime automatically when it is missing.
+- Portable and MSI artifacts require WebView2 to already be installed.
+- Download if needed: https://go.microsoft.com/fwlink/p/?LinkId=2124703
 
 Launch:
 - Run TerminalTiler.exe
@@ -358,6 +389,7 @@ Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
 if ($Makensis) {
+    Save-WebView2Bootstrapper -OutputPath $WebView2BootstrapperPath -Uri $WebView2BootstrapperUrl
     Write-Host "==> building NSIS installer"
     Remove-Item -Force $InstallerPath, $InstallerLatestPath -ErrorAction SilentlyContinue
     & $Makensis `
@@ -365,6 +397,7 @@ if ($Makensis) {
         "/DSTAGE_DIR=$PortableRoot" `
         "/DOUT_FILE=$InstallerPath" `
         "/DICON_FILE=$WindowsIconPath" `
+        "/DWEBVIEW2_BOOTSTRAPPER=$WebView2BootstrapperPath" `
         $NsisScript
 
     if (-not (Test-Path $InstallerPath)) {

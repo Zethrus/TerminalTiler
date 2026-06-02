@@ -602,6 +602,9 @@ function Invoke-LaunchSmoke {
             if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored interactive GTK workspace with") {
                 throw "$Label did not restore inside the shared interactive GTK workspace.`n$logText"
             }
+            if ($ProfileKind -eq "mixed" -and $logText -notmatch "Windows GTK WebView2 tile navigating to https://example.com") {
+                throw "$Label did not initialize the restored WebView2 browser tile.`n$logText"
+            }
             if ($logText -match "opened \d+ restored Windows workspace host window") {
                 throw "$Label unexpectedly opened the legacy Win32 workspace host from the GTK parity shell.`n$logText"
             }
@@ -767,11 +770,12 @@ if ($ExpectGtkShell) {
 }
 Assert-NsisIconMetadata -InstallRoot $NsisInstallRoot
 
+$NsisSmokeProfileKind = "mixed"
 Invoke-OptionalLaunchSmoke `
     -ExePath $InstalledExe `
     -SandboxRoot (Join-Path $SmokeRoot "installed-profile") `
     -Label "Installed build" `
-    -ProfileKind $SmokeProfileKind `
+    -ProfileKind $NsisSmokeProfileKind `
     -SkipLaunchSmoke $SkipLaunchSmoke `
     -SkipMessage "skipping NSIS-installed executable launch smoke"
 

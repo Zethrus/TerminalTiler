@@ -2174,6 +2174,31 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     }
 
     assert!(
+        WINDOWS_BUILD_PS1.contains("function Save-WebView2Bootstrapper")
+            && WINDOWS_BUILD_PS1.contains("Invoke-WebRequest -Uri $Uri")
+            && WINDOWS_BUILD_PS1.contains("Assert-NonEmptyFile")
+            && WINDOWS_BUILD_PS1.contains("MicrosoftEdgeWebview2Setup.exe")
+            && WINDOWS_BUILD_PS1.contains("https://go.microsoft.com/fwlink/p/?LinkId=2124703")
+            && WINDOWS_BUILD_PS1.contains(r#""/DWEBVIEW2_BOOTSTRAPPER=$WebView2BootstrapperPath""#)
+            && WINDOWS_INSTALLER_NSI.contains("WEBVIEW2_BOOTSTRAPPER")
+            && WINDOWS_INSTALLER_NSI.contains("{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+            && WINDOWS_INSTALLER_NSI.contains("Function DetectWebView2Runtime")
+            && WINDOWS_INSTALLER_NSI.contains("SetRegView 32")
+            && WINDOWS_INSTALLER_NSI.contains("SetRegView 64")
+            && WINDOWS_INSTALLER_NSI.contains(r#"ReadRegStr $1 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_GUID}" "pv""#)
+            && WINDOWS_INSTALLER_NSI.contains(r#"ReadRegStr $1 HKCU "Software\Microsoft\EdgeUpdate\Clients\${WEBVIEW2_CLIENT_GUID}" "pv""#)
+            && WINDOWS_INSTALLER_NSI.contains("Call EnsureWebView2Runtime")
+            && WINDOWS_INSTALLER_NSI.contains("File /oname=MicrosoftEdgeWebview2Setup.exe")
+            && WINDOWS_INSTALLER_NSI.contains(r#"ExecWait '"$PLUGINSDIR\MicrosoftEdgeWebview2Setup.exe" /silent /install' $1"#)
+            && WINDOWS_INSTALLER_NSI.contains("SetErrorLevel 2")
+            && WINDOWS_INSTALLER_NSI.contains("MessageBox MB_ICONEXCLAMATION|MB_OK")
+            && !WINDOWS_INSTALLER_NSI.contains("Browser tiles require Microsoft Edge WebView2 Runtime. Install the Evergreen runtime")
+            && WINDOWS_SMOKE_PS1.contains(r#"$NsisSmokeProfileKind = "mixed""#)
+            && WINDOWS_SMOKE_PS1.contains("Windows GTK WebView2 tile navigating to https://example.com"),
+        "Windows setup installer should bundle the WebView2 Evergreen bootstrapper, silently install it only when the runtime is missing, and smoke the installed browser tile path"
+    );
+
+    assert!(
         WINDOWS_INSTALLER_TOOLS_PS1.contains("heat.exe")
             && WINDOWS_BUILD_PS1.contains("HarvestedPayloadComponents")
             && WINDOWS_BUILD_PS1.contains(r#""-var" "var.StageDir""#)
