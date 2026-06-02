@@ -466,6 +466,8 @@ fn windows_gtk_workspace_tabs_detach_and_reattach_like_linux_tabs() {
             && WINDOWS_GTK_APP_RS.contains("Close Detached Workspace?")
             && WINDOWS_GTK_APP_RS.contains("detached_preview.take_single_tab_for_transfer()")
             && WINDOWS_GTK_APP_RS.contains("main_preview.push_detached_tab(detached_tab)")
+            && WINDOWS_GTK_APP_RS.contains("let title_right_click = gtk::GestureClick::builder()")
+            && WINDOWS_GTK_APP_RS.contains("title_shell.add_controller(title_right_click)")
             && WINDOWS_GTK_APP_RS
                 .contains("shell_state.unregister_detached_preview(&detached_preview)")
             && WINDOWS_GTK_APP_RS.contains(

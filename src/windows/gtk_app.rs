@@ -2841,6 +2841,19 @@ mod imp {
         }
         header.add_controller(right_click);
 
+        let title_right_click = gtk::GestureClick::builder()
+            .button(3)
+            .propagation_phase(gtk::PropagationPhase::Capture)
+            .build();
+        {
+            let popover = popover.clone();
+            title_right_click.connect_pressed(move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                context_menu::popup_at(&popover, x, y);
+            });
+        }
+        title_shell.add_controller(title_right_click);
+
         let force_close = Rc::new(Cell::new(false));
         {
             let detached_preview = detached_preview.clone();
