@@ -11,6 +11,7 @@ mod imp {
     use glib::value::ToValue;
     use gtk::{gdk, gio, glib};
 
+    use super::gtk_tray::WindowsGtkTrayController;
     use crate::extension::RuntimeOptions;
     use crate::logging;
     use crate::model::layout::DEFAULT_WEB_URL;
@@ -224,20 +225,32 @@ mod imp {
         let quit_requested = Rc::new(Cell::new(false));
         let force_quit_requested = Rc::new(Cell::new(false));
         let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background));
+        let open_settings_dialog_handle: VoidCallbackHandle = Rc::new(RefCell::new(None));
+        let tray_controller = WindowsGtkTrayController::new(
+            &window,
+            Rc::downgrade(&open_settings_dialog_handle),
+            force_quit_requested.clone(),
+            options.product.display_name.clone(),
+        );
         shell_state.launch_deck_active.set(true);
         {
             let shell_state = shell_state.clone();
             let quit_requested = quit_requested.clone();
             let force_quit_requested = force_quit_requested.clone();
             let current_close_to_background = current_close_to_background.clone();
+            let tray_controller = tray_controller.clone();
             window.connect_close_request(move |window| {
                 if force_quit_requested.replace(false) {
+                    tray_controller.shutdown();
                     shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
                     return glib::Propagation::Proceed;
                 }
 
                 if !quit_requested.replace(false) && current_close_to_background.get() {
-                    logging::info("minimizing Windows GTK shell to background");
+                    if tray_controller.hide_window_to_tray() {
+                        return glib::Propagation::Stop;
+                    }
+                    logging::info("Windows GTK tray unavailable; minimizing shell to background");
                     window.minimize();
                     return glib::Propagation::Stop;
                 }
@@ -259,6 +272,7 @@ mod imp {
                     return glib::Propagation::Stop;
                 }
 
+                tray_controller.shutdown();
                 shutdown_windows_gtk_shell(&shell_state, "closing Windows GTK application");
                 glib::Propagation::Proceed
             });
@@ -436,6 +450,7 @@ mod imp {
                 let settings_context = settings_context.clone();
                 move || present_settings_dialog(settings_context.clone())
             });
+            *open_settings_dialog_handle.borrow_mut() = Some(open_settings_dialog.clone());
             {
                 let open_settings_dialog = open_settings_dialog.clone();
                 settings_button.connect_clicked(move |_| open_settings_dialog());
@@ -468,6 +483,7 @@ mod imp {
             &shell_state,
         );
         window.present();
+        tray_controller.install();
 
         if dialog_smoke::is_enabled() {
             dialog_smoke::start(&window);

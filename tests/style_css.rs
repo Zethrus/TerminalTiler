@@ -51,6 +51,7 @@ const WINDOWS_CAPTURE_RELEASE_VISUALS_PS1: &str =
     include_str!("../packaging/capture-windows-release-gtk-visuals.ps1");
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
 const WINDOWS_GTK_RUNTIME_RS: &str = include_str!("../src/windows/gtk_runtime.rs");
+const WINDOWS_GTK_TRAY_RS: &str = include_str!("../src/windows/gtk_tray.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
 const WINDOWS_INSTALLER_NSI: &str = include_str!("../packaging/windows/installer.nsi");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
@@ -872,9 +873,18 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS
                 .contains("let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background))")
             && WINDOWS_GTK_APP_RS.contains("!quit_requested.replace(false) && current_close_to_background.get()")
+            && WINDOWS_MOD_RS.contains("mod gtk_tray;")
+            && WINDOWS_GTK_APP_RS.contains("WindowsGtkTrayController::new(")
+            && WINDOWS_GTK_APP_RS.contains("tray_controller.hide_window_to_tray()")
+            && WINDOWS_GTK_TRAY_RS.contains("pub(super) struct WindowsGtkTrayController")
+            && WINDOWS_GTK_TRAY_RS.contains("Shell_NotifyIconW(NIM_ADD")
+            && WINDOWS_GTK_TRAY_RS.contains("WM_WINDOWS_GTK_TRAYICON")
+            && WINDOWS_GTK_TRAY_RS.contains("Show / Restore")
+            && WINDOWS_GTK_TRAY_RS.contains("Open Settings")
+            && WINDOWS_GTK_TRAY_RS.contains("hiding Windows GTK shell window to tray")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK tray unavailable; minimizing shell to background")
             && WINDOWS_GTK_APP_RS.contains("window.minimize()")
             && WINDOWS_GTK_APP_RS.contains("quit_requested.set(true)")
-            && WINDOWS_GTK_APP_RS.contains("minimizing Windows GTK shell to background")
             && WINDOWS_GTK_APP_RS.contains("current_close_to_background.set(close_to_background)")
             && WINDOWS_GTK_APP_RS.contains("current_close_to_background.set(defaults.close_to_background)")
             && WINDOWS_GTK_APP_RS.contains("let force_quit_requested = Rc::new(Cell::new(false))")
