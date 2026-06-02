@@ -293,6 +293,26 @@ mod imp {
             refresh_launch_deck_handle: refresh_launch_deck_handle.clone(),
         };
         let refresh_launch_deck_weak = Rc::downgrade(&launch_context.refresh_launch_deck_handle);
+        let settings_context = WindowsSettingsDialogContext {
+            window: window.clone(),
+            overlay: overlay.clone(),
+            title: title.clone(),
+            fullscreen_button: fullscreen_button.clone(),
+            shell_state: shell_state.clone(),
+            current_close_to_background: current_close_to_background.clone(),
+            preference_store: preference_store.clone(),
+            preset_store: preset_store.clone(),
+            options: options.clone(),
+            voice_toast_tx: voice_toast_tx.clone(),
+            workspace_fullscreen_shortcut_controller: workspace_fullscreen_shortcut_controller
+                .clone(),
+            workspace_density_shortcut_controller: workspace_density_shortcut_controller.clone(),
+            workspace_zoom_in_shortcut_controller: workspace_zoom_in_shortcut_controller.clone(),
+            workspace_zoom_out_shortcut_controller: workspace_zoom_out_shortcut_controller.clone(),
+            command_palette_shortcut_controller: command_palette_shortcut_controller.clone(),
+            open_command_palette_handle: open_command_palette_handle.clone(),
+            refresh_launch_deck_handle: refresh_launch_deck_weak.clone(),
+        };
 
         let launch = build_windows_launch_deck(
             &launch_context,
@@ -352,24 +372,8 @@ mod imp {
                 let back_button = back_button.clone();
                 let fullscreen_button = fullscreen_button.clone();
                 let shell_state = shell_state.clone();
-                let current_close_to_background = current_close_to_background.clone();
-                let preference_store = preference_store.clone();
-                let preset_store = preset_store.clone();
+                let settings_context = settings_context.clone();
                 let asset_store = asset_store.clone();
-                let options = options.clone();
-                let voice_toast_tx = voice_toast_tx.clone();
-                let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
-                let workspace_fullscreen_shortcut_controller =
-                    workspace_fullscreen_shortcut_controller.clone();
-                let workspace_density_shortcut_controller =
-                    workspace_density_shortcut_controller.clone();
-                let workspace_zoom_in_shortcut_controller =
-                    workspace_zoom_in_shortcut_controller.clone();
-                let workspace_zoom_out_shortcut_controller =
-                    workspace_zoom_out_shortcut_controller.clone();
-                let command_palette_shortcut_controller =
-                    command_palette_shortcut_controller.clone();
-                let open_command_palette_handle = open_command_palette_handle.clone();
                 move || {
                     let Some(launch) = launch_widget_handle.borrow().as_ref().cloned() else {
                         return;
@@ -382,19 +386,8 @@ mod imp {
                         &back_button,
                         &fullscreen_button,
                         &shell_state,
-                        current_close_to_background.clone(),
-                        preference_store.clone(),
-                        preset_store.clone(),
+                        settings_context.clone(),
                         asset_store.clone(),
-                        options.clone(),
-                        voice_toast_tx.clone(),
-                        workspace_fullscreen_shortcut_controller.clone(),
-                        workspace_density_shortcut_controller.clone(),
-                        workspace_zoom_in_shortcut_controller.clone(),
-                        workspace_zoom_out_shortcut_controller.clone(),
-                        command_palette_shortcut_controller.clone(),
-                        open_command_palette_handle.clone(),
-                        refresh_launch_deck_handle.clone(),
                     );
                 }
             });
@@ -440,49 +433,8 @@ mod imp {
                 "workspace_zoom_out",
             );
             let open_settings_dialog: Rc<dyn Fn()> = Rc::new({
-                let window = window.clone();
-                let overlay = overlay.clone();
-                let title = title.clone();
-                let fullscreen_button = fullscreen_button.clone();
-                let shell_state = shell_state.clone();
-                let current_close_to_background = current_close_to_background.clone();
-                let preference_store = preference_store.clone();
-                let preset_store = preset_store.clone();
-                let options = options.clone();
-                let voice_toast_tx = voice_toast_tx.clone();
-                let workspace_fullscreen_shortcut_controller =
-                    workspace_fullscreen_shortcut_controller.clone();
-                let workspace_density_shortcut_controller =
-                    workspace_density_shortcut_controller.clone();
-                let workspace_zoom_in_shortcut_controller =
-                    workspace_zoom_in_shortcut_controller.clone();
-                let workspace_zoom_out_shortcut_controller =
-                    workspace_zoom_out_shortcut_controller.clone();
-                let command_palette_shortcut_controller =
-                    command_palette_shortcut_controller.clone();
-                let open_command_palette_handle = open_command_palette_handle.clone();
-                let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
-                move || {
-                    present_settings_dialog(
-                        &window,
-                        &overlay,
-                        &title,
-                        &fullscreen_button,
-                        &shell_state,
-                        current_close_to_background.clone(),
-                        preference_store.clone(),
-                        preset_store.clone(),
-                        options.clone(),
-                        voice_toast_tx.clone(),
-                        workspace_fullscreen_shortcut_controller.clone(),
-                        workspace_density_shortcut_controller.clone(),
-                        workspace_zoom_in_shortcut_controller.clone(),
-                        workspace_zoom_out_shortcut_controller.clone(),
-                        command_palette_shortcut_controller.clone(),
-                        open_command_palette_handle.clone(),
-                        refresh_launch_deck_handle.clone(),
-                    );
-                }
+                let settings_context = settings_context.clone();
+                move || present_settings_dialog(settings_context.clone())
             });
             {
                 let open_settings_dialog = open_settings_dialog.clone();
@@ -579,28 +531,29 @@ mod imp {
         );
     }
 
-    fn present_settings_dialog(
-        window: &adw::ApplicationWindow,
-        overlay: &adw::ToastOverlay,
-        title: &TitleChrome,
-        fullscreen_button: &gtk::Button,
-        shell_state: &WindowsGtkShellState,
-        current_close_to_background: Rc<Cell<bool>>,
-        preference_store: PreferenceStore,
-        preset_store: PresetStore,
-        options: RuntimeOptions,
-        voice_toast_tx: mpsc::Sender<String>,
-        workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
-        workspace_density_shortcut_controller: ShortcutControllerHandle,
-        workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
-        workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
-        command_palette_shortcut_controller: ShortcutControllerHandle,
-        open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
-        refresh_launch_deck_handle: WeakVoidCallbackHandle,
-    ) {
+    fn present_settings_dialog(context: WindowsSettingsDialogContext) {
+        let WindowsSettingsDialogContext {
+            window,
+            overlay,
+            title,
+            fullscreen_button,
+            shell_state,
+            current_close_to_background,
+            preference_store,
+            preset_store,
+            options,
+            voice_toast_tx,
+            workspace_fullscreen_shortcut_controller,
+            workspace_density_shortcut_controller,
+            workspace_zoom_in_shortcut_controller,
+            workspace_zoom_out_shortcut_controller,
+            command_palette_shortcut_controller,
+            open_command_palette_handle,
+            refresh_launch_deck_handle,
+        } = context;
         let preferences = preference_store.load();
         settings_dialog::present(
-            window,
+            &window,
             settings_dialog::SettingsDialogInput {
                 default_theme: preferences.default_theme,
                 default_density: preferences.default_density,
@@ -2398,6 +2351,27 @@ mod imp {
     type WeakVoidCallbackHandle = Weak<RefCell<Option<Rc<dyn Fn()>>>>;
 
     #[derive(Clone)]
+    struct WindowsSettingsDialogContext {
+        window: adw::ApplicationWindow,
+        overlay: adw::ToastOverlay,
+        title: TitleChrome,
+        fullscreen_button: gtk::Button,
+        shell_state: WindowsGtkShellState,
+        current_close_to_background: Rc<Cell<bool>>,
+        preference_store: PreferenceStore,
+        preset_store: PresetStore,
+        options: RuntimeOptions,
+        voice_toast_tx: mpsc::Sender<String>,
+        workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
+        workspace_density_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
+        workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
+        command_palette_shortcut_controller: ShortcutControllerHandle,
+        open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+        refresh_launch_deck_handle: WeakVoidCallbackHandle,
+    }
+
+    #[derive(Clone)]
     struct WindowsLaunchDeckContext {
         app: adw::Application,
         window: adw::ApplicationWindow,
@@ -2413,7 +2387,6 @@ mod imp {
         refresh_launch_deck_handle: VoidCallbackHandle,
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn present_command_palette(
         window: &adw::ApplicationWindow,
         overlay: &adw::ToastOverlay,
@@ -2422,66 +2395,14 @@ mod imp {
         back_button: &gtk::Button,
         fullscreen_button: &gtk::Button,
         shell_state: &WindowsGtkShellState,
-        current_close_to_background: Rc<Cell<bool>>,
-        preference_store: PreferenceStore,
-        preset_store: PresetStore,
+        settings_context: WindowsSettingsDialogContext,
         asset_store: AssetStore,
-        options: RuntimeOptions,
-        voice_toast_tx: mpsc::Sender<String>,
-        workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
-        workspace_density_shortcut_controller: ShortcutControllerHandle,
-        workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
-        workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
-        command_palette_shortcut_controller: ShortcutControllerHandle,
-        open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
-        refresh_launch_deck_handle: WeakVoidCallbackHandle,
     ) {
         let mut actions = command_palette::app_actions(command_palette::AppActionCallbacks {
-            product_display_name: options.product.display_name.clone(),
+            product_display_name: settings_context.options.product.display_name.clone(),
             open_settings: Rc::new({
-                let window = window.clone();
-                let overlay = overlay.clone();
-                let title = title.clone();
-                let fullscreen_button = fullscreen_button.clone();
-                let shell_state = shell_state.clone();
-                let current_close_to_background = current_close_to_background.clone();
-                let preference_store = preference_store.clone();
-                let preset_store = preset_store.clone();
-                let options = options.clone();
-                let voice_toast_tx = voice_toast_tx.clone();
-                let workspace_fullscreen_shortcut_controller =
-                    workspace_fullscreen_shortcut_controller.clone();
-                let workspace_density_shortcut_controller =
-                    workspace_density_shortcut_controller.clone();
-                let workspace_zoom_in_shortcut_controller =
-                    workspace_zoom_in_shortcut_controller.clone();
-                let workspace_zoom_out_shortcut_controller =
-                    workspace_zoom_out_shortcut_controller.clone();
-                let command_palette_shortcut_controller =
-                    command_palette_shortcut_controller.clone();
-                let open_command_palette_handle = open_command_palette_handle.clone();
-                let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
-                move || {
-                    present_settings_dialog(
-                        &window,
-                        &overlay,
-                        &title,
-                        &fullscreen_button,
-                        &shell_state,
-                        current_close_to_background.clone(),
-                        preference_store.clone(),
-                        preset_store.clone(),
-                        options.clone(),
-                        voice_toast_tx.clone(),
-                        workspace_fullscreen_shortcut_controller.clone(),
-                        workspace_density_shortcut_controller.clone(),
-                        workspace_zoom_in_shortcut_controller.clone(),
-                        workspace_zoom_out_shortcut_controller.clone(),
-                        command_palette_shortcut_controller.clone(),
-                        open_command_palette_handle.clone(),
-                        refresh_launch_deck_handle.clone(),
-                    );
-                }
+                let settings_context = settings_context.clone();
+                move || present_settings_dialog(settings_context.clone())
             }),
             open_assets_manager: Rc::new({
                 let window = window.clone();
@@ -2491,7 +2412,7 @@ mod imp {
             }),
             open_about: Rc::new({
                 let window = window.clone();
-                let options = options.clone();
+                let options = settings_context.options.clone();
                 move || about_dialog::present(&window, &options.product)
             }),
             new_tab: Rc::new({
@@ -2514,7 +2435,7 @@ mod imp {
                     );
                 }
             }),
-            open_companion: options.companion.clone().map(|companion| {
+            open_companion: settings_context.options.companion.clone().map(|companion| {
                 Rc::new({
                     let window = window.clone();
                     move || companion_dialog::present(&window, companion.clone())
