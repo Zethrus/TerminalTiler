@@ -972,6 +972,15 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("preview.send_text_to_focused_terminal(&text)")
             && WINDOWS_GTK_APP_RS.contains("sync_windows_voice_global_hotkey")
             && WINDOWS_GTK_APP_RS.contains("handle_windows_voice_global_hotkey_activation")
+            && WINDOWS_GTK_APP_RS.contains("active_voice_target")
+            && WINDOWS_GTK_APP_RS.contains("fn voice_target(&self)")
+            && WINDOWS_GTK_APP_RS.contains("shell_state.set_voice_target(&detached_preview)")
+            && WINDOWS_GTK_APP_RS.contains("fn install_detached_windows_voice_controls(")
+            && WINDOWS_GTK_APP_RS
+                .contains("detached_workspace_overlay.add_overlay(&detached_voice_hud.widget())")
+            && WINDOWS_GTK_APP_RS.contains("detached_preview.send_text_to_focused_terminal(&text)")
+            && WINDOWS_GTK_APP_RS
+                .contains("Windows GTK detached workspace selected as voice dictation target")
             && WINDOWS_GTK_APP_RS.contains("WindowsGlobalHotkeyHandle::start")
             && WINDOWS_GTK_VOICE_HOTKEY_RS.contains("RegisterHotKey")
             && WINDOWS_GTK_VOICE_HOTKEY_RS.contains("WM_HOTKEY")
@@ -979,7 +988,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_PREVIEW_RS.contains("pub fn focused_terminal_available(&self)")
             && WORKSPACE_PREVIEW_RS
                 .contains("pub fn send_text_to_focused_terminal(&self, text: &str) -> bool"),
-        "Windows GTK should share the Linux voice HUD and provide app-scoped voice dictation into active GTK terminal runtimes instead of exposing only voice settings"
+        "Windows GTK should share the Linux voice HUD and provide app-scoped/global voice dictation into active main or detached GTK terminal runtimes instead of exposing only voice settings"
     );
 
     assert!(

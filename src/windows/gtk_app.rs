@@ -402,6 +402,14 @@ mod imp {
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
         let shell_state = WindowsGtkShellState::new(session_store.clone());
+        {
+            let shell_state = shell_state.clone();
+            window.connect_is_active_notify(move |window| {
+                if window.is_active() {
+                    shell_state.set_main_voice_target();
+                }
+            });
+        }
         let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
         let voice_transcriber = Rc::new(WindowsVoiceTranscriberHandle::start());
         let voice_listening = Rc::new(Cell::new(false));
@@ -415,6 +423,13 @@ mod imp {
         let force_quit_requested = Rc::new(Cell::new(false));
         let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background));
         let open_settings_dialog_handle: VoidCallbackHandle = Rc::new(RefCell::new(None));
+        shell_state.set_voice_runtime(WindowsVoiceRuntime {
+            preference_store: preference_store.clone(),
+            voice_transcriber: voice_transcriber.clone(),
+            voice_listening: voice_listening.clone(),
+            voice_starting: voice_starting.clone(),
+            voice_stopping: voice_stopping.clone(),
+        });
         let tray_controller = WindowsGtkTrayController::new(
             &window,
             Rc::downgrade(&open_settings_dialog_handle),
@@ -731,9 +746,7 @@ mod imp {
                                 continue;
                             }
                             let inserted = shell_state
-                                .preview
-                                .borrow()
-                                .as_ref()
+                                .voice_target()
                                 .map(|preview| preview.send_text_to_focused_terminal(&text))
                                 .unwrap_or(false);
                             if inserted {
@@ -1501,7 +1514,7 @@ mod imp {
             voice_starting.get(),
             voice_stopping.get(),
         ));
-        let preview = shell_state.preview.borrow().as_ref().cloned();
+        let preview = shell_state.voice_target();
         let Some(preview) = preview else {
             voice_hud.show("No workspace target", None);
             overlay.add_toast(adw::Toast::new(
@@ -2032,17 +2045,64 @@ mod imp {
     #[derive(Clone)]
     struct WindowsGtkShellState {
         preview: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
+        active_voice_target: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
+        voice_runtime: Rc<RefCell<Option<WindowsVoiceRuntime>>>,
         launch_deck_active: Rc<Cell<bool>>,
         session_store: Rc<SessionStore>,
+    }
+
+    #[derive(Clone)]
+    struct WindowsVoiceRuntime {
+        preference_store: PreferenceStore,
+        voice_transcriber: Rc<WindowsVoiceTranscriberHandle>,
+        voice_listening: Rc<Cell<bool>>,
+        voice_starting: Rc<Cell<bool>>,
+        voice_stopping: Rc<Cell<bool>>,
     }
 
     impl WindowsGtkShellState {
         fn new(session_store: SessionStore) -> Self {
             Self {
                 preview: Rc::new(RefCell::new(None)),
+                active_voice_target: Rc::new(RefCell::new(None)),
+                voice_runtime: Rc::new(RefCell::new(None)),
                 launch_deck_active: Rc::new(Cell::new(false)),
                 session_store: Rc::new(session_store),
             }
+        }
+
+        fn voice_target(&self) -> Option<crate::ui::workspace_preview::SessionPreview> {
+            self.active_voice_target
+                .borrow()
+                .clone()
+                .or_else(|| self.preview.borrow().clone())
+        }
+
+        fn set_voice_target(&self, preview: &crate::ui::workspace_preview::SessionPreview) {
+            *self.active_voice_target.borrow_mut() = Some(preview.clone());
+        }
+
+        fn set_main_voice_target(&self) {
+            *self.active_voice_target.borrow_mut() = self.preview.borrow().clone();
+        }
+
+        fn clear_voice_target_if(&self, preview: &crate::ui::workspace_preview::SessionPreview) {
+            let should_clear = self
+                .active_voice_target
+                .borrow()
+                .as_ref()
+                .is_some_and(|target| session_preview_widgets_match(target, preview));
+            if should_clear {
+                self.set_main_voice_target();
+            }
+        }
+
+        fn set_voice_runtime(&self, runtime: WindowsVoiceRuntime) {
+            *self.voice_runtime.borrow_mut() = Some(runtime);
+        }
+
+        fn voice_runtime(&self) -> Option<WindowsVoiceRuntime> {
+            self.voice_runtime.borrow().clone()
         }
 
         fn has_workspace_tabs(&self) -> bool {
@@ -2075,6 +2135,13 @@ mod imp {
                 .as_ref()
                 .is_some_and(|preview| preview.has_active_processes())
         }
+    }
+
+    fn session_preview_widgets_match(
+        first: &crate::ui::workspace_preview::SessionPreview,
+        second: &crate::ui::workspace_preview::SessionPreview,
+    ) -> bool {
+        first.widget().as_ptr() == second.widget().as_ptr()
     }
 
     fn persist_windows_gtk_session(
@@ -2150,6 +2217,7 @@ mod imp {
 
         shell_state.launch_deck_active.set(false);
         preview.select_tab(index);
+        shell_state.set_voice_target(&preview);
         apply_active_preview_profile(window, &preview);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
@@ -2561,9 +2629,17 @@ mod imp {
         reattach_button.set_tooltip_text(Some("Reattach workspace to the main tab strip"));
         header.pack_end(&reattach_button);
 
+        let detached_voice_hud = VoiceHud::new();
+        let detached_workspace_overlay = gtk::Overlay::new();
+        detached_workspace_overlay.set_child(Some(&detached_preview.widget()));
+        detached_workspace_overlay.add_overlay(&detached_voice_hud.widget());
+
+        let detached_overlay = adw::ToastOverlay::new();
+        detached_overlay.set_child(Some(&detached_workspace_overlay));
+
         let detached_window_shell = build_window_shell();
         detached_window_shell.append(&header);
-        detached_window_shell.append(&detached_preview.widget());
+        detached_window_shell.append(&detached_overlay);
 
         let detached_window = adw::ApplicationWindow::builder()
             .application(app)
@@ -2603,6 +2679,25 @@ mod imp {
                 );
             });
         }
+        {
+            let shell_state = shell_state.clone();
+            let detached_preview = detached_preview.clone();
+            detached_window.connect_is_active_notify(move |window| {
+                if window.is_active() {
+                    shell_state.set_voice_target(&detached_preview);
+                    logging::info(
+                        "Windows GTK detached workspace selected as voice dictation target",
+                    );
+                }
+            });
+        }
+        install_detached_windows_voice_controls(
+            &detached_window,
+            shell_state,
+            &detached_preview,
+            detached_voice_hud.clone(),
+            detached_overlay.clone(),
+        );
 
         let reattaching = Rc::new(Cell::new(false));
         let do_reattach: Rc<dyn Fn()> = Rc::new({
@@ -2636,6 +2731,7 @@ mod imp {
                     next_index,
                 );
                 origin_window.present();
+                shell_state.set_main_voice_target();
                 reattaching.set(true);
                 detached_window.close();
             }
@@ -2676,11 +2772,13 @@ mod imp {
             let detached_preview = detached_preview.clone();
             let reattaching = reattaching.clone();
             let force_close_for_confirm = force_close.clone();
+            let shell_state = shell_state.clone();
             detached_window.connect_close_request(move |window| {
                 if reattaching.get() {
                     return glib::Propagation::Proceed;
                 }
                 if force_close_for_confirm.replace(false) {
+                    shell_state.clear_voice_target_if(&detached_preview);
                     detached_preview.terminate_all("closing detached Windows GTK workspace");
                     return glib::Propagation::Proceed;
                 }
@@ -2700,12 +2798,125 @@ mod imp {
                     );
                     return glib::Propagation::Stop;
                 }
+                shell_state.clear_voice_target_if(&detached_preview);
                 detached_preview.terminate_all("closing detached Windows GTK workspace");
                 glib::Propagation::Proceed
             });
         }
 
+        shell_state.set_voice_target(&detached_preview);
         detached_window.present();
+    }
+
+    fn install_detached_windows_voice_controls(
+        detached_window: &adw::ApplicationWindow,
+        shell_state: &WindowsGtkShellState,
+        detached_preview: &crate::ui::workspace_preview::SessionPreview,
+        detached_voice_hud: VoiceHud,
+        detached_overlay: adw::ToastOverlay,
+    ) {
+        let Some(runtime) = shell_state.voice_runtime() else {
+            return;
+        };
+
+        let detached_voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
+        let detached_voice_local_key_pressed = Rc::new(Cell::new(false));
+        let (detached_voice_event_tx, detached_voice_event_rx) =
+            mpsc::channel::<WindowsVoiceUiEvent>();
+
+        install_windows_voice_hotkey_controller(
+            detached_window,
+            &detached_voice_key_controller,
+            runtime.preference_store.clone(),
+            shell_state.clone(),
+            detached_voice_hud.clone(),
+            detached_overlay.clone(),
+            runtime.voice_transcriber.clone(),
+            runtime.voice_listening.clone(),
+            runtime.voice_starting.clone(),
+            runtime.voice_stopping.clone(),
+            detached_voice_local_key_pressed,
+            detached_voice_event_tx.clone(),
+        );
+
+        {
+            let detached_window_weak = detached_window.downgrade();
+            let detached_preview = detached_preview.clone();
+            let detached_voice_hud = detached_voice_hud.clone();
+            let detached_overlay = detached_overlay.clone();
+            let voice_starting = runtime.voice_starting.clone();
+            let voice_listening = runtime.voice_listening.clone();
+            let voice_stopping = runtime.voice_stopping.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(80), move || {
+                if detached_window_weak.upgrade().is_none() {
+                    return gtk::glib::ControlFlow::Break;
+                }
+                while let Ok(event) = detached_voice_event_rx.try_recv() {
+                    match event {
+                        WindowsVoiceUiEvent::ListeningStarted => {
+                            voice_starting.set(false);
+                            voice_listening.set(!voice_stopping.get());
+                        }
+                        WindowsVoiceUiEvent::Final(text) => {
+                            voice_starting.set(false);
+                            voice_listening.set(false);
+                            voice_stopping.set(false);
+                            if text.trim().is_empty() {
+                                detached_voice_hud.show("No speech detected", None);
+                                detached_voice_hud.hide_later();
+                                continue;
+                            }
+                            if detached_preview.send_text_to_focused_terminal(&text) {
+                                detached_voice_hud.show("Voice inserted", Some(&text));
+                                detached_voice_hud.hide_later();
+                            } else {
+                                detached_voice_hud.show("No focused terminal target", Some(&text));
+                                detached_overlay.add_toast(adw::Toast::new(
+                                    "Voice text was not inserted: no focused terminal pane",
+                                ));
+                            }
+                        }
+                        WindowsVoiceUiEvent::Partial(text) => {
+                            detached_voice_hud.show("Voice partial", Some(&text));
+                        }
+                        WindowsVoiceUiEvent::Status(message) => {
+                            if voice_stopping.get() && message == "Listening…" {
+                                continue;
+                            }
+                            detached_voice_hud.show(&message, None);
+                        }
+                        WindowsVoiceUiEvent::Error(message) => {
+                            voice_starting.set(false);
+                            voice_listening.set(false);
+                            voice_stopping.set(false);
+                            logging::error(format!(
+                                "Windows GTK detached voice transcription failed: {message}"
+                            ));
+                            detached_voice_hud.show("Voice error", Some(&message));
+                            detached_overlay
+                                .add_toast(adw::Toast::new("Voice transcription failed"));
+                        }
+                        WindowsVoiceUiEvent::GlobalHotkeyActivated => {}
+                    }
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+
+        {
+            let detached_window_weak = detached_window.downgrade();
+            let voice_transcriber = runtime.voice_transcriber.clone();
+            let voice_listening = runtime.voice_listening.clone();
+            gtk::glib::timeout_add_local(VOICE_AUDIO_FLUSH_INTERVAL, move || {
+                if detached_window_weak.upgrade().is_none() {
+                    return gtk::glib::ControlFlow::Break;
+                }
+                if voice_listening.get() {
+                    voice_transcriber.flush(&detached_voice_event_tx);
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2728,6 +2939,7 @@ mod imp {
         }
         if preview.snapshot().tabs.is_empty() {
             *shell_state.preview.borrow_mut() = None;
+            shell_state.set_main_voice_target();
             show_launch_deck_tab(
                 window,
                 overlay,
@@ -2784,6 +2996,7 @@ mod imp {
         if let Some(preview) = shell_state.preview.borrow().as_ref().cloned() {
             preview.push_tab(saved_tab);
             shell_state.launch_deck_active.set(false);
+            shell_state.set_voice_target(&preview);
             apply_active_preview_profile(window, &preview);
             overlay.set_child(Some(&preview.widget()));
             back_button.set_visible(true);
@@ -2859,6 +3072,7 @@ mod imp {
             );
         *shell_state.preview.borrow_mut() = Some(preview.clone());
         shell_state.launch_deck_active.set(false);
+        shell_state.set_voice_target(&preview);
         apply_active_preview_profile(window, &preview);
         overlay.set_child(Some(&preview.widget()));
         back_button.set_visible(true);
