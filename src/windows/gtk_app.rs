@@ -2126,14 +2126,17 @@ mod imp {
             &self,
             preview: &crate::ui::workspace_preview::SessionPreview,
         ) {
-            let mut detached_previews = self.detached_previews.borrow_mut();
-            if detached_previews
-                .iter()
-                .any(|detached| session_preview_widgets_match(detached, preview))
             {
-                return;
+                let mut detached_previews = self.detached_previews.borrow_mut();
+                if detached_previews
+                    .iter()
+                    .any(|detached| session_preview_widgets_match(detached, preview))
+                {
+                    return;
+                }
+                detached_previews.push(preview.clone());
             }
-            detached_previews.push(preview.clone());
+            self.save_preview_session("Windows GTK detached workspace registered");
         }
 
         fn unregister_detached_preview(
@@ -2144,6 +2147,7 @@ mod imp {
                 .borrow_mut()
                 .retain(|detached| !session_preview_widgets_match(detached, preview));
             self.clear_voice_target_if(preview);
+            self.save_preview_session("Windows GTK detached workspace unregistered");
         }
 
         fn has_workspace_tabs(&self) -> bool {

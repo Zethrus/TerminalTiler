@@ -451,6 +451,8 @@ fn windows_gtk_workspace_tabs_detach_and_reattach_like_linux_tabs() {
             && WINDOWS_GTK_APP_RS.contains("detached_previews")
             && WINDOWS_GTK_APP_RS.contains("fn register_detached_preview(")
             && WINDOWS_GTK_APP_RS.contains("fn unregister_detached_preview(")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK detached workspace registered")
+            && WINDOWS_GTK_APP_RS.contains("Windows GTK detached workspace unregistered")
             && WINDOWS_GTK_APP_RS.contains("fn combined_session_snapshot(&self)")
             && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Detach\", None)")
             && WINDOWS_GTK_APP_RS.contains("Workspace detached to a new window")
