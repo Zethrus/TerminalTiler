@@ -28,16 +28,19 @@ mod imp {
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
-        dialog_chrome, dialog_smoke, settings_dialog, tab_rename_dialog,
+        dialog_chrome, dialog_smoke, settings_dialog, tab_rename_dialog, voice_hud::VoiceHud,
     };
-    use crate::voice::VoicePackStatus;
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
+    use crate::voice::{
+        ParakeetTranscriber, VoiceActivationMode, VoiceEngineMode, VoicePackStatus,
+    };
     use crate::windows::gtk_tray::WindowsGtkTrayController;
 
     const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
     const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
+    const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
     pub fn run() -> ExitCode {
         run_with_options(RuntimeOptions::default())
@@ -96,6 +99,151 @@ mod imp {
         }
     }
 
+    enum WindowsVoiceTranscriberCommand {
+        Start {
+            manifest: pack::VoicePackManifest,
+            health: VoicePackHealth,
+            engine_mode: VoiceEngineMode,
+            microphone_id: Option<String>,
+            ui_tx: mpsc::Sender<WindowsVoiceUiEvent>,
+        },
+        Flush {
+            ui_tx: mpsc::Sender<WindowsVoiceUiEvent>,
+        },
+        Stop {
+            ui_tx: mpsc::Sender<WindowsVoiceUiEvent>,
+        },
+        Shutdown,
+    }
+
+    #[derive(Debug)]
+    enum WindowsVoiceUiEvent {
+        ListeningStarted,
+        Final(String),
+        Partial(String),
+        Status(String),
+        Error(String),
+    }
+
+    #[derive(Clone)]
+    struct WindowsVoiceTranscriberHandle {
+        tx: mpsc::Sender<WindowsVoiceTranscriberCommand>,
+    }
+
+    impl WindowsVoiceTranscriberHandle {
+        fn start() -> Self {
+            let (tx, rx) = mpsc::channel::<WindowsVoiceTranscriberCommand>();
+            std::thread::spawn(move || run_windows_voice_transcriber_worker(rx));
+            Self { tx }
+        }
+
+        fn start_capture(
+            &self,
+            manifest: pack::VoicePackManifest,
+            health: VoicePackHealth,
+            engine_mode: VoiceEngineMode,
+            microphone_id: Option<String>,
+            ui_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+        ) {
+            let _ = self.tx.send(WindowsVoiceTranscriberCommand::Start {
+                manifest,
+                health,
+                engine_mode,
+                microphone_id,
+                ui_tx: ui_tx.clone(),
+            });
+        }
+
+        fn flush(&self, ui_tx: &mpsc::Sender<WindowsVoiceUiEvent>) {
+            let _ = self.tx.send(WindowsVoiceTranscriberCommand::Flush {
+                ui_tx: ui_tx.clone(),
+            });
+        }
+
+        fn stop(&self, ui_tx: &mpsc::Sender<WindowsVoiceUiEvent>) {
+            let _ = self.tx.send(WindowsVoiceTranscriberCommand::Stop {
+                ui_tx: ui_tx.clone(),
+            });
+        }
+
+        fn shutdown(&self) {
+            let _ = self.tx.send(WindowsVoiceTranscriberCommand::Shutdown);
+        }
+    }
+
+    fn run_windows_voice_transcriber_worker(rx: mpsc::Receiver<WindowsVoiceTranscriberCommand>) {
+        let mut transcriber: Option<ParakeetTranscriber> = None;
+        for command in rx {
+            match command {
+                WindowsVoiceTranscriberCommand::Start {
+                    manifest,
+                    health,
+                    engine_mode,
+                    microphone_id,
+                    ui_tx,
+                } => {
+                    if let Some(mut previous) = transcriber.take() {
+                        let _ = previous.shutdown();
+                    }
+                    match ParakeetTranscriber::launch(&manifest, health, engine_mode).and_then(
+                        |mut transcriber| {
+                            transcriber.start_capture(microphone_id.as_deref())?;
+                            Ok(transcriber)
+                        },
+                    ) {
+                        Ok(next) => {
+                            transcriber = Some(next);
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::ListeningStarted);
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Status("Listening…".into()));
+                        }
+                        Err(error) => {
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Error(format!("{error:?}")));
+                        }
+                    }
+                }
+                WindowsVoiceTranscriberCommand::Flush { ui_tx } => {
+                    let Some(transcriber) = transcriber.as_mut() else {
+                        continue;
+                    };
+                    match transcriber.flush_captured_audio() {
+                        Ok(Some(partial)) => {
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Partial(partial));
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Error(format!("{error:?}")));
+                        }
+                    }
+                }
+                WindowsVoiceTranscriberCommand::Stop { ui_tx } => {
+                    let Some(mut transcriber) = transcriber.take() else {
+                        let _ = ui_tx.send(WindowsVoiceUiEvent::Final(String::new()));
+                        continue;
+                    };
+                    let partial_tx = ui_tx.clone();
+                    let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
+                        let _ = partial_tx.send(WindowsVoiceUiEvent::Partial(partial));
+                    });
+                    let _ = transcriber.shutdown();
+                    match result {
+                        Ok(text) => {
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Final(text));
+                        }
+                        Err(error) => {
+                            let _ = ui_tx.send(WindowsVoiceUiEvent::Error(format!("{error:?}")));
+                        }
+                    }
+                }
+                WindowsVoiceTranscriberCommand::Shutdown => {
+                    if let Some(mut transcriber) = transcriber.take() {
+                        let _ = transcriber.shutdown();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     fn present_launch_window(app: &adw::Application, options: &RuntimeOptions) {
         if let Some(window) = primary_window(app) {
             window.present();
@@ -123,6 +271,10 @@ mod imp {
         let title = app_header.title;
 
         let overlay = adw::ToastOverlay::new();
+        let voice_hud = VoiceHud::new();
+        let content_overlay = gtk::Overlay::new();
+        content_overlay.set_child(Some(&overlay));
+        content_overlay.add_overlay(&voice_hud.widget());
         let titlebar_actions = build_main_titlebar_actions(&header, options.companion.is_some());
         let back_button = titlebar_actions.back_button;
         let fullscreen_button = titlebar_actions.fullscreen_button;
@@ -132,7 +284,7 @@ mod imp {
 
         let window_shell = build_window_shell();
         window_shell.append(&header);
-        window_shell.append(&overlay);
+        window_shell.append(&content_overlay);
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
@@ -222,6 +374,13 @@ mod imp {
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
         let shell_state = WindowsGtkShellState::new(session_store.clone());
+        let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
+        let voice_transcriber = Rc::new(WindowsVoiceTranscriberHandle::start());
+        let voice_listening = Rc::new(Cell::new(false));
+        let voice_starting = Rc::new(Cell::new(false));
+        let voice_stopping = Rc::new(Cell::new(false));
+        let voice_local_key_pressed = Rc::new(Cell::new(false));
+        let (voice_event_tx, voice_event_rx) = mpsc::channel::<WindowsVoiceUiEvent>();
         let quit_requested = Rc::new(Cell::new(false));
         let force_quit_requested = Rc::new(Cell::new(false));
         let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background));
@@ -235,6 +394,7 @@ mod imp {
         shell_state.launch_deck_active.set(true);
         {
             let shell_state = shell_state.clone();
+            let voice_transcriber = voice_transcriber.clone();
             let quit_requested = quit_requested.clone();
             let force_quit_requested = force_quit_requested.clone();
             let current_close_to_background = current_close_to_background.clone();
@@ -242,6 +402,7 @@ mod imp {
             window.connect_close_request(move |window| {
                 if force_quit_requested.replace(false) {
                     tray_controller.shutdown();
+                    voice_transcriber.shutdown();
                     shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
                     return glib::Propagation::Proceed;
                 }
@@ -273,6 +434,7 @@ mod imp {
                 }
 
                 tray_controller.shutdown();
+                voice_transcriber.shutdown();
                 shutdown_windows_gtk_shell(&shell_state, "closing Windows GTK application");
                 glib::Propagation::Proceed
             });
@@ -472,6 +634,98 @@ mod imp {
                 window.add_action(&action);
             }
         }
+
+        install_windows_voice_hotkey_controller(
+            &window,
+            &voice_key_controller,
+            preference_store.clone(),
+            shell_state.clone(),
+            voice_hud.clone(),
+            overlay.clone(),
+            voice_transcriber.clone(),
+            voice_listening.clone(),
+            voice_starting.clone(),
+            voice_stopping.clone(),
+            voice_local_key_pressed.clone(),
+            voice_event_tx.clone(),
+        );
+
+        {
+            let shell_state = shell_state.clone();
+            let voice_hud = voice_hud.clone();
+            let overlay = overlay.clone();
+            let voice_listening = voice_listening.clone();
+            let voice_starting = voice_starting.clone();
+            let voice_stopping = voice_stopping.clone();
+            gtk::glib::timeout_add_local(Duration::from_millis(80), move || {
+                while let Ok(event) = voice_event_rx.try_recv() {
+                    match event {
+                        WindowsVoiceUiEvent::ListeningStarted => {
+                            voice_starting.set(false);
+                            voice_listening.set(!voice_stopping.get());
+                        }
+                        WindowsVoiceUiEvent::Final(text) => {
+                            voice_starting.set(false);
+                            voice_listening.set(false);
+                            voice_stopping.set(false);
+                            if text.trim().is_empty() {
+                                voice_hud.show("No speech detected", None);
+                                voice_hud.hide_later();
+                                continue;
+                            }
+                            let inserted = shell_state
+                                .preview
+                                .borrow()
+                                .as_ref()
+                                .map(|preview| preview.send_text_to_focused_terminal(&text))
+                                .unwrap_or(false);
+                            if inserted {
+                                voice_hud.show("Voice inserted", Some(&text));
+                                voice_hud.hide_later();
+                            } else {
+                                voice_hud.show("No focused terminal target", Some(&text));
+                                overlay.add_toast(adw::Toast::new(
+                                    "Voice text was not inserted: no focused terminal pane",
+                                ));
+                            }
+                        }
+                        WindowsVoiceUiEvent::Partial(text) => {
+                            voice_hud.show("Voice partial", Some(&text));
+                        }
+                        WindowsVoiceUiEvent::Status(message) => {
+                            if voice_stopping.get() && message == "Listening…" {
+                                continue;
+                            }
+                            voice_hud.show(&message, None);
+                        }
+                        WindowsVoiceUiEvent::Error(message) => {
+                            voice_starting.set(false);
+                            voice_listening.set(false);
+                            voice_stopping.set(false);
+                            logging::error(format!(
+                                "Windows GTK voice transcription failed: {message}"
+                            ));
+                            voice_hud.show("Voice error", Some(&message));
+                            overlay.add_toast(adw::Toast::new("Voice transcription failed"));
+                        }
+                    }
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+
+        {
+            let voice_transcriber = voice_transcriber.clone();
+            let voice_listening = voice_listening.clone();
+            let voice_event_tx = voice_event_tx.clone();
+            gtk::glib::timeout_add_local(VOICE_AUDIO_FLUSH_INTERVAL, move || {
+                if voice_listening.get() {
+                    voice_transcriber.flush(&voice_event_tx);
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+
         overlay.set_child(Some(&launch));
         sync_windows_shell_title_tabs(
             &window,
@@ -897,6 +1151,255 @@ mod imp {
                 }),
             },
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn install_windows_voice_hotkey_controller(
+        window: &adw::ApplicationWindow,
+        controller_handle: &VoiceKeyControllerHandle,
+        preference_store: PreferenceStore,
+        shell_state: WindowsGtkShellState,
+        voice_hud: VoiceHud,
+        overlay: adw::ToastOverlay,
+        voice_transcriber: Rc<WindowsVoiceTranscriberHandle>,
+        voice_listening: Rc<Cell<bool>>,
+        voice_starting: Rc<Cell<bool>>,
+        voice_stopping: Rc<Cell<bool>>,
+        voice_local_key_pressed: Rc<Cell<bool>>,
+        voice_event_tx: mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        if let Some(existing) = controller_handle.borrow_mut().take() {
+            window.remove_controller(&existing);
+        }
+
+        let controller = gtk::EventControllerKey::new();
+        controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+        {
+            let preference_store = preference_store.clone();
+            let shell_state = shell_state.clone();
+            let voice_hud = voice_hud.clone();
+            let overlay = overlay.clone();
+            let voice_transcriber = voice_transcriber.clone();
+            let voice_listening = voice_listening.clone();
+            let voice_starting = voice_starting.clone();
+            let voice_stopping = voice_stopping.clone();
+            let voice_local_key_pressed = voice_local_key_pressed.clone();
+            let voice_event_tx = voice_event_tx.clone();
+            controller.connect_key_pressed(move |_, key, _, state| {
+                let preferences = preference_store.load();
+                let voice = preferences.voice.clone();
+                if !windows_voice_key_event_matches(&voice.hotkey, key, state) {
+                    return glib::Propagation::Proceed;
+                }
+                if voice_local_key_pressed.replace(true) {
+                    logging::info("Windows GTK voice hotkey press ignored: repeat");
+                    return glib::Propagation::Stop;
+                }
+                logging::info("Windows GTK voice hotkey press matched");
+
+                if !voice.enabled {
+                    voice_hud.show("Voice disabled", None);
+                    overlay.add_toast(adw::Toast::new("Enable voice input in Settings first"));
+                    return glib::Propagation::Stop;
+                }
+
+                match voice.activation_mode {
+                    VoiceActivationMode::Toggle if voice_listening.get() => {
+                        stop_windows_voice_capture(
+                            &voice_transcriber,
+                            &voice_listening,
+                            &voice_stopping,
+                            &voice_hud,
+                            &voice_event_tx,
+                        );
+                    }
+                    VoiceActivationMode::Toggle | VoiceActivationMode::PushToTalk => {
+                        if !voice_listening.get() && !voice_starting.get() && !voice_stopping.get()
+                        {
+                            start_windows_voice_capture(
+                                &preference_store,
+                                &shell_state,
+                                &voice_hud,
+                                &overlay,
+                                &voice_transcriber,
+                                &voice_listening,
+                                &voice_starting,
+                                &voice_stopping,
+                                &voice_event_tx,
+                            );
+                        }
+                    }
+                }
+
+                glib::Propagation::Stop
+            });
+        }
+
+        {
+            let preference_store = preference_store.clone();
+            let voice_hud = voice_hud.clone();
+            let voice_transcriber = voice_transcriber.clone();
+            let voice_listening = voice_listening.clone();
+            let voice_starting = voice_starting.clone();
+            let voice_stopping = voice_stopping.clone();
+            let voice_local_key_pressed = voice_local_key_pressed.clone();
+            let voice_event_tx = voice_event_tx.clone();
+            controller.connect_key_released(move |_, key, _, _state| {
+                let preferences = preference_store.load();
+                let voice = preferences.voice.clone();
+                if !windows_voice_key_matches_accelerator_key(&voice.hotkey, key) {
+                    return;
+                }
+                voice_local_key_pressed.set(false);
+                if voice.activation_mode != VoiceActivationMode::PushToTalk {
+                    return;
+                }
+                logging::info("Windows GTK voice hotkey release matched");
+                if voice_starting.replace(false) && !voice_listening.get() {
+                    finish_pending_windows_voice_capture(
+                        &voice_transcriber,
+                        &voice_stopping,
+                        &voice_hud,
+                        &voice_event_tx,
+                    );
+                } else {
+                    stop_windows_voice_capture(
+                        &voice_transcriber,
+                        &voice_listening,
+                        &voice_stopping,
+                        &voice_hud,
+                        &voice_event_tx,
+                    );
+                }
+            });
+        }
+
+        window.add_controller(controller.clone());
+        *controller_handle.borrow_mut() = Some(controller);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_windows_voice_capture(
+        preference_store: &PreferenceStore,
+        shell_state: &WindowsGtkShellState,
+        voice_hud: &VoiceHud,
+        overlay: &adw::ToastOverlay,
+        voice_transcriber: &Rc<WindowsVoiceTranscriberHandle>,
+        voice_listening: &Rc<Cell<bool>>,
+        voice_starting: &Rc<Cell<bool>>,
+        voice_stopping: &Rc<Cell<bool>>,
+        voice_event_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        let preferences = preference_store.load();
+        let voice = preferences.voice.clone();
+        logging::info(format!(
+            "Windows GTK voice capture start requested enabled={} mode={} listening={} starting={} stopping={}",
+            voice.enabled,
+            voice.activation_mode.label(),
+            voice_listening.get(),
+            voice_starting.get(),
+            voice_stopping.get(),
+        ));
+        let preview = shell_state.preview.borrow().as_ref().cloned();
+        let Some(preview) = preview else {
+            voice_hud.show("No workspace target", None);
+            overlay.add_toast(adw::Toast::new(
+                "Open a workspace and focus a terminal pane before dictating",
+            ));
+            return;
+        };
+        if !preview.focused_terminal_available() {
+            voice_hud.show("No focused terminal target", None);
+            overlay.add_toast(adw::Toast::new("Focus a terminal pane before dictating"));
+            return;
+        }
+
+        let manifest = pack::builtin_parakeet_manifest();
+        let Some(root) = pack::default_voice_pack_dir() else {
+            voice_hud.show(
+                "Voice pack error",
+                Some("Could not resolve app data directory"),
+            );
+            return;
+        };
+        if let Err(detail) = refresh_builtin_voice_pack_assets_for_runtime(&root) {
+            logging::error(format!(
+                "Windows GTK voice capture blocked: could not refresh bundled voice pack assets: {detail}"
+            ));
+            voice_hud.show("Voice pack refresh failed", Some(&detail));
+            overlay.add_toast(adw::Toast::new("Voice pack refresh failed"));
+            return;
+        }
+        let health = pack::health_check(&root, &manifest);
+        if !matches!(health, VoicePackHealth::Ready { .. }) {
+            voice_hud.show(
+                "Voice pack not installed",
+                Some("Install NVIDIA Parakeet from Settings"),
+            );
+            overlay.add_toast(adw::Toast::new(
+                "Install the NVIDIA Parakeet voice pack in Settings first",
+            ));
+            return;
+        }
+
+        voice_listening.set(false);
+        voice_starting.set(true);
+        voice_stopping.set(false);
+        voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
+        voice_transcriber.start_capture(
+            manifest,
+            health,
+            voice.engine_mode,
+            voice.microphone_id,
+            voice_event_tx,
+        );
+    }
+
+    fn stop_windows_voice_capture(
+        voice_transcriber: &Rc<WindowsVoiceTranscriberHandle>,
+        voice_listening: &Rc<Cell<bool>>,
+        voice_stopping: &Rc<Cell<bool>>,
+        voice_hud: &VoiceHud,
+        voice_event_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        if !voice_listening.replace(false) {
+            logging::info("Windows GTK voice capture stop ignored: not listening");
+            return;
+        }
+        voice_stopping.set(true);
+        voice_hud.show("Finalizing voice text…", None);
+        voice_transcriber.stop(voice_event_tx);
+    }
+
+    fn finish_pending_windows_voice_capture(
+        voice_transcriber: &Rc<WindowsVoiceTranscriberHandle>,
+        voice_stopping: &Rc<Cell<bool>>,
+        voice_hud: &VoiceHud,
+        voice_event_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        voice_stopping.set(true);
+        voice_hud.show("Finalizing voice text…", None);
+        voice_transcriber.stop(voice_event_tx);
+    }
+
+    fn windows_voice_key_event_matches(
+        accelerator: &str,
+        key: gdk::Key,
+        state: gdk::ModifierType,
+    ) -> bool {
+        let Some((expected_key, expected_modifiers)) = gtk::accelerator_parse(accelerator) else {
+            return false;
+        };
+        let event_modifiers = state & gtk::accelerator_get_default_mod_mask();
+        key == expected_key && event_modifiers == expected_modifiers
+    }
+
+    fn windows_voice_key_matches_accelerator_key(accelerator: &str, key: gdk::Key) -> bool {
+        let Some((expected_key, _)) = gtk::accelerator_parse(accelerator) else {
+            return false;
+        };
+        key == expected_key
     }
 
     fn install_windows_voice_pack(
@@ -2362,6 +2865,7 @@ mod imp {
     }
 
     type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
+    type VoiceKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
     type LaunchWidgetHandle = Rc<RefCell<Option<gtk::Widget>>>;
     type VoidCallbackHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
     type WeakVoidCallbackHandle = Weak<RefCell<Option<Rc<dyn Fn()>>>>;

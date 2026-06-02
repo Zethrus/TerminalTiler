@@ -68,6 +68,7 @@ const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
+const VOICE_HUD_RS: &str = include_str!("../src/ui/voice_hud.rs");
 const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 
@@ -956,6 +957,22 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && VOICE_ENGINE_RS.contains("apply_background_spawn(&mut command)")
             && VOICE_ENGINE_RS.contains(".stderr(crate::voice::process::voice_engine_stderr())"),
         "Windows voice pack install and voice helper launches must run hidden and capture output instead of opening console windows"
+    );
+
+    assert!(
+        UI_MOD_RS.contains("pub mod voice_hud;")
+            && VOICE_HUD_RS.contains("pub struct VoiceHud")
+            && WINDOW_RS.contains("voice_hud::VoiceHud")
+            && WINDOWS_GTK_APP_RS.contains("voice_hud::VoiceHud")
+            && WINDOWS_GTK_APP_RS.contains("install_windows_voice_hotkey_controller")
+            && WINDOWS_GTK_APP_RS.contains("WindowsVoiceTranscriberHandle::start()")
+            && WINDOWS_GTK_APP_RS.contains("ParakeetTranscriber::launch")
+            && WINDOWS_GTK_APP_RS.contains("preview.focused_terminal_available()")
+            && WINDOWS_GTK_APP_RS.contains("preview.send_text_to_focused_terminal(&text)")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn focused_terminal_available(&self)")
+            && WORKSPACE_PREVIEW_RS
+                .contains("pub fn send_text_to_focused_terminal(&self, text: &str) -> bool"),
+        "Windows GTK should share the Linux voice HUD and provide app-scoped voice dictation into active GTK terminal runtimes instead of exposing only voice settings"
     );
 
     assert!(

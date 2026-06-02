@@ -483,6 +483,71 @@ impl SessionPreview {
         }
     }
 
+    pub fn send_text_to_focused_terminal(&self, text: &str) -> bool {
+        let session_ref = self.session.borrow();
+        let Some(tab_index) = active_tab_index(&session_ref, self.active_index.get()) else {
+            return false;
+        };
+        let Some(tab) = session_ref.tabs.get(tab_index) else {
+            return false;
+        };
+        let surfaces = self.runtime_surfaces.borrow();
+        let terminal_surfaces = tab
+            .preset
+            .layout
+            .tile_specs()
+            .into_iter()
+            .filter(|tile| tile.tile_kind == TileKind::Terminal)
+            .filter_map(|tile| {
+                let key = runtime_surface_key(tab_index, tab, &tile);
+                surfaces
+                    .get(&key)
+                    .and_then(|surface| surface.command_sender.as_ref().map(|send| (surface, send)))
+            })
+            .collect::<Vec<_>>();
+
+        terminal_surfaces
+            .iter()
+            .find(|(surface, _)| surface.widget.has_focus())
+            .or_else(|| {
+                if terminal_surfaces.len() == 1 {
+                    terminal_surfaces.first()
+                } else {
+                    None
+                }
+            })
+            .is_some_and(|(_, send)| send(text))
+    }
+
+    pub fn focused_terminal_available(&self) -> bool {
+        let session_ref = self.session.borrow();
+        let Some(tab_index) = active_tab_index(&session_ref, self.active_index.get()) else {
+            return false;
+        };
+        let Some(tab) = session_ref.tabs.get(tab_index) else {
+            return false;
+        };
+        let surfaces = self.runtime_surfaces.borrow();
+        let terminal_surfaces = tab
+            .preset
+            .layout
+            .tile_specs()
+            .into_iter()
+            .filter(|tile| tile.tile_kind == TileKind::Terminal)
+            .filter_map(|tile| {
+                let key = runtime_surface_key(tab_index, tab, &tile);
+                surfaces
+                    .get(&key)
+                    .filter(|surface| surface.command_sender.is_some())
+            })
+            .collect::<Vec<_>>();
+
+        terminal_surfaces
+            .iter()
+            .any(|surface| surface.widget.has_focus())
+            || terminal_surfaces.len() == 1
+    }
+
     pub fn cycle_active_density(&self) -> Option<ApplicationDensity> {
         let next_density = {
             let mut session = self.session.borrow_mut();

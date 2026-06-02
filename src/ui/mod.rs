@@ -116,6 +116,11 @@ pub(crate) mod transcript_dialog;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub mod voice_hud;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod web_context_menu;
 #[cfg(target_os = "linux")]
 pub mod web_tile;
