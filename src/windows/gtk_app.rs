@@ -11,7 +11,6 @@ mod imp {
     use glib::value::ToValue;
     use gtk::{gdk, gio, glib};
 
-    use super::gtk_tray::WindowsGtkTrayController;
     use crate::extension::RuntimeOptions;
     use crate::logging;
     use crate::model::layout::DEFAULT_WEB_URL;
@@ -35,6 +34,7 @@ mod imp {
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
+    use crate::windows::gtk_tray::WindowsGtkTrayController;
 
     const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
     const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";

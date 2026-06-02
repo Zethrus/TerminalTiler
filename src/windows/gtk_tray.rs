@@ -382,9 +382,10 @@ fn fill_wide_buffer(buffer: &mut [u16], value: &str) {
         *slot = 0;
     }
 
+    let writable_len = buffer.len().saturating_sub(1);
     for (slot, unit) in buffer
         .iter_mut()
-        .take(buffer.len().saturating_sub(1))
+        .take(writable_len)
         .zip(value.encode_utf16())
     {
         *slot = unit;
