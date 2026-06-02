@@ -980,6 +980,8 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("handle_windows_voice_global_hotkey_activation")
             && WINDOWS_GTK_APP_RS.contains("active_voice_target")
             && WINDOWS_GTK_APP_RS.contains("fn voice_target(&self)")
+            && WINDOWS_GTK_APP_RS.contains("if self.launch_deck_active.get()")
+            && WINDOWS_GTK_APP_RS.contains("shell_state.set_main_voice_target();")
             && WINDOWS_GTK_APP_RS.contains("shell_state.set_voice_target(&detached_preview)")
             && WINDOWS_GTK_APP_RS.contains("fn install_detached_windows_voice_controls(")
             && WINDOWS_GTK_APP_RS

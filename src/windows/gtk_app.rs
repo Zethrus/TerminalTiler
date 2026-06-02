@@ -2074,10 +2074,21 @@ mod imp {
         }
 
         fn voice_target(&self) -> Option<crate::ui::workspace_preview::SessionPreview> {
-            self.active_voice_target
-                .borrow()
-                .clone()
-                .or_else(|| self.preview.borrow().clone())
+            if let Some(target) = self.active_voice_target.borrow().clone() {
+                let is_main_preview = self
+                    .preview
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|preview| session_preview_widgets_match(preview, &target));
+                if !is_main_preview || !self.launch_deck_active.get() {
+                    return Some(target);
+                }
+            }
+            if self.launch_deck_active.get() {
+                None
+            } else {
+                self.preview.borrow().clone()
+            }
         }
 
         fn set_voice_target(&self, preview: &crate::ui::workspace_preview::SessionPreview) {
@@ -2085,7 +2096,11 @@ mod imp {
         }
 
         fn set_main_voice_target(&self) {
-            *self.active_voice_target.borrow_mut() = self.preview.borrow().clone();
+            *self.active_voice_target.borrow_mut() = if self.launch_deck_active.get() {
+                None
+            } else {
+                self.preview.borrow().clone()
+            };
         }
 
         fn clear_voice_target_if(&self, preview: &crate::ui::workspace_preview::SessionPreview) {
@@ -2231,6 +2246,7 @@ mod imp {
         shell_state: &WindowsGtkShellState,
     ) {
         shell_state.launch_deck_active.set(true);
+        shell_state.set_main_voice_target();
         apply_launch_deck_profile(window);
         overlay.set_child(Some(launch));
         back_button.set_visible(shell_state.has_workspace_tabs());
