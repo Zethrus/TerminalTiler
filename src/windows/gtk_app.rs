@@ -210,7 +210,7 @@ mod imp {
                     microphone_id,
                     ui_tx,
                 } => {
-                    if let Some(mut previous) = transcriber.take() {
+                    if let Some(previous) = transcriber.take() {
                         let _ = previous.shutdown();
                     }
                     match ParakeetTranscriber::launch(&manifest, health, engine_mode).and_then(
@@ -263,7 +263,7 @@ mod imp {
                     }
                 }
                 WindowsVoiceTranscriberCommand::Shutdown => {
-                    if let Some(mut transcriber) = transcriber.take() {
+                    if let Some(transcriber) = transcriber.take() {
                         let _ = transcriber.shutdown();
                     }
                     break;
@@ -513,6 +513,8 @@ mod imp {
             preset_store: preset_store.clone(),
             options: options.clone(),
             voice_toast_tx: voice_toast_tx.clone(),
+            voice_global_hotkey: voice_global_hotkey.clone(),
+            voice_event_tx: voice_event_tx.clone(),
             workspace_fullscreen_shortcut_controller: workspace_fullscreen_shortcut_controller
                 .clone(),
             workspace_density_shortcut_controller: workspace_density_shortcut_controller.clone(),
@@ -881,6 +883,8 @@ mod imp {
             preset_store,
             options,
             voice_toast_tx,
+            voice_global_hotkey,
+            voice_event_tx,
             workspace_fullscreen_shortcut_controller,
             workspace_density_shortcut_controller,
             workspace_zoom_in_shortcut_controller,
@@ -3078,6 +3082,8 @@ mod imp {
         preset_store: PresetStore,
         options: RuntimeOptions,
         voice_toast_tx: mpsc::Sender<String>,
+        voice_global_hotkey: Rc<RefCell<Option<WindowsVoiceGlobalHotkeyRegistration>>>,
+        voice_event_tx: mpsc::Sender<WindowsVoiceUiEvent>,
         workspace_fullscreen_shortcut_controller: ShortcutControllerHandle,
         workspace_density_shortcut_controller: ShortcutControllerHandle,
         workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
