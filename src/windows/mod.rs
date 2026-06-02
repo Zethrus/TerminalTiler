@@ -9,6 +9,8 @@ mod gtk_app;
 mod gtk_runtime;
 #[cfg(all(feature = "windows-gtk-shell", not(feature = "windows-win32-shell")))]
 mod gtk_tray;
+#[cfg(all(feature = "windows-gtk-shell", not(feature = "windows-win32-shell")))]
+mod gtk_voice_hotkey;
 mod launcher_editor;
 mod restore_prompt;
 pub mod runbook_dialog;

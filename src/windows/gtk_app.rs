@@ -5,7 +5,7 @@ mod imp {
     use std::process::ExitCode;
     use std::rc::{Rc, Weak};
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use adw::prelude::*;
     use glib::value::ToValue;
@@ -37,6 +37,7 @@ mod imp {
         ParakeetTranscriber, VoiceActivationMode, VoiceEngineMode, VoicePackStatus,
     };
     use crate::windows::gtk_tray::WindowsGtkTrayController;
+    use crate::windows::gtk_voice_hotkey::{WindowsGlobalHotkeyEvent, WindowsGlobalHotkeyHandle};
 
     const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
     const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
@@ -123,11 +124,38 @@ mod imp {
         Partial(String),
         Status(String),
         Error(String),
+        GlobalHotkeyActivated,
     }
 
     #[derive(Clone)]
     struct WindowsVoiceTranscriberHandle {
         tx: mpsc::Sender<WindowsVoiceTranscriberCommand>,
+    }
+
+    enum WindowsVoiceGlobalHotkeyRegistration {
+        Active {
+            shortcut: String,
+            handle: WindowsGlobalHotkeyHandle,
+        },
+        Unavailable {
+            shortcut: String,
+            last_attempt: Instant,
+        },
+    }
+
+    impl WindowsVoiceGlobalHotkeyRegistration {
+        fn shortcut(&self) -> &str {
+            match self {
+                Self::Active { shortcut, .. } | Self::Unavailable { shortcut, .. } => shortcut,
+            }
+        }
+
+        fn unavailable_retry_pending(&self) -> bool {
+            matches!(
+                self,
+                Self::Unavailable { last_attempt, .. } if last_attempt.elapsed() < Duration::from_secs(30)
+            )
+        }
     }
 
     impl WindowsVoiceTranscriberHandle {
@@ -380,6 +408,8 @@ mod imp {
         let voice_starting = Rc::new(Cell::new(false));
         let voice_stopping = Rc::new(Cell::new(false));
         let voice_local_key_pressed = Rc::new(Cell::new(false));
+        let voice_global_hotkey =
+            Rc::new(RefCell::new(None::<WindowsVoiceGlobalHotkeyRegistration>));
         let (voice_event_tx, voice_event_rx) = mpsc::channel::<WindowsVoiceUiEvent>();
         let quit_requested = Rc::new(Cell::new(false));
         let force_quit_requested = Rc::new(Cell::new(false));
@@ -395,6 +425,7 @@ mod imp {
         {
             let shell_state = shell_state.clone();
             let voice_transcriber = voice_transcriber.clone();
+            let voice_global_hotkey = voice_global_hotkey.clone();
             let quit_requested = quit_requested.clone();
             let force_quit_requested = force_quit_requested.clone();
             let current_close_to_background = current_close_to_background.clone();
@@ -402,6 +433,7 @@ mod imp {
             window.connect_close_request(move |window| {
                 if force_quit_requested.replace(false) {
                     tray_controller.shutdown();
+                    voice_global_hotkey.borrow_mut().take();
                     voice_transcriber.shutdown();
                     shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
                     return glib::Propagation::Proceed;
@@ -434,6 +466,7 @@ mod imp {
                 }
 
                 tray_controller.shutdown();
+                voice_global_hotkey.borrow_mut().take();
                 voice_transcriber.shutdown();
                 shutdown_windows_gtk_shell(&shell_state, "closing Windows GTK application");
                 glib::Propagation::Proceed
@@ -650,13 +683,35 @@ mod imp {
             voice_event_tx.clone(),
         );
 
+        sync_windows_voice_global_hotkey(
+            &voice_global_hotkey,
+            &preference_store.load().voice,
+            &voice_event_tx,
+        );
+        gtk::glib::timeout_add_seconds_local(2, {
+            let preference_store = preference_store.clone();
+            let voice_global_hotkey = voice_global_hotkey.clone();
+            let voice_event_tx = voice_event_tx.clone();
+            move || {
+                sync_windows_voice_global_hotkey(
+                    &voice_global_hotkey,
+                    &preference_store.load().voice,
+                    &voice_event_tx,
+                );
+                gtk::glib::ControlFlow::Continue
+            }
+        });
+
         {
+            let preference_store = preference_store.clone();
             let shell_state = shell_state.clone();
             let voice_hud = voice_hud.clone();
             let overlay = overlay.clone();
+            let voice_transcriber = voice_transcriber.clone();
             let voice_listening = voice_listening.clone();
             let voice_starting = voice_starting.clone();
             let voice_stopping = voice_stopping.clone();
+            let voice_event_tx_for_handler = voice_event_tx.clone();
             gtk::glib::timeout_add_local(Duration::from_millis(80), move || {
                 while let Ok(event) = voice_event_rx.try_recv() {
                     match event {
@@ -707,6 +762,19 @@ mod imp {
                             ));
                             voice_hud.show("Voice error", Some(&message));
                             overlay.add_toast(adw::Toast::new("Voice transcription failed"));
+                        }
+                        WindowsVoiceUiEvent::GlobalHotkeyActivated => {
+                            handle_windows_voice_global_hotkey_activation(
+                                &preference_store,
+                                &shell_state,
+                                &voice_hud,
+                                &overlay,
+                                &voice_transcriber,
+                                &voice_listening,
+                                &voice_starting,
+                                &voice_stopping,
+                                &voice_event_tx_for_handler,
+                            );
                         }
                     }
                 }
@@ -1007,7 +1075,16 @@ mod imp {
                 }),
                 on_voice_preferences_changed: Rc::new({
                     let preference_store = preference_store.clone();
-                    move |voice| preference_store.save_voice_preferences(voice)
+                    let voice_global_hotkey = voice_global_hotkey.clone();
+                    let voice_event_tx = voice_event_tx.clone();
+                    move |voice| {
+                        preference_store.save_voice_preferences(voice.clone());
+                        sync_windows_voice_global_hotkey(
+                            &voice_global_hotkey,
+                            &voice,
+                            &voice_event_tx,
+                        );
+                    }
                 }),
                 on_voice_pack_install_requested: Rc::new({
                     let overlay = overlay.clone();
@@ -1150,6 +1227,125 @@ mod imp {
                     move |width, height| preference_store.save_settings_dialog_size(width, height)
                 }),
             },
+        );
+    }
+
+    fn sync_windows_voice_global_hotkey(
+        registration: &Rc<RefCell<Option<WindowsVoiceGlobalHotkeyRegistration>>>,
+        voice: &crate::voice::VoicePreferences,
+        voice_event_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        if !should_register_windows_voice_global_hotkey(voice) {
+            registration.borrow_mut().take();
+            return;
+        }
+
+        {
+            let current = registration.borrow();
+            if let Some(current) = current.as_ref()
+                && current.shortcut() == voice.hotkey
+            {
+                if current.unavailable_retry_pending() {
+                    return;
+                }
+                if matches!(current, WindowsVoiceGlobalHotkeyRegistration::Active { .. }) {
+                    return;
+                }
+            }
+        }
+
+        registration.borrow_mut().take();
+        let (global_tx, global_rx) = mpsc::channel::<WindowsGlobalHotkeyEvent>();
+        match WindowsGlobalHotkeyHandle::start(voice.hotkey.clone(), global_tx) {
+            Ok(handle) => {
+                let shortcut = voice.hotkey.clone();
+                logging::info(format!(
+                    "registered Windows GTK global voice hotkey {shortcut}"
+                ));
+                *registration.borrow_mut() =
+                    Some(WindowsVoiceGlobalHotkeyRegistration::Active { shortcut, handle });
+                let ui_tx = voice_event_tx.clone();
+                std::thread::spawn(move || {
+                    while let Ok(event) = global_rx.recv() {
+                        logging::info(format!("Windows GTK global voice hotkey event={event:?}"));
+                        let _ = match event {
+                            WindowsGlobalHotkeyEvent::Activated => {
+                                ui_tx.send(WindowsVoiceUiEvent::GlobalHotkeyActivated)
+                            }
+                        };
+                    }
+                });
+            }
+            Err(error) => {
+                logging::error(format!(
+                    "Windows GTK global voice hotkey unavailable for '{}': {error}",
+                    voice.hotkey
+                ));
+                *registration.borrow_mut() =
+                    Some(WindowsVoiceGlobalHotkeyRegistration::Unavailable {
+                        shortcut: voice.hotkey.clone(),
+                        last_attempt: Instant::now(),
+                    });
+            }
+        }
+    }
+
+    fn should_register_windows_voice_global_hotkey(voice: &crate::voice::VoicePreferences) -> bool {
+        voice.enabled
+            && (voice.prefer_global_hotkey
+                || voice.activation_mode == VoiceActivationMode::PushToTalk)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_windows_voice_global_hotkey_activation(
+        preference_store: &PreferenceStore,
+        shell_state: &WindowsGtkShellState,
+        voice_hud: &VoiceHud,
+        overlay: &adw::ToastOverlay,
+        voice_transcriber: &Rc<WindowsVoiceTranscriberHandle>,
+        voice_listening: &Rc<Cell<bool>>,
+        voice_starting: &Rc<Cell<bool>>,
+        voice_stopping: &Rc<Cell<bool>>,
+        voice_event_tx: &mpsc::Sender<WindowsVoiceUiEvent>,
+    ) {
+        let voice = preference_store.load().voice;
+        logging::info(format!(
+            "Windows GTK global voice hotkey activated enabled={} mode={} listening={} starting={} stopping={}",
+            voice.enabled,
+            voice.activation_mode.label(),
+            voice_listening.get(),
+            voice_starting.get(),
+            voice_stopping.get(),
+        ));
+        if !voice.enabled {
+            return;
+        }
+
+        if voice_listening.get() {
+            stop_windows_voice_capture(
+                voice_transcriber,
+                voice_listening,
+                voice_stopping,
+                voice_hud,
+                voice_event_tx,
+            );
+            return;
+        }
+
+        if voice_starting.get() || voice_stopping.get() {
+            return;
+        }
+
+        start_windows_voice_capture(
+            preference_store,
+            shell_state,
+            voice_hud,
+            overlay,
+            voice_transcriber,
+            voice_listening,
+            voice_starting,
+            voice_stopping,
+            voice_event_tx,
         );
     }
 

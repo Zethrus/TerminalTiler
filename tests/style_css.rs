@@ -52,6 +52,7 @@ const WINDOWS_CAPTURE_RELEASE_VISUALS_PS1: &str =
 const WINDOWS_GTK_APP_RS: &str = include_str!("../src/windows/gtk_app.rs");
 const WINDOWS_GTK_RUNTIME_RS: &str = include_str!("../src/windows/gtk_runtime.rs");
 const WINDOWS_GTK_TRAY_RS: &str = include_str!("../src/windows/gtk_tray.rs");
+const WINDOWS_GTK_VOICE_HOTKEY_RS: &str = include_str!("../src/windows/gtk_voice_hotkey.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
 const WINDOWS_INSTALLER_NSI: &str = include_str!("../packaging/windows/installer.nsi");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
@@ -969,6 +970,12 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("ParakeetTranscriber::launch")
             && WINDOWS_GTK_APP_RS.contains("preview.focused_terminal_available()")
             && WINDOWS_GTK_APP_RS.contains("preview.send_text_to_focused_terminal(&text)")
+            && WINDOWS_GTK_APP_RS.contains("sync_windows_voice_global_hotkey")
+            && WINDOWS_GTK_APP_RS.contains("handle_windows_voice_global_hotkey_activation")
+            && WINDOWS_GTK_APP_RS.contains("WindowsGlobalHotkeyHandle::start")
+            && WINDOWS_GTK_VOICE_HOTKEY_RS.contains("RegisterHotKey")
+            && WINDOWS_GTK_VOICE_HOTKEY_RS.contains("WM_HOTKEY")
+            && WINDOWS_GTK_VOICE_HOTKEY_RS.contains("PostThreadMessageW")
             && WORKSPACE_PREVIEW_RS.contains("pub fn focused_terminal_available(&self)")
             && WORKSPACE_PREVIEW_RS
                 .contains("pub fn send_text_to_focused_terminal(&self, text: &str) -> bool"),
