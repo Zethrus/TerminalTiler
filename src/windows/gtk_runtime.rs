@@ -255,24 +255,6 @@ mod imp {
         make_shrinkable(&scroller);
         surface.append(&scroller);
 
-        let input_row = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(8)
-            .margin_start(10)
-            .margin_end(10)
-            .margin_bottom(10)
-            .build();
-        let input = gtk::Entry::builder()
-            .placeholder_text("Send command to this Windows terminal pane")
-            .hexpand(true)
-            .css_classes(["workspace-broadcast-entry"])
-            .build();
-        let send_button =
-            icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
-        input_row.append(&input);
-        input_row.append(&send_button);
-        surface.append(&input_row);
-
         let state = Rc::new(RefCell::new(TerminalRuntimeState::default()));
         let recovery_bind_generation = Rc::new(Cell::new(0u64));
         let (event_tx, event_rx) = mpsc::channel::<TerminalRuntimeEvent>();
@@ -348,16 +330,6 @@ mod imp {
             );
         }
 
-        {
-            let input = input.clone();
-            let state = state.clone();
-            send_button.connect_clicked(move |_| send_entry_text(&input, &state));
-        }
-        {
-            let state = state.clone();
-            input.connect_activate(move |entry| send_entry_text(entry, &state));
-        }
-
         let restart_runtime = Rc::new({
             let state = state.clone();
             let tile = tile.clone();
@@ -394,12 +366,11 @@ mod imp {
         });
         install_terminal_output_context_menu(
             &terminal_output,
-            &input,
             &state,
             restart_runtime.clone(),
             open_local_shell.clone(),
         );
-        install_terminal_output_shortcuts(&terminal_output, &input, &state);
+        install_terminal_output_shortcuts(&terminal_output, &state);
         install_terminal_input_key_controller(&terminal_output, &state, terminal_buffer.clone());
 
         let command_sender = Rc::new({
@@ -941,21 +912,6 @@ mod imp {
         }
     }
 
-    fn send_entry_text(entry: &gtk::Entry, state: &Rc<RefCell<TerminalRuntimeState>>) {
-        let text = entry.text().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let payload = if text.ends_with('\n') {
-            text
-        } else {
-            format!("{text}\r\n")
-        };
-        if send_terminal_runtime_payload(state, payload) {
-            entry.set_text("");
-        }
-    }
-
     fn send_terminal_runtime_payload(
         state: &Rc<RefCell<TerminalRuntimeState>>,
         payload: String,
@@ -1057,7 +1013,6 @@ mod imp {
 
     fn install_terminal_output_context_menu(
         output: &gtk::TextView,
-        input: &gtk::Entry,
         state: &Rc<RefCell<TerminalRuntimeState>>,
         restart_runtime: Rc<dyn Fn()>,
         open_local_shell: Rc<dyn Fn()>,
@@ -1110,12 +1065,7 @@ mod imp {
                         transcript_dialog::present(&output, &transcript);
                     }
                 }),
-                focus_command_input: Some(Rc::new({
-                    let input = input.clone();
-                    move || {
-                        input.grab_focus();
-                    }
-                })),
+                focus_command_input: None,
             },
         );
         {
@@ -1128,7 +1078,6 @@ mod imp {
 
     fn install_terminal_output_shortcuts(
         output: &gtk::TextView,
-        input: &gtk::Entry,
         state: &Rc<RefCell<TerminalRuntimeState>>,
     ) {
         let shortcut_controller = gtk::ShortcutController::new();
@@ -1163,24 +1112,6 @@ mod imp {
         );
 
         output.add_controller(shortcut_controller);
-
-        let input_shortcut_controller = gtk::ShortcutController::new();
-        input_shortcut_controller.set_scope(gtk::ShortcutScope::Local);
-        let output_for_copy = output.clone();
-        let copy_action = gtk::CallbackAction::new(move |_, _| {
-            if copy_terminal_output_selection(&output_for_copy) {
-                gtk::glib::Propagation::Stop
-            } else {
-                gtk::glib::Propagation::Proceed
-            }
-        });
-        add_terminal_output_shortcut(
-            &input_shortcut_controller,
-            DEFAULT_TERMINAL_COPY_SHORTCUT,
-            "copy",
-            &copy_action,
-        );
-        input.add_controller(input_shortcut_controller);
     }
 
     fn copy_terminal_output_selection(output: &gtk::TextView) -> bool {
