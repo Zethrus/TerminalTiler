@@ -449,16 +449,22 @@ fn windows_gtk_workspace_tabs_detach_and_reattach_like_linux_tabs() {
             && WORKSPACE_PREVIEW_RS.contains("pub fn push_detached_tab(")
             && WINDOWS_GTK_APP_RS.contains("fn detach_windows_preview_tab(")
             && WINDOWS_GTK_APP_RS.contains("fn present_detached_windows_preview_window(")
+            && WINDOWS_GTK_APP_RS.contains("detached_previews")
+            && WINDOWS_GTK_APP_RS.contains("fn register_detached_preview(")
+            && WINDOWS_GTK_APP_RS.contains("fn unregister_detached_preview(")
+            && WINDOWS_GTK_APP_RS.contains("fn combined_session_snapshot(&self)")
             && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Detach\", None)")
             && WINDOWS_GTK_APP_RS.contains("Workspace detached to a new window")
             && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Reattach\", None)")
             && WINDOWS_GTK_APP_RS.contains("Close Detached Workspace?")
             && WINDOWS_GTK_APP_RS.contains("detached_preview.take_single_tab_for_transfer()")
             && WINDOWS_GTK_APP_RS.contains("main_preview.push_detached_tab(detached_tab)")
+            && WINDOWS_GTK_APP_RS
+                .contains("shell_state.unregister_detached_preview(&detached_preview)")
             && WINDOWS_GTK_APP_RS.contains(
                 "detached_preview.terminate_all(\"closing detached Windows GTK workspace\")"
             ),
-        "Windows GTK workspace tabs should expose Linux-style Detach/Reattach windows while preserving live runtime surfaces"
+        "Windows GTK workspace tabs should expose Linux-style Detach/Reattach windows while preserving live runtime surfaces and including detached previews in shell lifecycle state"
     );
 }
 

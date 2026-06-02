@@ -2045,6 +2045,7 @@ mod imp {
     #[derive(Clone)]
     struct WindowsGtkShellState {
         preview: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
+        detached_previews: Rc<RefCell<Vec<crate::ui::workspace_preview::SessionPreview>>>,
         active_voice_target: Rc<RefCell<Option<crate::ui::workspace_preview::SessionPreview>>>,
         voice_runtime: Rc<RefCell<Option<WindowsVoiceRuntime>>>,
         launch_deck_active: Rc<Cell<bool>>,
@@ -2064,6 +2065,7 @@ mod imp {
         fn new(session_store: SessionStore) -> Self {
             Self {
                 preview: Rc::new(RefCell::new(None)),
+                detached_previews: Rc::new(RefCell::new(Vec::new())),
                 active_voice_target: Rc::new(RefCell::new(None)),
                 voice_runtime: Rc::new(RefCell::new(None)),
                 launch_deck_active: Rc::new(Cell::new(false)),
@@ -2105,6 +2107,30 @@ mod imp {
             self.voice_runtime.borrow().clone()
         }
 
+        fn register_detached_preview(
+            &self,
+            preview: &crate::ui::workspace_preview::SessionPreview,
+        ) {
+            let mut detached_previews = self.detached_previews.borrow_mut();
+            if detached_previews
+                .iter()
+                .any(|detached| session_preview_widgets_match(detached, preview))
+            {
+                return;
+            }
+            detached_previews.push(preview.clone());
+        }
+
+        fn unregister_detached_preview(
+            &self,
+            preview: &crate::ui::workspace_preview::SessionPreview,
+        ) {
+            self.detached_previews
+                .borrow_mut()
+                .retain(|detached| !session_preview_widgets_match(detached, preview));
+            self.clear_voice_target_if(preview);
+        }
+
         fn has_workspace_tabs(&self) -> bool {
             self.preview
                 .borrow()
@@ -2113,8 +2139,8 @@ mod imp {
         }
 
         fn save_preview_session(&self, reason: &str) {
-            if let Some(preview) = self.preview.borrow().as_ref() {
-                persist_windows_gtk_session(&self.session_store, &preview.snapshot(), reason);
+            if let Some(session) = self.combined_session_snapshot() {
+                persist_windows_gtk_session(&self.session_store, &session, reason);
             } else {
                 logging::info(format!(
                     "clearing Windows GTK saved session state reason='{reason}'"
@@ -2124,16 +2150,47 @@ mod imp {
         }
 
         fn terminate_preview_runtimes(&self, reason: &str) {
-            if let Some(preview) = self.preview.borrow().as_ref() {
+            for preview in self.all_previews() {
                 preview.terminate_all(reason);
             }
         }
 
         fn has_active_processes(&self) -> bool {
-            self.preview
-                .borrow()
-                .as_ref()
-                .is_some_and(|preview| preview.has_active_processes())
+            self.all_previews()
+                .iter()
+                .any(|preview| preview.has_active_processes())
+        }
+
+        fn all_previews(&self) -> Vec<crate::ui::workspace_preview::SessionPreview> {
+            let mut previews = Vec::new();
+            if let Some(preview) = self.preview.borrow().as_ref().cloned() {
+                previews.push(preview);
+            }
+            previews.extend(self.detached_previews.borrow().iter().cloned());
+            previews
+        }
+
+        fn combined_session_snapshot(&self) -> Option<SavedSession> {
+            let mut tabs = Vec::new();
+            let mut active_tab_index = 0;
+            if let Some(preview) = self.preview.borrow().as_ref() {
+                let snapshot = preview.snapshot();
+                active_tab_index = snapshot
+                    .active_tab_index
+                    .min(snapshot.tabs.len().saturating_sub(1));
+                tabs.extend(snapshot.tabs);
+            }
+            for detached_preview in self.detached_previews.borrow().iter() {
+                tabs.extend(detached_preview.snapshot().tabs);
+            }
+            if tabs.is_empty() {
+                None
+            } else {
+                Some(SavedSession {
+                    tabs,
+                    active_tab_index,
+                })
+            }
         }
     }
 
@@ -2731,6 +2788,7 @@ mod imp {
                     next_index,
                 );
                 origin_window.present();
+                shell_state.unregister_detached_preview(&detached_preview);
                 shell_state.set_main_voice_target();
                 reattaching.set(true);
                 detached_window.close();
@@ -2778,7 +2836,7 @@ mod imp {
                     return glib::Propagation::Proceed;
                 }
                 if force_close_for_confirm.replace(false) {
-                    shell_state.clear_voice_target_if(&detached_preview);
+                    shell_state.unregister_detached_preview(&detached_preview);
                     detached_preview.terminate_all("closing detached Windows GTK workspace");
                     return glib::Propagation::Proceed;
                 }
@@ -2798,12 +2856,13 @@ mod imp {
                     );
                     return glib::Propagation::Stop;
                 }
-                shell_state.clear_voice_target_if(&detached_preview);
+                shell_state.unregister_detached_preview(&detached_preview);
                 detached_preview.terminate_all("closing detached Windows GTK workspace");
                 glib::Propagation::Proceed
             });
         }
 
+        shell_state.register_detached_preview(&detached_preview);
         shell_state.set_voice_target(&detached_preview);
         detached_window.present();
     }
