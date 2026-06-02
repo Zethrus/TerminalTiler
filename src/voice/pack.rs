@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::app_paths;
+use crate::{app_paths, logging};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoicePackManifest {
@@ -51,6 +51,7 @@ pub enum VoicePackError {
         actual: String,
     },
     InvalidManifest(String),
+    PythonUnavailable(String),
 }
 
 impl From<io::Error> for VoicePackError {
@@ -85,11 +86,25 @@ impl std::fmt::Display for VoicePackError {
             Self::InvalidManifest(message) => {
                 write!(formatter, "invalid voice pack manifest: {message}")
             }
+            Self::PythonUnavailable(message) => formatter.write_str(message),
         }
     }
 }
 
 impl std::error::Error for VoicePackError {}
+
+impl VoicePackError {
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::CommandFailed { log_path, .. } => match log_path {
+                Some(path) => format!("Voice pack setup failed; see {path}"),
+                None => "Voice pack setup failed; check the application logs".into(),
+            },
+            Self::PythonUnavailable(message) => message.clone(),
+            _ => self.to_string(),
+        }
+    }
+}
 
 const BUILTIN_PARAKEET_MANIFEST: &str =
     include_str!("../../resources/voice/parakeet/manifest.toml");
@@ -196,17 +211,7 @@ where
     }
 
     let python = python_environment_executable(root, manifest);
-    if !python.is_file() {
-        run_command_with_progress(
-            Command::new(system_python_command())
-                .arg("-m")
-                .arg("venv")
-                .arg(python_environment_dir(root, manifest)),
-            10,
-            20,
-            &mut progress,
-        )?;
-    }
+    ensure_python_environment_with_working_pip(root, manifest, &mut progress)?;
 
     run_command_with_progress(
         Command::new(&python)
@@ -231,6 +236,93 @@ where
         &mut progress,
     )?;
     Ok(true)
+}
+
+fn ensure_python_environment_with_working_pip<F>(
+    root: &Path,
+    manifest: &VoicePackManifest,
+    progress: &mut F,
+) -> Result<(), VoicePackError>
+where
+    F: FnMut(u8),
+{
+    let venv_dir = python_environment_dir(root, manifest);
+    let python = python_environment_executable(root, manifest);
+    if !python.is_file() {
+        create_python_environment(root, manifest, 10, 20, progress)?;
+    }
+
+    if probe_venv_pip(&python).is_ok() {
+        return Ok(());
+    }
+
+    logging::info(format!(
+        "voice pack Python environment has broken or missing pip; attempting ensurepip repair at {}",
+        python.display()
+    ));
+    let _ = run_command_with_progress(
+        Command::new(&python)
+            .arg("-m")
+            .arg("ensurepip")
+            .arg("--upgrade"),
+        21,
+        24,
+        progress,
+    );
+    if probe_venv_pip(&python).is_ok() {
+        return Ok(());
+    }
+
+    logging::info(format!(
+        "voice pack Python environment pip repair failed; recreating venv at {}",
+        venv_dir.display()
+    ));
+    if venv_dir.exists() {
+        fs::remove_dir_all(&venv_dir)?;
+    }
+    create_python_environment(root, manifest, 10, 24, progress)?;
+    match probe_venv_pip(&python) {
+        Ok(()) => Ok(()),
+        Err(detail) => {
+            let ensurepip_error = run_command_with_progress(
+                Command::new(&python)
+                    .arg("-m")
+                    .arg("ensurepip")
+                    .arg("--upgrade"),
+                25,
+                29,
+                progress,
+            )
+            .err();
+            if probe_venv_pip(&python).is_ok() {
+                return Ok(());
+            }
+            match ensurepip_error {
+                Some(error) => Err(error),
+                None => Err(VoicePackError::Io(format!(
+                    "Python virtual environment pip is unavailable after repair: {detail}"
+                ))),
+            }
+        }
+    }
+}
+
+fn create_python_environment<F>(
+    root: &Path,
+    manifest: &VoicePackManifest,
+    start_percent: u8,
+    end_percent: u8,
+    progress: &mut F,
+) -> Result<(), VoicePackError>
+where
+    F: FnMut(u8),
+{
+    let mut command = resolve_host_python_command()?;
+    command
+        .arg("-m")
+        .arg("venv")
+        .arg(python_environment_dir(root, manifest));
+    run_command_with_progress(&mut command, start_percent, end_percent, progress)
 }
 
 pub fn delete_pack(root: &Path, manifest: &VoicePackManifest) -> Result<bool, VoicePackError> {
@@ -472,11 +564,150 @@ fn unix_timestamp() -> u64 {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn system_python_command() -> &'static str {
     if cfg!(target_os = "windows") {
         "python"
     } else {
         "python3"
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PythonCommandSpec {
+    program: &'static str,
+    args: &'static [&'static str],
+}
+
+fn resolve_host_python_command() -> Result<Command, VoicePackError> {
+    let mut failures = Vec::new();
+    for spec in host_python_candidates() {
+        match probe_host_python(spec) {
+            Ok(detail) => {
+                logging::info(format!(
+                    "using host Python for voice pack venv creation: {detail}"
+                ));
+                return Ok(command_from_python_spec(spec));
+            }
+            Err(detail) => failures.push(detail),
+        }
+    }
+    Err(VoicePackError::PythonUnavailable(format!(
+        "Voice pack setup requires 64-bit Python 3.10+ on PATH. Install Python, then retry Install / Reinstall. Attempts: {}",
+        failures.join("; ")
+    )))
+}
+
+fn host_python_candidates() -> &'static [PythonCommandSpec] {
+    #[cfg(target_os = "windows")]
+    {
+        const CANDIDATES: &[PythonCommandSpec] = &[
+            PythonCommandSpec {
+                program: "py",
+                args: &["-3"],
+            },
+            PythonCommandSpec {
+                program: "python",
+                args: &[],
+            },
+        ];
+        CANDIDATES
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        const CANDIDATES: &[PythonCommandSpec] = &[
+            PythonCommandSpec {
+                program: "python3",
+                args: &[],
+            },
+            PythonCommandSpec {
+                program: "python",
+                args: &[],
+            },
+        ];
+        CANDIDATES
+    }
+}
+
+fn command_from_python_spec(spec: &PythonCommandSpec) -> Command {
+    let mut command = Command::new(spec.program);
+    command.args(spec.args);
+    command
+}
+
+fn render_python_spec(spec: &PythonCommandSpec) -> String {
+    std::iter::once(spec.program)
+        .chain(spec.args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn probe_host_python(spec: &PythonCommandSpec) -> Result<String, String> {
+    const PYTHON_PROBE: &str = r#"
+import platform
+import struct
+import sys
+bits = struct.calcsize("P") * 8
+version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+print(f"{sys.executable} ({version}, {bits}-bit, {platform.platform()})")
+if sys.version_info < (3, 10) or bits != 64:
+    raise SystemExit(1)
+"#;
+    let mut command = command_from_python_spec(spec);
+    command
+        .arg("-c")
+        .arg(PYTHON_PROBE)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::voice::process::apply_background_spawn(&mut command);
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(if detail.is_empty() {
+                render_python_spec(spec)
+            } else {
+                detail
+            })
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = if !stderr.trim().is_empty() {
+                stderr.trim().to_string()
+            } else if !stdout.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                output.status.to_string()
+            };
+            Err(format!("{}: {detail}", render_python_spec(spec)))
+        }
+        Err(error) => Err(format!("{}: {error}", render_python_spec(spec))),
+    }
+}
+
+fn probe_venv_pip(python: &Path) -> Result<(), String> {
+    let mut command = Command::new(python);
+    command
+        .arg("-c")
+        .arg("import pip, pip._internal")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::voice::process::apply_background_spawn(&mut command);
+    match command.output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = if !stderr.trim().is_empty() {
+                stderr.trim().to_string()
+            } else if !stdout.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                output.status.to_string()
+            };
+            Err(detail)
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -726,5 +957,85 @@ mod tests {
         assert_eq!(fs::read_to_string(venv_sentinel).unwrap(), "keep venv");
         assert_eq!(fs::read_to_string(cache_sentinel).unwrap(), "keep cache");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn python_environment_recreates_broken_venv_without_deleting_model_cache() {
+        if resolve_host_python_command().is_err() {
+            eprintln!("skipping voice pack venv repair test because Python 3.10+ is unavailable");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-broken-venv-repair-{}",
+            Uuid::new_v4()
+        ));
+        let manifest = VoicePackManifest {
+            id: "fake".into(),
+            version: "1".into(),
+            engine_executable: "engine.py".into(),
+            model_path: "hf-cache/model".into(),
+            archive_url: "builtin://fake".into(),
+            archive_sha256: "builtin".into(),
+            model_name: default_parakeet_model_name(),
+            streaming_model_name: default_parakeet_streaming_model_name(),
+            python_requirements: Vec::new(),
+        };
+        let pack_root = pack_root(&root, &manifest);
+        let cache_sentinel = pack_root.join(&manifest.model_path).join("sentinel.txt");
+        fs::create_dir_all(cache_sentinel.parent().unwrap()).unwrap();
+        fs::write(&cache_sentinel, "keep cache").unwrap();
+
+        let broken_python = python_environment_executable(&root, &manifest);
+        fs::create_dir_all(broken_python.parent().unwrap()).unwrap();
+        write_broken_python_executable(&broken_python);
+
+        let mut progress = Vec::new();
+        ensure_python_environment_with_working_pip(&root, &manifest, &mut |percent| {
+            progress.push(percent);
+        })
+        .unwrap();
+
+        let repaired_python = python_environment_executable(&root, &manifest);
+        assert!(repaired_python.is_file());
+        assert!(probe_venv_pip(&repaired_python).is_ok());
+        assert_eq!(fs::read_to_string(cache_sentinel).unwrap(), "keep cache");
+        assert!(progress.contains(&24));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn command_failure_user_message_points_to_log_without_traceback_tail() {
+        let error = VoicePackError::CommandFailed {
+            command: "python -m pip install".into(),
+            status: "exit code: 1".into(),
+            log_path: Some("C:\\Users\\z\\voice-pack-install.log".into()),
+            output_tail: "Traceback (most recent call last):\nModuleNotFoundError: No module named 'pip._internal'".into(),
+        };
+
+        let message = error.user_message();
+
+        assert_eq!(
+            message,
+            "Voice pack setup failed; see C:\\Users\\z\\voice-pack-install.log"
+        );
+        assert!(!message.contains("Traceback"));
+        assert!(error.to_string().contains("pip._internal"));
+    }
+
+    fn write_broken_python_executable(path: &Path) {
+        #[cfg(target_family = "unix")]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::write(path, "#!/bin/sh\nexit 1\n").unwrap();
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+        #[cfg(not(target_family = "unix"))]
+        {
+            fs::write(path, "not a real python executable").unwrap();
+        }
     }
 }

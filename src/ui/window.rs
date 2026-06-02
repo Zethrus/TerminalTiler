@@ -2361,7 +2361,7 @@ fn present_with_initial_workspace(
                                                 let mut preferences = preference_store.load();
                                                 preferences.voice.pack_status =
                                                     VoicePackStatus::Error {
-                                                        message: error.to_string(),
+                                                        message: error.user_message(),
                                                     };
                                                 preference_store.save(&preferences);
                                                 logging::error(format!(
@@ -2376,7 +2376,7 @@ fn present_with_initial_workspace(
                                     Err(error) => {
                                         let mut preferences = preference_store.load();
                                         preferences.voice.pack_status = VoicePackStatus::Error {
-                                            message: error.to_string(),
+                                            message: error.user_message(),
                                         };
                                         preference_store.save(&preferences);
                                         logging::error(format!(

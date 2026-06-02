@@ -345,6 +345,12 @@ Browser tiles:
 - Portable and MSI artifacts require WebView2 to already be installed.
 - Download if needed: https://go.microsoft.com/fwlink/p/?LinkId=2124703
 
+Voice input:
+- Installing the NVIDIA Parakeet voice pack requires 64-bit Python 3.10+ via
+  py -3 or python.
+- Install / Reinstall repairs or recreates the pack-local voice .venv when pip
+  is damaged while preserving the model cache.
+
 Launch:
 - Run TerminalTiler.exe
 - The native launcher and workspace host are both included in this build.

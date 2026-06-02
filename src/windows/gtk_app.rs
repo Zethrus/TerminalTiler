@@ -1661,7 +1661,7 @@ mod imp {
                         }
                     }
                     Err(error) => {
-                        let message = error.to_string();
+                        let message = error.user_message();
                         save_voice_pack_error(&preference_store, &message);
                         logging::error(format!(
                             "failed to prepare NVIDIA Parakeet Python environment: {error:?}"
@@ -1672,7 +1672,7 @@ mod imp {
                 }
             }
             Err(error) => {
-                let message = error.to_string();
+                let message = error.user_message();
                 save_voice_pack_error(&preference_store, &message);
                 logging::error(format!(
                     "failed to install bundled NVIDIA Parakeet voice pack: {error:?}"

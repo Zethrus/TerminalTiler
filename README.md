@@ -78,7 +78,9 @@ optional `voice-cpal` feature. The app captures microphone audio locally, runs a
 settings-managed Parakeet helper/voice pack, and inserts finalized transcript
 chunks only into the focused TerminalTiler terminal pane. See
 [docs/voice-parakeet.md](docs/voice-parakeet.md) for setup, verification, and
-manual release checks.
+manual release checks. Windows voice-pack installation requires a 64-bit Python
+3.10+ host interpreter and repairs/recreates the pack-local `.venv` when pip is
+damaged.
 
 ## Development
 

@@ -40,6 +40,18 @@ The Settings install path copies these files into the app data voice-pack
 directory, creates a pack-local Python virtual environment, installs the pinned
 requirements, and runs a helper health check before marking the pack installed.
 
+## Windows Python prerequisite and repair
+
+Windows voice-pack installation uses a pack-local virtual environment under the
+TerminalTiler app-data voice-pack directory. The installer requires a 64-bit
+Python 3.10+ host interpreter discoverable through `py -3` or `python`.
+
+If the pack-local `.venv` exists but pip is broken, **Install / Reinstall**
+first tries `ensurepip --upgrade`, then recreates only `.venv` and retries. The
+model cache (`hf-cache/`) is preserved. Full command output is written to
+`voice-pack-install.log` in the TerminalTiler log directory; the Settings row
+shows only a short failure summary.
+
 ## Verification on provisioned machines
 
 Use the verifier when Torch/NeMo/model downloads are available:
