@@ -2261,6 +2261,12 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("PrintWindow")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_theme")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("default_density")
+            && WINDOWS_CAPTURE_VISUALS_PS1
+                .contains(r#"[ValidateSet("system", "light", "dark", "all")]"#)
+            && WINDOWS_CAPTURE_VISUALS_PS1
+                .contains(r#"[ValidateSet("comfortable", "standard", "compact", "all")]"#)
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains(r#"$themes = if ($Theme -eq "all")"#)
+            && WINDOWS_CAPTURE_VISUALS_PS1.contains(r#"$densities = if ($Density -eq "all")"#)
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Saved Fleet")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("Visual QA Web Workspace")
             && WINDOWS_CAPTURE_VISUALS_PS1.contains("tile_kind = \"web-view\"")
@@ -2294,6 +2300,10 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msi-install")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("saved-workspaces")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("workspace-with-web")
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains(r#"[ValidateSet("system", "light", "dark", "all")]"#)
+            && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
+                .contains(r#"[ValidateSet("comfortable", "standard", "compact", "all")]"#)
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("Expand-Archive")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1.contains("msiexec.exe")
             && WINDOWS_CAPTURE_RELEASE_VISUALS_PS1
@@ -2309,6 +2319,12 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("workspace-with-web")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_theme")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("default_density")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("--theme system|light|dark|all")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH
+                .contains("--density comfortable|standard|compact|all")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("themes=(system light dark)")
+            && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH
+                .contains("densities=(comfortable standard compact)")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Saved Fleet")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("Visual QA Web Workspace")
             && PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH.contains("tile_kind = \"web-view\"")
@@ -2335,10 +2351,14 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("workspace-with-web")
             && PACKAGE_COMPARE_GTK_VISUALS_SH
                 .contains("<index>-<scenario>-<theme>-<density>-*.png")
-            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("--density comfortable|standard|compact")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("--theme system|light|dark|all")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH
+                .contains("--density comfortable|standard|compact|all")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("themes=(system light dark)")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("densities=(comfortable standard compact)")
             && PACKAGE_COMPARE_GTK_VISUALS_SH
                 .contains("scenario\\tindex\\ttheme\\tdensity\\tstatus\\tnormalized_rmse")
-            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("$index-$scenario-$THEME-$DENSITY-")
+            && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("$index-$scenario-$theme-$density-")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("compare -metric RMSE")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("identify -format '%wx%h'")
             && PACKAGE_COMPARE_GTK_VISUALS_SH.contains("fail-dimensions")

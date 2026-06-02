@@ -22,8 +22,9 @@ Options:
   --output-dir DIR            Output directory (default: packaging/.build/linux-gtk-visuals)
   --capture-set CSV           launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web
                               (default: all)
-  --theme system|light|dark   Seeded app theme (default: dark)
-  --density comfortable|standard|compact
+  --theme system|light|dark|all
+                              Seeded app theme (default: dark)
+  --density comfortable|standard|compact|all
                               Seeded app density (default: compact)
   --startup-timeout SECONDS   Seconds to wait for app windows (default: 20)
   --keep-process              Leave TerminalTiler running after capture
@@ -74,13 +75,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$THEME" in
-  system|light|dark) ;;
-  *) echo "--theme must be system, light, or dark" >&2; exit 2 ;;
+  system|light|dark|all) ;;
+  *) echo "--theme must be system, light, dark, or all" >&2; exit 2 ;;
 esac
 
 case "$DENSITY" in
-  comfortable|standard|compact) ;;
-  *) echo "--density must be comfortable, standard, or compact" >&2; exit 2 ;;
+  comfortable|standard|compact|all) ;;
+  *) echo "--density must be comfortable, standard, compact, or all" >&2; exit 2 ;;
 esac
 
 if [[ -z "$EXE_PATH" ]]; then
@@ -452,11 +453,27 @@ capture_scenario() {
 
 mkdir -p "$OUTPUT_DIR"
 IFS=',' read -r -a scenarios <<<"$CAPTURE_SET"
-for scenario in "${scenarios[@]}"; do
-  case "$scenario" in
-    launch-dashboard|saved-workspaces|restored-workspace|workspace-with-web) capture_scenario "$scenario" ;;
-    *) echo "Unknown capture scenario: $scenario" >&2; exit 2 ;;
-  esac
+if [[ "$THEME" == "all" ]]; then
+  themes=(system light dark)
+else
+  themes=("$THEME")
+fi
+if [[ "$DENSITY" == "all" ]]; then
+  densities=(comfortable standard compact)
+else
+  densities=("$DENSITY")
+fi
+for theme in "${themes[@]}"; do
+  for density in "${densities[@]}"; do
+    THEME="$theme"
+    DENSITY="$density"
+    for scenario in "${scenarios[@]}"; do
+      case "$scenario" in
+        launch-dashboard|saved-workspaces|restored-workspace|workspace-with-web) capture_scenario "$scenario" ;;
+        *) echo "Unknown capture scenario: $scenario" >&2; exit 2 ;;
+      esac
+    done
+  done
 done
 
 echo "Linux GTK visual captures written to $OUTPUT_DIR"

@@ -5,9 +5,9 @@ param(
     [string]$StageRoot = (Join-Path $PSScriptRoot ".build\windows-gtk-release-visual-stage"),
     [ValidateSet("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web")]
     [string[]]$CaptureSet = @("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web"),
-    [ValidateSet("system", "light", "dark")]
+    [ValidateSet("system", "light", "dark", "all")]
     [string]$Theme = "dark",
-    [ValidateSet("comfortable", "standard", "compact")]
+    [ValidateSet("comfortable", "standard", "compact", "all")]
     [string]$Density = "compact",
     [int]$StartupTimeoutSeconds = 20,
     [switch]$KeepInstalled

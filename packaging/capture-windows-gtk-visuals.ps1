@@ -3,9 +3,9 @@ param(
     [string]$OutputDir = (Join-Path $PSScriptRoot ".build\windows-gtk-visuals"),
     [ValidateSet("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web")]
     [string[]]$CaptureSet = @("launch-dashboard", "saved-workspaces", "restored-workspace", "workspace-with-web"),
-    [ValidateSet("system", "light", "dark")]
+    [ValidateSet("system", "light", "dark", "all")]
     [string]$Theme = "dark",
-    [ValidateSet("comfortable", "standard", "compact")]
+    [ValidateSet("comfortable", "standard", "compact", "all")]
     [string]$Density = "compact",
     [int]$StartupTimeoutSeconds = 20,
     [switch]$KeepProcess
@@ -467,8 +467,16 @@ function Invoke-VisualCaptureScenario {
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-foreach ($scenario in $CaptureSet) {
-    Invoke-VisualCaptureScenario -Scenario $scenario
+$themes = if ($Theme -eq "all") { @("system", "light", "dark") } else { @($Theme) }
+$densities = if ($Density -eq "all") { @("comfortable", "standard", "compact") } else { @($Density) }
+foreach ($themeValue in $themes) {
+    foreach ($densityValue in $densities) {
+        $Theme = $themeValue
+        $Density = $densityValue
+        foreach ($scenario in $CaptureSet) {
+            Invoke-VisualCaptureScenario -Scenario $scenario
+        }
+    }
 }
 
 Write-Host "Windows GTK visual captures written to $OutputDir"

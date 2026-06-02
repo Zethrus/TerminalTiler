@@ -25,8 +25,9 @@ Options:
   --output-dir DIR            Diff/report output root (default: packaging/.build/gtk-visual-diffs)
   --capture-set CSV           launch-dashboard,saved-workspaces,restored-workspace,workspace-with-web
                               (default: all)
-  --theme system|light|dark   Capture theme to compare (default: dark)
-  --density comfortable|standard|compact
+  --theme system|light|dark|all
+                              Capture theme to compare (default: dark)
+  --density comfortable|standard|compact|all
                               Capture density to compare (default: compact)
   --threshold FLOAT           Max normalized RMSE allowed (default: 0.035)
   -h, --help                  Show this help
@@ -76,13 +77,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$THEME" in
-  system|light|dark) ;;
-  *) echo "--theme must be system, light, or dark" >&2; exit 2 ;;
+  system|light|dark|all) ;;
+  *) echo "--theme must be system, light, dark, or all" >&2; exit 2 ;;
 esac
 
 case "$DENSITY" in
-  comfortable|standard|compact) ;;
-  *) echo "--density must be comfortable, standard, or compact" >&2; exit 2 ;;
+  comfortable|standard|compact|all) ;;
+  *) echo "--density must be comfortable, standard, compact, or all" >&2; exit 2 ;;
 esac
 
 if ! command -v compare >/dev/null 2>&1; then
@@ -108,13 +109,15 @@ find_single_capture() {
   local root="$1"
   local scenario="$2"
   local index="$3"
-  local matches=("$root/$scenario/captures/$index-$scenario-$THEME-$DENSITY-"*.png)
+  local theme="$4"
+  local density="$5"
+  local matches=("$root/$scenario/captures/$index-$scenario-$theme-$density-"*.png)
 
   if (( ${#matches[@]} == 0 )); then
     return 1
   fi
   if (( ${#matches[@]} > 1 )); then
-    echo "Multiple captures matched $root/$scenario/captures/$index-$scenario-$THEME-$DENSITY-*.png" >&2
+    echo "Multiple captures matched $root/$scenario/captures/$index-$scenario-$theme-$density-*.png" >&2
     printf '%s\n' "${matches[@]}" >&2
     return 2
   fi
@@ -138,10 +141,12 @@ float_leq() {
 compare_pair() {
   local scenario="$1"
   local index="$2"
-  local linux_png="$3"
-  local windows_png="$4"
+  local theme="$3"
+  local density="$4"
+  local linux_png="$5"
+  local windows_png="$6"
   local scenario_diff_dir="$OUTPUT_DIR/$scenario"
-  local diff_png="$scenario_diff_dir/$index-$scenario-$THEME-$DENSITY-diff.png"
+  local diff_png="$scenario_diff_dir/$index-$scenario-$theme-$density-diff.png"
   local status="pass"
   local rmse="1"
   local compare_output
@@ -155,7 +160,7 @@ compare_pair() {
     status="fail-dimensions"
     failures=$((failures + 1))
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$scenario" "$index" "$THEME" "$DENSITY" "$status" "$rmse" "$linux_png" "$windows_png" "$diff_png" >>"$REPORT_PATH"
+      "$scenario" "$index" "$theme" "$density" "$status" "$rmse" "$linux_png" "$windows_png" "$diff_png" >>"$REPORT_PATH"
     echo "FAIL $scenario#$index dimensions differ: linux=$linux_size windows=$windows_size"
     return
   fi
@@ -175,7 +180,7 @@ compare_pair() {
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$scenario" "$index" "$THEME" "$DENSITY" "$status" "$rmse" "$linux_png" "$windows_png" "$diff_png" >>"$REPORT_PATH"
+    "$scenario" "$index" "$theme" "$density" "$status" "$rmse" "$linux_png" "$windows_png" "$diff_png" >>"$REPORT_PATH"
 
   if [[ "$status" == pass ]]; then
     echo "PASS $scenario#$index normalized_rmse=$rmse"
@@ -185,30 +190,44 @@ compare_pair() {
 }
 
 IFS=',' read -r -a scenarios <<<"$CAPTURE_SET"
+if [[ "$THEME" == "all" ]]; then
+  themes=(system light dark)
+else
+  themes=("$THEME")
+fi
+if [[ "$DENSITY" == "all" ]]; then
+  densities=(comfortable standard compact)
+else
+  densities=("$DENSITY")
+fi
 for scenario in "${scenarios[@]}"; do
   case "$scenario" in
     launch-dashboard|saved-workspaces|restored-workspace|workspace-with-web) ;;
     *) echo "Unknown capture scenario: $scenario" >&2; exit 2 ;;
   esac
 
-  linux_files=("$LINUX_DIR/$scenario/captures/"??-"$scenario"-"$THEME"-"$DENSITY"-*.png)
-  if (( ${#linux_files[@]} == 0 )); then
-    echo "No Linux captures found for $scenario/$THEME/$DENSITY under $LINUX_DIR" >&2
-    failures=$((failures + 1))
-    continue
-  fi
+  for theme in "${themes[@]}"; do
+    for density in "${densities[@]}"; do
+      linux_files=("$LINUX_DIR/$scenario/captures/"??-"$scenario"-"$theme"-"$density"-*.png)
+      if (( ${#linux_files[@]} == 0 )); then
+        echo "No Linux captures found for $scenario/$theme/$density under $LINUX_DIR" >&2
+        failures=$((failures + 1))
+        continue
+      fi
 
-  for linux_png in "${linux_files[@]}"; do
-    base="$(basename "$linux_png")"
-    index="${base%%-*}"
-    if ! windows_png="$(find_single_capture "$WINDOWS_DIR" "$scenario" "$index")"; then
-      echo "Missing Windows capture for $scenario#$index theme=$THEME density=$DENSITY" >&2
-      failures=$((failures + 1))
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$scenario" "$index" "$THEME" "$DENSITY" "fail-missing-windows" "1" "$linux_png" "" "" >>"$REPORT_PATH"
-      continue
-    fi
-    compare_pair "$scenario" "$index" "$linux_png" "$windows_png"
+      for linux_png in "${linux_files[@]}"; do
+        base="$(basename "$linux_png")"
+        index="${base%%-*}"
+        if ! windows_png="$(find_single_capture "$WINDOWS_DIR" "$scenario" "$index" "$theme" "$density")"; then
+          echo "Missing Windows capture for $scenario#$index theme=$theme density=$density" >&2
+          failures=$((failures + 1))
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$scenario" "$index" "$theme" "$density" "fail-missing-windows" "1" "$linux_png" "" "" >>"$REPORT_PATH"
+          continue
+        fi
+        compare_pair "$scenario" "$index" "$theme" "$density" "$linux_png" "$windows_png"
+      done
+    done
   done
 done
 
