@@ -221,15 +221,25 @@ mod imp {
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
         let shell_state = WindowsGtkShellState::new(session_store.clone());
+        let quit_requested = Rc::new(Cell::new(false));
         let force_quit_requested = Rc::new(Cell::new(false));
+        let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background));
         shell_state.launch_deck_active.set(true);
         {
             let shell_state = shell_state.clone();
+            let quit_requested = quit_requested.clone();
             let force_quit_requested = force_quit_requested.clone();
+            let current_close_to_background = current_close_to_background.clone();
             window.connect_close_request(move |window| {
                 if force_quit_requested.replace(false) {
                     shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
                     return glib::Propagation::Proceed;
+                }
+
+                if !quit_requested.replace(false) && current_close_to_background.get() {
+                    logging::info("minimizing Windows GTK shell to background");
+                    window.minimize();
+                    return glib::Propagation::Stop;
                 }
 
                 if shell_state.has_active_processes() {
@@ -482,8 +492,12 @@ mod imp {
             }
             {
                 let window_for_quit_action = window.clone();
+                let quit_requested = quit_requested.clone();
                 let action = gio::SimpleAction::new("quit-app", None);
-                action.connect_activate(move |_, _| window_for_quit_action.close());
+                action.connect_activate(move |_, _| {
+                    quit_requested.set(true);
+                    window_for_quit_action.close();
+                });
                 window.add_action(&action);
             }
         }
@@ -634,8 +648,10 @@ mod imp {
                 on_close_to_background_changed: Rc::new({
                     let overlay = overlay.clone();
                     let preference_store = preference_store.clone();
+                    let current_close_to_background = current_close_to_background.clone();
                     move |close_to_background| {
                         preference_store.save_close_to_background(close_to_background);
+                        current_close_to_background.set(close_to_background);
                         let message = if close_to_background {
                             "Close-to-background preference enabled"
                         } else {
@@ -826,9 +842,11 @@ mod imp {
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
                     let refresh_launch_deck_handle = refresh_launch_deck_handle.clone();
+                    let current_close_to_background = current_close_to_background.clone();
                     move || {
                         let defaults = AppPreferences::default();
                         preference_store.save(&defaults);
+                        current_close_to_background.set(defaults.close_to_background);
                         apply_theme_mode(&window, defaults.default_theme);
                         apply_window_density(&window, defaults.default_density);
                         install_workspace_fullscreen_shortcut(
