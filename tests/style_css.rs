@@ -170,7 +170,6 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             && WINDOWS_GTK_APP_RS.contains("build_window_shell()")
             && !WINDOWS_GTK_APP_RS.contains("HeaderBar::builder()")
             && !WINDOWS_GTK_APP_RS.contains("icons::icon_button(")
-            && !WINDOWS_GTK_APP_RS.contains("titlebar-action-button")
             && !WINDOWS_GTK_APP_RS.contains("header.add_css_class(\"app-headerbar\")")
             && !WINDOWS_GTK_APP_RS.contains("title.root.add_css_class(\"app-title-handle\")"),
         "Windows GTK should reuse the same main shell chrome/actions as Linux rather than carrying parallel titlebar construction"
@@ -456,6 +455,14 @@ fn windows_gtk_workspace_tabs_detach_and_reattach_like_linux_tabs() {
             && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Detach\", None)")
             && WINDOWS_GTK_APP_RS.contains("Workspace detached to a new window")
             && WINDOWS_GTK_APP_RS.contains("context_menu::action_button(\"Reattach\", None)")
+            && source_contains(
+                WINDOWS_GTK_APP_RS,
+                "&[\"flat\", \"titlebar-action-button\"],\n        );\n        header.pack_end(&detached_fullscreen_button);"
+            )
+            && source_contains(
+                WINDOWS_GTK_APP_RS,
+                "&[\"flat\", \"titlebar-action-button\"],\n        );\n        reattach_button.set_tooltip_text"
+            )
             && WINDOWS_GTK_APP_RS.contains("Close Detached Workspace?")
             && WINDOWS_GTK_APP_RS.contains("detached_preview.take_single_tab_for_transfer()")
             && WINDOWS_GTK_APP_RS.contains("main_preview.push_detached_tab(detached_tab)")

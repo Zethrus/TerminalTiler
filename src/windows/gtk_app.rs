@@ -2691,13 +2691,13 @@ mod imp {
         let detached_fullscreen_button = crate::ui::icons::labeled_button(
             "Fullscreen",
             crate::ui::icons::name::FULLSCREEN,
-            &["flat"],
+            &["flat", "titlebar-action-button"],
         );
         header.pack_end(&detached_fullscreen_button);
         let reattach_button = crate::ui::icons::labeled_button(
             "Reattach",
             crate::ui::icons::name::RESTORE,
-            &["flat"],
+            &["flat", "titlebar-action-button"],
         );
         reattach_button.set_tooltip_text(Some("Reattach workspace to the main tab strip"));
         header.pack_end(&reattach_button);
