@@ -2779,6 +2779,7 @@ mod imp {
         let reattaching = Rc::new(Cell::new(false));
         let do_reattach: Rc<dyn Fn()> = Rc::new({
             let detached_preview = detached_preview.clone();
+            let detached_workspace_overlay = detached_workspace_overlay.clone();
             let detached_window = detached_window.clone();
             let origin_window = origin_window.clone();
             let origin_overlay = origin_overlay.clone();
@@ -2789,14 +2790,17 @@ mod imp {
             let shell_state = shell_state.clone();
             let reattaching = reattaching.clone();
             move || {
-                let Some(main_preview) = shell_state.preview.borrow().clone() else {
-                    return;
-                };
-                let Some(detached_tab) = detached_preview.take_single_tab_for_transfer() else {
-                    return;
-                };
-                let next_index = main_preview.push_detached_tab(detached_tab);
                 shell_state.launch_deck_active.set(false);
+                let next_index = if let Some(main_preview) = shell_state.preview.borrow().clone() {
+                    let Some(detached_tab) = detached_preview.take_single_tab_for_transfer() else {
+                        return;
+                    };
+                    main_preview.push_detached_tab(detached_tab)
+                } else {
+                    detached_workspace_overlay.set_child(None::<&gtk::Widget>);
+                    *shell_state.preview.borrow_mut() = Some(detached_preview.clone());
+                    0
+                };
                 show_workspace_preview_tab(
                     &origin_window,
                     &origin_overlay,
