@@ -352,6 +352,7 @@ mod imp {
                 let back_button = back_button.clone();
                 let fullscreen_button = fullscreen_button.clone();
                 let shell_state = shell_state.clone();
+                let current_close_to_background = current_close_to_background.clone();
                 let preference_store = preference_store.clone();
                 let preset_store = preset_store.clone();
                 let asset_store = asset_store.clone();
@@ -381,6 +382,7 @@ mod imp {
                         &back_button,
                         &fullscreen_button,
                         &shell_state,
+                        current_close_to_background.clone(),
                         preference_store.clone(),
                         preset_store.clone(),
                         asset_store.clone(),
@@ -443,6 +445,7 @@ mod imp {
                 let title = title.clone();
                 let fullscreen_button = fullscreen_button.clone();
                 let shell_state = shell_state.clone();
+                let current_close_to_background = current_close_to_background.clone();
                 let preference_store = preference_store.clone();
                 let preset_store = preset_store.clone();
                 let options = options.clone();
@@ -466,6 +469,7 @@ mod imp {
                         &title,
                         &fullscreen_button,
                         &shell_state,
+                        current_close_to_background.clone(),
                         preference_store.clone(),
                         preset_store.clone(),
                         options.clone(),
@@ -581,6 +585,7 @@ mod imp {
         title: &TitleChrome,
         fullscreen_button: &gtk::Button,
         shell_state: &WindowsGtkShellState,
+        current_close_to_background: Rc<Cell<bool>>,
         preference_store: PreferenceStore,
         preset_store: PresetStore,
         options: RuntimeOptions,
