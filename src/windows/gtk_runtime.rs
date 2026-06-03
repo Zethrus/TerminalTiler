@@ -25,9 +25,8 @@ mod imp {
         ContextMenuRequestedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
         CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
         NavigationCompletedEventHandler, NewWindowRequestedEventHandler, take_pwstr,
-        wait_with_pump,
     };
-    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED, HWND as Win32Hwnd, RECT as WinRect};
+    use windows::Win32::Foundation::{E_POINTER, HWND as Win32Hwnd, RECT as WinRect};
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::System::WinRT::EventRegistrationToken;
     use windows::core::{Error as WindowsError, HSTRING, Interface, PCWSTR, PWSTR};
@@ -161,6 +160,7 @@ mod imp {
         auto_refresh_seconds: Option<u32>,
         refresh_tick: u32,
         last_bounds: Option<WinRect>,
+        hwnd_poll_count: u32,
         initialized: bool,
         shutdown: bool,
     }
@@ -1579,6 +1579,10 @@ mod imp {
 
             if !state.borrow().initialized {
                 if let Some(hwnd) = gtk_widget_hwnd(&host) {
+                    let poll_count = state.borrow().hwnd_poll_count;
+                    logging::info(format!(
+                        "Windows GTK WebView2 runtime surface discovered parent HWND after {poll_count} poll(s)"
+                    ));
                     initialize_gtk_webview_runtime(
                         hwnd,
                         &host,
@@ -1588,6 +1592,14 @@ mod imp {
                         &detail_label,
                         &context_popover,
                     );
+                } else {
+                    let mut state = state.borrow_mut();
+                    state.hwnd_poll_count = state.hwnd_poll_count.saturating_add(1);
+                    if state.hwnd_poll_count == 10 {
+                        logging::info(
+                            "Windows GTK WebView2 runtime surface still waiting for parent HWND after 10 polls",
+                        );
+                    }
                 }
             }
 
@@ -1614,41 +1626,208 @@ mod imp {
             state.initialized = true;
         }
 
-        let environment = match create_webview_environment() {
-            Ok(environment) => environment,
-            Err(error) => {
-                detail_label.set_text(&web_runtime_detail(
-                    &error,
-                    &state.borrow().current_url,
-                    None,
-                ));
-                logging::error(format!("Windows GTK WebView2 environment failed: {error}"));
+        if let Err(error) = ensure_webview_com_initialized() {
+            detail_label.set_text(&web_runtime_detail(
+                &error,
+                &state.borrow().current_url,
+                None,
+            ));
+            logging::error(format!("Windows GTK WebView2 COM init failed: {error}"));
+            return;
+        }
+
+        logging::info("Windows GTK WebView2 creating environment");
+        let state_for_watchdog = state.clone();
+        glib::timeout_add_local_once(Duration::from_secs(10), move || {
+            let state = state_for_watchdog.borrow();
+            if !state.shutdown && state.environment.is_none() {
+                logging::error(
+                    "Windows GTK WebView2 environment callback did not complete after 10s",
+                );
+            }
+        });
+
+        let host = host.clone();
+        let state = state.clone();
+        let runtime_status = runtime_status.to_string();
+        let title = title.clone();
+        let detail_label = detail_label.clone();
+        let context_popover = context_popover.clone();
+        let environment_handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+            move |error_code, environment| {
+                if let Err(error) = error_code {
+                    report_gtk_webview_initialization_failure(
+                        &state,
+                        &detail_label,
+                        "Windows GTK WebView2 environment failed",
+                        error,
+                    );
+                    return Ok(());
+                }
+
+                let Some(environment) = environment else {
+                    report_gtk_webview_initialization_failure(
+                        &state,
+                        &detail_label,
+                        "Windows GTK WebView2 environment failed",
+                        WindowsError::from(E_POINTER),
+                    );
+                    return Ok(());
+                };
+
+                logging::info("Windows GTK WebView2 environment created; creating controller");
+                create_gtk_webview_controller_async(
+                    parent_hwnd,
+                    environment,
+                    host.clone(),
+                    state.clone(),
+                    runtime_status.clone(),
+                    title.clone(),
+                    detail_label.clone(),
+                    context_popover.clone(),
+                );
+                Ok(())
+            },
+        ));
+
+        let result = unsafe {
+            CreateCoreWebView2EnvironmentWithOptions(
+                PCWSTR::null(),
+                PCWSTR::null(),
+                None::<
+                    &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
+                >,
+                &environment_handler,
+            )
+        };
+        if let Err(error) = result {
+            report_gtk_webview_initialization_failure(
+                &state,
+                &detail_label,
+                "Windows GTK WebView2 environment creation failed",
+                error,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_gtk_webview_controller_async(
+        parent_hwnd: windows_sys::Win32::Foundation::HWND,
+        environment: ICoreWebView2Environment,
+        host: gtk::Widget,
+        state: Rc<RefCell<WebRuntimeState>>,
+        runtime_status: String,
+        title: gtk::Label,
+        detail_label: gtk::Label,
+        context_popover: gtk::Popover,
+    ) {
+        {
+            let mut state_ref = state.borrow_mut();
+            if state_ref.shutdown {
                 return;
             }
-        };
-        let controller = match create_webview_controller(parent_hwnd, &environment) {
-            Ok(controller) => controller,
-            Err(error) => {
-                detail_label.set_text(&web_runtime_detail(
-                    &error,
-                    &state.borrow().current_url,
-                    None,
-                ));
-                logging::error(format!("Windows GTK WebView2 controller failed: {error}"));
-                return;
+            state_ref.environment = Some(environment.clone());
+        }
+
+        let state_for_watchdog = state.clone();
+        glib::timeout_add_local_once(Duration::from_secs(10), move || {
+            let state = state_for_watchdog.borrow();
+            if !state.shutdown && state.controller.is_none() {
+                logging::error(
+                    "Windows GTK WebView2 controller callback did not complete after 10s",
+                );
             }
+        });
+
+        let environment_for_completion = environment.clone();
+        let controller_handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+            move |error_code, controller| {
+                if let Err(error) = error_code {
+                    report_gtk_webview_initialization_failure(
+                        &state,
+                        &detail_label,
+                        "Windows GTK WebView2 controller failed",
+                        error,
+                    );
+                    return Ok(());
+                }
+
+                let Some(controller) = controller else {
+                    report_gtk_webview_initialization_failure(
+                        &state,
+                        &detail_label,
+                        "Windows GTK WebView2 controller failed",
+                        WindowsError::from(E_POINTER),
+                    );
+                    return Ok(());
+                };
+
+                complete_gtk_webview_initialization(
+                    environment_for_completion.clone(),
+                    controller,
+                    &host,
+                    &state,
+                    &runtime_status,
+                    &title,
+                    &detail_label,
+                    &context_popover,
+                );
+                Ok(())
+            },
+        ));
+
+        let result = unsafe {
+            environment
+                .CreateCoreWebView2Controller(Win32Hwnd(parent_hwnd as _), &controller_handler)
         };
+        if let Err(error) = result {
+            report_gtk_webview_initialization_failure(
+                &state,
+                &detail_label,
+                "Windows GTK WebView2 controller creation failed",
+                error,
+            );
+        }
+    }
+
+    fn report_gtk_webview_initialization_failure(
+        state: &Rc<RefCell<WebRuntimeState>>,
+        detail_label: &gtk::Label,
+        context: &str,
+        error: WindowsError,
+    ) {
+        detail_label.set_text(&web_runtime_detail(
+            &format!("{context}: {error}"),
+            &state.borrow().current_url,
+            None,
+        ));
+        logging::error(format!("{context}: {error}"));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn complete_gtk_webview_initialization(
+        environment: ICoreWebView2Environment,
+        controller: ICoreWebView2Controller,
+        host: &gtk::Widget,
+        state: &Rc<RefCell<WebRuntimeState>>,
+        runtime_status: &str,
+        title: &gtk::Label,
+        detail_label: &gtk::Label,
+        context_popover: &gtk::Popover,
+    ) {
+        if state.borrow().shutdown {
+            return;
+        }
+
         let webview = match unsafe { controller.CoreWebView2() } {
             Ok(webview) => webview,
             Err(error) => {
-                detail_label.set_text(&web_runtime_detail(
-                    &format!("WebView2 controller access failed: {error}"),
-                    &state.borrow().current_url,
-                    None,
-                ));
-                logging::error(format!(
-                    "Windows GTK WebView2 controller access failed: {error}"
-                ));
+                report_gtk_webview_initialization_failure(
+                    state,
+                    detail_label,
+                    "Windows GTK WebView2 controller access failed",
+                    error,
+                );
                 return;
             }
         };
@@ -1998,58 +2177,6 @@ mod imp {
                     .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
             })
             .clone()
-    }
-
-    fn create_webview_environment() -> Result<ICoreWebView2Environment, String> {
-        ensure_webview_com_initialized()?;
-
-        let (tx, rx) = mpsc::channel();
-        unsafe {
-            CreateCoreWebView2EnvironmentWithOptions(
-                PCWSTR::null(),
-                PCWSTR::null(),
-                None::<
-                    &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
-                >,
-                &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
-                    move |error_code, environment| {
-                        error_code?;
-                        tx.send(environment.ok_or_else(|| WindowsError::from(E_POINTER)))
-                            .map_err(|_| WindowsError::from(E_UNEXPECTED))
-                    },
-                )),
-            )
-            .map_err(|error| format!("CreateCoreWebView2EnvironmentWithOptions failed: {error}"))?;
-        }
-
-        wait_with_pump(rx)
-            .map_err(|error| format!("Waiting for WebView2 environment failed: {error}"))?
-            .map_err(|error| format!("Creating WebView2 environment failed: {error}"))
-    }
-
-    fn create_webview_controller(
-        parent_hwnd: windows_sys::Win32::Foundation::HWND,
-        environment: &ICoreWebView2Environment,
-    ) -> Result<ICoreWebView2Controller, String> {
-        let (tx, rx) = mpsc::channel();
-        let handler: ICoreWebView2CreateCoreWebView2ControllerCompletedHandler =
-            CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
-                move |error_code, controller| {
-                    error_code?;
-                    tx.send(controller.ok_or_else(|| WindowsError::from(E_POINTER)))
-                        .map_err(|_| WindowsError::from(E_UNEXPECTED))
-                },
-            ));
-
-        unsafe {
-            environment
-                .CreateCoreWebView2Controller(Win32Hwnd(parent_hwnd as _), &handler)
-                .map_err(|error| format!("CreateCoreWebView2Controller failed: {error}"))?;
-        }
-
-        wait_with_pump(rx)
-            .map_err(|error| format!("Waiting for WebView2 controller failed: {error}"))?
-            .map_err(|error| format!("Creating WebView2 controller failed: {error}"))
     }
 
     fn web_runtime_detail(

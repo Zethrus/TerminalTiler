@@ -1767,6 +1767,14 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("web_settings_applier: Some(web_settings_applier)")
             && WINDOWS_GTK_RUNTIME_RS.contains("CreateCoreWebView2EnvironmentWithOptions")
             && WINDOWS_GTK_RUNTIME_RS.contains("CreateCoreWebView2ControllerCompletedHandler")
+            && WINDOWS_GTK_RUNTIME_RS.contains("create_gtk_webview_controller_async")
+            && WINDOWS_GTK_RUNTIME_RS.contains("complete_gtk_webview_initialization")
+            && WINDOWS_GTK_RUNTIME_RS.contains("Windows GTK WebView2 creating environment")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("Windows GTK WebView2 controller callback did not complete after 10s")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("Windows GTK WebView2 runtime surface still waiting for parent HWND")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("wait_with_pump")
             && WINDOWS_GTK_RUNTIME_RS.contains("gdk_win32_surface_get_handle")
             && WINDOWS_GTK_RUNTIME_RS.contains("gtk_widget_root_bounds")
             && WINDOWS_GTK_RUNTIME_RS.contains("controller.SetBounds(bounds)")
