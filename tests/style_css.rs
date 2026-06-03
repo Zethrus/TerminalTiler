@@ -2137,6 +2137,37 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1.contains("continuing with GTK session-log validation."),
         "Windows smoke test should validate GTK startup/restored-runtime logs even for self-extracting portable launchers"
     );
+
+    let smoke_script = WINDOWS_SMOKE_PS1.replace("\r\n", "\n");
+    let pattern_helper_start = smoke_script
+        .find("function Get-LaunchSmokeRequiredPattern")
+        .expect("Windows smoke test should keep launch-smoke wait patterns centralized");
+    let invoke_launch_smoke_start = smoke_script
+        .find("function Invoke-LaunchSmoke")
+        .expect("Windows smoke test should keep Invoke-LaunchSmoke");
+    assert!(
+        pattern_helper_start < invoke_launch_smoke_start,
+        "launch-smoke wait-pattern helper should be defined before Invoke-LaunchSmoke"
+    );
+    let pattern_helper = &smoke_script[pattern_helper_start..invoke_launch_smoke_start];
+    let gtk_mixed_wait = pattern_helper
+        .find("Windows GTK WebView2 tile navigating to https://example.com")
+        .expect("GTK mixed smoke should wait for WebView2 navigation");
+    let gtk_terminal_wait = pattern_helper
+        .find("Windows GTK shell restored interactive GTK workspace with")
+        .expect("GTK terminal-only smoke should wait for generic workspace restore");
+    assert!(
+        gtk_mixed_wait < gtk_terminal_wait
+            && source_contains(
+                pattern_helper,
+                "if ($ProfileKind -eq \"mixed\") {\n            return \"Windows GTK WebView2 tile navigating to https://example.com\"\n        }\n        return \"Windows GTK shell restored interactive GTK workspace with\"",
+            )
+            && WINDOWS_SMOKE_PS1.contains(
+                "$requiredPattern = Get-LaunchSmokeRequiredPattern -ExpectGtkShell $expectGtkShell -ProfileKind $ProfileKind",
+            ),
+        "GTK mixed launch smoke must wait for the WebView2 navigation log before stopping the app, instead of using the earlier generic GTK restore signal"
+    );
+
     assert!(
         WINDOWS_SMOKE_PS1.contains("function Stop-TerminalTilerSmokeProcesses")
             && WINDOWS_SMOKE_PS1.contains("TerminalTiler*.exe")

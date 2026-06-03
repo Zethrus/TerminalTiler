@@ -511,6 +511,31 @@ function Wait-ForSessionLogPattern {
     throw "Timed out waiting for smoke log pattern '$Pattern'.`n$latestText"
 }
 
+function Get-LaunchSmokeRequiredPattern {
+    param(
+        [bool]$ExpectGtkShell,
+        [string]$ProfileKind
+    )
+
+    if ($ExpectGtkShell) {
+        if ($ProfileKind -eq "clean-first-run") {
+            return "windows GTK shell loaded canonical GTK CSS"
+        }
+        if ($ProfileKind -eq "mixed") {
+            return "Windows GTK WebView2 tile navigating to https://example.com"
+        }
+        return "Windows GTK shell restored interactive GTK workspace with"
+    }
+
+    if ($ProfileKind -eq "clean-first-run") {
+        return "Windows startup init complete"
+    }
+    if ($ProfileKind -eq "mixed") {
+        return "web pane \d+ navigating to https://example.com"
+    }
+    return "opened 1 restored Windows workspace host window\(s\)"
+}
+
 function Invoke-LaunchSmoke {
     param(
         [string]$ExePath,
@@ -550,21 +575,7 @@ function Invoke-LaunchSmoke {
             throw "Process $ExePath exited with code $(Format-ExitCode -ExitCode $process.ExitCode)"
         }
 
-        if ($expectGtkShell -and $ProfileKind -eq "clean-first-run") {
-            $requiredPattern = "windows GTK shell loaded canonical GTK CSS"
-        }
-        elseif ($ProfileKind -eq "clean-first-run") {
-            $requiredPattern = "Windows startup init complete"
-        }
-        elseif ($expectGtkShell) {
-            $requiredPattern = "Windows GTK shell restored interactive GTK workspace with"
-        }
-        elseif ($ProfileKind -eq "mixed") {
-            $requiredPattern = "web pane \d+ navigating to https://example.com"
-        }
-        else {
-            $requiredPattern = "opened 1 restored Windows workspace host window\(s\)"
-        }
+        $requiredPattern = Get-LaunchSmokeRequiredPattern -ExpectGtkShell $expectGtkShell -ProfileKind $ProfileKind
 
         if (-not $hasMainWindow) {
             if (-not $expectGtkShell) {
