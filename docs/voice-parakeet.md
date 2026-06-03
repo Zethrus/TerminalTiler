@@ -44,10 +44,15 @@ requirements, and runs a helper health check before marking the pack installed.
 
 Windows voice-pack installation uses a pack-local virtual environment under the
 TerminalTiler app-data voice-pack directory. The installer requires a 64-bit
-Python 3.10+ host interpreter discoverable through `py -3` or `python`.
+Python 3.10–3.13 host interpreter (3.12 or 3.13 recommended). Python 3.14+ is
+currently unsupported by the Parakeet/NeMo
+dependency set. On Windows, the installer tries exact `py -3.13`, `py -3.12`,
+`py -3.11`, and `py -3.10` launchers before falling back to `python` / broad
+`py -3` only when the runtime validates.
 
-If the pack-local `.venv` exists but pip is broken, **Install / Reinstall**
-first tries `ensurepip --upgrade`, then recreates only `.venv` and retries. The
+If the pack-local `.venv` exists but uses unsupported Python (including
+Python 3.14+) or pip is broken, **Install / Reinstall** recreates only `.venv`
+and retries. For pip-only breakage it first tries `ensurepip --upgrade`. The
 model cache (`hf-cache/`) is preserved. Full command output is written to
 `voice-pack-install.log` in the TerminalTiler log directory; the Settings row
 shows only a short failure summary.

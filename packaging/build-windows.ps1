@@ -346,10 +346,10 @@ Browser tiles:
 - Download if needed: https://go.microsoft.com/fwlink/p/?LinkId=2124703
 
 Voice input:
-- Installing the NVIDIA Parakeet voice pack requires 64-bit Python 3.10+ via
-  py -3 or python.
+- Installing the NVIDIA Parakeet voice pack requires 64-bit Python 3.10–3.13
+  (3.12 or 3.13 recommended; Python 3.14+ is unsupported by Parakeet/NeMo).
 - Install / Reinstall repairs or recreates the pack-local voice .venv when pip
-  is damaged while preserving the model cache.
+  is damaged or the venv Python is incompatible while preserving the model cache.
 
 Launch:
 - Run TerminalTiler.exe

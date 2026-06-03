@@ -250,7 +250,22 @@ where
     let python = python_environment_executable(root, manifest);
     if !python.is_file() {
         create_python_environment(root, manifest, 10, 20, progress)?;
+    } else if let Err(detail) = validate_python_executable(&python) {
+        logging::info(format!(
+            "voice pack Python environment uses an unsupported or broken runtime; recreating venv at {}: {detail}",
+            venv_dir.display()
+        ));
+        if venv_dir.exists() {
+            fs::remove_dir_all(&venv_dir)?;
+        }
+        create_python_environment(root, manifest, 10, 24, progress)?;
     }
+
+    validate_python_executable(&python).map_err(|detail| {
+        VoicePackError::PythonUnavailable(format!(
+            "Voice pack setup requires 64-bit CPython 3.10–3.13. Python 3.14+ is not supported by the Parakeet/NeMo dependency set. Recreate the voice pack with Python 3.10–3.13 installed (3.12 or 3.13 recommended). Detail: {detail}"
+        ))
+    })?;
 
     if probe_venv_pip(&python).is_ok() {
         return Ok(());
@@ -281,6 +296,11 @@ where
         fs::remove_dir_all(&venv_dir)?;
     }
     create_python_environment(root, manifest, 10, 24, progress)?;
+    validate_python_executable(&python).map_err(|detail| {
+        VoicePackError::PythonUnavailable(format!(
+            "Voice pack setup requires 64-bit CPython 3.10–3.13. Python 3.14+ is not supported by the Parakeet/NeMo dependency set. Recreated venv runtime is incompatible: {detail}"
+        ))
+    })?;
     match probe_venv_pip(&python) {
         Ok(()) => Ok(()),
         Err(detail) => {
@@ -593,7 +613,7 @@ fn resolve_host_python_command() -> Result<Command, VoicePackError> {
         }
     }
     Err(VoicePackError::PythonUnavailable(format!(
-        "Voice pack setup requires 64-bit Python 3.10+ on PATH. Install Python, then retry Install / Reinstall. Attempts: {}",
+        "Voice pack setup requires 64-bit CPython 3.10–3.13 on PATH (3.12 or 3.13 recommended). Python 3.14+ is not supported by the Parakeet/NeMo dependency set. Install a supported Python, then retry Install / Reinstall. Attempts: {}",
         failures.join("; ")
     )))
 }
@@ -604,11 +624,27 @@ fn host_python_candidates() -> &'static [PythonCommandSpec] {
         const CANDIDATES: &[PythonCommandSpec] = &[
             PythonCommandSpec {
                 program: "py",
-                args: &["-3"],
+                args: &["-3.13"],
+            },
+            PythonCommandSpec {
+                program: "py",
+                args: &["-3.12"],
+            },
+            PythonCommandSpec {
+                program: "py",
+                args: &["-3.11"],
+            },
+            PythonCommandSpec {
+                program: "py",
+                args: &["-3.10"],
             },
             PythonCommandSpec {
                 program: "python",
                 args: &[],
+            },
+            PythonCommandSpec {
+                program: "py",
+                args: &["-3"],
             },
         ];
         CANDIDATES
@@ -642,46 +678,166 @@ fn render_python_spec(spec: &PythonCommandSpec) -> String {
         .join(" ")
 }
 
-fn probe_host_python(spec: &PythonCommandSpec) -> Result<String, String> {
-    const PYTHON_PROBE: &str = r#"
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PythonRuntimeInfo {
+    executable: String,
+    implementation: String,
+    major: u8,
+    minor: u8,
+    micro: u8,
+    bits: u16,
+    platform: String,
+}
+
+impl PythonRuntimeInfo {
+    fn detail(&self) -> String {
+        format!(
+            "{} ({} {}.{}.{}, {}-bit, {})",
+            self.executable,
+            self.implementation,
+            self.major,
+            self.minor,
+            self.micro,
+            self.bits,
+            self.platform
+        )
+    }
+}
+
+const PYTHON_RUNTIME_PROBE: &str = r#"
 import platform
 import struct
 import sys
-bits = struct.calcsize("P") * 8
-version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-print(f"{sys.executable} ({version}, {bits}-bit, {platform.platform()})")
-if sys.version_info < (3, 10) or bits != 64:
-    raise SystemExit(1)
+print(f"executable={sys.executable}")
+print(f"implementation={platform.python_implementation()}")
+print(f"major={sys.version_info.major}")
+print(f"minor={sys.version_info.minor}")
+print(f"micro={sys.version_info.micro}")
+print(f"bits={struct.calcsize('P') * 8}")
+print(f"platform={platform.platform()}")
 "#;
+
+fn probe_host_python(spec: &PythonCommandSpec) -> Result<String, String> {
     let mut command = command_from_python_spec(spec);
     command
         .arg("-c")
-        .arg(PYTHON_PROBE)
+        .arg(PYTHON_RUNTIME_PROBE)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::voice::process::apply_background_spawn(&mut command);
     match command.output() {
         Ok(output) if output.status.success() => {
-            let detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(if detail.is_empty() {
-                render_python_spec(spec)
-            } else {
-                detail
-            })
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let detail = if !stderr.trim().is_empty() {
-                stderr.trim().to_string()
-            } else if !stdout.trim().is_empty() {
-                stdout.trim().to_string()
-            } else {
-                output.status.to_string()
-            };
-            Err(format!("{}: {detail}", render_python_spec(spec)))
+            let info = parse_python_runtime_probe(&stdout)
+                .map_err(|detail| format!("{}: {detail}", render_python_spec(spec)))?;
+            validate_python_runtime(&info).map_err(|detail| {
+                format!(
+                    "{}: {} ({})",
+                    render_python_spec(spec),
+                    detail,
+                    info.detail()
+                )
+            })?;
+            Ok(info.detail())
         }
+        Ok(output) => Err(format!(
+            "{}: {}",
+            render_python_spec(spec),
+            command_failure_detail(&output)
+        )),
         Err(error) => Err(format!("{}: {error}", render_python_spec(spec))),
+    }
+}
+
+fn validate_python_executable(python: &Path) -> Result<String, String> {
+    let info = probe_python_executable_runtime(python)?;
+    validate_python_runtime(&info)?;
+    Ok(info.detail())
+}
+
+fn probe_python_executable_runtime(python: &Path) -> Result<PythonRuntimeInfo, String> {
+    let mut command = Command::new(python);
+    command
+        .arg("-c")
+        .arg(PYTHON_RUNTIME_PROBE)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::voice::process::apply_background_spawn(&mut command);
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            parse_python_runtime_probe(&stdout)
+        }
+        Ok(output) => Err(command_failure_detail(&output)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn validate_python_runtime(info: &PythonRuntimeInfo) -> Result<(), String> {
+    if info.implementation != "CPython" {
+        return Err(format!(
+            "unsupported Python implementation {}; install 64-bit CPython 3.10–3.13",
+            info.implementation
+        ));
+    }
+    if info.bits != 64 {
+        return Err(format!(
+            "unsupported {}-bit Python; install 64-bit CPython 3.10–3.13",
+            info.bits
+        ));
+    }
+    if info.major != 3 || info.minor < 10 {
+        return Err(format!(
+            "unsupported Python {}.{}.{}; install 64-bit CPython 3.10–3.13",
+            info.major, info.minor, info.micro
+        ));
+    }
+    if info.minor >= 14 {
+        return Err(format!(
+            "unsupported Python {}.{}.{}; Python 3.14+ is not supported by the Parakeet/NeMo dependency set",
+            info.major, info.minor, info.micro
+        ));
+    }
+    Ok(())
+}
+
+fn parse_python_runtime_probe(raw: &str) -> Result<PythonRuntimeInfo, String> {
+    fn value<'a>(raw: &'a str, key: &str) -> Result<&'a str, String> {
+        raw.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("Python runtime probe did not report {key}"))
+    }
+
+    Ok(PythonRuntimeInfo {
+        executable: value(raw, "executable")?.to_string(),
+        implementation: value(raw, "implementation")?.to_string(),
+        major: value(raw, "major")?
+            .parse()
+            .map_err(|error| format!("invalid Python major version: {error}"))?,
+        minor: value(raw, "minor")?
+            .parse()
+            .map_err(|error| format!("invalid Python minor version: {error}"))?,
+        micro: value(raw, "micro")?
+            .parse()
+            .map_err(|error| format!("invalid Python micro version: {error}"))?,
+        bits: value(raw, "bits")?
+            .parse()
+            .map_err(|error| format!("invalid Python architecture bitness: {error}"))?,
+        platform: value(raw, "platform")?.to_string(),
+    })
+}
+
+fn command_failure_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stderr.trim().is_empty() {
+        stderr.trim().to_string()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim().to_string()
+    } else {
+        output.status.to_string()
     }
 }
 
@@ -810,6 +966,55 @@ mod tests {
             verify_archive_checksum(b"abc", "deadbeef"),
             Err(VoicePackError::ChecksumMismatch { .. })
         ));
+    }
+
+    fn runtime_info(major: u8, minor: u8, bits: u16) -> PythonRuntimeInfo {
+        PythonRuntimeInfo {
+            executable: "/usr/bin/python".into(),
+            implementation: "CPython".into(),
+            major,
+            minor,
+            micro: 0,
+            bits,
+            platform: "test-platform".into(),
+        }
+    }
+
+    #[test]
+    fn python_runtime_validation_accepts_supported_cpython_versions() {
+        for minor in 10..=13 {
+            assert!(
+                validate_python_runtime(&runtime_info(3, minor, 64)).is_ok(),
+                "expected Python 3.{minor} 64-bit to be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn python_runtime_validation_rejects_unsupported_versions_and_bitness() {
+        assert!(validate_python_runtime(&runtime_info(3, 9, 64)).is_err());
+        assert!(validate_python_runtime(&runtime_info(3, 14, 64)).is_err());
+        assert!(validate_python_runtime(&runtime_info(3, 12, 32)).is_err());
+
+        let mut pypy = runtime_info(3, 12, 64);
+        pypy.implementation = "PyPy".into();
+        assert!(validate_python_runtime(&pypy).is_err());
+    }
+
+    #[test]
+    fn python_runtime_probe_parser_reads_expected_fields() {
+        let info = parse_python_runtime_probe(
+            "executable=/opt/python\nimplementation=CPython\nmajor=3\nminor=13\nmicro=2\nbits=64\nplatform=Linux-test\n",
+        )
+        .unwrap();
+
+        assert_eq!(info.executable, "/opt/python");
+        assert_eq!(info.implementation, "CPython");
+        assert_eq!(info.major, 3);
+        assert_eq!(info.minor, 13);
+        assert_eq!(info.micro, 2);
+        assert_eq!(info.bits, 64);
+        assert_eq!(info.platform, "Linux-test");
     }
 
     #[test]
@@ -962,7 +1167,9 @@ mod tests {
     #[test]
     fn python_environment_recreates_broken_venv_without_deleting_model_cache() {
         if resolve_host_python_command().is_err() {
-            eprintln!("skipping voice pack venv repair test because Python 3.10+ is unavailable");
+            eprintln!(
+                "skipping voice pack venv repair test because 64-bit CPython 3.10–3.13 is unavailable"
+            );
             return;
         }
 
@@ -1005,6 +1212,58 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
+    fn python_environment_recreates_unsupported_venv_even_when_pip_works() {
+        if resolve_host_python_command().is_err() {
+            eprintln!(
+                "skipping voice pack unsupported venv repair test because 64-bit CPython 3.10–3.13 is unavailable"
+            );
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-unsupported-venv-repair-{}",
+            Uuid::new_v4()
+        ));
+        let manifest = VoicePackManifest {
+            id: "fake".into(),
+            version: "1".into(),
+            engine_executable: "engine.py".into(),
+            model_path: "hf-cache/model".into(),
+            archive_url: "builtin://fake".into(),
+            archive_sha256: "builtin".into(),
+            model_name: default_parakeet_model_name(),
+            streaming_model_name: default_parakeet_streaming_model_name(),
+            python_requirements: Vec::new(),
+        };
+        let pack_root = pack_root(&root, &manifest);
+        let cache_sentinel = pack_root.join(&manifest.model_path).join("sentinel.txt");
+        fs::create_dir_all(cache_sentinel.parent().unwrap()).unwrap();
+        fs::write(&cache_sentinel, "keep cache").unwrap();
+
+        let fake_python = python_environment_executable(&root, &manifest);
+        fs::create_dir_all(fake_python.parent().unwrap()).unwrap();
+        write_unsupported_python_executable_with_working_pip(&fake_python);
+        let venv_sentinel = python_environment_dir(&root, &manifest).join("remove-me.txt");
+        fs::write(&venv_sentinel, "old venv").unwrap();
+
+        let mut progress = Vec::new();
+        ensure_python_environment_with_working_pip(&root, &manifest, &mut |percent| {
+            progress.push(percent);
+        })
+        .unwrap();
+
+        let repaired_python = python_environment_executable(&root, &manifest);
+        assert!(repaired_python.is_file());
+        assert!(validate_python_executable(&repaired_python).is_ok());
+        assert!(probe_venv_pip(&repaired_python).is_ok());
+        assert!(!venv_sentinel.exists(), "old .venv should be deleted");
+        assert_eq!(fs::read_to_string(cache_sentinel).unwrap(), "keep cache");
+        assert!(progress.contains(&24));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn command_failure_user_message_points_to_log_without_traceback_tail() {
         let error = VoicePackError::CommandFailed {
             command: "python -m pip install".into(),
@@ -1021,6 +1280,37 @@ mod tests {
         );
         assert!(!message.contains("Traceback"));
         assert!(error.to_string().contains("pip._internal"));
+    }
+
+    #[cfg(target_family = "unix")]
+    fn write_unsupported_python_executable_with_working_pip(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(
+            path,
+            r#"#!/bin/sh
+script=${2:-}
+case "$script" in
+  *"import pip"*) exit 0 ;;
+  *)
+    cat <<'EOF'
+executable=/tmp/python314
+implementation=CPython
+major=3
+minor=14
+micro=0
+bits=64
+platform=test-platform
+EOF
+    exit 0
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
     }
 
     fn write_broken_python_executable(path: &Path) {
