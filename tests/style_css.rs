@@ -1,6 +1,7 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
 const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
 const APP_CHROME_RS: &str = include_str!("../src/ui/app_chrome.rs");
+const APP_PATHS_RS: &str = include_str!("../src/app_paths.rs");
 const APPEARANCE_RS: &str = include_str!("../src/ui/appearance.rs");
 const ASSETS_MANAGER_RS: &str = include_str!("../src/ui/assets_manager.rs");
 const COMMAND_PALETTE_RS: &str = include_str!("../src/ui/command_palette.rs");
@@ -57,6 +58,7 @@ const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk
 const WINDOWS_INSTALLER_NSI: &str = include_str!("../packaging/windows/installer.nsi");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
+const WINDOWS_WIN32_HELPERS_RS: &str = include_str!("../src/windows/win32_helpers.rs");
 const WINDOWS_MOD_RS: &str = include_str!("../src/windows/mod.rs");
 const WINDOWS_PORTABLE_NSI: &str = include_str!("../packaging/windows/portable.nsi");
 const WINDOWS_RC: &str = include_str!("../resources/windows/terminaltiler.rc");
@@ -508,10 +510,27 @@ fn settings_exposes_application_logs_folder_action() {
         "GTK settings log-folder action should create the logs directory and launch it through the desktop"
     );
     assert!(
+        APP_PATHS_RS.contains("fn platform_state_dir() -> Option<PathBuf>")
+            && APP_PATHS_RS.contains("dirs.data_local_dir()")
+            && APP_PATHS_RS.contains(".parent()")
+            && APP_PATHS_RS.contains("parent.join(\"state\")"),
+        "Windows logs should resolve under a local application state directory"
+    );
+    assert!(
         WINDOWS_APP_RS.contains("ID_SETTINGS_OPEN_LOGS_FOLDER")
             && WINDOWS_APP_RS.contains("open_logs_folder_from_settings")
-            && WINDOWS_APP_RS.contains("ShellExecuteW"),
-        "Windows settings should expose and handle an Open Logs Folder button"
+            && WINDOWS_APP_RS.contains("open_path_with_shell(state.window_hwnd, &path)"),
+        "Windows Win32 settings should open the logs folder through the native shell helper"
+    );
+    assert!(
+        WINDOWS_GTK_APP_RS.contains("on_open_logs_folder")
+            && WINDOWS_GTK_APP_RS.contains("open_path_with_shell(std::ptr::null_mut(), &path)")
+            && !WINDOWS_GTK_APP_RS.contains("gio::AppInfo::launch_default_for_uri"),
+        "Windows GTK settings should use the native shell helper instead of Gio URI launching for folders"
+    );
+    assert!(
+        WINDOWS_WIN32_HELPERS_RS.contains("ShellExecuteW"),
+        "source audit should fail if Windows shell execution disappears entirely"
     );
 }
 

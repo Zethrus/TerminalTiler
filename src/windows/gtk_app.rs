@@ -38,6 +38,7 @@ mod imp {
     };
     use crate::windows::gtk_tray::WindowsGtkTrayController;
     use crate::windows::gtk_voice_hotkey::{WindowsGlobalHotkeyEvent, WindowsGlobalHotkeyHandle};
+    use crate::windows::win32_helpers::open_path_with_shell;
 
     const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
     const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
@@ -1836,26 +1837,20 @@ mod imp {
 
     fn open_logs_folder(overlay: &adw::ToastOverlay) {
         match logging::ensure_log_directory() {
-            Ok(path) => {
-                let uri = gio::File::for_path(&path).uri();
-                match gio::AppInfo::launch_default_for_uri(
-                    uri.as_str(),
-                    None::<&gio::AppLaunchContext>,
-                ) {
-                    Ok(()) => {
-                        logging::info(format!("opened application logs folder {}", path.display()));
-                        overlay.add_toast(adw::Toast::new("Opened logs folder"));
-                    }
-                    Err(error) => {
-                        logging::error(format!(
-                            "failed to open application logs folder '{}': {}",
-                            path.display(),
-                            error
-                        ));
-                        overlay.add_toast(adw::Toast::new("Failed to open logs folder"));
-                    }
+            Ok(path) => match open_path_with_shell(std::ptr::null_mut(), &path) {
+                Ok(()) => {
+                    logging::info(format!("opened application logs folder {}", path.display()));
+                    overlay.add_toast(adw::Toast::new("Opened logs folder"));
                 }
-            }
+                Err(error) => {
+                    logging::error(format!(
+                        "failed to open application logs folder '{}': {}",
+                        path.display(),
+                        error
+                    ));
+                    overlay.add_toast(adw::Toast::new("Failed to open logs folder"));
+                }
+            },
             Err(error) => {
                 logging::error(format!("failed to prepare logs folder: {error}"));
                 overlay.add_toast(adw::Toast::new("Could not resolve logs folder"));

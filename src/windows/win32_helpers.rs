@@ -3,7 +3,11 @@ use std::ffi::c_void;
 #[cfg(target_os = "windows")]
 use std::mem;
 #[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
 use std::panic::{self, AssertUnwindSafe};
+#[cfg(target_os = "windows")]
+use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::ptr;
 
@@ -12,9 +16,11 @@ use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
+#[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-    LoadCursorW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WNDPROC,
+    LoadCursorW, RegisterClassW, SW_SHOW, WINDOW_EX_STYLE, WNDCLASSW, WNDPROC,
 };
 
 #[cfg(target_os = "windows")]
@@ -40,6 +46,32 @@ pub unsafe fn catch_window_proc(
 #[cfg(target_os = "windows")]
 pub fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+pub fn open_path_with_shell(parent: HWND, path: &Path) -> Result<(), String> {
+    let operation = wide("open");
+    let target: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        ShellExecuteW(
+            parent,
+            operation.as_ptr(),
+            target.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOW,
+        )
+    };
+
+    if result as usize <= 32 {
+        Err(format!("ShellExecuteW returned {}", result as usize))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "windows")]

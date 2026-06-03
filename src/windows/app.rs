@@ -18,7 +18,7 @@ mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-        Shell_NotifyIconW, ShellExecuteW,
+        Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
@@ -66,7 +66,8 @@ mod imp {
     use crate::voice::pack::{self, VoicePackHealth};
     use crate::voice::{VoiceActivationMode, VoiceEngineMode, VoicePackStatus};
     use crate::windows::win32_helpers::{
-        create_child_window_with_ex_style as create_child_window, read_window_text, wide,
+        create_child_window_with_ex_style as create_child_window, open_path_with_shell,
+        read_window_text, wide,
     };
     use crate::windows::workspace;
     use crate::windows::wsl::{self, WindowsRuntime};
@@ -3680,33 +3681,20 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn open_logs_folder_from_settings(state: &SettingsWindowState) {
         match logging::ensure_log_directory() {
-            Ok(path) => {
-                let operation = wide("open");
-                let target_text = path.to_string_lossy().to_string();
-                let target = wide(&target_text);
-                let result = unsafe {
-                    ShellExecuteW(
-                        state.window_hwnd,
-                        operation.as_ptr(),
-                        target.as_ptr(),
-                        ptr::null(),
-                        ptr::null(),
-                        SW_SHOW,
-                    )
-                };
-
-                if result as usize <= 32 {
-                    logging::error(format!(
-                        "failed to open application logs folder '{}': ShellExecuteW returned {}",
-                        path.display(),
-                        result as usize
-                    ));
-                    set_settings_status(state, "Failed to open logs folder.");
-                } else {
+            Ok(path) => match open_path_with_shell(state.window_hwnd, &path) {
+                Ok(()) => {
                     logging::info(format!("opened application logs folder {}", path.display()));
                     set_settings_status(state, "Opened logs folder.");
                 }
-            }
+                Err(error) => {
+                    logging::error(format!(
+                        "failed to open application logs folder '{}': {}",
+                        path.display(),
+                        error
+                    ));
+                    set_settings_status(state, "Failed to open logs folder.");
+                }
+            },
             Err(error) => {
                 logging::error(format!(
                     "failed to prepare application logs folder: {}",

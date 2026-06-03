@@ -102,10 +102,16 @@ The first launch seeds presets at the XDG config location for the app. On Linux 
 ~/.config/TerminalTiler/presets.toml
 ```
 
-Application logs and crash reports are written to the XDG state directory. On Linux this is typically:
+Application logs and crash reports are written to the platform state directory. On Linux this is typically:
 
 ```text
 ~/.local/state/terminaltiler/logs/terminaltiler.log
+```
+
+On Windows this is typically:
+
+```text
+%LOCALAPPDATA%\Zethrus\TerminalTiler\state\logs\terminaltiler.log
 ```
 
 Launcher stderr from desktop or packaged starts is also appended separately to:
