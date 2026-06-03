@@ -18,8 +18,8 @@ mod imp {
     use gtk::{gio, glib};
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2_11,
-        ICoreWebView2Controller, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
-        ICoreWebView2Environment, ICoreWebView2NewWindowRequestedEventArgs,
+        ICoreWebView2Controller, ICoreWebView2Environment,
+        ICoreWebView2NewWindowRequestedEventArgs,
     };
     use webview2_com::{
         ContextMenuRequestedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
@@ -1653,12 +1653,14 @@ mod imp {
         let title = title.clone();
         let detail_label = detail_label.clone();
         let context_popover = context_popover.clone();
+        let state_for_callback = state.clone();
+        let detail_label_for_callback = detail_label.clone();
         let environment_handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
             move |error_code, environment| {
                 if let Err(error) = error_code {
                     report_gtk_webview_initialization_failure(
-                        &state,
-                        &detail_label,
+                        &state_for_callback,
+                        &detail_label_for_callback,
                         "Windows GTK WebView2 environment failed",
                         error,
                     );
@@ -1667,8 +1669,8 @@ mod imp {
 
                 let Some(environment) = environment else {
                     report_gtk_webview_initialization_failure(
-                        &state,
-                        &detail_label,
+                        &state_for_callback,
+                        &detail_label_for_callback,
                         "Windows GTK WebView2 environment failed",
                         WindowsError::from(E_POINTER),
                     );
@@ -1680,10 +1682,10 @@ mod imp {
                     parent_hwnd,
                     environment,
                     host.clone(),
-                    state.clone(),
+                    state_for_callback.clone(),
                     runtime_status.clone(),
                     title.clone(),
-                    detail_label.clone(),
+                    detail_label_for_callback.clone(),
                     context_popover.clone(),
                 );
                 Ok(())
@@ -1740,12 +1742,14 @@ mod imp {
         });
 
         let environment_for_completion = environment.clone();
+        let state_for_callback = state.clone();
+        let detail_label_for_callback = detail_label.clone();
         let controller_handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
             move |error_code, controller| {
                 if let Err(error) = error_code {
                     report_gtk_webview_initialization_failure(
-                        &state,
-                        &detail_label,
+                        &state_for_callback,
+                        &detail_label_for_callback,
                         "Windows GTK WebView2 controller failed",
                         error,
                     );
@@ -1754,8 +1758,8 @@ mod imp {
 
                 let Some(controller) = controller else {
                     report_gtk_webview_initialization_failure(
-                        &state,
-                        &detail_label,
+                        &state_for_callback,
+                        &detail_label_for_callback,
                         "Windows GTK WebView2 controller failed",
                         WindowsError::from(E_POINTER),
                     );
@@ -1766,10 +1770,10 @@ mod imp {
                     environment_for_completion.clone(),
                     controller,
                     &host,
-                    &state,
+                    &state_for_callback,
                     &runtime_status,
                     &title,
-                    &detail_label,
+                    &detail_label_for_callback,
                     &context_popover,
                 );
                 Ok(())
