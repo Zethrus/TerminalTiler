@@ -3042,6 +3042,31 @@ window.windows-gtk-shell .settings-section {
   font-size: 10px;
 }
 
+.session-resume-dialog .session-resume-content {
+  min-width: 380px;
+}
+
+.session-resume-dialog .session-resume-heading {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.session-resume-dialog .session-resume-body {
+  line-height: 1.35;
+}
+
+.session-resume-dialog .session-resume-actions {
+  margin-top: 4px;
+}
+
+.session-resume-dialog button.session-resume-action {
+  min-height: 40px;
+}
+
+.session-resume-dialog.windows-gtk-shell button.session-resume-action {
+  min-height: 34px;
+}
+
 .settings-dialog-window.windows-gtk-shell .settings-section {
   padding: 12px;
   border-radius: 18px;

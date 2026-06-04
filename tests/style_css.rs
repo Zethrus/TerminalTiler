@@ -708,6 +708,47 @@ fn primary_actions_use_shared_symbolic_icon_helper() {
 }
 
 #[test]
+fn session_resume_prompt_uses_stable_custom_dialog_layout() {
+    let resume_prompt = WINDOW_RS
+        .split_once("fn prompt_session_resume")
+        .and_then(|(_, tail)| {
+            tail.split_once("fn show_startup_notice")
+                .map(|(body, _)| body)
+        })
+        .expect("prompt_session_resume should stay before show_startup_notice");
+
+    assert!(
+        resume_prompt.contains("let dialog = adw::Dialog::new();")
+            && !resume_prompt.contains("MessageDialog")
+            && resume_prompt.contains("dialog.set_content_width(380)")
+            && !resume_prompt.contains("set_follows_content_size(true)")
+            && resume_prompt.contains(".css_classes([\"session-resume-content\"])")
+            && resume_prompt.contains(".css_classes([\"session-resume-actions\"])")
+            && resume_prompt.contains("gtk::Button::with_label(\"Resume And Rerun\")")
+            && resume_prompt.contains("gtk::Button::with_label(\"Resume As Shells\")")
+            && resume_prompt.contains("gtk::Button::with_label(\"Start Fresh\")")
+            && resume_prompt.contains("dialog.connect_closed")
+            && resume_prompt.contains("if !action_taken.replace(true)")
+            && resume_prompt.contains("dialog.set_default_widget(Some(&shells_button))"),
+        "startup session resume should use a fixed-width custom AdwDialog layout with separate wrapped copy, action stack, and once-guarded close fallback"
+    );
+
+    for selector in [
+        ".session-resume-dialog .session-resume-content",
+        ".session-resume-dialog .session-resume-heading",
+        ".session-resume-dialog .session-resume-body",
+        ".session-resume-dialog .session-resume-actions",
+        ".session-resume-dialog button.session-resume-action",
+        ".session-resume-dialog.windows-gtk-shell button.session-resume-action",
+    ] {
+        assert!(
+            STYLE_CSS.contains(selector),
+            "resume prompt should have scoped CSS hook: {selector}"
+        );
+    }
+}
+
+#[test]
 fn launch_buttons_use_premium_role_contract() {
     for role in [
         "primary = warm cream CTA",
