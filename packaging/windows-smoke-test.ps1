@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$GtkMixedWebView2SmokeTimeoutSeconds = 75
 
 function Get-PackageVersion {
     param([string]$RootDir)
@@ -335,6 +336,18 @@ function Write-SmokeDiagnostics {
     if ($null -ne $ExitCode) {
         Write-Host "Process exit code: $(Format-ExitCode -ExitCode $ExitCode)"
     }
+    $webView2UserDataFolder = Join-Path $SandboxRoot "profile\local-data\webview2"
+    Write-Host "Resolved WebView2 user data folder: $webView2UserDataFolder"
+    if (Test-Path $webView2UserDataFolder) {
+        Get-ChildItem -Path $webView2UserDataFolder -Force -ErrorAction SilentlyContinue |
+            Select-Object -First 20 FullName, Length, LastWriteTime |
+            Format-Table -AutoSize |
+            Out-String |
+            Write-Host
+    }
+    else {
+        Write-Host "WebView2 user data folder was not created."
+    }
     $logs = @(Find-SmokeLogs -SandboxRoot $SandboxRoot)
     if ($logs.Count -eq 0) {
         Write-Host "No TerminalTiler logs were found under $SandboxRoot"
@@ -566,6 +579,8 @@ function Invoke-LaunchSmoke {
     $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
 
     try {
+        $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
+        Write-Host "$Label WebView2 user data folder: $webView2UserDataFolder"
         $process = Start-Process -FilePath $ExePath -PassThru
         $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
         $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
@@ -585,7 +600,8 @@ function Invoke-LaunchSmoke {
             Write-Host "$Label did not expose a Win32 MainWindowHandle before the smoke timeout; continuing with GTK session-log validation."
         }
 
-        $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds 20
+        $logTimeoutSeconds = if ($expectGtkShell -and $ProfileKind -eq "mixed") { $GtkMixedWebView2SmokeTimeoutSeconds } else { 20 }
+        $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds $logTimeoutSeconds
 
         Stop-ProcessTree -Process $process
         $finalLogText = Get-SmokeSessionLogText -SandboxRoot $SandboxRoot

@@ -33,6 +33,7 @@ mod imp {
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_sys::Win32::System::Threading::TerminateProcess;
 
+    use crate::app_paths;
     use crate::dropped_paths::{self, DroppedPathTarget};
     use crate::logging;
     use crate::model::assets::{OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
@@ -63,6 +64,9 @@ mod imp {
     const TERMINAL_RUNTIME_ROWS: usize = 24;
     const TERMINAL_RUNTIME_POLL_MS: u64 = 80;
     const WEBVIEW_RUNTIME_POLL_MS: u64 = 100;
+    const WEBVIEW_PARENT_HWND_LOG_POLLS: u32 = 10;
+    const WEBVIEW_ENVIRONMENT_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
+    const WEBVIEW_CONTROLLER_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
 
     unsafe extern "C" {
         fn gdk_win32_surface_get_handle(surface: *mut gdk::ffi::GdkSurface) -> *mut c_void;
@@ -1595,10 +1599,10 @@ mod imp {
                 } else {
                     let mut state = state.borrow_mut();
                     state.hwnd_poll_count = state.hwnd_poll_count.saturating_add(1);
-                    if state.hwnd_poll_count == 10 {
-                        logging::info(
-                            "Windows GTK WebView2 runtime surface still waiting for parent HWND after 10 polls",
-                        );
+                    if state.hwnd_poll_count == WEBVIEW_PARENT_HWND_LOG_POLLS {
+                        logging::info(format!(
+                            "Windows GTK WebView2 runtime surface still waiting for parent HWND after {WEBVIEW_PARENT_HWND_LOG_POLLS} polls"
+                        ));
                     }
                 }
             }
@@ -1627,25 +1631,55 @@ mod imp {
         }
 
         if let Err(error) = ensure_webview_com_initialized() {
-            detail_label.set_text(&web_runtime_detail(
-                &error,
-                &state.borrow().current_url,
-                None,
-            ));
-            logging::error(format!("Windows GTK WebView2 COM init failed: {error}"));
+            report_gtk_webview_initialization_message(
+                state,
+                detail_label,
+                &format!("Windows GTK WebView2 COM init failed: {error}"),
+            );
             return;
         }
 
-        logging::info("Windows GTK WebView2 creating environment");
+        let Some(user_data_dir) = app_paths::webview2_user_data_dir() else {
+            report_gtk_webview_initialization_failure(
+                state,
+                detail_label,
+                "Windows GTK WebView2 user data folder resolution failed",
+                WindowsError::from(E_POINTER),
+            );
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(&user_data_dir) {
+            report_gtk_webview_initialization_io_failure(
+                state,
+                detail_label,
+                "Windows GTK WebView2 user data folder creation failed",
+                error,
+            );
+            return;
+        }
+        logging::info(format!(
+            "Windows GTK WebView2 creating environment with user data folder {}",
+            user_data_dir.display()
+        ));
+        let user_data_folder = HSTRING::from(user_data_dir.to_string_lossy().as_ref());
+
         let state_for_watchdog = state.clone();
-        glib::timeout_add_local_once(Duration::from_secs(10), move || {
-            let state = state_for_watchdog.borrow();
-            if !state.shutdown && state.environment.is_none() {
-                logging::error(
-                    "Windows GTK WebView2 environment callback did not complete after 10s",
-                );
-            }
-        });
+        let detail_label_for_watchdog = detail_label.clone();
+        glib::timeout_add_local_once(
+            Duration::from_secs(WEBVIEW_ENVIRONMENT_CALLBACK_TIMEOUT_SECONDS),
+            move || {
+                let state = state_for_watchdog.borrow();
+                if !state.shutdown && state.environment.is_none() {
+                    drop(state);
+                    report_gtk_webview_initialization_timeout(
+                        &state_for_watchdog,
+                        &detail_label_for_watchdog,
+                        "Windows GTK WebView2 environment callback",
+                        WEBVIEW_ENVIRONMENT_CALLBACK_TIMEOUT_SECONDS,
+                    );
+                }
+            },
+        );
 
         let host = host.clone();
         let state = state.clone();
@@ -1657,6 +1691,13 @@ mod imp {
         let detail_label_for_callback = detail_label.clone();
         let environment_handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
             move |error_code, environment| {
+                if state_for_callback.borrow().shutdown {
+                    logging::info(
+                        "Windows GTK WebView2 environment callback ignored after shutdown",
+                    );
+                    return Ok(());
+                }
+
                 if let Err(error) = error_code {
                     report_gtk_webview_initialization_failure(
                         &state_for_callback,
@@ -1695,7 +1736,7 @@ mod imp {
         let result = unsafe {
             CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
-                PCWSTR::null(),
+                PCWSTR(user_data_folder.as_ptr()),
                 None::<
                     &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
                 >,
@@ -1732,20 +1773,35 @@ mod imp {
         }
 
         let state_for_watchdog = state.clone();
-        glib::timeout_add_local_once(Duration::from_secs(10), move || {
-            let state = state_for_watchdog.borrow();
-            if !state.shutdown && state.controller.is_none() {
-                logging::error(
-                    "Windows GTK WebView2 controller callback did not complete after 10s",
-                );
-            }
-        });
+        let detail_label_for_watchdog = detail_label.clone();
+        glib::timeout_add_local_once(
+            Duration::from_secs(WEBVIEW_CONTROLLER_CALLBACK_TIMEOUT_SECONDS),
+            move || {
+                let state = state_for_watchdog.borrow();
+                if !state.shutdown && state.controller.is_none() {
+                    drop(state);
+                    report_gtk_webview_initialization_timeout(
+                        &state_for_watchdog,
+                        &detail_label_for_watchdog,
+                        "Windows GTK WebView2 controller callback",
+                        WEBVIEW_CONTROLLER_CALLBACK_TIMEOUT_SECONDS,
+                    );
+                }
+            },
+        );
 
         let environment_for_completion = environment.clone();
         let state_for_callback = state.clone();
         let detail_label_for_callback = detail_label.clone();
         let controller_handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
             move |error_code, controller| {
+                if state_for_callback.borrow().shutdown {
+                    logging::info(
+                        "Windows GTK WebView2 controller callback ignored after shutdown",
+                    );
+                    return Ok(());
+                }
+
                 if let Err(error) = error_code {
                     report_gtk_webview_initialization_failure(
                         &state_for_callback,
@@ -1800,12 +1856,62 @@ mod imp {
         context: &str,
         error: WindowsError,
     ) {
-        detail_label.set_text(&web_runtime_detail(
+        report_gtk_webview_initialization_message(
+            state,
+            detail_label,
             &format!("{context}: {error}"),
-            &state.borrow().current_url,
+        );
+    }
+
+    fn report_gtk_webview_initialization_io_failure(
+        state: &Rc<RefCell<WebRuntimeState>>,
+        detail_label: &gtk::Label,
+        context: &str,
+        error: std::io::Error,
+    ) {
+        report_gtk_webview_initialization_message(
+            state,
+            detail_label,
+            &format!("{context}: {error}"),
+        );
+    }
+
+    fn report_gtk_webview_initialization_timeout(
+        state: &Rc<RefCell<WebRuntimeState>>,
+        detail_label: &gtk::Label,
+        context: &str,
+        timeout_seconds: u64,
+    ) {
+        report_gtk_webview_initialization_message(
+            state,
+            detail_label,
+            &format!("{context} did not complete after {timeout_seconds}s"),
+        );
+    }
+
+    fn report_gtk_webview_initialization_message(
+        state: &Rc<RefCell<WebRuntimeState>>,
+        detail_label: &gtk::Label,
+        message: &str,
+    ) {
+        let (shutdown, current_url) = {
+            let state = state.borrow();
+            (state.shutdown, state.current_url.clone())
+        };
+        if shutdown {
+            logging::info(format!(
+                "Windows GTK WebView2 initialization message ignored after shutdown: {message}"
+            ));
+            return;
+        }
+        detail_label.set_text(&web_runtime_detail(
+            &format!(
+                "Recoverable WebView2 initialization error: {message}. Open Externally remains available"
+            ),
+            &current_url,
             None,
         ));
-        logging::error(format!("{context}: {error}"));
+        logging::error(message);
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -85,6 +85,7 @@ mod imp {
         WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
+    use crate::app_paths;
     use crate::dropped_paths::{self, DroppedPathTarget};
     use crate::logging;
     use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
@@ -750,11 +751,25 @@ mod imp {
     fn create_webview_environment() -> Result<ICoreWebView2Environment, String> {
         ensure_webview_com_initialized()?;
 
+        let user_data_dir = app_paths::webview2_user_data_dir()
+            .ok_or_else(|| "Could not resolve WebView2 user data folder".to_string())?;
+        std::fs::create_dir_all(&user_data_dir).map_err(|error| {
+            format!(
+                "Creating WebView2 user data folder '{}' failed: {error}",
+                user_data_dir.display()
+            )
+        })?;
+        logging::info(format!(
+            "creating WebView2 environment with user data folder {}",
+            user_data_dir.display()
+        ));
+        let user_data_folder = HSTRING::from(user_data_dir.to_string_lossy().as_ref());
+
         let (tx, rx) = mpsc::channel();
         unsafe {
             CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
-                PCWSTR::null(),
+                PCWSTR(user_data_folder.as_ptr()),
                 None::<
                     &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2EnvironmentOptions,
                 >,

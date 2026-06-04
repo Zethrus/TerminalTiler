@@ -513,8 +513,10 @@ fn settings_exposes_application_logs_folder_action() {
         APP_PATHS_RS.contains("fn platform_state_dir() -> Option<PathBuf>")
             && APP_PATHS_RS.contains("dirs.data_local_dir()")
             && APP_PATHS_RS.contains(".parent()")
-            && APP_PATHS_RS.contains("parent.join(\"state\")"),
-        "Windows logs should resolve under a local application state directory"
+            && APP_PATHS_RS.contains("parent.join(\"state\")")
+            && APP_PATHS_RS.contains("pub fn webview2_user_data_dir() -> Option<PathBuf>")
+            && APP_PATHS_RS.contains("data_local_dir().map(|dir| dir.join(\"webview2\"))"),
+        "Windows logs should resolve under a local application state directory and WebView2 should use the writable local data profile"
     );
     assert!(
         WINDOWS_APP_RS.contains("ID_SETTINGS_OPEN_LOGS_FOLDER")
@@ -1831,7 +1833,14 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && WINDOWS_GTK_RUNTIME_RS.contains("complete_gtk_webview_initialization")
             && WINDOWS_GTK_RUNTIME_RS.contains("Windows GTK WebView2 creating environment")
             && WINDOWS_GTK_RUNTIME_RS
-                .contains("Windows GTK WebView2 controller callback did not complete after 10s")
+                .contains("const WEBVIEW_ENVIRONMENT_CALLBACK_TIMEOUT_SECONDS: u64 = 45")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("const WEBVIEW_CONTROLLER_CALLBACK_TIMEOUT_SECONDS: u64 = 45")
+            && WINDOWS_GTK_RUNTIME_RS.contains("app_paths::webview2_user_data_dir()")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("Recoverable WebView2 initialization error: {message}. Open Externally remains available")
+            && WINDOWS_GTK_RUNTIME_RS
+                .contains("Windows GTK WebView2 controller callback")
             && WINDOWS_GTK_RUNTIME_RS
                 .contains("Windows GTK WebView2 runtime surface still waiting for parent HWND")
             && !WINDOWS_GTK_RUNTIME_RS.contains("wait_with_pump")
@@ -2232,8 +2241,11 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             )
             && WINDOWS_SMOKE_PS1.contains(
                 "$requiredPattern = Get-LaunchSmokeRequiredPattern -ExpectGtkShell $expectGtkShell -ProfileKind $ProfileKind",
-            ),
-        "GTK mixed launch smoke must wait for the WebView2 navigation log before stopping the app, instead of using the earlier generic GTK restore signal"
+            )
+            && WINDOWS_SMOKE_PS1.contains("$GtkMixedWebView2SmokeTimeoutSeconds = 75")
+            && WINDOWS_SMOKE_PS1.contains("Resolved WebView2 user data folder:")
+            && WINDOWS_SMOKE_PS1.contains("local-data\\webview2"),
+        "GTK mixed launch smoke must wait for the WebView2 navigation log long enough to cover WebView2 initialization, instead of using the earlier generic GTK restore signal"
     );
 
     assert!(
