@@ -4,6 +4,7 @@
 Line protocol on stdin/stdout:
   start <sample_rate_hz>
   audio-pcm16-hex <little-endian signed PCM16 bytes as hex>
+  audio-buffer-pcm16-hex <captured PCM16 bytes buffered without partial inference>
   audio-final-pcm16-hex <final buffered PCM16 bytes without partial inference>
   stop
   warm
@@ -82,6 +83,7 @@ class ParakeetEngine:
         self._torch = None
         self._quantized = False
         self._streaming_error: Optional[str] = None
+        self._device: Optional[str] = None
         self.capture = CaptureBuffer()
         self.latest_partial = ""
         self._last_partial_at = 0.0
@@ -95,14 +97,13 @@ class ParakeetEngine:
             emit("health", f"error: {exc}")
             return
 
-        cuda = bool(torch.cuda.is_available())
-        if self.engine_mode == "cuda" and not cuda:
-            emit("health", "error: CUDA requested but torch.cuda.is_available() is false")
+        try:
+            device = self._select_device(torch)
+        except RuntimeError as exc:
+            emit("health", f"error: {exc}")
             return
-
-        device = self._device_name(torch, cuda)
         cuda_device = "none"
-        if cuda:
+        if device == "cuda":
             try:
                 cuda_device = torch.cuda.get_device_name(0)
             except Exception:
@@ -127,14 +128,13 @@ class ParakeetEngine:
             emit("health", f"error: {exc}")
             return
 
-        cuda = bool(torch.cuda.is_available())
-        if self.engine_mode == "cuda" and not cuda:
-            emit("health", "error: CUDA requested but torch.cuda.is_available() is false")
+        try:
+            device = self._select_device(torch)
+        except RuntimeError as exc:
+            emit("health", f"error: {exc}")
             return
-
-        device = self._device_name(torch, cuda)
         cuda_device = "none"
-        if cuda:
+        if device == "cuda":
             try:
                 cuda_device = torch.cuda.get_device_name(0)
             except Exception:
@@ -160,7 +160,7 @@ class ParakeetEngine:
         device = "unknown"
         if self._torch is not None:
             try:
-                device = self._device_name(self._torch, bool(self._torch.cuda.is_available()))
+                device = self._select_device(self._torch)
             except Exception:
                 device = "unavailable"
         model = (
@@ -198,8 +198,12 @@ class ParakeetEngine:
             return
         started = time.perf_counter()
         try:
-            text = self._final_transcript(bytes(self.capture.pcm), self.capture.sample_rate_hz)
+            pcm = bytes(self.capture.pcm)
+            sample_rate_hz = self.capture.sample_rate_hz
+            self.capture.pcm.clear()
+            text = self._final_transcript(pcm, sample_rate_hz)
         except Exception as exc:  # pragma: no cover - depends on user pack/GPU
+            self.capture.pcm.clear()
             emit("error", f"Parakeet transcription failed: {exc}")
             return
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -254,9 +258,9 @@ class ParakeetEngine:
         import nemo.collections.asr as nemo_asr  # type: ignore
 
         model = nemo_asr.models.ASRModel.from_pretrained(model_name=model_name)
-        cuda = bool(torch.cuda.is_available())
-        device = self._device_name(torch, cuda)
+        device = self._select_device(torch)
         model = model.to(device)
+        self._configure_ctc_decoding(model)
         if device == "cpu" and os.environ.get("TERMINALTILER_VOICE_CPU_QUANTIZE", "1") != "0":
             try:
                 quantization = getattr(torch, "ao", torch).quantization
@@ -275,14 +279,32 @@ class ParakeetEngine:
         self._torch = torch
         return model
 
-    def _device_name(self, torch, cuda_available: bool) -> str:
+    def _select_device(self, torch) -> str:
+        if self._device is not None:
+            return self._device
         if self.engine_mode == "cpu":
-            return "cpu"
+            self._device = "cpu"
+            return self._device
+        cuda_available = bool(torch.cuda.is_available())
         if self.engine_mode == "cuda":
             if not cuda_available:
                 raise RuntimeError("CUDA requested but torch.cuda.is_available() is false")
-            return "cuda"
-        return "cuda" if cuda_available else "cpu"
+            self._device = "cuda"
+            return self._device
+        self._device = "cuda" if cuda_available else "cpu"
+        return self._device
+
+    def _configure_ctc_decoding(self, model) -> None:
+        change_decoding = getattr(model, "change_decoding_strategy", None)
+        decoding_cfg = getattr(model, "cfg", None)
+        decoding_cfg = getattr(decoding_cfg, "decoding", None)
+        if change_decoding is None or decoding_cfg is None:
+            return
+        try:
+            decoding_cfg.strategy = "greedy_batch"
+            change_decoding(decoding_cfg)
+        except Exception as exc:  # pragma: no cover - model/version dependent
+            print(f"CTC greedy_batch decoding unavailable; keeping default: {exc}", file=sys.stderr)
 
     def _captured_seconds(self) -> float:
         if self.capture.sample_rate_hz <= 0:
@@ -346,7 +368,8 @@ class ParakeetEngine:
         last_error: Optional[Exception] = None
         for call in call_variants:
             try:
-                return transcript_text(call())
+                with self._inference_context():
+                    return transcript_text(call())
             except TypeError as exc:
                 last_error = exc
                 continue
@@ -364,12 +387,37 @@ class ParakeetEngine:
                 wav.setsampwidth(2)
                 wav.setframerate(sample_rate_hz)
                 wav.writeframes(pcm)
-            return transcript_text(model.transcribe([str(wav_path)], timestamps=False))
+            with self._inference_context():
+                return transcript_text(model.transcribe([str(wav_path)], timestamps=False))
         finally:
             try:
                 wav_path.unlink()
             except FileNotFoundError:
                 pass
+
+
+    def _inference_context(self):
+        class _NullContext:
+            def __enter__(self):
+                return None
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        torch = self._torch
+        if torch is None:
+            try:
+                import torch as torch_module  # type: ignore
+                torch = torch_module
+                self._torch = torch_module
+            except Exception:
+                return _NullContext()
+        inference_mode = getattr(torch, "inference_mode", None)
+        if inference_mode is not None:
+            return inference_mode()
+        no_grad = getattr(torch, "no_grad", None)
+        if no_grad is not None:
+            return no_grad()
+        return _NullContext()
 
 
 def transcript_text(output) -> str:
@@ -423,6 +471,8 @@ def main() -> int:
             engine.start(sample_rate)
         elif kind == "audio-pcm16-hex":
             engine.append_pcm16_hex(payload)
+        elif kind == "audio-buffer-pcm16-hex":
+            engine.append_pcm16_hex(payload, emit_partial=False)
         elif kind == "audio-final-pcm16-hex":
             engine.append_pcm16_hex(payload, emit_partial=False)
         elif kind == "stop":

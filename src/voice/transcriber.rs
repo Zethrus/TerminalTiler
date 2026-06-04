@@ -1,11 +1,18 @@
 use std::io;
+use std::time::{Duration, Instant};
 
 use crate::voice::audio::{AudioCapture, AudioCaptureError};
 use crate::voice::engine::{
     VoiceEngineCapabilities, VoiceEngineEvent, VoiceEngineProcess, VoiceEngineRequest,
 };
+
 use crate::voice::pack::{VoicePackHealth, VoicePackManifest};
 use crate::voice::preferences::VoiceEngineMode;
+
+const VOICE_ENGINE_START_TIMEOUT: Duration = Duration::from_secs(3);
+const VOICE_ENGINE_CAPABILITIES_TIMEOUT: Duration = Duration::from_secs(3);
+const VOICE_ENGINE_MODEL_WARM_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const VOICE_ENGINE_FINAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub struct ParakeetTranscriber {
     engine: VoiceEngineProcess,
@@ -32,6 +39,20 @@ impl From<io::Error> for ParakeetTranscriberError {
     }
 }
 
+fn read_event_before(
+    engine: &mut VoiceEngineProcess,
+    deadline: Instant,
+) -> Result<Option<VoiceEngineEvent>, ParakeetTranscriberError> {
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return Err(ParakeetTranscriberError::EngineIo(
+            "voice engine response timed out".into(),
+        ));
+    };
+    engine
+        .read_event_timeout(remaining)
+        .map_err(ParakeetTranscriberError::from)
+}
+
 impl ParakeetTranscriber {
     pub fn launch(
         manifest: &VoicePackManifest,
@@ -41,7 +62,7 @@ impl ParakeetTranscriber {
         let mut engine = VoiceEngineProcess::launch(manifest, health, engine_mode)?;
         // Consume the helper's startup ready frame when present. If the process
         // exits before readiness, the first later request will surface the error.
-        let _ = engine.read_event()?;
+        let _ = engine.read_event_timeout(VOICE_ENGINE_START_TIMEOUT)?;
         Ok(Self {
             engine,
             capture: None,
@@ -52,8 +73,9 @@ impl ParakeetTranscriber {
         self.engine
             .send(&VoiceEngineRequest::Warm)
             .map_err(ParakeetTranscriberError::from)?;
+        let deadline = Instant::now() + VOICE_ENGINE_MODEL_WARM_TIMEOUT;
         loop {
-            match self.engine.read_event()? {
+            match read_event_before(&mut self.engine, deadline)? {
                 Some(VoiceEngineEvent::Health { ok: true, .. }) => return Ok(()),
                 Some(VoiceEngineEvent::Health { detail, .. }) => {
                     return Err(ParakeetTranscriberError::Engine(detail));
@@ -74,8 +96,9 @@ impl ParakeetTranscriber {
         self.engine
             .send(&VoiceEngineRequest::Health)
             .map_err(ParakeetTranscriberError::from)?;
+        let deadline = Instant::now() + VOICE_ENGINE_MODEL_WARM_TIMEOUT;
         loop {
-            match self.engine.read_event()? {
+            match read_event_before(&mut self.engine, deadline)? {
                 Some(VoiceEngineEvent::Health { ok: true, .. }) => return Ok(()),
                 Some(VoiceEngineEvent::Health { detail, .. }) => {
                     return Err(ParakeetTranscriberError::Engine(detail));
@@ -93,8 +116,9 @@ impl ParakeetTranscriber {
         self.engine
             .send(&VoiceEngineRequest::Capabilities)
             .map_err(ParakeetTranscriberError::from)?;
+        let deadline = Instant::now() + VOICE_ENGINE_CAPABILITIES_TIMEOUT;
         loop {
-            match self.engine.read_event()? {
+            match read_event_before(&mut self.engine, deadline)? {
                 Some(VoiceEngineEvent::Capabilities(capabilities)) => return Ok(capabilities),
                 Some(VoiceEngineEvent::Error(message)) => {
                     if message.trim() == "unknown command: capabilities" {
@@ -118,8 +142,9 @@ impl ParakeetTranscriber {
                 sample_rate_hz: 16_000,
             })
             .map_err(ParakeetTranscriberError::from)?;
+        let deadline = Instant::now() + VOICE_ENGINE_START_TIMEOUT;
         loop {
-            match self.engine.read_event()? {
+            match read_event_before(&mut self.engine, deadline)? {
                 Some(VoiceEngineEvent::Ready) => return Ok(()),
                 Some(VoiceEngineEvent::Error(message)) => {
                     return Err(ParakeetTranscriberError::Engine(message));
@@ -153,19 +178,9 @@ impl ParakeetTranscriber {
             return Ok(None);
         }
         self.engine
-            .send(&VoiceEngineRequest::AudioPcm16(samples))
+            .send(&VoiceEngineRequest::BufferedAudioPcm16(samples))
             .map_err(ParakeetTranscriberError::from)?;
-        loop {
-            match self.engine.read_event()? {
-                Some(VoiceEngineEvent::Partial(text)) => return Ok(Some(text)),
-                Some(VoiceEngineEvent::Ready) => return Ok(None),
-                Some(VoiceEngineEvent::Error(message)) => {
-                    return Err(ParakeetTranscriberError::Engine(message));
-                }
-                Some(_) => continue,
-                None => return Err(ParakeetTranscriberError::EngineExited),
-            }
-        }
+        Ok(None)
     }
 
     pub fn transcribe_pcm16(
@@ -216,8 +231,9 @@ impl ParakeetTranscriber {
             .send(&VoiceEngineRequest::Stop)
             .map_err(ParakeetTranscriberError::from)?;
 
+        let deadline = Instant::now() + VOICE_ENGINE_FINAL_TIMEOUT;
         loop {
-            match self.engine.read_event()? {
+            match read_event_before(&mut self.engine, deadline)? {
                 Some(VoiceEngineEvent::Partial(text)) => {
                     on_partial(text);
                 }
@@ -244,6 +260,20 @@ impl ParakeetTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_model_work_timeouts_allow_slow_cpu_and_download_paths() {
+        assert_eq!(
+            VOICE_ENGINE_START_TIMEOUT,
+            std::time::Duration::from_secs(3)
+        );
+        assert_eq!(
+            VOICE_ENGINE_CAPABILITIES_TIMEOUT,
+            std::time::Duration::from_secs(3)
+        );
+        assert!(VOICE_ENGINE_MODEL_WARM_TIMEOUT >= std::time::Duration::from_secs(30 * 60));
+        assert!(VOICE_ENGINE_FINAL_TIMEOUT >= std::time::Duration::from_secs(10 * 60));
+    }
 
     #[test]
     fn bundled_helper_returns_empty_final_for_empty_capture_without_loading_nemo() {

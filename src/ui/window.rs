@@ -69,6 +69,9 @@ const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+const VOICE_CAPTURE_SAFETY_CAP: Duration = Duration::from_secs(120);
+
+type VoiceSessionId = u64;
 
 static NEXT_LINUX_WINDOW_ID: AtomicUsize = AtomicUsize::new(1);
 static LINUX_SESSION_REGISTRY: OnceLock<Mutex<LinuxSessionRegistry>> = OnceLock::new();
@@ -210,13 +213,37 @@ impl SessionPersistence {
 enum VoiceUiEvent {
     WarmRequested,
     WarmReady(u64),
-    WarmFailed { generation: u64, message: String },
-    ListeningStarted,
-    ListeningCancelled(String),
-    Final(String),
-    Partial(String),
-    Status(String),
-    Error(String),
+    WarmFailed {
+        generation: u64,
+        message: String,
+    },
+    ListeningStarted {
+        session_id: VoiceSessionId,
+    },
+    ListeningCancelled {
+        session_id: VoiceSessionId,
+        message: String,
+    },
+    Final {
+        session_id: VoiceSessionId,
+        text: String,
+    },
+    #[allow(dead_code)]
+    Partial {
+        session_id: VoiceSessionId,
+        text: String,
+    },
+    Status {
+        session_id: VoiceSessionId,
+        message: String,
+    },
+    Error {
+        session_id: VoiceSessionId,
+        message: String,
+    },
+    FlushComplete {
+        session_id: VoiceSessionId,
+    },
     HotkeyPressed,
     HotkeyReleased,
     Toast(String),
@@ -257,6 +284,23 @@ fn apply_voice_listening_started(
     voice_listening.set(!voice_stopping.get());
 }
 
+fn voice_event_is_current(
+    event_session_id: VoiceSessionId,
+    current_session_id: VoiceSessionId,
+) -> bool {
+    event_session_id == current_session_id
+}
+
+fn voice_capture_exceeded_safety_cap(started_at: Option<Instant>, now: Instant) -> bool {
+    started_at
+        .map(|started_at| now.duration_since(started_at) >= VOICE_CAPTURE_SAFETY_CAP)
+        .unwrap_or(false)
+}
+
+fn reserve_voice_flush_if_idle(listening: bool, flush_pending: &Cell<bool>) -> bool {
+    listening && !flush_pending.replace(true)
+}
+
 enum VoiceTranscriberCommand {
     Prepare {
         manifest: pack::VoicePackManifest,
@@ -266,6 +310,7 @@ enum VoiceTranscriberCommand {
         ui_tx: mpsc::Sender<VoiceUiEvent>,
     },
     Start {
+        session_id: VoiceSessionId,
         manifest: pack::VoicePackManifest,
         health: VoicePackHealth,
         engine_mode: VoiceEngineMode,
@@ -273,9 +318,11 @@ enum VoiceTranscriberCommand {
         ui_tx: mpsc::Sender<VoiceUiEvent>,
     },
     Flush {
+        session_id: VoiceSessionId,
         ui_tx: mpsc::Sender<VoiceUiEvent>,
     },
     Stop {
+        session_id: VoiceSessionId,
         ui_tx: mpsc::Sender<VoiceUiEvent>,
     },
     Reset,
@@ -313,6 +360,7 @@ impl VoiceTranscriberHandle {
 
     fn start_capture(
         &self,
+        session_id: VoiceSessionId,
         manifest: pack::VoicePackManifest,
         health: VoicePackHealth,
         engine_mode: VoiceEngineMode,
@@ -320,6 +368,7 @@ impl VoiceTranscriberHandle {
         ui_tx: &mpsc::Sender<VoiceUiEvent>,
     ) {
         let _ = self.tx.send(VoiceTranscriberCommand::Start {
+            session_id,
             manifest,
             health,
             engine_mode,
@@ -328,14 +377,16 @@ impl VoiceTranscriberHandle {
         });
     }
 
-    fn flush(&self, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
+    fn flush(&self, session_id: VoiceSessionId, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
         let _ = self.tx.send(VoiceTranscriberCommand::Flush {
+            session_id,
             ui_tx: ui_tx.clone(),
         });
     }
 
-    fn stop(&self, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
+    fn stop(&self, session_id: VoiceSessionId, ui_tx: &mpsc::Sender<VoiceUiEvent>) {
         let _ = self.tx.send(VoiceTranscriberCommand::Stop {
+            session_id,
             ui_tx: ui_tx.clone(),
         });
     }
@@ -353,7 +404,6 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
     let mut transcriber = None::<ParakeetTranscriber>;
     let mut current_engine_mode = None::<VoiceEngineMode>;
     let mut model_warmed = false;
-    let mut first_partial_started_at = None::<Instant>;
 
     for command in rx {
         match command {
@@ -400,6 +450,7 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 }
             }
             VoiceTranscriberCommand::Start {
+                session_id,
                 manifest,
                 health,
                 engine_mode,
@@ -416,9 +467,10 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 )
                 .and_then(|_| {
                     if !model_warmed {
-                        let _ = ui_tx.send(VoiceUiEvent::ListeningCancelled(
-                            "Voice model is preparing; try again shortly.".into(),
-                        ));
+                        let _ = ui_tx.send(VoiceUiEvent::ListeningCancelled {
+                            session_id,
+                            message: "Voice model is preparing; try again shortly.".into(),
+                        });
                         return Ok(());
                     }
                     transcriber
@@ -429,57 +481,64 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 }) {
                     Ok(()) => {
                         if model_warmed {
-                            first_partial_started_at = Some(Instant::now());
-                            let _ = ui_tx.send(VoiceUiEvent::ListeningStarted);
-                            let _ = ui_tx.send(VoiceUiEvent::Status("Listening…".into()));
+                            let _ = ui_tx.send(VoiceUiEvent::ListeningStarted { session_id });
+                            let _ = ui_tx.send(VoiceUiEvent::Status {
+                                session_id,
+                                message: "Listening…".into(),
+                            });
                         }
                     }
                     Err(message) => {
-                        let _ = ui_tx.send(VoiceUiEvent::Error(message));
+                        if let Some(transcriber) = transcriber.take() {
+                            let _ = transcriber.shutdown();
+                        }
+                        current_engine_mode = None;
+                        model_warmed = false;
+                        let _ = ui_tx.send(VoiceUiEvent::Error {
+                            session_id,
+                            message,
+                        });
                     }
                 }
             }
-            VoiceTranscriberCommand::Flush { ui_tx } => {
-                let Some(transcriber) = transcriber.as_mut() else {
+            VoiceTranscriberCommand::Flush { session_id, ui_tx } => {
+                let Some(active_transcriber) = transcriber.as_mut() else {
+                    let _ = ui_tx.send(VoiceUiEvent::FlushComplete { session_id });
                     continue;
                 };
                 let flushed_at = Instant::now();
-                match transcriber.flush_captured_audio() {
-                    Ok(Some(partial)) => {
+                match active_transcriber.flush_captured_audio() {
+                    Ok(_) => {
                         logging::info(format!(
-                            "voice audio flush returned partial elapsed_ms={}",
-                            flushed_at.elapsed().as_millis()
-                        ));
-                        if let Some(started) = first_partial_started_at.take() {
-                            let elapsed_ms = started.elapsed().as_millis();
-                            let _ = ui_tx.send(VoiceUiEvent::Status(format!(
-                                "First partial in {elapsed_ms}ms"
-                            )));
-                        }
-                        let _ = ui_tx.send(VoiceUiEvent::Partial(partial));
-                    }
-                    Ok(None) => {
-                        logging::info(format!(
-                            "voice audio flush buffered without partial elapsed_ms={}",
+                            "voice audio flush buffered elapsed_ms={}",
                             flushed_at.elapsed().as_millis()
                         ));
                     }
                     Err(error) => {
-                        let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
+                        if let Some(transcriber) = transcriber.take() {
+                            let _ = transcriber.shutdown();
+                        }
+                        current_engine_mode = None;
+                        model_warmed = false;
+                        let _ = ui_tx.send(VoiceUiEvent::Error {
+                            session_id,
+                            message: format!("{error:?}"),
+                        });
                     }
                 }
+                let _ = ui_tx.send(VoiceUiEvent::FlushComplete { session_id });
             }
-            VoiceTranscriberCommand::Stop { ui_tx } => {
-                first_partial_started_at = None;
-                let Some(transcriber) = transcriber.as_mut() else {
+            VoiceTranscriberCommand::Stop { session_id, ui_tx } => {
+                let Some(active_transcriber) = transcriber.as_mut() else {
+                    let _ = ui_tx.send(VoiceUiEvent::Final {
+                        session_id,
+                        text: String::new(),
+                    });
                     continue;
                 };
                 let released_at = Instant::now();
-                let partial_tx = ui_tx.clone();
                 logging::info("voice capture finalization started");
-                let result = transcriber.stop_capture_and_transcribe_with_partials(|partial| {
-                    let _ = partial_tx.send(VoiceUiEvent::Partial(partial));
-                });
+                let result = active_transcriber.stop_capture_and_transcribe();
                 match result {
                     Ok(text) => {
                         let elapsed_ms = released_at.elapsed().as_millis();
@@ -487,17 +546,26 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                             "voice capture finalized text_len={} elapsed_ms={elapsed_ms}",
                             text.len()
                         ));
-                        let _ = ui_tx.send(VoiceUiEvent::Status(format!(
-                            "Final after release in {elapsed_ms}ms"
-                        )));
-                        let _ = ui_tx.send(VoiceUiEvent::Final(text));
+                        let _ = ui_tx.send(VoiceUiEvent::Status {
+                            session_id,
+                            message: format!("Final after release in {elapsed_ms}ms"),
+                        });
+                        let _ = ui_tx.send(VoiceUiEvent::Final { session_id, text });
                     }
                     Err(error) => {
                         let elapsed_ms = released_at.elapsed().as_millis();
                         logging::error(format!(
                             "voice capture finalization failed after {elapsed_ms}ms: {error:?}"
                         ));
-                        let _ = ui_tx.send(VoiceUiEvent::Error(format!("{error:?}")));
+                        if let Some(transcriber) = transcriber.take() {
+                            let _ = transcriber.shutdown();
+                        }
+                        current_engine_mode = None;
+                        model_warmed = false;
+                        let _ = ui_tx.send(VoiceUiEvent::Error {
+                            session_id,
+                            message: format!("{error:?}"),
+                        });
                     }
                 }
             }
@@ -507,7 +575,6 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 }
                 current_engine_mode = None;
                 model_warmed = false;
-                first_partial_started_at = None;
             }
             VoiceTranscriberCommand::Shutdown => {
                 if let Some(transcriber) = transcriber.take() {
@@ -851,6 +918,9 @@ fn present_with_initial_workspace(
     let voice_listening = Rc::new(Cell::new(false));
     let voice_starting = Rc::new(Cell::new(false));
     let voice_stopping = Rc::new(Cell::new(false));
+    let voice_session_id = Rc::new(Cell::new(0_u64));
+    let voice_flush_pending = Rc::new(Cell::new(false));
+    let voice_capture_started_at = Rc::new(RefCell::new(None::<Instant>));
     let voice_local_key_pressed = Rc::new(Cell::new(false));
     let voice_warm_state = Rc::new(Cell::new(VoiceWarmState::Cold));
     let voice_warm_generation = Rc::new(Cell::new(0_u64));
@@ -924,6 +994,9 @@ fn present_with_initial_workspace(
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
         let voice_stopping = voice_stopping.clone();
+        let voice_session_id = voice_session_id.clone();
+        let voice_flush_pending = voice_flush_pending.clone();
+        let voice_capture_started_at = voice_capture_started_at.clone();
         let voice_warm_state = voice_warm_state.clone();
         let voice_warm_generation = voice_warm_generation.clone();
         let voice_warm_error = voice_warm_error.clone();
@@ -959,23 +1032,40 @@ fn present_with_initial_workspace(
                         voice_warm_error.replace(Some(message.clone()));
                         logging::error(format!("voice model warm-up failed: {message}"));
                     }
-                    VoiceUiEvent::ListeningStarted => {
+                    VoiceUiEvent::ListeningStarted { session_id } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
                         apply_voice_listening_started(
                             &voice_starting,
                             &voice_listening,
                             &voice_stopping,
                         );
+                        voice_capture_started_at.replace(Some(Instant::now()));
                     }
-                    VoiceUiEvent::ListeningCancelled(message) => {
+                    VoiceUiEvent::ListeningCancelled {
+                        session_id,
+                        message,
+                    } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
                         voice_starting.set(false);
                         voice_listening.set(false);
                         voice_stopping.set(false);
+                        voice_flush_pending.set(false);
+                        voice_capture_started_at.replace(None);
                         voice_hud.show(&message, None);
                     }
-                    VoiceUiEvent::Final(text) => {
+                    VoiceUiEvent::Final { session_id, text } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
                         voice_starting.set(false);
                         voice_listening.set(false);
                         voice_stopping.set(false);
+                        voice_flush_pending.set(false);
+                        voice_capture_started_at.replace(None);
                         if text.trim().is_empty() {
                             voice_hud.show("No speech detected", None);
                             voice_hud.hide_later();
@@ -995,22 +1085,47 @@ fn present_with_initial_workspace(
                             );
                         }
                     }
-                    VoiceUiEvent::Error(message) => {
+                    VoiceUiEvent::Error {
+                        session_id,
+                        message,
+                    } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
                         voice_starting.set(false);
                         voice_listening.set(false);
                         voice_stopping.set(false);
+                        voice_flush_pending.set(false);
+                        voice_capture_started_at.replace(None);
                         logging::error(format!("voice transcription failed: {message}"));
                         voice_hud.show("Voice error", Some(&message));
                         show_toast(&toast_overlay, "Voice transcription failed");
                     }
-                    VoiceUiEvent::Partial(text) => {
-                        voice_hud.show("Voice partial", Some(&text));
+                    VoiceUiEvent::Partial { session_id, text } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
+                        logging::info(format!(
+                            "ignored voice partial for active session text_len={}",
+                            text.len()
+                        ));
                     }
-                    VoiceUiEvent::Status(message) => {
+                    VoiceUiEvent::Status {
+                        session_id,
+                        message,
+                    } => {
+                        if !voice_event_is_current(session_id, voice_session_id.get()) {
+                            continue;
+                        }
                         if voice_stopping.get() && message == "Listening…" {
                             continue;
                         }
                         voice_hud.show(&message, None);
+                    }
+                    VoiceUiEvent::FlushComplete { session_id } => {
+                        if voice_event_is_current(session_id, voice_session_id.get()) {
+                            voice_flush_pending.set(false);
+                        }
                     }
                     VoiceUiEvent::HotkeyPressed => {
                         let voice = preference_store.load().voice;
@@ -1032,6 +1147,8 @@ fn present_with_initial_workspace(
                                     &voice_transcriber,
                                     &voice_listening,
                                     &voice_stopping,
+                                    &voice_flush_pending,
+                                    &voice_session_id,
                                     &voice_hud,
                                     &voice_event_tx_for_handler,
                                 );
@@ -1051,6 +1168,9 @@ fn present_with_initial_workspace(
                                         &voice_listening,
                                         &voice_starting,
                                         &voice_stopping,
+                                        &voice_session_id,
+                                        &voice_flush_pending,
+                                        &voice_capture_started_at,
                                         &voice_warm_state,
                                         &voice_warm_generation,
                                         &voice_warm_error,
@@ -1085,6 +1205,8 @@ fn present_with_initial_workspace(
                             finish_pending_voice_capture(
                                 &voice_transcriber,
                                 &voice_stopping,
+                                &voice_flush_pending,
+                                &voice_session_id,
                                 &voice_hud,
                                 &voice_event_tx_for_handler,
                             );
@@ -1095,6 +1217,8 @@ fn present_with_initial_workspace(
                                 &voice_transcriber,
                                 &voice_listening,
                                 &voice_stopping,
+                                &voice_flush_pending,
+                                &voice_session_id,
                                 &voice_hud,
                                 &voice_event_tx_for_handler,
                             );
@@ -1121,6 +1245,9 @@ fn present_with_initial_workspace(
         voice_listening.clone(),
         voice_starting.clone(),
         voice_stopping.clone(),
+        voice_session_id.clone(),
+        voice_flush_pending.clone(),
+        voice_capture_started_at.clone(),
         voice_local_key_pressed.clone(),
         voice_warm_state.clone(),
         voice_warm_generation.clone(),
@@ -1155,12 +1282,35 @@ fn present_with_initial_workspace(
     {
         let voice_transcriber = voice_transcriber.clone();
         let voice_listening = voice_listening.clone();
+        let voice_stopping = voice_stopping.clone();
+        let voice_flush_pending = voice_flush_pending.clone();
+        let voice_session_id = voice_session_id.clone();
+        let voice_capture_started_at = voice_capture_started_at.clone();
+        let voice_hud = voice_hud.clone();
         let voice_event_tx = voice_event_tx.clone();
         glib::timeout_add_local(VOICE_AUDIO_FLUSH_INTERVAL, move || {
             if !voice_listening.get() {
                 return glib::ControlFlow::Continue;
             }
-            voice_transcriber.flush(&voice_event_tx);
+            if voice_capture_exceeded_safety_cap(*voice_capture_started_at.borrow(), Instant::now())
+            {
+                logging::error("voice capture exceeded 120s safety cap; finalizing automatically");
+                stop_voice_capture(
+                    &voice_transcriber,
+                    &voice_listening,
+                    &voice_stopping,
+                    &voice_flush_pending,
+                    &voice_session_id,
+                    &voice_hud,
+                    &voice_event_tx,
+                );
+                return glib::ControlFlow::Continue;
+            }
+            if !reserve_voice_flush_if_idle(voice_listening.get(), &voice_flush_pending) {
+                logging::info("voice audio flush skipped because previous flush is still pending");
+                return glib::ControlFlow::Continue;
+            }
+            voice_transcriber.flush(voice_session_id.get(), &voice_event_tx);
             glib::ControlFlow::Continue
         });
     }
@@ -4389,6 +4539,9 @@ fn install_voice_hotkey_controller(
     voice_listening: Rc<Cell<bool>>,
     voice_starting: Rc<Cell<bool>>,
     voice_stopping: Rc<Cell<bool>>,
+    voice_session_id: Rc<Cell<VoiceSessionId>>,
+    voice_flush_pending: Rc<Cell<bool>>,
+    voice_capture_started_at: Rc<RefCell<Option<Instant>>>,
     voice_local_key_pressed: Rc<Cell<bool>>,
     voice_warm_state: Rc<Cell<VoiceWarmState>>,
     voice_warm_generation: Rc<Cell<u64>>,
@@ -4412,6 +4565,9 @@ fn install_voice_hotkey_controller(
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
         let voice_stopping = voice_stopping.clone();
+        let voice_session_id = voice_session_id.clone();
+        let voice_flush_pending = voice_flush_pending.clone();
+        let voice_capture_started_at = voice_capture_started_at.clone();
         let voice_local_key_pressed = voice_local_key_pressed.clone();
         let voice_warm_state = voice_warm_state.clone();
         let voice_warm_generation = voice_warm_generation.clone();
@@ -4441,6 +4597,8 @@ fn install_voice_hotkey_controller(
                         &voice_transcriber,
                         &voice_listening,
                         &voice_stopping,
+                        &voice_flush_pending,
+                        &voice_session_id,
                         &voice_hud,
                         &voice_event_tx,
                     );
@@ -4457,6 +4615,9 @@ fn install_voice_hotkey_controller(
                             &voice_listening,
                             &voice_starting,
                             &voice_stopping,
+                            &voice_session_id,
+                            &voice_flush_pending,
+                            &voice_capture_started_at,
                             &voice_warm_state,
                             &voice_warm_generation,
                             &voice_warm_error,
@@ -4477,6 +4638,8 @@ fn install_voice_hotkey_controller(
         let voice_listening = voice_listening.clone();
         let voice_starting = voice_starting.clone();
         let voice_stopping = voice_stopping.clone();
+        let voice_session_id = voice_session_id.clone();
+        let voice_flush_pending = voice_flush_pending.clone();
         let voice_local_key_pressed = voice_local_key_pressed.clone();
         let voice_event_tx = voice_event_tx.clone();
         controller.connect_key_released(move |_, key, _, _state| {
@@ -4494,6 +4657,8 @@ fn install_voice_hotkey_controller(
                 finish_pending_voice_capture(
                     &voice_transcriber,
                     &voice_stopping,
+                    &voice_flush_pending,
+                    &voice_session_id,
                     &voice_hud,
                     &voice_event_tx,
                 );
@@ -4502,6 +4667,8 @@ fn install_voice_hotkey_controller(
                     &voice_transcriber,
                     &voice_listening,
                     &voice_stopping,
+                    &voice_flush_pending,
+                    &voice_session_id,
                     &voice_hud,
                     &voice_event_tx,
                 );
@@ -4627,6 +4794,9 @@ fn start_voice_capture(
     voice_listening: &Rc<Cell<bool>>,
     voice_starting: &Rc<Cell<bool>>,
     voice_stopping: &Rc<Cell<bool>>,
+    voice_session_id: &Rc<Cell<VoiceSessionId>>,
+    voice_flush_pending: &Rc<Cell<bool>>,
+    voice_capture_started_at: &Rc<RefCell<Option<Instant>>>,
     voice_warm_state: &Rc<Cell<VoiceWarmState>>,
     voice_warm_generation: &Rc<Cell<u64>>,
     voice_warm_error: &Rc<RefCell<Option<String>>>,
@@ -4723,12 +4893,19 @@ fn start_voice_capture(
         }
     }
 
+    let session_id = voice_session_id.get().saturating_add(1);
+    voice_session_id.set(session_id);
+    voice_flush_pending.set(false);
+    voice_capture_started_at.replace(None);
     voice_listening.set(false);
     voice_starting.set(true);
     voice_stopping.set(false);
     voice_hud.show("Starting voice capture…", Some("Preparing microphone"));
-    logging::info("voice capture start queued");
+    logging::info(format!(
+        "voice capture start queued session_id={session_id}"
+    ));
     voice_transcriber.start_capture(
+        session_id,
         manifest,
         health,
         voice.engine_mode,
@@ -4741,6 +4918,8 @@ fn stop_voice_capture(
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_listening: &Rc<Cell<bool>>,
     voice_stopping: &Rc<Cell<bool>>,
+    voice_flush_pending: &Rc<Cell<bool>>,
+    voice_session_id: &Rc<Cell<VoiceSessionId>>,
     voice_hud: &VoiceHud,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
@@ -4748,22 +4927,32 @@ fn stop_voice_capture(
         logging::info("voice capture stop ignored: not listening");
         return;
     }
+    let session_id = voice_session_id.get();
+    voice_flush_pending.set(false);
     voice_stopping.set(true);
     voice_hud.show("Finalizing voice text…", None);
-    logging::info("voice capture stop requested");
-    voice_transcriber.stop(voice_event_tx);
+    logging::info(format!(
+        "voice capture stop requested session_id={session_id}"
+    ));
+    voice_transcriber.stop(session_id, voice_event_tx);
 }
 
 fn finish_pending_voice_capture(
     voice_transcriber: &Rc<VoiceTranscriberHandle>,
     voice_stopping: &Rc<Cell<bool>>,
+    voice_flush_pending: &Rc<Cell<bool>>,
+    voice_session_id: &Rc<Cell<VoiceSessionId>>,
     voice_hud: &VoiceHud,
     voice_event_tx: &mpsc::Sender<VoiceUiEvent>,
 ) {
+    let session_id = voice_session_id.get();
+    voice_flush_pending.set(false);
     voice_stopping.set(true);
     voice_hud.show("Finalizing voice text…", None);
-    logging::info("voice capture stop requested before listening started");
-    voice_transcriber.stop(voice_event_tx);
+    logging::info(format!(
+        "voice capture stop requested before listening started session_id={session_id}"
+    ));
+    voice_transcriber.stop(session_id, voice_event_tx);
 }
 
 fn voice_key_event_matches(accelerator: &str, key: gdk::Key, state: gdk::ModifierType) -> bool {
@@ -5826,9 +6015,10 @@ fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        VOICE_AUDIO_FLUSH_INTERVAL, VoiceHotkeyWarmGate, VoiceWarmState, WorkspaceTab,
-        apply_voice_listening_started, move_item_to_position, move_tab_to_position,
-        next_active_index_after_detach, preview_index_for_pointer, voice_hotkey_warm_gate,
+        VOICE_AUDIO_FLUSH_INTERVAL, VOICE_CAPTURE_SAFETY_CAP, VoiceHotkeyWarmGate, VoiceWarmState,
+        WorkspaceTab, apply_voice_listening_started, move_item_to_position, move_tab_to_position,
+        next_active_index_after_detach, preview_index_for_pointer, reserve_voice_flush_if_idle,
+        voice_capture_exceeded_safety_cap, voice_event_is_current, voice_hotkey_warm_gate,
     };
     use crate::voice::{VoiceActivationMode, VoicePreferences};
     use std::cell::Cell;
@@ -5889,6 +6079,39 @@ mod tests {
     #[test]
     fn voice_audio_flush_cadence_targets_low_latency_chunks() {
         assert_eq!(VOICE_AUDIO_FLUSH_INTERVAL.as_millis(), 250);
+    }
+
+    #[test]
+    fn voice_session_gate_rejects_stale_events() {
+        assert!(voice_event_is_current(7, 7));
+        assert!(!voice_event_is_current(6, 7));
+    }
+
+    #[test]
+    fn voice_flush_backpressure_allows_only_one_pending_flush() {
+        let flush_pending = Cell::new(false);
+
+        assert!(reserve_voice_flush_if_idle(true, &flush_pending));
+        assert!(flush_pending.get());
+        assert!(!reserve_voice_flush_if_idle(true, &flush_pending));
+
+        flush_pending.set(false);
+        assert!(!reserve_voice_flush_if_idle(false, &flush_pending));
+        assert!(!flush_pending.get());
+    }
+
+    #[test]
+    fn voice_capture_safety_cap_bounds_long_holds() {
+        let now = std::time::Instant::now();
+        assert!(!voice_capture_exceeded_safety_cap(None, now));
+        assert!(!voice_capture_exceeded_safety_cap(
+            Some(now - VOICE_CAPTURE_SAFETY_CAP + std::time::Duration::from_millis(1)),
+            now,
+        ));
+        assert!(voice_capture_exceeded_safety_cap(
+            Some(now - VOICE_CAPTURE_SAFETY_CAP),
+            now,
+        ));
     }
 
     #[test]

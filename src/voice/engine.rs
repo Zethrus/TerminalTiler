@@ -2,6 +2,9 @@ use std::ffi::OsStr;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::voice::pack::{VoicePackHealth, VoicePackManifest};
 use crate::voice::preferences::VoiceEngineMode;
@@ -10,6 +13,7 @@ use crate::voice::preferences::VoiceEngineMode;
 pub enum VoiceEngineRequest {
     Start { sample_rate_hz: u32 },
     AudioPcm16(Vec<i16>),
+    BufferedAudioPcm16(Vec<i16>),
     FinalAudioPcm16(Vec<i16>),
     Stop,
     Capabilities,
@@ -116,6 +120,9 @@ pub fn frame_from_request(request: &VoiceEngineRequest) -> FramedMessage {
         VoiceEngineRequest::AudioPcm16(samples) => {
             FramedMessage::new("audio-pcm16-hex", pcm16_samples_to_hex(samples))
         }
+        VoiceEngineRequest::BufferedAudioPcm16(samples) => {
+            FramedMessage::new("audio-buffer-pcm16-hex", pcm16_samples_to_hex(samples))
+        }
         VoiceEngineRequest::FinalAudioPcm16(samples) => {
             FramedMessage::new("audio-final-pcm16-hex", pcm16_samples_to_hex(samples))
         }
@@ -162,29 +169,84 @@ fn capabilities_from_payload(payload: &str) -> VoiceEngineCapabilities {
 pub struct VoiceEngineProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    stdout_rx: mpsc::Receiver<io::Result<Option<VoiceEngineEvent>>>,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct VoiceEngineHealthCheckTimeouts {
+    startup: Duration,
+    response: Duration,
+    shutdown: Duration,
+}
+
+const DEFAULT_HEALTH_CHECK_TIMEOUTS: VoiceEngineHealthCheckTimeouts =
+    VoiceEngineHealthCheckTimeouts {
+        startup: Duration::from_secs(3),
+        response: Duration::from_secs(60),
+        shutdown: Duration::from_secs(2),
+    };
 
 pub fn run_voice_engine_health_check(
     manifest: &VoicePackManifest,
     health: VoicePackHealth,
     engine_mode: VoiceEngineMode,
 ) -> io::Result<VoiceEngineEvent> {
+    run_voice_engine_health_check_with_timeouts(
+        manifest,
+        health,
+        engine_mode,
+        DEFAULT_HEALTH_CHECK_TIMEOUTS,
+    )
+}
+
+fn run_voice_engine_health_check_with_timeouts(
+    manifest: &VoicePackManifest,
+    health: VoicePackHealth,
+    engine_mode: VoiceEngineMode,
+    timeouts: VoiceEngineHealthCheckTimeouts,
+) -> io::Result<VoiceEngineEvent> {
     let mut process = VoiceEngineProcess::launch(manifest, health, engine_mode)?;
-    let _ = process.read_event()?;
-    process.send(&VoiceEngineRequest::Health)?;
-    let event = loop {
-        match process.read_event()? {
-            Some(event @ VoiceEngineEvent::Health { .. }) => break event,
-            Some(event @ VoiceEngineEvent::Error(_)) => break event,
-            Some(_) => continue,
-            None => {
-                break VoiceEngineEvent::Error("voice engine exited during health check".into());
-            }
+    let event = run_voice_engine_health_check_request(&mut process, timeouts);
+    let shutdown = process.shutdown_with_timeout(timeouts.shutdown);
+    match event {
+        Ok(event) => Ok(event),
+        Err(error) => {
+            let _ = shutdown;
+            Err(error)
         }
-    };
-    let _ = process.shutdown();
-    Ok(event)
+    }
+}
+
+fn run_voice_engine_health_check_request(
+    process: &mut VoiceEngineProcess,
+    timeouts: VoiceEngineHealthCheckTimeouts,
+) -> io::Result<VoiceEngineEvent> {
+    let _ = process.read_event_timeout(timeouts.startup)?;
+    process.send(&VoiceEngineRequest::Health)?;
+    let deadline = Instant::now() + timeouts.response;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Ok(VoiceEngineEvent::Error(
+                "voice engine health check timed out".into(),
+            ));
+        };
+        match process.read_event_timeout(remaining) {
+            Ok(Some(event @ VoiceEngineEvent::Health { .. })) => return Ok(event),
+            Ok(Some(event @ VoiceEngineEvent::Error(_))) => return Ok(event),
+            Ok(Some(_)) => continue,
+            Ok(None) => {
+                return Ok(VoiceEngineEvent::Error(
+                    "voice engine exited during health check".into(),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                return Ok(VoiceEngineEvent::Error(
+                    "voice engine health check timed out".into(),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 impl VoiceEngineProcess {
@@ -228,10 +290,12 @@ impl VoiceEngineProcess {
             .take()
             .ok_or_else(|| io::Error::other("voice engine stdout unavailable"))?;
 
+        let stdout_rx = spawn_stdout_reader(stdout);
+
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout_rx,
         })
     }
 
@@ -241,18 +305,78 @@ impl VoiceEngineProcess {
     }
 
     pub fn read_event(&mut self) -> io::Result<Option<VoiceEngineEvent>> {
-        read_engine_event(&mut self.stdout)
+        self.stdout_rx.recv().unwrap_or(Ok(None))
+    }
+
+    pub fn read_event_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> io::Result<Option<VoiceEngineEvent>> {
+        match self.stdout_rx.recv_timeout(timeout) {
+            Ok(event) => event,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "voice engine did not respond within {}ms",
+                    timeout.as_millis()
+                ),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        }
     }
 
     pub fn process_id(&self) -> u32 {
         self.child.id()
     }
 
-    pub fn shutdown(mut self) -> io::Result<()> {
-        let _ = self.send(&VoiceEngineRequest::Shutdown);
-        let _ = self.child.wait();
-        Ok(())
+    pub fn shutdown(self) -> io::Result<()> {
+        self.shutdown_with_timeout(Duration::from_secs(2))
     }
+
+    fn shutdown_with_timeout(mut self, timeout: Duration) -> io::Result<()> {
+        let _ = self.send(&VoiceEngineRequest::Shutdown);
+        wait_for_child_or_kill(&mut self.child, timeout)
+    }
+}
+
+fn spawn_stdout_reader(
+    stdout: std::process::ChildStdout,
+) -> mpsc::Receiver<io::Result<Option<VoiceEngineEvent>>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            match read_engine_event(&mut reader) {
+                Ok(Some(event)) => {
+                    if tx.send(Ok(Some(event))).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tx.send(Ok(None));
+                    break;
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    rx
+}
+
+fn wait_for_child_or_kill(child: &mut Child, timeout: Duration) -> io::Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
 }
 
 impl VoiceEngineMode {
@@ -357,6 +481,10 @@ mod tests {
             FramedMessage::new("audio-pcm16-hex", "0100feff3412")
         );
         assert_eq!(
+            frame_from_request(&VoiceEngineRequest::BufferedAudioPcm16(vec![1, -2, 0x1234])),
+            FramedMessage::new("audio-buffer-pcm16-hex", "0100feff3412")
+        );
+        assert_eq!(
             frame_from_request(&VoiceEngineRequest::FinalAudioPcm16(vec![1, -2, 0x1234])),
             FramedMessage::new("audio-final-pcm16-hex", "0100feff3412")
         );
@@ -417,6 +545,138 @@ health ok: model loaded
                 warm: true,
             })
         );
+    }
+
+    #[test]
+    fn engine_read_timeout_returns_timed_out_error() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-engine-timeout-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let pack_root = root.join("timeout").join("1");
+        std::fs::create_dir_all(pack_root.join("model")).unwrap();
+        let engine_path = pack_root.join("timeout_engine.py");
+        std::fs::write(
+            &engine_path,
+            r#"#!/usr/bin/env python3
+import sys
+import time
+print("ready timeout-helper", flush=True)
+for raw in sys.stdin:
+    kind = raw.strip().split(" ", 1)[0]
+    if kind == "start":
+        time.sleep(0.2)
+        print("ready started", flush=True)
+    elif kind == "shutdown":
+        print("ready shutdown", flush=True)
+        raise SystemExit(0)
+"#,
+        )
+        .unwrap();
+        let manifest = VoicePackManifest {
+            id: "timeout".into(),
+            version: "1".into(),
+            engine_executable: "timeout_engine.py".into(),
+            model_path: "model".into(),
+            archive_url: "builtin://timeout".into(),
+            archive_sha256: "builtin".into(),
+            model_name: "legacy/offline".into(),
+            streaming_model_name: "legacy/streaming".into(),
+            python_requirements: Vec::new(),
+        };
+        let health = VoicePackHealth::Ready {
+            engine_path,
+            model_path: pack_root.join("model"),
+        };
+        let mut process =
+            VoiceEngineProcess::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
+
+        assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
+        process
+            .send(&VoiceEngineRequest::Start {
+                sample_rate_hz: 16_000,
+            })
+            .unwrap();
+        let error = process
+            .read_event_timeout(Duration::from_millis(20))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+        process.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn health_check_timeout_shuts_down_helper() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-health-timeout-cleanup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let pack_root = root.join("health-timeout").join("1");
+        std::fs::create_dir_all(pack_root.join("model")).unwrap();
+        let pid_path = root.join("helper.pid");
+        let engine_path = pack_root.join("health_timeout_engine.py");
+        std::fs::write(
+            &engine_path,
+            format!(
+                r#"#!/usr/bin/env python3
+import os
+import sys
+import time
+with open({pid_path:?}, "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+print("ready health-timeout-helper", flush=True)
+for raw in sys.stdin:
+    kind = raw.strip().split(" ", 1)[0]
+    if kind == "health":
+        time.sleep(60)
+    elif kind == "shutdown":
+        print("ready shutdown", flush=True)
+        raise SystemExit(0)
+"#,
+                pid_path = pid_path.display().to_string(),
+            ),
+        )
+        .unwrap();
+        let manifest = VoicePackManifest {
+            id: "health-timeout".into(),
+            version: "1".into(),
+            engine_executable: "health_timeout_engine.py".into(),
+            model_path: "model".into(),
+            archive_url: "builtin://health-timeout".into(),
+            archive_sha256: "builtin".into(),
+            model_name: "legacy/offline".into(),
+            streaming_model_name: "legacy/streaming".into(),
+            python_requirements: Vec::new(),
+        };
+        let health = VoicePackHealth::Ready {
+            engine_path,
+            model_path: pack_root.join("model"),
+        };
+
+        let event = run_voice_engine_health_check_with_timeouts(
+            &manifest,
+            health,
+            VoiceEngineMode::Cpu,
+            VoiceEngineHealthCheckTimeouts {
+                startup: Duration::from_secs(1),
+                response: Duration::from_millis(20),
+                shutdown: Duration::from_millis(50),
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            event,
+            VoiceEngineEvent::Error(message) if message.contains("timed out")
+        ));
+        let pid = std::fs::read_to_string(&pid_path).unwrap();
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "health-check helper should be shut down after timeout"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -502,6 +762,34 @@ health ok: model loaded
             Some(VoiceEngineEvent::Partial(text))
                 if text.contains("Captured") || text.contains("Streaming ASR unavailable")
         ));
+        process.send(&VoiceEngineRequest::Shutdown).unwrap();
+        assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_python_helper_buffers_audio_without_partial_inference() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-buffered-audio-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manifest = crate::voice::pack::install_builtin_parakeet_pack(&root).unwrap();
+        let health = crate::voice::pack::health_check(&root, &manifest);
+        let mut process =
+            VoiceEngineProcess::launch(&manifest, health, VoiceEngineMode::Cpu).unwrap();
+
+        assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
+        process
+            .send(&VoiceEngineRequest::Start {
+                sample_rate_hz: 16_000,
+            })
+            .unwrap();
+        assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
+        process
+            .send(&VoiceEngineRequest::BufferedAudioPcm16(vec![0, 1, -1, 2]))
+            .unwrap();
+
+        assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
         process.send(&VoiceEngineRequest::Shutdown).unwrap();
         assert_eq!(process.read_event().unwrap(), Some(VoiceEngineEvent::Ready));
         let _ = std::fs::remove_dir_all(root);
