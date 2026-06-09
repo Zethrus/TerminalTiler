@@ -61,21 +61,71 @@ pub(crate) fn icon_button(icon_name: &str, tooltip: &str, css_classes: &[&str]) 
     button
 }
 
+/// Controls how a button's text label handles horizontal overflow.
+///
+/// `Ellipsize` (the default for shared dialog/popover buttons) lets the label
+/// shrink and truncate with a trailing ellipsis. `Fit` keeps the label at its
+/// natural width so short, fixed-string labels (e.g. titlebar actions) never
+/// collapse to a premature ellipsis when packed into a constrained container.
+pub(crate) enum LabelFit {
+    Ellipsize,
+    Fit,
+}
+
 pub(crate) fn labeled_button(label: &str, icon_name: &str, css_classes: &[&str]) -> gtk::Button {
+    build_labeled_button(label, icon_name, css_classes, LabelFit::Ellipsize)
+}
+
+pub(crate) fn labeled_button_fitted(
+    label: &str,
+    icon_name: &str,
+    css_classes: &[&str],
+) -> gtk::Button {
+    build_labeled_button(label, icon_name, css_classes, LabelFit::Fit)
+}
+
+fn build_labeled_button(
+    label: &str,
+    icon_name: &str,
+    css_classes: &[&str],
+    fit: LabelFit,
+) -> gtk::Button {
     let button = gtk::Button::builder().build();
     for class_name in css_classes {
         button.add_css_class(class_name);
     }
-    set_button_icon_label(&button, label, icon_name);
+    set_button_icon_label_with_alignment(&button, label, icon_name, gtk::Align::Center, fit);
     button
 }
 
 pub(crate) fn set_button_icon_label(button: &gtk::Button, label: &str, icon_name: &str) {
-    set_button_icon_label_with_alignment(button, label, icon_name, gtk::Align::Center);
+    set_button_icon_label_with_alignment(
+        button,
+        label,
+        icon_name,
+        gtk::Align::Center,
+        LabelFit::Ellipsize,
+    );
+}
+
+pub(crate) fn set_button_icon_label_fitted(button: &gtk::Button, label: &str, icon_name: &str) {
+    set_button_icon_label_with_alignment(
+        button,
+        label,
+        icon_name,
+        gtk::Align::Center,
+        LabelFit::Fit,
+    );
 }
 
 pub(crate) fn set_button_icon_label_start(button: &gtk::Button, label: &str, icon_name: &str) {
-    set_button_icon_label_with_alignment(button, label, icon_name, gtk::Align::Start);
+    set_button_icon_label_with_alignment(
+        button,
+        label,
+        icon_name,
+        gtk::Align::Start,
+        LabelFit::Ellipsize,
+    );
 }
 
 fn set_button_icon_label_with_alignment(
@@ -83,6 +133,7 @@ fn set_button_icon_label_with_alignment(
     label: &str,
     icon_name: &str,
     halign: gtk::Align,
+    fit: LabelFit,
 ) {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -99,15 +150,24 @@ fn set_button_icon_label_with_alignment(
     let _ = icon.pango_context();
     row.append(&icon);
 
-    row.append(
-        &gtk::Label::builder()
-            .label(label)
-            .halign(gtk::Align::Start)
-            .valign(gtk::Align::Center)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .css_classes(["button-text-label"])
-            .build(),
-    );
+    // `single_line_mode` requests the full font ascent/descent for the line box
+    // regardless of the actual glyphs, which keeps uppercase ascenders from
+    // clipping at the top of the button.
+    let text = gtk::Label::builder()
+        .label(label)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Center)
+        .single_line_mode(true)
+        .css_classes(["button-text-label"])
+        .build();
+    match fit {
+        LabelFit::Ellipsize => text.set_ellipsize(gtk::pango::EllipsizeMode::End),
+        LabelFit::Fit => {
+            text.set_ellipsize(gtk::pango::EllipsizeMode::None);
+            text.set_hexpand(false);
+        }
+    }
+    row.append(&text);
 
     button.set_child(Some(&row));
 }

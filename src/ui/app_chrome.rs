@@ -57,10 +57,10 @@ pub(crate) fn sync_workspace_fullscreen_chrome(
     title_widget.set_visible(!is_fullscreen);
     fullscreen_button.set_visible(true);
     if is_fullscreen {
-        icons::set_button_icon_label(fullscreen_button, "Exit Fullscreen", icon_name::RESTORE);
+        icons::set_button_icon_label_fitted(fullscreen_button, "Exit Fullscreen", icon_name::RESTORE);
         fullscreen_button.set_tooltip_text(Some(exit_tooltip));
     } else {
-        icons::set_button_icon_label(fullscreen_button, "Fullscreen", icon_name::FULLSCREEN);
+        icons::set_button_icon_label_fitted(fullscreen_button, "Fullscreen", icon_name::FULLSCREEN);
         fullscreen_button.set_tooltip_text(Some(enter_tooltip));
     }
 }
@@ -69,7 +69,7 @@ pub(crate) fn build_main_titlebar_actions(
     header: &adw::HeaderBar,
     include_companion: bool,
 ) -> MainTitlebarActions {
-    let back_button = icons::labeled_button(
+    let back_button = icons::labeled_button_fitted(
         "Templates",
         icon_name::LAYOUT,
         &["flat", "titlebar-action-button"],
@@ -77,7 +77,7 @@ pub(crate) fn build_main_titlebar_actions(
     back_button.set_visible(false);
     header.pack_start(&back_button);
 
-    let fullscreen_button = icons::labeled_button(
+    let fullscreen_button = icons::labeled_button_fitted(
         "Fullscreen",
         icon_name::FULLSCREEN,
         &["flat", "titlebar-action-button"],
@@ -94,7 +94,7 @@ pub(crate) fn build_main_titlebar_actions(
     header.pack_end(&settings_button);
 
     let companion_button = include_companion.then(|| {
-        let button = icons::labeled_button(
+        let button = icons::labeled_button_fitted(
             "Account / Sync",
             icon_name::WEB,
             &["flat", "titlebar-action-button"],
