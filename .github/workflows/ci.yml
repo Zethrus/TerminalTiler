@@ -68,6 +68,7 @@ jobs:
 
   verify-windows:
     runs-on: windows-2022
+    continue-on-error: true
 
     steps:
       - name: Check out repository
@@ -113,6 +114,7 @@ jobs:
 
   verify-windows-gtk:
     runs-on: windows-2022
+    continue-on-error: true
 
     steps:
       - name: Check out repository

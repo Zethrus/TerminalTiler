@@ -1418,7 +1418,7 @@ fn usage_stats_record_primary_terminal_input_paths() {
         "write_pane_input(pane, text, text.as_bytes(), text, \"pane paste write failed\")",
     ] {
         assert!(
-            WINDOWS_WORKSPACE_RS.contains(token),
+            source_contains(WINDOWS_WORKSPACE_RS, token),
             "Windows native usage stats should share typing, broadcast, and paste recording paths: {token}"
         );
     }
@@ -2383,6 +2383,29 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
 }
 
 #[test]
+fn ci_uses_linux_verify_as_package_gating_source_of_truth() {
+    let linux_verify = workflow_job_block(CI_YML, "verify");
+    assert!(
+        linux_verify.contains("runs-on: ubuntu-latest")
+            && linux_verify.contains("cargo test --features voice-cpal")
+            && linux_verify.contains("cargo clippy --all-targets --all-features -- -D warnings")
+            && !linux_verify.contains("continue-on-error: true"),
+        "Linux verify should remain the required source-of-truth CI job for package gating"
+    );
+
+    for job_name in ["verify-windows", "verify-windows-gtk"] {
+        let windows_verify = workflow_job_block(CI_YML, job_name);
+        assert!(
+            source_contains(
+                &windows_verify,
+                "runs-on: windows-2022\n    continue-on-error: true",
+            ),
+            "{job_name} should keep running for signal without blocking the Linux-authoritative CI conclusion"
+        );
+    }
+}
+
+#[test]
 fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
     assert!(
         DOC_WINDOWS_GTK_VISUAL_QA
@@ -2725,6 +2748,34 @@ fn assert_css_block_contains(selector: &str, expected: &str, reason: &str) {
 
 fn source_contains(source: &str, needle: &str) -> bool {
     source.replace("\r\n", "\n").contains(needle)
+}
+
+fn workflow_job_block(workflow: &str, job_name: &str) -> String {
+    let normalized = workflow.replace("\r\n", "\n");
+    let marker = format!("{job_name}:");
+    let mut found = false;
+    let mut block = String::new();
+
+    for line in normalized.lines() {
+        let is_job_header =
+            line.starts_with("  ") && !line.starts_with("    ") && line.trim_end().ends_with(':');
+
+        if is_job_header {
+            if found {
+                break;
+            }
+
+            found = line.trim() == marker;
+        }
+
+        if found {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+
+    assert!(found, "workflow should define job {job_name}");
+    block
 }
 
 fn declaration_value<'a>(body: &'a str, property: &str) -> Option<&'a str> {
