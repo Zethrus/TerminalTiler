@@ -15,8 +15,18 @@ permissions:
   contents: write
 
 jobs:
-  release-linux:
+  resolve-release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_meta.outputs.tag }}
+      package_version: ${{ steps.package_version.outputs.package_version }}
+      build_date: ${{ steps.package_version.outputs.build_date }}
+      deb_path: ${{ steps.package_version.outputs.deb_path }}
+      appimage_path: ${{ steps.package_version.outputs.appimage_path }}
+      windows_zip_path: ${{ steps.package_version.outputs.windows_zip_path }}
+      windows_portable_exe_path: ${{ steps.package_version.outputs.windows_portable_exe_path }}
+      windows_installer_path: ${{ steps.package_version.outputs.windows_installer_path }}
+      windows_msi_path: ${{ steps.package_version.outputs.windows_msi_path }}
 
     steps:
       - name: Resolve release tag
@@ -50,70 +60,52 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
         run: bash packaging/resolve-package-version.sh
+
+  release-linux:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository at release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - name: Install Linux validation dependencies
         run: bash packaging/install-ubuntu-workflow-deps.sh
 
       - name: Build Linux release artifacts in Debian 13 container
         env:
-          PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
-          BUILD_DATE: ${{ steps.package_version.outputs.build_date }}
+          PACKAGE_VERSION: ${{ needs.resolve-release.outputs.package_version }}
+          BUILD_DATE: ${{ needs.resolve-release.outputs.build_date }}
         run: bash packaging/build-in-container.sh
 
       - name: Validate Linux release artifacts
         env:
-          PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
-          BUILD_DATE: ${{ steps.package_version.outputs.build_date }}
+          PACKAGE_VERSION: ${{ needs.resolve-release.outputs.package_version }}
+          BUILD_DATE: ${{ needs.resolve-release.outputs.build_date }}
           SMOKE_PROFILE_KIND: terminal-only
           SKIP_PACKAGE_BUILD: 1
         run: bash packaging/release-smoke-test.sh
 
-      - name: Publish Linux release assets
-        uses: softprops/action-gh-release@v2
+      - name: Upload Linux release artifacts
+        uses: actions/upload-artifact@v6
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          generate_release_notes: true
-          files: |
-            ${{ steps.package_version.outputs.deb_path }}
-            ${{ steps.package_version.outputs.appimage_path }}
-          fail_on_unmatched_files: true
+          name: terminaltiler-release-linux-${{ needs.resolve-release.outputs.package_version }}
+          path: |
+            ${{ needs.resolve-release.outputs.deb_path }}
+            ${{ needs.resolve-release.outputs.appimage_path }}
+          if-no-files-found: error
 
   release-windows:
+    needs: resolve-release
     runs-on: windows-2022
 
     steps:
-      - name: Resolve release tag
-        id: release_meta
-        shell: bash
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$INPUT_TAG"
-          else
-            tag="$REF_NAME"
-          fi
-
-          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "Release tags must look like v0.2.0" >&2
-            exit 1
-          fi
-
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       - name: Check out repository at release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.release_meta.outputs.tag }}
-
-      - name: Resolve package version
-        id: package_version
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
-        run: bash packaging/resolve-package-version.sh
+          ref: ${{ needs.resolve-release.outputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.92.0
@@ -141,13 +133,13 @@ jobs:
       - name: Build Windows release artifacts
         shell: pwsh
         env:
-          PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
+          PACKAGE_VERSION: ${{ needs.resolve-release.outputs.package_version }}
         run: ./packaging/build-windows.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -RequireInstallers
 
       - name: Validate Windows release artifacts
         shell: pwsh
         env:
-          PACKAGE_VERSION: ${{ steps.package_version.outputs.package_version }}
+          PACKAGE_VERSION: ${{ needs.resolve-release.outputs.package_version }}
         run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
 
       - name: Upload Windows smoke diagnostics
@@ -158,13 +150,71 @@ jobs:
           path: packaging/.build/windows-smoke
           if-no-files-found: ignore
 
-      - name: Publish Windows release assets
-        uses: softprops/action-gh-release@v2
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v6
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: terminaltiler-release-windows-${{ needs.resolve-release.outputs.package_version }}
+          path: |
+            ${{ needs.resolve-release.outputs.windows_portable_exe_path }}
+            ${{ needs.resolve-release.outputs.windows_zip_path }}
+            ${{ needs.resolve-release.outputs.windows_installer_path }}
+            ${{ needs.resolve-release.outputs.windows_msi_path }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: [resolve-release, release-linux, release-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download platform release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}
+          path: dist
+          merge-multiple: true
+
+      - name: Verify release assets before publishing
+        shell: bash
+        env:
+          DEB_PATH: ${{ needs.resolve-release.outputs.deb_path }}
+          APPIMAGE_PATH: ${{ needs.resolve-release.outputs.appimage_path }}
+          WINDOWS_PORTABLE_EXE_PATH: ${{ needs.resolve-release.outputs.windows_portable_exe_path }}
+          WINDOWS_ZIP_PATH: ${{ needs.resolve-release.outputs.windows_zip_path }}
+          WINDOWS_INSTALLER_PATH: ${{ needs.resolve-release.outputs.windows_installer_path }}
+          WINDOWS_MSI_PATH: ${{ needs.resolve-release.outputs.windows_msi_path }}
+        run: |
+          expected=(
+            "$DEB_PATH"
+            "$APPIMAGE_PATH"
+            "$WINDOWS_PORTABLE_EXE_PATH"
+            "$WINDOWS_ZIP_PATH"
+            "$WINDOWS_INSTALLER_PATH"
+            "$WINDOWS_MSI_PATH"
+          )
+
+          missing=0
+          for file in "${expected[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "Missing release asset: $file" >&2
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            find dist -maxdepth 2 -type f -print >&2 || true
+            exit 1
+          fi
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.resolve-release.outputs.tag }}
+          generate_release_notes: true
           files: |
-            ${{ steps.package_version.outputs.windows_portable_exe_path }}
-            ${{ steps.package_version.outputs.windows_zip_path }}
-            ${{ steps.package_version.outputs.windows_installer_path }}
-            ${{ steps.package_version.outputs.windows_msi_path }}
+            ${{ needs.resolve-release.outputs.deb_path }}
+            ${{ needs.resolve-release.outputs.appimage_path }}
+            ${{ needs.resolve-release.outputs.windows_portable_exe_path }}
+            ${{ needs.resolve-release.outputs.windows_zip_path }}
+            ${{ needs.resolve-release.outputs.windows_installer_path }}
+            ${{ needs.resolve-release.outputs.windows_msi_path }}
           fail_on_unmatched_files: true

@@ -2352,6 +2352,83 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
 }
 
 #[test]
+fn release_publishes_only_after_all_platform_artifacts_are_available() {
+    let linux_release = workflow_job_block(RELEASE_YML, "release-linux");
+    let windows_release = workflow_job_block(RELEASE_YML, "release-windows");
+    let publish_release = workflow_job_block(RELEASE_YML, "publish-release");
+    let publish_assets_step = publish_release
+        .split("- name: Publish release assets")
+        .nth(1)
+        .expect("publish-release should keep a final GitHub Release step");
+
+    assert!(
+        workflow_job_block(RELEASE_YML, "resolve-release")
+            .contains("tag: ${{ steps.release_meta.outputs.tag }}")
+            && linux_release.contains("needs: resolve-release")
+            && windows_release.contains("needs: resolve-release"),
+        "release workflow should resolve the release tag/package paths once before platform jobs build artifacts"
+    );
+
+    assert!(
+        linux_release.contains("Upload Linux release artifacts")
+            && linux_release.contains("actions/upload-artifact@v6")
+            && linux_release.contains(
+                "terminaltiler-release-linux-${{ needs.resolve-release.outputs.package_version }}"
+            )
+            && linux_release.contains("${{ needs.resolve-release.outputs.deb_path }}")
+            && linux_release.contains("${{ needs.resolve-release.outputs.appimage_path }}")
+            && linux_release.contains("if-no-files-found: error")
+            && !linux_release.contains("softprops/action-gh-release"),
+        "Linux release job should upload validated artifacts for the final publisher instead of independently creating/updating a GitHub Release"
+    );
+
+    assert!(
+        windows_release.contains("Upload Windows release artifacts")
+            && windows_release.contains("actions/upload-artifact@v6")
+            && windows_release.contains(
+                "terminaltiler-release-windows-${{ needs.resolve-release.outputs.package_version }}"
+            )
+            && windows_release
+                .contains("${{ needs.resolve-release.outputs.windows_portable_exe_path }}")
+            && windows_release.contains("${{ needs.resolve-release.outputs.windows_zip_path }}")
+            && windows_release
+                .contains("${{ needs.resolve-release.outputs.windows_installer_path }}")
+            && windows_release.contains("${{ needs.resolve-release.outputs.windows_msi_path }}")
+            && windows_release.contains("if-no-files-found: error")
+            && !windows_release.contains("softprops/action-gh-release"),
+        "Windows release job should upload validated artifacts for the final publisher instead of racing Linux to publish"
+    );
+
+    assert!(
+        publish_release.contains("needs: [resolve-release, release-linux, release-windows]")
+            && publish_release.contains("actions/download-artifact@v8")
+            && publish_release.contains("pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}")
+            && publish_release.contains("merge-multiple: true")
+            && publish_release.contains("Verify release assets before publishing")
+            && publish_release.contains("Missing release asset: $file")
+            && publish_release.contains("softprops/action-gh-release@v3")
+            && !RELEASE_YML.contains("softprops/action-gh-release@v2")
+            && !RELEASE_YML.contains("actions/download-artifact@v4")
+            && !RELEASE_YML.contains("actions/upload-artifact@v4"),
+        "Release publishing should wait for both platform jobs, download merged artifacts with Node 24-ready actions, verify them, and publish once"
+    );
+
+    for asset_output in [
+        "${{ needs.resolve-release.outputs.deb_path }}",
+        "${{ needs.resolve-release.outputs.appimage_path }}",
+        "${{ needs.resolve-release.outputs.windows_portable_exe_path }}",
+        "${{ needs.resolve-release.outputs.windows_zip_path }}",
+        "${{ needs.resolve-release.outputs.windows_installer_path }}",
+        "${{ needs.resolve-release.outputs.windows_msi_path }}",
+    ] {
+        assert!(
+            publish_assets_step.contains(asset_output),
+            "final release publisher should include expected asset output {asset_output}"
+        );
+    }
+}
+
+#[test]
 fn package_artifacts_waits_for_successful_ci_on_main() {
     assert!(
         PACKAGE_ARTIFACTS_YML.contains("workflow_run:")
