@@ -117,6 +117,14 @@ impl StatsState {
         self.dirty = true;
     }
 
+    /// Clear all counters and pending typing timing.
+    fn reset(&mut self) {
+        self.lifetime = LifetimeTotals::default();
+        self.days.clear();
+        self.last_input = None;
+        self.dirty = true;
+    }
+
     /// Mutable handle to today's bucket, creating + pruning as needed.
     fn today_bucket(&mut self, today: &str) -> &mut DayBucket {
         if self.days.back().map(|bucket| bucket.date.as_str()) != Some(today) {
@@ -224,6 +232,12 @@ impl StatsRecorder {
     pub fn snapshot(&self) -> StatsSnapshot {
         let today = local_today_ymd();
         self.state.borrow().snapshot(&today)
+    }
+
+    /// Clear all counters and pending timing state. The next flush persists the
+    /// empty state so the reset survives application restarts.
+    pub fn reset(&self) {
+        self.state.borrow_mut().reset();
     }
 
     /// If counters changed since the last flush, return a clone of the data to
@@ -540,6 +554,37 @@ mod tests {
 
         assert!(recorder.take_persist_payload().is_none());
         assert_eq!(recorder.snapshot().total_chars, 0);
+    }
+
+    #[test]
+    fn reset_clears_snapshot_and_persists_empty_payload() {
+        let recorder = StatsRecorder::default();
+        recorder.record_manual_typing("hello world");
+        let _ = recorder.take_persist_payload();
+
+        recorder.reset();
+
+        let snapshot = recorder.snapshot();
+        assert_eq!(snapshot, StatsSnapshot::default());
+        let (lifetime, days) = recorder
+            .take_persist_payload()
+            .expect("reset should be persisted even after previous flush");
+        assert_eq!(lifetime, LifetimeTotals::default());
+        assert!(days.is_empty());
+    }
+
+    #[test]
+    fn reset_clears_active_typing_timer() {
+        let mut state = StatsState::default();
+        let base = Instant::now();
+        state.record(1, 1, T0, base);
+
+        state.reset();
+        state.record(1, 1, T0, instant_after(base, 500));
+
+        assert_eq!(state.lifetime.active_ms, 0);
+        assert_eq!(state.lifetime.chars, 1);
+        assert_eq!(state.days.len(), 1);
     }
 
     #[test]

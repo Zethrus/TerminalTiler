@@ -1,18 +1,36 @@
-//! Read-only usage statistics dialog.
+//! Usage statistics dialog.
 //!
 //! Presents a [`StatsSnapshot`] (see [`crate::services::stats`]) grouped into
-//! Today / This Week / Lifetime. Pure presentation: no inputs, no callbacks.
+//! Today / This Week / Lifetime, with an explicit destructive reset action.
+
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
 
 use crate::services::stats::StatsSnapshot;
+use crate::stats_hub;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
 
 const STATS_DIALOG_TITLE: &str = "Usage Statistics";
 
-pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
+pub fn present_shared(window: &adw::ApplicationWindow) {
+    present(
+        window,
+        stats_hub::recorder().snapshot(),
+        Rc::new(|| {
+            stats_hub::reset();
+            stats_hub::recorder().snapshot()
+        }),
+    );
+}
+
+fn present(
+    window: &adw::ApplicationWindow,
+    snapshot: StatsSnapshot,
+    on_reset: Rc<dyn Fn() -> StatsSnapshot>,
+) {
     let dialog = adw::Dialog::new();
     dialog.set_title(STATS_DIALOG_TITLE);
     dialog.set_follows_content_size(false);
@@ -45,6 +63,72 @@ pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
     content.set_margin_start(16);
     content.set_margin_end(16);
     scroller.set_child(Some(&content));
+
+    replace_stats_sections(&content, snapshot);
+
+    let reset_button = icons::labeled_button(
+        "Reset Statistics",
+        icon_name::RESET,
+        &["pill-button", "destructive-button", "stats-reset-button"],
+    );
+    {
+        let window = window.clone();
+        let content = content.clone();
+        let on_reset = on_reset.clone();
+        reset_button.connect_clicked(move |_| {
+            let content = content.clone();
+            let on_reset = on_reset.clone();
+            dialog_chrome::confirm_destructive_action(
+                &window,
+                "Reset Usage Statistics?",
+                "This clears usage statistics for today, this week, and all time. This cannot be undone.",
+                "Reset",
+                move || {
+                    let snapshot = on_reset();
+                    replace_stats_sections(&content, snapshot);
+                },
+            );
+        });
+    }
+
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &["pill-button", "ghost-link-button", "settings-close-button"],
+    );
+    {
+        let dialog = dialog.clone();
+        close_button.connect_clicked(move |_| {
+            let dialog = dialog.clone();
+            glib::idle_add_local_once(move || {
+                dialog.close();
+            });
+        });
+    }
+
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .margin_top(12)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .build();
+    footer.append(&reset_button);
+    footer.append(&gtk::Box::builder().hexpand(true).build());
+    footer.append(&close_button);
+    root.append(&footer);
+
+    dialog.set_child(Some(&root));
+    dialog.set_default_widget(Some(&close_button));
+    dialog.present(Some(window));
+}
+
+/// Replace all stat cards with values from `snapshot`.
+fn replace_stats_sections(content: &gtk::Box, snapshot: StatsSnapshot) {
+    while let Some(child) = content.first_child() {
+        content.remove(&child);
+    }
 
     content.append(&build_section(
         "Today",
@@ -83,36 +167,6 @@ pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
             ),
         ],
     ));
-
-    let close_button = icons::labeled_button(
-        "Close",
-        icon_name::CLOSE,
-        &["pill-button", "ghost-link-button", "settings-close-button"],
-    );
-    {
-        let dialog = dialog.clone();
-        close_button.connect_clicked(move |_| {
-            let dialog = dialog.clone();
-            glib::idle_add_local_once(move || {
-                dialog.close();
-            });
-        });
-    }
-
-    let footer = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .halign(gtk::Align::End)
-        .margin_top(12)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
-        .build();
-    footer.append(&close_button);
-    root.append(&footer);
-
-    dialog.set_child(Some(&root));
-    dialog.set_default_widget(Some(&close_button));
-    dialog.present(Some(window));
 }
 
 /// A titled card holding a list of `label: value` metric rows.

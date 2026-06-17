@@ -37,6 +37,17 @@ pub fn recorder() -> StatsRecorder {
 /// Persist any pending counters immediately (periodic tick or on close).
 pub fn flush() {
     let (store, recorder) = shared();
+    flush_recorder(&store, &recorder);
+}
+
+/// Clear all shared usage statistics and persist the empty counters.
+pub fn reset() {
+    let (store, recorder) = shared();
+    recorder.reset();
+    flush_recorder(&store, &recorder);
+}
+
+fn flush_recorder(store: &StatsStore, recorder: &StatsRecorder) {
     if let Some((lifetime, days)) = recorder.take_persist_payload() {
         store.save(&lifetime, &days);
     }

@@ -184,7 +184,7 @@ impl WindowsGtkTrayController {
         self.restore_window_from_tray();
         let window = self.inner.window.clone();
         glib::idle_add_local_once(move || {
-            crate::ui::stats_dialog::present(&window, crate::stats_hub::recorder().snapshot());
+            crate::ui::stats_dialog::present_shared(&window);
         });
     }
 

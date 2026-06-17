@@ -3440,7 +3440,7 @@ mod imp {
             }),
             open_stats: Rc::new({
                 let window = window.clone();
-                move || stats_dialog::present(&window, crate::stats_hub::recorder().snapshot())
+                move || stats_dialog::present_shared(&window)
             }),
             open_assets_manager: Rc::new({
                 let window = window.clone();

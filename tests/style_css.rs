@@ -1465,12 +1465,23 @@ fn usage_stats_dialog_uses_stats_specific_spacing() {
         "stats-dialog-content",
         "stats-section",
         "stats-section-heading",
+        "Reset Statistics",
+        "stats-reset-button",
+        "dialog_chrome::confirm_destructive_action",
     ] {
         assert!(
             STATS_DIALOG_RS.contains(token),
             "Usage Statistics dialog should use stats-specific chrome/classes: {token}"
         );
     }
+
+    assert!(
+        STATS_DIALOG_RS.contains("stats_hub::reset()")
+            && WINDOW_RS.contains("stats_dialog::present_shared(&window_for_stats)")
+            && WINDOWS_GTK_APP_RS.contains("stats_dialog::present_shared(&window)")
+            && WINDOWS_GTK_TRAY_RS.contains("stats_dialog::present_shared(&window)"),
+        "Usage Statistics reset should be centralized in the shared dialog and wired from Linux, Windows GTK, and tray entry points"
+    );
 
     for token in [
         ".stats-dialog-content",

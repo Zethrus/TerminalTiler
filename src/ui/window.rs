@@ -2969,7 +2969,7 @@ fn present_with_initial_workspace(
                 }),
                 open_stats: Rc::new({
                     let window = window.clone();
-                    move || stats_dialog::present(&window, stats_hub::recorder().snapshot())
+                    move || stats_dialog::present_shared(&window)
                 }),
                 open_assets_manager: Rc::new({
                     let open_assets_manager = open_assets_manager.clone();
@@ -3101,7 +3101,7 @@ fn present_with_initial_workspace(
         let window_for_stats = window.clone();
         let action = gio::SimpleAction::new("open-stats", None);
         action.connect_activate(move |_, _| {
-            stats_dialog::present(&window_for_stats, stats_hub::recorder().snapshot());
+            stats_dialog::present_shared(&window_for_stats);
         });
         window.add_action(&action);
     }
