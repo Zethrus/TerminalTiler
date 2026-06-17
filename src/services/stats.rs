@@ -1,9 +1,9 @@
 //! Usage statistics engine.
 //!
-//! Platform-neutral typing counters shared by every terminal backend. All real
-//! user input (typed, pasted, voice, broadcast) funnels through `record_input`,
-//! which keeps in-memory totals plus rolling per-day buckets. Persistence lives
-//! in [`crate::storage::stats_store`]; this module owns only counting and the
+//! Platform-neutral typing counters shared by every terminal backend. Only
+//! manual printable keyboard text should call `record_manual_typing`, which
+//! keeps in-memory totals plus rolling per-day buckets. Persistence lives in
+//! [`crate::storage::stats_store`]; this module owns only counting and the
 //! read-only [`StatsSnapshot`] used by the UI.
 
 use std::cell::RefCell;
@@ -203,11 +203,12 @@ impl StatsRecorder {
         }
     }
 
-    /// Record one unit of user input. Counts printable Unicode chars only,
-    /// discarding control chars and full escape sequences so arrow keys, Enter,
-    /// function keys, etc. do not inflate totals. Paste and voice text flow
-    /// through here too.
-    pub fn record_input(&self, text: &str) {
+    /// Record one unit of manual keyboard typing. Counts printable Unicode
+    /// chars only, discarding control chars and full escape sequences so arrow
+    /// keys, Enter, function keys, paste wrappers, etc. do not inflate totals.
+    /// Programmatic sends, paste, voice, runbooks, snippets, broadcasts, and
+    /// terminal responses must not call this API.
+    pub fn record_manual_typing(&self, text: &str) {
         let (printable, words) = measure(text);
         if printable == 0 {
             return;
@@ -513,11 +514,32 @@ mod tests {
     fn dirty_flag_drives_persistence_payload() {
         let recorder = StatsRecorder::default();
         assert!(recorder.take_persist_payload().is_none());
-        recorder.record_input("hello");
+        recorder.record_manual_typing("hello");
         let payload = recorder.take_persist_payload();
         assert!(payload.is_some());
         // Second call without new input yields nothing.
         assert!(recorder.take_persist_payload().is_none());
+    }
+
+    #[test]
+    fn manual_typing_counts_printable_chars_words_and_wpm() {
+        let recorder = StatsRecorder::default();
+        recorder.record_manual_typing("hello world");
+
+        let snapshot = recorder.snapshot();
+        assert_eq!(snapshot.total_chars, 11);
+        assert_eq!(snapshot.total_words, 2);
+        assert_eq!(snapshot.chars_today, 11);
+        assert_eq!(snapshot.words_today, 2);
+    }
+
+    #[test]
+    fn manual_typing_ignores_control_and_navigation_payloads() {
+        let recorder = StatsRecorder::default();
+        recorder.record_manual_typing("\r\n\t\u{1b}[A\u{1b}[B\u{1b}OP\u{7f}");
+
+        assert!(recorder.take_persist_payload().is_none());
+        assert_eq!(recorder.snapshot().total_chars, 0);
     }
 
     #[test]

@@ -810,7 +810,11 @@ mod imp {
                 else {
                     return gtk::glib::Propagation::Proceed;
                 };
+                let manual_typing = terminal_runtime_manual_typing_text(key, key_state);
                 if send_terminal_runtime_payload(&state, payload) {
+                    if let Some(manual_typing) = manual_typing {
+                        crate::stats_hub::recorder().record_manual_typing(&manual_typing);
+                    }
                     gtk::glib::Propagation::Stop
                 } else {
                     gtk::glib::Propagation::Proceed
@@ -888,6 +892,19 @@ mod imp {
         None
     }
 
+    fn terminal_runtime_manual_typing_text(
+        key: gtk::gdk::Key,
+        state: gtk::gdk::ModifierType,
+    ) -> Option<String> {
+        let modifiers = state & gtk::accelerator_get_default_mod_mask();
+        if !(modifiers.is_empty() || modifiers == gtk::gdk::ModifierType::SHIFT_MASK) {
+            return None;
+        }
+
+        let character = key.to_unicode()?;
+        (!character.is_control()).then(|| character.to_string())
+    }
+
     fn control_character_payload(character: char) -> Option<String> {
         let upper = character.to_ascii_uppercase();
         let byte = match upper {
@@ -935,7 +952,6 @@ mod imp {
         if let Some(stdin_tx) = stdin_tx {
             if stdin_tx.send(payload.clone()).is_ok() {
                 state.borrow_mut().transcript.push_input(&payload);
-                crate::stats_hub::recorder().record_input(&payload);
                 return true;
             }
 

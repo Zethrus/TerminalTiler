@@ -2074,8 +2074,24 @@ button.tile-header-action:disabled {
 }
 
 .settings-section-heading {
+  min-height: 16px;
+  padding: 2px 0;
   font-size: 10px;
   letter-spacing: 0.16em;
+}
+
+.stats-dialog-content {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.stats-section {
+  margin: 0;
+}
+
+.stats-section-heading {
+  min-height: 18px;
+  padding: 3px 0;
 }
 
 .settings-section-copy {
@@ -3072,7 +3088,19 @@ window.windows-gtk-shell .settings-section {
   border-radius: 18px;
 }
 
+.stats-dialog-window.windows-gtk-shell .stats-section {
+  padding: 12px;
+  border-radius: 18px;
+}
+
 .settings-dialog-window.windows-gtk-shell .settings-dialog-content .config-panel {
+  border-radius: 18px;
+  box-shadow:
+    0 16px 34px alpha(@tt_shadow, 0.22),
+    inset 0 1px alpha(@tt_white, 0.04);
+}
+
+.stats-dialog-window.windows-gtk-shell .stats-dialog-content .config-panel {
   border-radius: 18px;
   box-shadow:
     0 16px 34px alpha(@tt_shadow, 0.22),
@@ -3110,7 +3138,8 @@ window.window-shell.theme-light {
   color: #192332;
 }
 
-window.settings-dialog-window.theme-light {
+window.settings-dialog-window.theme-light,
+window.stats-dialog-window.theme-light {
   background:
     radial-gradient(circle at top, rgba(108, 139, 196, 0.10), transparent 24%),
     linear-gradient(180deg, #edf1f6 0%, #e2e7ef 100%);
@@ -3118,7 +3147,8 @@ window.settings-dialog-window.theme-light {
 }
 
 window.window-shell.theme-light headerbar.app-headerbar,
-window.settings-dialog-window.theme-light headerbar {
+window.settings-dialog-window.theme-light headerbar,
+window.stats-dialog-window.theme-light headerbar {
   background:
     linear-gradient(180deg, rgba(248, 245, 239, 0.98), rgba(239, 243, 249, 0.96)),
     radial-gradient(circle at top, rgba(196, 112, 54, 0.06), transparent 34%);

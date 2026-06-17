@@ -3,6 +3,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
@@ -29,7 +30,6 @@ pub struct TerminalSession {
     descriptor: Rc<str>,
     launch_spec: Rc<TerminalLaunchSpec>,
     transcript: Rc<RefCell<TranscriptBuffer>>,
-    stats: StatsRecorder,
 }
 
 #[derive(Default)]
@@ -194,7 +194,6 @@ impl TerminalSession {
             descriptor,
             launch_spec,
             transcript,
-            stats,
         };
 
         if !session.launch_spec.configured_argv.is_empty() {
@@ -243,7 +242,6 @@ impl TerminalSession {
         }
 
         self.transcript.borrow_mut().push_input(text);
-        self.stats.record_input(text);
         self.terminal.grab_focus();
         self.terminal.feed_child(text.as_bytes());
         true
@@ -347,7 +345,6 @@ impl TerminalSession {
         }
 
         self.transcript.borrow_mut().push_input(&payload);
-        self.stats.record_input(&payload);
         self.terminal.grab_focus();
         self.terminal.paste_text(&payload);
         true
@@ -525,12 +522,38 @@ fn install_terminal_input_stats_hook(
     state: Rc<RefCell<TerminalSessionState>>,
     stats: StatsRecorder,
 ) {
+    let manual_typing_armed = Rc::new(RefCell::new(None::<Instant>));
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let manual_typing_armed = manual_typing_armed.clone();
+        key_controller.connect_key_pressed(move |_, key, _, modifier_state| {
+            if is_manual_printable_key(key, modifier_state) {
+                *manual_typing_armed.borrow_mut() = Some(Instant::now());
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    terminal.add_controller(key_controller);
+
     terminal.connect_commit(move |_, text, _| {
         let state = state.borrow();
-        if !state.exited && !state.termination_requested {
-            stats.record_input(text);
+        if state.exited || state.termination_requested {
+            *manual_typing_armed.borrow_mut() = None;
+            return;
+        }
+
+        let armed = manual_typing_armed.borrow_mut().take();
+        if armed.is_some_and(|armed| armed.elapsed() <= Duration::from_millis(750)) {
+            stats.record_manual_typing(text);
         }
     });
+}
+
+fn is_manual_printable_key(key: gdk::Key, state: gdk::ModifierType) -> bool {
+    let modifiers = state & gtk::accelerator_get_default_mod_mask();
+    (modifiers.is_empty() || modifiers == gdk::ModifierType::SHIFT_MASK)
+        && key.to_unicode().is_some_and(|value| !value.is_control())
 }
 
 fn install_terminal_shortcuts(terminal: &vte4::Terminal) {

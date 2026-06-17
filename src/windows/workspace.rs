@@ -2261,14 +2261,13 @@ mod imp {
     }
 
     fn send_text_to_pane(pane: &mut PaneState, text: &str) -> bool {
-        write_pane_input(pane, text, text.as_bytes(), text, "pane input write failed")
+        write_pane_input(pane, text, text.as_bytes(), "pane input write failed")
     }
 
     fn write_pane_input(
         pane: &mut PaneState,
         transcript_text: &str,
         input_bytes: &[u8],
-        stats_text: &str,
         error_context: &str,
     ) -> bool {
         if pane.session.is_none() {
@@ -2281,10 +2280,7 @@ mod imp {
         };
 
         match session.write_input(input_bytes) {
-            Ok(()) => {
-                crate::stats_hub::recorder().record_input(stats_text);
-                true
-            }
+            Ok(()) => true,
             Err(error) => {
                 logging::error(format!("{error_context}: {error}"));
                 false
@@ -5106,13 +5102,16 @@ mod imp {
         let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
         let input = String::from_utf8_lossy(&bytes);
-        write_pane_input(
-            pane,
-            input.as_ref(),
-            &bytes,
-            input.as_ref(),
-            "pane input write failed",
-        );
+        if write_pane_input(pane, input.as_ref(), &bytes, "pane input write failed") {
+            if let Some(manual_typing) = manual_typing_text_from_char_value(value) {
+                crate::stats_hub::recorder().record_manual_typing(&manual_typing);
+            }
+        }
+    }
+
+    fn manual_typing_text_from_char_value(value: u32) -> Option<String> {
+        let character = char::from_u32(value)?;
+        (!character.is_control()).then(|| character.to_string())
     }
 
     fn handle_key_input(pane: &mut PaneState, virtual_key: u16) {
@@ -5753,14 +5752,13 @@ mod imp {
                 pane,
                 &wrapped,
                 wrapped.as_bytes(),
-                text,
                 "pane paste write failed",
             ) {
                 Ok(())
             } else {
                 Err("pane paste write failed".into())
             }
-        } else if write_pane_input(pane, text, text.as_bytes(), text, "pane paste write failed") {
+        } else if write_pane_input(pane, text, text.as_bytes(), "pane paste write failed") {
             Ok(())
         } else {
             Err("pane paste write failed".into())

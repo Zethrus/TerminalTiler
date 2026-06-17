@@ -9,7 +9,7 @@ use crate::storage::document::{
     preserve_corrupt_warning, read_optional_string, write_toml_private,
 };
 
-const STATS_VERSION: u32 = 1;
+const STATS_VERSION: u32 = 2;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StatsDocument {
@@ -178,8 +178,28 @@ mod tests {
     }
 
     #[test]
-    fn version_mismatch_starts_fresh() {
+    fn older_v1_stats_are_moved_aside_and_start_fresh() {
         let path = temp_path("stats-version");
+        let doc = r#"
+version = 1
+
+[lifetime]
+chars = 9999
+words_ws = 1999
+keystrokes = 888
+active_ms = 777
+"#;
+        fs::write(&path, doc).unwrap();
+        let store = StatsStore::from_path(path.clone());
+
+        let loaded = store.load();
+        assert_eq!(loaded.lifetime, LifetimeTotals::default());
+        assert!(!path.exists(), "v1 file should have been moved aside");
+    }
+
+    #[test]
+    fn future_version_mismatch_starts_fresh() {
+        let path = temp_path("stats-future-version");
         let doc = format!("version = {}\n", STATS_VERSION + 1);
         fs::write(&path, doc).unwrap();
         let store = StatsStore::from_path(path);

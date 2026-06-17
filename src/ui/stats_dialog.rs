@@ -18,7 +18,7 @@ pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
     dialog.set_follows_content_size(false);
     dialog.set_content_width(460);
     dialog.set_content_height(560);
-    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "settings-dialog-window");
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "stats-dialog-window");
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -30,7 +30,7 @@ pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
         .vexpand(true)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .css_classes(["settings-dialog-scroller"])
+        .css_classes(["settings-dialog-scroller", "stats-dialog-scroller"])
         .build();
     scroller.set_has_frame(false);
     root.append(&scroller);
@@ -38,7 +38,7 @@ pub fn present(window: &adw::ApplicationWindow, snapshot: StatsSnapshot) {
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
-        .css_classes(["settings-dialog-content"])
+        .css_classes(["settings-dialog-content", "stats-dialog-content"])
         .build();
     content.set_margin_top(16);
     content.set_margin_bottom(16);
@@ -120,7 +120,7 @@ fn build_section(title: &str, meta: &str, rows: &[gtk::Widget]) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
-        .css_classes(["config-panel", "settings-section"])
+        .css_classes(["config-panel", "settings-section", "stats-section"])
         .build();
 
     let header = gtk::Box::builder()
@@ -133,7 +133,11 @@ fn build_section(title: &str, meta: &str, rows: &[gtk::Widget]) -> gtk::Widget {
             .label(title)
             .halign(gtk::Align::Start)
             .hexpand(true)
-            .css_classes(["eyebrow", "settings-section-heading"])
+            .css_classes([
+                "eyebrow",
+                "settings-section-heading",
+                "stats-section-heading",
+            ])
             .build(),
     );
     header.append(

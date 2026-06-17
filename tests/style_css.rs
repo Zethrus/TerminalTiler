@@ -32,6 +32,7 @@ const RUNBOOK_CONTROLS_RS: &str = include_str!("../src/ui/runbook_controls.rs");
 const RUNBOOK_DIALOG_RS: &str = include_str!("../src/ui/runbook_dialog.rs");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
 const SNIPPET_POPOVER_RS: &str = include_str!("../src/ui/snippet_popover.rs");
+const STATS_DIALOG_RS: &str = include_str!("../src/ui/stats_dialog.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
 const TERMINAL_CONTEXT_MENU_RS: &str = include_str!("../src/ui/terminal_context_menu.rs");
 const TERMINAL_RECOVERY_POPOVER_RS: &str = include_str!("../src/ui/terminal_recovery_popover.rs");
@@ -1397,29 +1398,89 @@ fn dialog_smoke_can_require_companion_dialog_for_pro_builds() {
 }
 
 #[test]
-fn usage_stats_record_primary_terminal_input_paths() {
+fn usage_stats_record_manual_terminal_typing_only() {
     for token in [
         "install_terminal_input_stats_hook(&terminal, state.clone(), stats.clone())",
+        "gtk::EventControllerKey::new()",
+        "is_manual_printable_key(key, modifier_state)",
         "terminal.connect_commit(move |_, text, _|",
-        "stats.record_input(text)",
-        "self.stats.record_input(&payload)",
+        "stats.record_manual_typing(text)",
     ] {
         assert!(
             TERMINAL_SESSION_RS.contains(token),
-            "GTK terminal usage stats should record real VTE input and dropped-path paste: {token}"
+            "GTK terminal usage stats should record only armed manual VTE typing: {token}"
+        );
+    }
+    assert!(
+        !TERMINAL_SESSION_RS.contains("record_input")
+            && !TERMINAL_SESSION_RS.contains("self.stats.record_manual_typing")
+            && !TERMINAL_SESSION_RS.contains("record_manual_typing(&payload)"),
+        "GTK terminal programmatic sends and dropped-path paste must not record usage stats"
+    );
+
+    for token in [
+        "fn write_pane_input(",
+        "manual_typing_text_from_char_value(value)",
+        "crate::stats_hub::recorder().record_manual_typing(&manual_typing)",
+        "if write_pane_input(pane, input.as_ref(), &bytes, \"pane input write failed\")",
+        "\"pane paste write failed\"",
+        "write_pane_input(pane, text, text.as_bytes(), \"pane paste write failed\")",
+    ] {
+        assert!(
+            source_contains(WINDOWS_WORKSPACE_RS, token),
+            "Windows native usage stats should record only manual printable WM_CHAR input: {token}"
+        );
+    }
+    assert!(
+        !WINDOWS_WORKSPACE_RS.contains("record_input")
+            && !WINDOWS_WORKSPACE_RS.contains("record_manual_typing(text)")
+            && !WINDOWS_WORKSPACE_RS.contains("record_manual_typing(&payload)"),
+        "Windows native startup commands, broadcast/runbook sends, paste, dropped paths, voice, and special keys must not record usage stats"
+    );
+
+    for token in [
+        "terminal_runtime_manual_typing_text(key, key_state)",
+        "crate::stats_hub::recorder().record_manual_typing(&manual_typing)",
+        "send_terminal_runtime_payload(&state, payload)",
+        "paste_clipboard_into_terminal_runtime",
+        "paste_dropped_paths_into_terminal_runtime",
+    ] {
+        assert!(
+            WINDOWS_GTK_RUNTIME_RS.contains(token),
+            "Windows GTK runtime usage stats should be keyed off manual printable key handling only: {token}"
+        );
+    }
+    assert!(
+        !WINDOWS_GTK_RUNTIME_RS.contains("record_input")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("record_manual_typing(&payload)"),
+        "Windows GTK programmatic sends, paste, dropped paths, terminal responses, runbooks, broadcasts, snippets, and voice must not record stats"
+    );
+}
+
+#[test]
+fn usage_stats_dialog_uses_stats_specific_spacing() {
+    for token in [
+        "dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"stats-dialog-window\")",
+        "stats-dialog-scroller",
+        "stats-dialog-content",
+        "stats-section",
+        "stats-section-heading",
+    ] {
+        assert!(
+            STATS_DIALOG_RS.contains(token),
+            "Usage Statistics dialog should use stats-specific chrome/classes: {token}"
         );
     }
 
     for token in [
-        "fn write_pane_input(",
-        "crate::stats_hub::recorder().record_input(stats_text)",
-        "write_pane_input(\n            pane,\n            input.as_ref(),",
-        "\"pane paste write failed\"",
-        "write_pane_input(pane, text, text.as_bytes(), text, \"pane paste write failed\")",
+        ".stats-dialog-content",
+        ".stats-section-heading",
+        "min-height: 18px;",
+        "padding: 3px 0;",
     ] {
         assert!(
-            source_contains(WINDOWS_WORKSPACE_RS, token),
-            "Windows native usage stats should share typing, broadcast, and paste recording paths: {token}"
+            STYLE_CSS.contains(token),
+            "Usage Statistics CSS should reserve vertical heading room to avoid clipping: {token}"
         );
     }
 }
