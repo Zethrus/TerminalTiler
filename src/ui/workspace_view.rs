@@ -22,6 +22,7 @@ use crate::services::layout_editor::{
 };
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
+use crate::services::stats::StatsRecorder;
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::name as icon_name;
 use crate::ui::runbook_controls;
@@ -63,6 +64,7 @@ struct WorkspaceRuntimeInner {
     density: ApplicationDensity,
     zoom_steps: i32,
     max_reconnect_attempts: u32,
+    stats: StatsRecorder,
     path_label: gtk::Label,
     url_entry: gtk::Entry,
     url_reload_button: gtk::Button,
@@ -668,6 +670,7 @@ impl WorkspaceRuntime {
                     on_swap,
                     on_close,
                     can_close,
+                    self.inner.stats.clone(),
                 );
                 install_tile_alert_hooks(
                     &tile_view.session,
@@ -917,6 +920,7 @@ pub struct WorkspaceView {
     pub runtime: WorkspaceRuntime,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_with_layout_change_handler(
     preset: &WorkspacePreset,
     workspace_root: &Path,
@@ -924,6 +928,7 @@ pub fn build_with_layout_change_handler(
     use_dark_palette: bool,
     zoom_steps: i32,
     max_reconnect_attempts: u32,
+    stats: StatsRecorder,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
     let layout_state = Rc::new(RefCell::new(preset.layout.clone()));
@@ -971,6 +976,7 @@ pub fn build_with_layout_change_handler(
             density: preset.density,
             zoom_steps,
             max_reconnect_attempts,
+            stats,
             path_label: path_label.clone(),
             url_entry: url_entry.clone(),
             url_reload_button: url_reload_button.clone(),

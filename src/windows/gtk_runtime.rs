@@ -935,6 +935,7 @@ mod imp {
         if let Some(stdin_tx) = stdin_tx {
             if stdin_tx.send(payload.clone()).is_ok() {
                 state.borrow_mut().transcript.push_input(&payload);
+                crate::stats_hub::recorder().record_input(&payload);
                 return true;
             }
 

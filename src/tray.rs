@@ -12,6 +12,7 @@ use crate::logging;
 pub enum TrayCommand {
     Show,
     OpenSettings,
+    OpenStats,
     Quit,
 }
 
@@ -124,6 +125,14 @@ impl ksni::Tray for AppTray {
                 label: "Open Settings".into(),
                 activate: Box::new(|tray: &mut AppTray| {
                     let _ = tray.command_tx.send(TrayCommand::OpenSettings);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            ksni::menu::StandardItem {
+                label: "Usage Statistics".into(),
+                activate: Box::new(|tray: &mut AppTray| {
+                    let _ = tray.command_tx.send(TrayCommand::OpenStats);
                 }),
                 ..Default::default()
             }

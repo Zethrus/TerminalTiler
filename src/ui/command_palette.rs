@@ -17,6 +17,7 @@ pub struct PaletteAction {
 pub struct AppActionCallbacks {
     pub product_display_name: String,
     pub open_settings: Rc<dyn Fn()>,
+    pub open_stats: Rc<dyn Fn()>,
     pub open_assets_manager: Rc<dyn Fn()>,
     pub open_about: Rc<dyn Fn()>,
     pub new_tab: Rc<dyn Fn()>,
@@ -43,6 +44,11 @@ pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
             title: "Open Settings".into(),
             subtitle: "Application preferences and shortcuts.".into(),
             on_activate: callbacks.open_settings,
+        },
+        PaletteAction {
+            title: "Open Usage Statistics".into(),
+            subtitle: "Characters, words, and WPM typed today, this week, and all time.".into(),
+            on_activate: callbacks.open_stats,
         },
         PaletteAction {
             title: "Open Assets Manager".into(),

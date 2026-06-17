@@ -14,6 +14,7 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::{ResolvedLaunchTransport, resolve_tile_launch};
+use crate::services::stats::StatsRecorder;
 use crate::terminal_palette::terminal_palette;
 use crate::transcript::TranscriptBuffer;
 
@@ -28,6 +29,7 @@ pub struct TerminalSession {
     descriptor: Rc<str>,
     launch_spec: Rc<TerminalLaunchSpec>,
     transcript: Rc<RefCell<TranscriptBuffer>>,
+    stats: StatsRecorder,
 }
 
 #[derive(Default)]
@@ -106,6 +108,7 @@ impl TerminalSession {
         use_dark_palette: bool,
         density: ApplicationDensity,
         zoom_steps: i32,
+        stats: StatsRecorder,
     ) -> Self {
         let terminal = vte4::Terminal::new();
         terminal.set_hexpand(true);
@@ -146,6 +149,7 @@ impl TerminalSession {
                 ));
             });
         }
+        install_terminal_input_stats_hook(&terminal, state.clone(), stats.clone());
 
         let launch_spec = if let Err(error) = validate_working_dir(&working_dir) {
             let error = error.to_string();
@@ -190,6 +194,7 @@ impl TerminalSession {
             descriptor,
             launch_spec,
             transcript,
+            stats,
         };
 
         if !session.launch_spec.configured_argv.is_empty() {
@@ -238,6 +243,7 @@ impl TerminalSession {
         }
 
         self.transcript.borrow_mut().push_input(text);
+        self.stats.record_input(text);
         self.terminal.grab_focus();
         self.terminal.feed_child(text.as_bytes());
         true
@@ -341,6 +347,7 @@ impl TerminalSession {
         }
 
         self.transcript.borrow_mut().push_input(&payload);
+        self.stats.record_input(&payload);
         self.terminal.grab_focus();
         self.terminal.paste_text(&payload);
         true
@@ -511,6 +518,19 @@ fn copy_terminal_selection(terminal: &vte4::Terminal) -> bool {
 fn paste_terminal_clipboard(terminal: &vte4::Terminal) {
     terminal.grab_focus();
     terminal.paste_clipboard();
+}
+
+fn install_terminal_input_stats_hook(
+    terminal: &vte4::Terminal,
+    state: Rc<RefCell<TerminalSessionState>>,
+    stats: StatsRecorder,
+) {
+    terminal.connect_commit(move |_, text, _| {
+        let state = state.borrow();
+        if !state.exited && !state.termination_requested {
+            stats.record_input(text);
+        }
+    });
 }
 
 fn install_terminal_shortcuts(terminal: &vte4::Terminal) {

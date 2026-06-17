@@ -20,6 +20,7 @@ use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::session_restore::{
     flatten_window_sessions, session_for_restore_mode, shell_only_session,
 };
+use crate::stats_hub;
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
@@ -37,7 +38,7 @@ use crate::ui::appearance::{
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_chrome,
-    dialog_smoke, launch_screen, settings_dialog, tab_rename_dialog,
+    dialog_smoke, launch_screen, settings_dialog, stats_dialog, tab_rename_dialog,
     title_chrome::{
         TitleTabChrome, TitleTabInput, apply_title_tab_state, build_interactive_title_tab,
     },
@@ -762,6 +763,26 @@ struct TabStripController {
     can_detach_tab: TabPredicateHandle,
 }
 
+/// Seconds between background flushes of usage statistics to disk.
+const STATS_FLUSH_INTERVAL_SECONDS: u32 = 30;
+
+thread_local! {
+    static STATS_TIMER_INSTALLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Install the periodic usage-stats flush timer exactly once per process.
+fn ensure_stats_flush_timer() {
+    STATS_TIMER_INSTALLED.with(|installed| {
+        if installed.replace(true) {
+            return;
+        }
+        glib::timeout_add_seconds_local(STATS_FLUSH_INTERVAL_SECONDS, || {
+            stats_hub::flush();
+            glib::ControlFlow::Continue
+        });
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn present(
     app: &adw::Application,
@@ -805,6 +826,8 @@ fn present_with_initial_workspace(
     let preset_store = Rc::new(preset_store);
     let asset_store = Rc::new(asset_store);
     let session_store = Rc::new(session_store);
+
+    ensure_stats_flush_timer();
 
     let app_header = build_app_header_chrome();
     let header = app_header.header;
@@ -1579,6 +1602,7 @@ fn present_with_initial_workspace(
                     resolved_theme_uses_dark_palette(preset.theme),
                     terminal_zoom_steps,
                     preference_store_for_workspace.load().max_reconnect_attempts,
+                    stats_hub::recorder(),
                     {
                         let layout_target = layout_target.clone();
                         let session_persistence = session_persistence_for_workspace.clone();
@@ -2943,6 +2967,10 @@ fn present_with_initial_workspace(
                     let open_settings_dialog = open_settings_dialog.clone();
                     move || open_settings_dialog()
                 }),
+                open_stats: Rc::new({
+                    let window = window.clone();
+                    move || stats_dialog::present(&window, stats_hub::recorder().snapshot())
+                }),
                 open_assets_manager: Rc::new({
                     let open_assets_manager = open_assets_manager.clone();
                     move || open_assets_manager()
@@ -3070,6 +3098,15 @@ fn present_with_initial_workspace(
     }
 
     {
+        let window_for_stats = window.clone();
+        let action = gio::SimpleAction::new("open-stats", None);
+        action.connect_activate(move |_, _| {
+            stats_dialog::present(&window_for_stats, stats_hub::recorder().snapshot());
+        });
+        window.add_action(&action);
+    }
+
+    {
         let open_assets_manager = open_assets_manager.clone();
         let action = gio::SimpleAction::new("open-assets", None);
         action.connect_activate(move |_, _| open_assets_manager());
@@ -3100,6 +3137,7 @@ fn present_with_initial_workspace(
         let force_quit_requested = force_quit_requested.clone();
         let action = gio::SimpleAction::new("quit-app", None);
         action.connect_activate(move |_, _| {
+            stats_hub::flush();
             tray_controller.set_window_hidden(false);
             if has_active_workspace_processes(&tabs_for_quit_action) {
                 let window = window_for_quit_action.clone();
@@ -3272,6 +3310,7 @@ fn present_with_initial_workspace(
         let tray_controller = tray_controller.clone();
         let voice_transcriber = voice_transcriber.clone();
         window.connect_close_request(move |window| {
+            stats_hub::flush();
             if force_quit_requested.replace(false) {
                 voice_transcriber.shutdown();
                 unregister_linux_main_attach_target(window_id);
@@ -4261,6 +4300,7 @@ fn restore_saved_session(
             resolved_theme_uses_dark_palette(preset.theme),
             terminal_zoom_steps,
             context.preference_store.load().max_reconnect_attempts,
+            stats_hub::recorder(),
             {
                 let layout_target = layout_target.clone();
                 let session_persistence = context.session_persistence.clone();

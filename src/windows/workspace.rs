@@ -1047,6 +1047,7 @@ mod imp {
                 0
             }
             WM_DESTROY => {
+                crate::stats_hub::flush();
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     unsafe {
                         KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
@@ -2260,11 +2261,35 @@ mod imp {
     }
 
     fn send_text_to_pane(pane: &mut PaneState, text: &str) -> bool {
+        write_pane_input(pane, text, text.as_bytes(), text, "pane input write failed")
+    }
+
+    fn write_pane_input(
+        pane: &mut PaneState,
+        transcript_text: &str,
+        input_bytes: &[u8],
+        stats_text: &str,
+        error_context: &str,
+    ) -> bool {
+        if pane.session.is_none() {
+            return false;
+        }
+
+        pane.transcript.push_input(transcript_text);
         let Some(session) = pane.session.as_ref() else {
             return false;
         };
-        pane.transcript.push_input(text);
-        session.write_input(text.as_bytes()).is_ok()
+
+        match session.write_input(input_bytes) {
+            Ok(()) => {
+                crate::stats_hub::recorder().record_input(stats_text);
+                true
+            }
+            Err(error) => {
+                logging::error(format!("{error_context}: {error}"));
+                false
+            }
+        }
     }
 
     fn send_text_to_target(
@@ -5080,13 +5105,14 @@ mod imp {
         };
         let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
-        let Some(session) = pane.session.as_ref() else {
-            return;
-        };
-        pane.transcript.push_input(&String::from_utf8_lossy(&bytes));
-        if let Err(error) = session.write_input(&bytes) {
-            logging::error(format!("pane input write failed: {error}"));
-        }
+        let input = String::from_utf8_lossy(&bytes);
+        write_pane_input(
+            pane,
+            input.as_ref(),
+            &bytes,
+            input.as_ref(),
+            "pane input write failed",
+        );
     }
 
     fn handle_key_input(pane: &mut PaneState, virtual_key: u16) {
@@ -5718,16 +5744,26 @@ mod imp {
     fn paste_text_into_pane(pane: &mut PaneState, text: &str) -> Result<(), String> {
         let _ = pane.terminal.reset_viewport();
         clear_selection(pane);
-        let Some(session) = pane.session.as_ref() else {
+        if pane.session.is_none() {
             return Ok(());
-        };
+        }
         if pane.terminal.bracketed_paste() {
             let wrapped = format!("\u{1b}[200~{text}\u{1b}[201~");
-            pane.transcript.push_input(&wrapped);
-            session.write_input(wrapped.as_bytes())
+            if write_pane_input(
+                pane,
+                &wrapped,
+                wrapped.as_bytes(),
+                text,
+                "pane paste write failed",
+            ) {
+                Ok(())
+            } else {
+                Err("pane paste write failed".into())
+            }
+        } else if write_pane_input(pane, text, text.as_bytes(), text, "pane paste write failed") {
+            Ok(())
         } else {
-            pane.transcript.push_input(text);
-            session.write_input(text.as_bytes())
+            Err("pane paste write failed".into())
         }
     }
 

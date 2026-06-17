@@ -10,6 +10,8 @@ pub mod open_core;
 mod platform;
 mod product;
 mod services;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod stats_hub;
 mod storage;
 #[cfg(target_os = "linux")]
 mod terminal;

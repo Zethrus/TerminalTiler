@@ -12,6 +12,7 @@ use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::snippets::resolve_snippet;
+use crate::services::stats::StatsRecorder;
 use crate::terminal::session::TerminalSession;
 use crate::ui::pane_status::initial_status_snapshot;
 use crate::ui::snippet_popover::{self, SnippetPopoverInput};
@@ -44,6 +45,7 @@ pub fn build(
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
     can_close: bool,
+    stats: StatsRecorder,
 ) -> TileView {
     let session = TerminalSession::spawn(
         tile,
@@ -52,6 +54,7 @@ pub fn build(
         use_dark_palette,
         density,
         zoom_steps,
+        stats,
     );
 
     let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);

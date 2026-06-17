@@ -97,6 +97,18 @@ fn handle_tray_command(
                 ));
             }
         }
+        tray::TrayCommand::OpenStats => {
+            let options = RuntimeOptions::default();
+            if let Some(window) = ensure_main_window(app, tray_controller, &options)
+                && let Err(error) =
+                    gtk::prelude::WidgetExt::activate_action(&window, "win.open-stats", None)
+            {
+                logging::error(format!(
+                    "failed to activate stats action from tray: {}",
+                    error
+                ));
+            }
+        }
         tray::TrayCommand::Quit => {
             if let Some(window) = primary_window(app) {
                 tray_controller.set_window_hidden(false);

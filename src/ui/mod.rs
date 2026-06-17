@@ -79,6 +79,11 @@ pub(crate) mod snippet_popover;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub mod stats_dialog;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod tab_rename_dialog;
 #[cfg(any(
     target_os = "linux",

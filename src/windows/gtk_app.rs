@@ -25,6 +25,7 @@ mod imp {
     };
     use crate::ui::appearance::{apply_theme_mode, apply_window_density};
     use crate::ui::launch_screen::{LaunchScreenActions, LaunchScreenInput};
+    use crate::ui::stats_dialog;
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
@@ -447,6 +448,7 @@ mod imp {
             let current_close_to_background = current_close_to_background.clone();
             let tray_controller = tray_controller.clone();
             window.connect_close_request(move |window| {
+                crate::stats_hub::flush();
                 if force_quit_requested.replace(false) {
                     tray_controller.shutdown();
                     voice_global_hotkey.borrow_mut().take();
@@ -700,6 +702,11 @@ mod imp {
             voice_local_key_pressed.clone(),
             voice_event_tx.clone(),
         );
+
+        gtk::glib::timeout_add_seconds_local(30, || {
+            crate::stats_hub::flush();
+            gtk::glib::ControlFlow::Continue
+        });
 
         sync_windows_voice_global_hotkey(
             &voice_global_hotkey,
@@ -3430,6 +3437,10 @@ mod imp {
             open_settings: Rc::new({
                 let settings_context = settings_context.clone();
                 move || present_settings_dialog(settings_context.clone())
+            }),
+            open_stats: Rc::new({
+                let window = window.clone();
+                move || stats_dialog::present(&window, crate::stats_hub::recorder().snapshot())
             }),
             open_assets_manager: Rc::new({
                 let window = window.clone();

@@ -55,6 +55,7 @@ const WINDOWS_GTK_RUNTIME_RS: &str = include_str!("../src/windows/gtk_runtime.rs
 const WINDOWS_GTK_TRAY_RS: &str = include_str!("../src/windows/gtk_tray.rs");
 const WINDOWS_GTK_VOICE_HOTKEY_RS: &str = include_str!("../src/windows/gtk_voice_hotkey.rs");
 const WINDOWS_GTK_SMOKE_PS1: &str = include_str!("../packaging/build-windows-gtk-smoke.ps1");
+const WINDOWS_WORKSPACE_RS: &str = include_str!("../src/windows/workspace.rs");
 const WINDOWS_INSTALLER_NSI: &str = include_str!("../packaging/windows/installer.nsi");
 const WINDOWS_INSTALLER_TOOLS_PS1: &str = include_str!("../packaging/windows-installer-tools.ps1");
 const WINDOWS_INSTALLER_WXS: &str = include_str!("../packaging/windows/installer.wxs");
@@ -1393,6 +1394,34 @@ fn dialog_smoke_can_require_companion_dialog_for_pro_builds() {
             && WINDOWS_GTK_APP_RS.contains("dialog_smoke::start(&window)"),
         "dialog smoke should optionally require Account / Sync to open/close through the shared win.open-companion action for Pro GTK builds"
     );
+}
+
+#[test]
+fn usage_stats_record_primary_terminal_input_paths() {
+    for token in [
+        "install_terminal_input_stats_hook(&terminal, state.clone(), stats.clone())",
+        "terminal.connect_commit(move |_, text, _|",
+        "stats.record_input(text)",
+        "self.stats.record_input(&payload)",
+    ] {
+        assert!(
+            TERMINAL_SESSION_RS.contains(token),
+            "GTK terminal usage stats should record real VTE input and dropped-path paste: {token}"
+        );
+    }
+
+    for token in [
+        "fn write_pane_input(",
+        "crate::stats_hub::recorder().record_input(stats_text)",
+        "write_pane_input(\n            pane,\n            input.as_ref(),",
+        "\"pane paste write failed\"",
+        "write_pane_input(pane, text, text.as_bytes(), text, \"pane paste write failed\")",
+    ] {
+        assert!(
+            WINDOWS_WORKSPACE_RS.contains(token),
+            "Windows native usage stats should share typing, broadcast, and paste recording paths: {token}"
+        );
+    }
 }
 
 #[test]

@@ -33,6 +33,7 @@ const WINDOWS_GTK_TRAY_ICON_ID: u32 = 1;
 const WINDOWS_GTK_TRAY_MENU_SHOW: usize = 1;
 const WINDOWS_GTK_TRAY_MENU_SETTINGS: usize = 2;
 const WINDOWS_GTK_TRAY_MENU_QUIT: usize = 3;
+const WINDOWS_GTK_TRAY_MENU_STATS: usize = 4;
 
 unsafe extern "C" {
     fn gdk_win32_surface_get_handle(surface: *mut gdk::ffi::GdkSurface) -> *mut c_void;
@@ -179,6 +180,14 @@ impl WindowsGtkTrayController {
         glib::idle_add_local_once(move || open_settings());
     }
 
+    fn open_stats_from_tray(&self) {
+        self.restore_window_from_tray();
+        let window = self.inner.window.clone();
+        glib::idle_add_local_once(move || {
+            crate::ui::stats_dialog::present(&window, crate::stats_hub::recorder().snapshot());
+        });
+    }
+
     fn quit_from_tray(&self) {
         self.inner.force_quit_requested.set(true);
         self.inner.window_hidden_to_tray.set(false);
@@ -214,6 +223,12 @@ impl WindowsGtkTrayController {
             AppendMenuW(
                 menu,
                 MF_STRING,
+                WINDOWS_GTK_TRAY_MENU_STATS,
+                wide("Usage Statistics").as_ptr(),
+            );
+            AppendMenuW(
+                menu,
+                MF_STRING,
                 WINDOWS_GTK_TRAY_MENU_QUIT,
                 wide("Quit").as_ptr(),
             );
@@ -240,6 +255,7 @@ impl WindowsGtkTrayController {
         match selected as usize {
             WINDOWS_GTK_TRAY_MENU_SHOW => self.restore_window_from_tray(),
             WINDOWS_GTK_TRAY_MENU_SETTINGS => self.open_settings_from_tray(),
+            WINDOWS_GTK_TRAY_MENU_STATS => self.open_stats_from_tray(),
             WINDOWS_GTK_TRAY_MENU_QUIT => self.quit_from_tray(),
             _ => {}
         }
