@@ -23,6 +23,7 @@ use crate::services::layout_editor::{
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::services::stats::StatsRecorder;
+use crate::storage::session_store::SavedTerminalHistory;
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::name as icon_name;
 use crate::ui::runbook_controls;
@@ -64,6 +65,7 @@ struct WorkspaceRuntimeInner {
     density: ApplicationDensity,
     zoom_steps: i32,
     max_reconnect_attempts: u32,
+    restored_terminal_history: HashMap<String, Vec<String>>,
     stats: StatsRecorder,
     path_label: gtk::Label,
     url_entry: gtk::Entry,
@@ -100,6 +102,32 @@ impl WorkspaceRuntime {
                 session.apply_appearance(use_dark_palette, density, zoom_steps);
             }
         }
+    }
+
+    pub fn apply_terminal_history_lines(&self, _lines: u32) {
+        // Saved/restored terminal history is captured on save. It must not
+        // resize live in-session scrollback, because `0` means "do not save
+        // history" rather than "disable normal terminal scrollback".
+    }
+
+    pub fn capture_terminal_histories(&self, max_lines: usize) -> Vec<SavedTerminalHistory> {
+        if max_lines == 0 {
+            return Vec::new();
+        }
+
+        self.inner
+            .tiles
+            .borrow()
+            .iter()
+            .filter_map(|tile| {
+                let session = tile.session.as_ref()?;
+                let lines = session.capture_terminal_history(max_lines);
+                (!lines.is_empty()).then(|| SavedTerminalHistory {
+                    tile_id: tile.tile.id.clone(),
+                    lines,
+                })
+            })
+            .collect()
     }
 
     pub fn reflow_layout(&self) {
@@ -666,6 +694,11 @@ impl WorkspaceRuntime {
                     self.inner.use_dark_palette,
                     self.inner.density,
                     self.inner.zoom_steps,
+                    self.inner
+                        .restored_terminal_history
+                        .get(&tile.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
                     snippet_provider,
                     on_swap,
                     on_close,
@@ -928,6 +961,8 @@ pub fn build_with_layout_change_handler(
     use_dark_palette: bool,
     zoom_steps: i32,
     max_reconnect_attempts: u32,
+    _terminal_history_lines: u32,
+    restored_terminal_history: Vec<SavedTerminalHistory>,
     stats: StatsRecorder,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
@@ -976,6 +1011,10 @@ pub fn build_with_layout_change_handler(
             density: preset.density,
             zoom_steps,
             max_reconnect_attempts,
+            restored_terminal_history: restored_terminal_history
+                .into_iter()
+                .map(|history| (history.tile_id, history.lines))
+                .collect(),
             stats,
             path_label: path_label.clone(),
             url_entry: url_entry.clone(),

@@ -41,6 +41,7 @@ pub fn build(
     use_dark_palette: bool,
     density: ApplicationDensity,
     zoom_steps: i32,
+    restored_history_lines: &[String],
     snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
@@ -54,6 +55,7 @@ pub fn build(
         use_dark_palette,
         density,
         zoom_steps,
+        restored_history_lines,
         stats,
     );
 

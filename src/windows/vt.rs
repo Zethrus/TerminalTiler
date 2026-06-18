@@ -86,6 +86,7 @@ pub struct VtBuffer {
     rows: usize,
     cells: Vec<VtCell>,
     history: VecDeque<Vec<VtCell>>,
+    history_limit: usize,
     viewport_offset: usize,
     cursor_col: usize,
     cursor_row: usize,
@@ -136,6 +137,7 @@ impl VtBuffer {
             rows,
             cells: vec![VtCell::default(); columns * rows],
             history: VecDeque::new(),
+            history_limit: 10_000,
             viewport_offset: 0,
             cursor_col: 0,
             cursor_row: 0,
@@ -240,6 +242,36 @@ impl VtBuffer {
 
     pub fn history_len(&self) -> usize {
         self.history.len()
+    }
+
+    pub fn set_history_limit(&mut self, history_limit: usize) {
+        self.history_limit = history_limit;
+        while self.history.len() > self.history_limit {
+            self.history.pop_front();
+        }
+        self.viewport_offset = self.viewport_offset.min(self.history.len());
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn recent_plain_lines(&self, max_lines: usize) -> Vec<String> {
+        if max_lines == 0 {
+            return Vec::new();
+        }
+        let total_rows = self.total_rows();
+        let start_row = total_rows.saturating_sub(max_lines);
+        let mut lines = (start_row..total_rows)
+            .map(|row| {
+                (0..self.columns())
+                    .map(|column| self.display_cell(row, column).ch)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        while lines.last().is_some_and(|line| line.trim().is_empty()) {
+            lines.pop();
+        }
+        lines
     }
 
     pub fn viewport_offset(&self) -> usize {
@@ -1176,7 +1208,7 @@ impl VtBuffer {
         let start = row * self.columns;
         let end = start + self.columns;
         self.history.push_back(self.cells[start..end].to_vec());
-        while self.history.len() > 10_000 {
+        while self.history.len() > self.history_limit {
             self.history.pop_front();
         }
     }

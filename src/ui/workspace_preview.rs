@@ -53,6 +53,7 @@ pub struct TileRuntimeSurface {
     pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
     pub shutdown: Option<Rc<dyn Fn(&str)>>,
     pub active_process_checker: Option<Rc<dyn Fn() -> bool>>,
+    pub terminal_history_provider: Option<Rc<dyn Fn(usize) -> Vec<String>>>,
     pub recovery_binder: Option<TileRuntimeRecoveryBinder>,
 }
 
@@ -74,6 +75,7 @@ impl TileRuntimeSurface {
             web_settings_applier: None,
             shutdown: None,
             active_process_checker: None,
+            terminal_history_provider: None,
             recovery_binder: None,
         }
     }
@@ -271,6 +273,41 @@ impl SessionPreview {
 
     pub fn snapshot(&self) -> SavedSession {
         self.session.borrow().clone()
+    }
+
+    pub fn snapshot_with_terminal_history(&self, line_limit: usize) -> SavedSession {
+        let mut session = self.session.borrow().clone();
+        if line_limit == 0 {
+            for tab in &mut session.tabs {
+                tab.terminal_history.clear();
+            }
+            return session;
+        }
+
+        let surfaces = self.runtime_surfaces.borrow();
+        for (index, tab) in session.tabs.iter_mut().enumerate() {
+            let histories = tab
+                .preset
+                .layout
+                .tile_specs()
+                .into_iter()
+                .filter_map(|tile| {
+                    let provider = surfaces
+                        .get(&runtime_surface_key(index, tab, &tile))?
+                        .terminal_history_provider
+                        .as_ref()?;
+                    let lines = provider(line_limit);
+                    (!lines.is_empty()).then(|| {
+                        crate::storage::session_store::SavedTerminalHistory {
+                            tile_id: tile.id,
+                            lines,
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            tab.terminal_history = histories;
+        }
+        session
     }
 
     pub fn runbooks(&self) -> Vec<Runbook> {
@@ -2599,6 +2636,7 @@ mod tests {
             workspace_root: PathBuf::from(format!("/tmp/{preset_id}")),
             custom_title: None,
             terminal_zoom_steps: 0,
+            terminal_history: Vec::new(),
         }
     }
 

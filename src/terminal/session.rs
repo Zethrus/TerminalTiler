@@ -16,11 +16,15 @@ use crate::model::layout::TileSpec;
 use crate::model::preset::ApplicationDensity;
 use crate::services::launch_resolution::{ResolvedLaunchTransport, resolve_tile_launch};
 use crate::services::stats::StatsRecorder;
+use crate::services::terminal_history::{
+    normalize_terminal_history_lines, restored_terminal_history_text,
+};
 use crate::terminal_palette::terminal_palette;
 use crate::transcript::TranscriptBuffer;
 
 const DEFAULT_TERMINAL_COPY_SHORTCUT: &str = "<Ctrl><Shift>C";
 const DEFAULT_TERMINAL_PASTE_SHORTCUT: &str = "<Ctrl><Shift>V";
+const LIVE_TERMINAL_SCROLLBACK_LINES: i64 = 20_000;
 const MIN_TERMINAL_FONT_POINTS: i32 = 7;
 const MAX_TERMINAL_FONT_POINTS: i32 = 20;
 #[derive(Clone)]
@@ -101,6 +105,7 @@ impl TerminalLaunchSpec {
 }
 
 impl TerminalSession {
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         tile: &TileSpec,
         workspace_root: &Path,
@@ -108,6 +113,7 @@ impl TerminalSession {
         use_dark_palette: bool,
         density: ApplicationDensity,
         zoom_steps: i32,
+        restored_history_lines: &[String],
         stats: StatsRecorder,
     ) -> Self {
         let terminal = vte4::Terminal::new();
@@ -115,7 +121,7 @@ impl TerminalSession {
         terminal.set_vexpand(true);
         terminal.set_size_request(0, 0);
         terminal.set_overflow(gtk::Overflow::Hidden);
-        terminal.set_scrollback_lines(20_000);
+        terminal.set_scrollback_lines(LIVE_TERMINAL_SCROLLBACK_LINES);
         terminal.set_mouse_autohide(true);
         terminal.set_clear_background(false);
         terminal.set_cursor_blink_mode(vte4::CursorBlinkMode::System);
@@ -196,6 +202,11 @@ impl TerminalSession {
             transcript,
         };
 
+        let restored_history = restored_terminal_history_text(restored_history_lines);
+        if !restored_history.is_empty() {
+            terminal.feed(restored_history.as_bytes());
+        }
+
         if !session.launch_spec.configured_argv.is_empty() {
             session.spawn_from_mode(TerminalLaunchMode::ConfiguredSession);
         }
@@ -257,6 +268,13 @@ impl TerminalSession {
     pub fn recent_transcript(&self, line_count: usize) -> String {
         self.refresh_output_snapshot();
         self.transcript.borrow().recent_transcript(line_count)
+    }
+
+    pub fn capture_terminal_history(&self, max_lines: usize) -> Vec<String> {
+        let Some(snapshot) = self.output_snapshot() else {
+            return Vec::new();
+        };
+        normalize_terminal_history_lines(&snapshot, max_lines)
     }
 
     pub fn termination_requested(&self) -> bool {
@@ -430,6 +448,13 @@ impl TerminalSession {
     }
 
     fn refresh_output_snapshot(&self) {
+        let Some(snapshot) = self.output_snapshot() else {
+            return;
+        };
+        self.transcript.borrow_mut().replace_output(&snapshot);
+    }
+
+    fn output_snapshot(&self) -> Option<String> {
         let stream = gio::MemoryOutputStream::new_resizable();
         if self
             .terminal
@@ -440,14 +465,13 @@ impl TerminalSession {
             )
             .is_err()
         {
-            return;
+            return None;
         }
         if stream.close(None::<&gio::Cancellable>).is_err() {
-            return;
+            return None;
         }
         let bytes = stream.steal_as_bytes();
-        let snapshot = String::from_utf8_lossy(bytes.as_ref()).into_owned();
-        self.transcript.borrow_mut().replace_output(&snapshot);
+        Some(String::from_utf8_lossy(bytes.as_ref()).into_owned())
     }
 }
 

@@ -10,4 +10,5 @@ pub mod session_restore;
 pub mod snippets;
 pub mod stats;
 mod template_variables;
+pub mod terminal_history;
 pub mod tile_draft;

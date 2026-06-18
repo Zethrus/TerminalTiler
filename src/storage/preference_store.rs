@@ -6,6 +6,9 @@ use crate::app_paths;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::services::terminal_history::{
+    DEFAULT_TERMINAL_HISTORY_LINES, normalize_saved_terminal_history_line_limit,
+};
 use crate::storage::document::{read_optional_string, write_toml_private};
 use crate::storage::fs_utils::preserve_corrupt_file;
 use crate::voice::VoicePreferences;
@@ -36,6 +39,7 @@ pub struct AppPreferences {
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
     pub max_reconnect_attempts: u32,
+    pub terminal_history_lines: u32,
     pub voice: VoicePreferences,
 }
 
@@ -73,6 +77,8 @@ struct PreferenceDocument {
     settings_dialog_height: i32,
     #[serde(default = "default_max_reconnect_attempts")]
     max_reconnect_attempts: u32,
+    #[serde(default = "default_terminal_history_lines")]
+    terminal_history_lines: u32,
     #[serde(default)]
     voice: VoicePreferences,
 }
@@ -119,6 +125,10 @@ fn default_settings_dialog_height() -> i32 {
 
 fn default_max_reconnect_attempts() -> u32 {
     DEFAULT_MAX_RECONNECT_ATTEMPTS
+}
+
+fn default_terminal_history_lines() -> u32 {
+    DEFAULT_TERMINAL_HISTORY_LINES
 }
 
 fn normalize_settings_dialog_width(width: i32) -> i32 {
@@ -253,6 +263,9 @@ impl PreferenceStore {
                     document.settings_dialog_height,
                 ),
                 max_reconnect_attempts: document.max_reconnect_attempts,
+                terminal_history_lines: normalize_saved_terminal_history_line_limit(
+                    document.terminal_history_lines,
+                ),
                 voice: document.voice,
             },
             Ok(_) => {
@@ -329,6 +342,12 @@ impl PreferenceStore {
         self.save(&preferences);
     }
 
+    pub fn save_terminal_history_lines(&self, lines: u32) {
+        let mut preferences = self.load();
+        preferences.terminal_history_lines = normalize_saved_terminal_history_line_limit(lines);
+        self.save(&preferences);
+    }
+
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_voice_preferences(&self, voice: VoicePreferences) {
         let mut preferences = self.load();
@@ -365,6 +384,9 @@ impl PreferenceStore {
             settings_dialog_width: preferences.settings_dialog_width,
             settings_dialog_height: preferences.settings_dialog_height,
             max_reconnect_attempts: preferences.max_reconnect_attempts,
+            terminal_history_lines: normalize_saved_terminal_history_line_limit(
+                preferences.terminal_history_lines,
+            ),
             voice: preferences.voice.clone(),
         };
 
@@ -410,6 +432,7 @@ impl Default for AppPreferences {
             settings_dialog_width: default_settings_dialog_width(),
             settings_dialog_height: default_settings_dialog_height(),
             max_reconnect_attempts: default_max_reconnect_attempts(),
+            terminal_history_lines: default_terminal_history_lines(),
             voice: VoicePreferences::default(),
         }
     }
@@ -455,6 +478,10 @@ mod tests {
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
         assert_eq!(store.load().max_reconnect_attempts, 5);
+        assert_eq!(
+            store.load().terminal_history_lines,
+            crate::services::terminal_history::DEFAULT_TERMINAL_HISTORY_LINES
+        );
         assert_eq!(store.load().voice, VoicePreferences::default());
     }
 
@@ -477,6 +504,7 @@ mod tests {
             settings_dialog_width: 640,
             settings_dialog_height: 540,
             max_reconnect_attempts: 7,
+            terminal_history_lines: 1_234,
             voice: VoicePreferences {
                 enabled: true,
                 ..VoicePreferences::default()
@@ -499,6 +527,7 @@ mod tests {
                 settings_dialog_width: 640,
                 settings_dialog_height: 540,
                 max_reconnect_attempts: 7,
+                terminal_history_lines: 1_234,
                 voice: VoicePreferences {
                     enabled: true,
                     ..VoicePreferences::default()
@@ -531,8 +560,24 @@ mod tests {
                 settings_dialog_width: 528,
                 settings_dialog_height: 760,
                 max_reconnect_attempts: 5,
+                terminal_history_lines:
+                    crate::services::terminal_history::DEFAULT_TERMINAL_HISTORY_LINES,
                 voice: VoicePreferences::default(),
             }
+        );
+    }
+
+    #[test]
+    fn clamps_terminal_history_lines_when_loading() {
+        let dir = temp_dir("pref-terminal-history-clamp");
+        let path = dir.join("preferences.toml");
+        fs::write(&path, "version = 1\nterminal_history_lines = 999999\n").unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(
+            store.load().terminal_history_lines,
+            crate::services::terminal_history::MAX_TERMINAL_HISTORY_LINES
         );
     }
 

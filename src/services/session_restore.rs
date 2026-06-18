@@ -130,6 +130,10 @@ mod tests {
                 workspace_root: PathBuf::from("."),
                 custom_title: Some("Example".into()),
                 terminal_zoom_steps: 2,
+                terminal_history: vec![crate::storage::session_store::SavedTerminalHistory {
+                    tile_id: "tile-1".into(),
+                    lines: vec!["previous output".into()],
+                }],
             }],
             active_tab_index: 0,
         }
@@ -145,6 +149,7 @@ mod tests {
         assert_eq!(tiles[0].reconnect_policy, ReconnectPolicy::Always);
         assert_eq!(restored.tabs[0].custom_title.as_deref(), Some("Example"));
         assert_eq!(restored.tabs[0].terminal_zoom_steps, 2);
+        assert_eq!(restored.tabs[0].terminal_history[0].tile_id, "tile-1");
     }
 
     #[test]
@@ -187,6 +192,7 @@ mod tests {
             workspace_root: PathBuf::from("/tmp/second-b"),
             custom_title: Some("second-b".into()),
             terminal_zoom_steps: -1,
+            terminal_history: Vec::new(),
         });
         second.active_tab_index = 1;
 

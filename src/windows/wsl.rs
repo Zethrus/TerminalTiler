@@ -885,6 +885,7 @@ mod tests {
                 workspace_root: PathBuf::from(r"C:\Users\dev\project"),
                 custom_title: None,
                 terminal_zoom_steps: 0,
+                terminal_history: Vec::new(),
             }],
             active_tab_index: 0,
         }

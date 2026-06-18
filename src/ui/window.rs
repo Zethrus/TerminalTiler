@@ -24,7 +24,7 @@ use crate::stats_hub;
 use crate::storage::asset_store::AssetStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
-use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+use crate::storage::session_store::{SavedSession, SavedTab, SavedTerminalHistory, SessionStore};
 use crate::terminal::session::clamp_terminal_zoom_steps;
 use crate::tray::TrayController;
 use crate::ui::app_chrome::{
@@ -130,6 +130,7 @@ struct WorkspaceState {
     assets: crate::model::assets::WorkspaceAssets,
     runtime: workspace_view::WorkspaceRuntime,
     terminal_zoom_steps: i32,
+    terminal_history: Vec<SavedTerminalHistory>,
     layout_target: WorkspaceLayoutTargetHandle,
 }
 
@@ -141,6 +142,12 @@ struct SessionPersistence {
     session_store: Rc<SessionStore>,
     suppression_depth: Rc<Cell<usize>>,
     pending_save: Rc<Cell<bool>>,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalHistorySaveMode {
+    Preserve,
+    Capture { line_limit: usize },
 }
 
 struct SessionSaveGuard {
@@ -180,6 +187,19 @@ impl SessionPersistence {
     }
 
     fn save_now(&self, reason: &str) {
+        self.save_now_with_history_mode(reason, TerminalHistorySaveMode::Preserve);
+    }
+
+    fn save_now_capturing_history(&self, reason: &str, line_limit: u32) {
+        self.save_now_with_history_mode(
+            reason,
+            TerminalHistorySaveMode::Capture {
+                line_limit: line_limit as usize,
+            },
+        );
+    }
+
+    fn save_now_with_history_mode(&self, reason: &str, history_mode: TerminalHistorySaveMode) {
         self.pending_save.set(false);
         if self.suppression_depth.get() > 0 {
             logging::info(format!(
@@ -195,6 +215,7 @@ impl SessionPersistence {
             &self.tabs,
             self.active_tab_id.get(),
             &self.session_store,
+            history_mode,
         );
     }
 
@@ -1595,13 +1616,16 @@ fn present_with_initial_workspace(
                 let assets = asset_store
                     .load_assets_for_workspace_root(&workspace_root)
                     .assets;
+                let preferences = preference_store_for_workspace.load();
                 let built_workspace = workspace_view::build_with_layout_change_handler(
                     &preset,
                     &workspace_root,
                     &assets,
                     resolved_theme_uses_dark_palette(preset.theme),
                     terminal_zoom_steps,
-                    preference_store_for_workspace.load().max_reconnect_attempts,
+                    preferences.max_reconnect_attempts,
+                    preferences.terminal_history_lines,
+                    Vec::new(),
                     stats_hub::recorder(),
                     {
                         let layout_target = layout_target.clone();
@@ -1628,6 +1652,7 @@ fn present_with_initial_workspace(
                         assets: assets.clone(),
                         runtime: built_workspace.runtime.clone(),
                         terminal_zoom_steps,
+                        terminal_history: Vec::new(),
                         layout_target: layout_target.clone(),
                     }));
                     tab.workspace_root = Some(workspace_root.clone());
@@ -2038,6 +2063,7 @@ fn present_with_initial_workspace(
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
                     max_reconnect_attempts: preferences.max_reconnect_attempts,
+                    terminal_history_lines: preferences.terminal_history_lines,
                     voice: preferences.voice.clone(),
                     microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
                     product_display_name: options_for_settings.product.display_name.clone(),
@@ -2315,6 +2341,20 @@ fn present_with_initial_workspace(
                             logging::info(format!(
                                 "updated application settings max_reconnect_attempts={}",
                                 attempts
+                            ));
+                        }
+                    }),
+                    on_terminal_history_lines_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        move |lines| {
+                            preference_store.save_terminal_history_lines(lines);
+                            for runtime in workspace_runtimes(&tabs) {
+                                runtime.apply_terminal_history_lines(lines);
+                            }
+                            logging::info(format!(
+                                "updated application settings terminal_history_lines={}",
+                                lines
                             ));
                         }
                     }),
@@ -3132,6 +3172,7 @@ fn present_with_initial_workspace(
         let tabs_for_quit_action = tabs.clone();
         let active_for_quit_action = active_tab_id.clone();
         let session_store_for_quit_action = session_store.clone();
+        let preference_store_for_quit_action = preference_store.clone();
         let tray_controller = tray_controller.clone();
         let quit_requested = quit_requested.clone();
         let force_quit_requested = force_quit_requested.clone();
@@ -3143,6 +3184,7 @@ fn present_with_initial_workspace(
                 let window = window_for_quit_action.clone();
                 let tabs = tabs_for_quit_action.clone();
                 let session_store = session_store_for_quit_action.clone();
+                let preference_store = preference_store_for_quit_action.clone();
                 let active_tab_id = active_for_quit_action.clone();
                 let force_quit_requested = force_quit_requested.clone();
                 dialog_chrome::confirm_destructive_action(
@@ -3158,6 +3200,7 @@ fn present_with_initial_workspace(
                             &tabs,
                             active_tab_id.get(),
                             &session_store,
+                            preference_store.load().terminal_history_lines,
                         );
                     },
                 );
@@ -3304,6 +3347,7 @@ fn present_with_initial_workspace(
         let active_for_save = active_tab_id.clone();
         let session_store = session_store.clone();
         let session_persistence_for_window_close = session_persistence.clone();
+        let preference_store_for_window_close = preference_store.clone();
         let current_close_to_background = current_close_to_background.clone();
         let quit_requested = quit_requested.clone();
         let force_quit_requested = force_quit_requested.clone();
@@ -3332,6 +3376,7 @@ fn present_with_initial_workspace(
                 let confirm_window = window.clone();
                 let tabs = tabs_for_save.clone();
                 let session_store = session_store.clone();
+                let preference_store = preference_store_for_window_close.clone();
                 let active_tab_id = active_for_save.clone();
                 let force_quit_requested = force_quit_requested.clone();
                 dialog_chrome::confirm_destructive_action(
@@ -3347,6 +3392,7 @@ fn present_with_initial_workspace(
                             &tabs,
                             active_tab_id.get(),
                             &session_store,
+                            preference_store.load().terminal_history_lines,
                         );
                     },
                 );
@@ -3356,7 +3402,10 @@ fn present_with_initial_workspace(
             tray_controller.set_window_hidden(false);
             voice_transcriber.shutdown();
             let runtimes = workspace_runtimes(&tabs_for_save);
-            session_persistence_for_window_close.save_now("closing application window");
+            session_persistence_for_window_close.save_now_capturing_history(
+                "closing application window",
+                preference_store_for_window_close.load().terminal_history_lines,
+            );
             unregister_linux_main_attach_target(window_id);
 
             for runtime in runtimes {
@@ -4161,7 +4210,13 @@ fn attach_workspace_tab_to_main_window(
         runtime.reflow_layout();
     }
     note_linux_main_attach_target_active(window_id);
-    save_application_window_session_state(window_id, tabs, active_tab_id.get(), session_store);
+    save_application_window_session_state(
+        window_id,
+        tabs,
+        active_tab_id.get(),
+        session_store,
+        TerminalHistorySaveMode::Preserve,
+    );
     logging::info(format!(
         "reattached workspace tab {} to window {}",
         tab_id, window_id
@@ -4285,6 +4340,8 @@ fn restore_saved_session(
 
         let workspace_root = saved_tab.workspace_root;
         let preset = saved_tab.preset;
+        let custom_title = saved_tab.custom_title;
+        let terminal_history = saved_tab.terminal_history;
         let terminal_zoom_steps =
             clamp_terminal_zoom_steps(preset.density, saved_tab.terminal_zoom_steps);
         let layout_target = make_workspace_layout_target(&context.tabs, tab_id);
@@ -4292,6 +4349,7 @@ fn restore_saved_session(
             .asset_store
             .load_assets_for_workspace_root(&workspace_root)
             .assets;
+        let preferences = context.preference_store.load();
 
         let built_workspace = workspace_view::build_with_layout_change_handler(
             &preset,
@@ -4299,7 +4357,9 @@ fn restore_saved_session(
             &assets,
             resolved_theme_uses_dark_palette(preset.theme),
             terminal_zoom_steps,
-            context.preference_store.load().max_reconnect_attempts,
+            preferences.max_reconnect_attempts,
+            preferences.terminal_history_lines,
+            terminal_history.clone(),
             stats_hub::recorder(),
             {
                 let layout_target = layout_target.clone();
@@ -4315,7 +4375,7 @@ fn restore_saved_session(
         context.tabs.borrow_mut().push(WorkspaceTab {
             id: tab_id,
             default_title: format!("Workspace {}", tab_id),
-            custom_title: saved_tab.custom_title,
+            custom_title,
             subtitle: workspace_root.display().to_string(),
             page_shell: page_shell.clone(),
             content: TabContent::Workspace(Box::new(WorkspaceState {
@@ -4323,6 +4383,7 @@ fn restore_saved_session(
                 assets: assets.clone(),
                 runtime: built_workspace.runtime.clone(),
                 terminal_zoom_steps,
+                terminal_history,
                 layout_target: layout_target.clone(),
             })),
             workspace_root: Some(workspace_root.clone()),
@@ -5312,16 +5373,24 @@ fn configure_window_controls(header: &adw::HeaderBar) {
 fn collect_session(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
+    history_mode: TerminalHistorySaveMode,
 ) -> Option<SavedSession> {
-    let tabs_ref = tabs.borrow();
+    let mut tabs_ref = tabs.borrow_mut();
     let saved_tabs: Vec<SavedTab> = tabs_ref
-        .iter()
-        .filter_map(|tab| match &tab.content {
-            TabContent::Workspace(workspace) => tab.workspace_root.as_ref().map(|root| SavedTab {
-                preset: workspace.preset.clone(),
-                workspace_root: root.clone(),
-                custom_title: tab.custom_title.clone(),
-                terminal_zoom_steps: workspace.terminal_zoom_steps,
+        .iter_mut()
+        .filter_map(|tab| match &mut tab.content {
+            TabContent::Workspace(workspace) => tab.workspace_root.as_ref().map(|root| {
+                if let TerminalHistorySaveMode::Capture { line_limit } = history_mode {
+                    workspace.terminal_history =
+                        workspace.runtime.capture_terminal_histories(line_limit);
+                }
+                SavedTab {
+                    preset: workspace.preset.clone(),
+                    workspace_root: root.clone(),
+                    custom_title: tab.custom_title.clone(),
+                    terminal_zoom_steps: workspace.terminal_zoom_steps,
+                    terminal_history: workspace.terminal_history.clone(),
+                }
             }),
             TabContent::LaunchDeck => None,
         })
@@ -5364,6 +5433,7 @@ fn saved_tab_for_workspace(tab: &WorkspaceTab) -> Option<SavedTab> {
         workspace_root: root.clone(),
         custom_title: tab.custom_title.clone(),
         terminal_zoom_steps: workspace.terminal_zoom_steps,
+        terminal_history: workspace.terminal_history.clone(),
     })
 }
 
@@ -5431,6 +5501,7 @@ fn detach_workspace_tab(
         tabs,
         active_tab_id.get(),
         session_store,
+        TerminalHistorySaveMode::Preserve,
     );
     logging::info(format!(
         "detached workspace tab {} preset='{}' root='{}'",
@@ -5525,7 +5596,13 @@ fn present_detached_workspace_window(
             rebind_workspace_tab_layout(tab, &detached_tabs);
         }
     }
-    save_application_window_session_state(window_id, &detached_tabs, tab_id, session_store);
+    save_application_window_session_state(
+        window_id,
+        &detached_tabs,
+        tab_id,
+        session_store,
+        TerminalHistorySaveMode::Preserve,
+    );
 
     {
         let window = window.clone();
@@ -5797,6 +5874,7 @@ fn save_application_window_session_state(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     session_store: &SessionStore,
+    history_mode: TerminalHistorySaveMode,
 ) {
     let registry_lock = linux_session_registry().lock();
     let Ok(mut registry) = registry_lock else {
@@ -5804,7 +5882,7 @@ fn save_application_window_session_state(
         return;
     };
 
-    if let Some(session) = collect_session(tabs, active_tab_id) {
+    if let Some(session) = collect_session(tabs, active_tab_id, history_mode) {
         logging::info(format!(
             "saving window {} session with {} workspace tab(s)",
             window_id,
@@ -5846,9 +5924,18 @@ fn force_quit_application(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     session_store: &SessionStore,
+    terminal_history_lines: u32,
 ) {
     logging::info("force quitting application window");
-    save_application_window_session_state(window_id, tabs, active_tab_id, session_store);
+    save_application_window_session_state(
+        window_id,
+        tabs,
+        active_tab_id,
+        session_store,
+        TerminalHistorySaveMode::Capture {
+            line_limit: terminal_history_lines as usize,
+        },
+    );
     for runtime in workspace_runtimes(tabs) {
         runtime.terminate_all("force quitting application window");
     }

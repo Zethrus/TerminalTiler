@@ -31,6 +31,15 @@ pub struct SavedTab {
     pub custom_title: Option<String>,
     #[serde(default = "default_terminal_zoom_steps")]
     pub terminal_zoom_steps: i32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminal_history: Vec<SavedTerminalHistory>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedTerminalHistory {
+    pub tile_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -210,7 +219,7 @@ impl SessionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{SESSION_VERSION, SavedTab, SessionDocument, SessionStore};
+    use super::{SESSION_VERSION, SavedTab, SavedTerminalHistory, SessionDocument, SessionStore};
     use crate::model::layout::{WorkingDirectory, tile};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use crate::platform::resolve_workspace_root;
@@ -286,12 +295,14 @@ mod tests {
                     workspace_root: valid_root.clone(),
                     custom_title: Some("valid".into()),
                     terminal_zoom_steps: 2,
+                    terminal_history: Vec::new(),
                 },
                 SavedTab {
                     preset: sample_preset(),
                     workspace_root: dir.join("missing"),
                     custom_title: Some("missing".into()),
                     terminal_zoom_steps: -1,
+                    terminal_history: Vec::new(),
                 },
             ],
         };
@@ -323,6 +334,7 @@ mod tests {
                 workspace_root: valid_root,
                 custom_title: Some("legacy".into()),
                 terminal_zoom_steps: 3,
+                terminal_history: Vec::new(),
             }],
         };
         let legacy_session = toml::to_string_pretty(&legacy_document)
@@ -429,12 +441,17 @@ type = "workspace-root"
                     workspace_root: first_root.clone(),
                     custom_title: Some("first".into()),
                     terminal_zoom_steps: 1,
+                    terminal_history: vec![SavedTerminalHistory {
+                        tile_id: "tile-1".into(),
+                        lines: vec!["line one".into(), "line two".into()],
+                    }],
                 },
                 SavedTab {
                     preset: second_preset,
                     workspace_root: second_root.clone(),
                     custom_title: Some("second".into()),
                     terminal_zoom_steps: -2,
+                    terminal_history: Vec::new(),
                 },
             ],
             active_tab_index: 1,
@@ -452,6 +469,11 @@ type = "workspace-root"
         assert_eq!(session.tabs[1].custom_title.as_deref(), Some("second"));
         assert_eq!(session.tabs[0].terminal_zoom_steps, 1);
         assert_eq!(session.tabs[1].terminal_zoom_steps, -2);
+        assert_eq!(session.tabs[0].terminal_history[0].tile_id, "tile-1");
+        assert_eq!(
+            session.tabs[0].terminal_history[0].lines,
+            vec!["line one".to_string(), "line two".to_string()]
+        );
         // Session load intentionally resolves existing workspace roots before returning them.
         assert_eq!(
             session.tabs[0].workspace_root,

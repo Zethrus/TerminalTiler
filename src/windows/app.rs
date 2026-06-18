@@ -1915,6 +1915,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 workspace_root,
                 custom_title,
                 terminal_zoom_steps: 0,
+                terminal_history: Vec::new(),
             }],
             active_tab_index: 0,
         };
@@ -4256,6 +4257,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         preferences.workspace_zoom_in_shortcut = defaults.workspace_zoom_in_shortcut;
         preferences.workspace_zoom_out_shortcut = defaults.workspace_zoom_out_shortcut;
         preferences.command_palette_shortcut = defaults.command_palette_shortcut;
+        preferences.terminal_history_lines = defaults.terminal_history_lines;
         preferences.voice = defaults.voice;
         state.preference_store.save(&preferences);
         apply_preferences_to_settings_controls(state, &preferences);

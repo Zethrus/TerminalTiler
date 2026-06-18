@@ -5,6 +5,7 @@ use gtk::glib;
 use std::cell::{Cell, RefCell};
 
 use crate::model::preset::{ApplicationDensity, ThemeMode};
+use crate::services::terminal_history::MAX_TERMINAL_HISTORY_LINES;
 use crate::storage::preference_store::AppPreferences;
 use crate::ui::dialog_chrome;
 use crate::ui::dialog_smoke;
@@ -23,6 +24,7 @@ struct SettingsState {
     zoom_out_shortcut: String,
     command_palette_shortcut: String,
     max_reconnect_attempts: u32,
+    terminal_history_lines: u32,
     voice: VoicePreferences,
 }
 
@@ -39,6 +41,7 @@ impl SettingsState {
             zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
             command_palette_shortcut: defaults.command_palette_shortcut,
             max_reconnect_attempts: defaults.max_reconnect_attempts,
+            terminal_history_lines: defaults.terminal_history_lines,
             voice: defaults.voice,
         }
     }
@@ -56,6 +59,7 @@ pub struct SettingsDialogInput {
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
     pub max_reconnect_attempts: u32,
+    pub terminal_history_lines: u32,
     pub voice: VoicePreferences,
     pub microphone_devices: Vec<MicrophoneDevice>,
     pub product_display_name: String,
@@ -74,6 +78,7 @@ pub struct SettingsDialogActions {
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_command_palette_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_max_reconnect_attempts_changed: Rc<dyn Fn(u32)>,
+    pub on_terminal_history_lines_changed: Rc<dyn Fn(u32)>,
     pub on_voice_preferences_changed: Rc<dyn Fn(VoicePreferences)>,
     pub on_voice_pack_install_requested: Rc<dyn Fn()>,
     pub voice_pack_status_provider: Rc<dyn Fn() -> VoicePackStatus>,
@@ -373,6 +378,7 @@ pub fn present(
         settings_dialog_width,
         settings_dialog_height,
         max_reconnect_attempts,
+        terminal_history_lines,
         voice,
         microphone_devices,
         product_display_name,
@@ -389,6 +395,7 @@ pub fn present(
         on_zoom_out_shortcut_changed,
         on_command_palette_shortcut_changed,
         on_max_reconnect_attempts_changed,
+        on_terminal_history_lines_changed,
         on_voice_preferences_changed,
         on_voice_pack_install_requested,
         voice_pack_status_provider,
@@ -476,6 +483,7 @@ pub fn present(
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
     let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
     let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
+    let current_terminal_history_lines = Rc::new(Cell::new(terminal_history_lines));
     let current_voice = Rc::new(RefCell::new(voice));
     let reset_button = icons::labeled_button(
         "Reset Defaults",
@@ -492,6 +500,7 @@ pub fn present(
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
+        let current_terminal_history_lines = current_terminal_history_lines.clone();
         let current_voice = current_voice.clone();
         let reset_button = reset_button.clone();
         Rc::new(move || {
@@ -507,6 +516,7 @@ pub fn present(
                     zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
                     command_palette_shortcut: current_command_palette_shortcut.borrow().clone(),
                     max_reconnect_attempts: current_max_reconnect_attempts.get(),
+                    terminal_history_lines: current_terminal_history_lines.get(),
                     voice: current_voice.borrow().clone(),
                 },
             );
@@ -786,6 +796,57 @@ pub fn present(
     }
     reconnect_row.append(&reconnect_spin);
     connection_section.append(&reconnect_row);
+
+    let history_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["settings-toggle-row"])
+        .build();
+    let history_text = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    history_text.append(
+        &gtk::Label::builder()
+            .label("Terminal history lines")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["settings-shortcut-title"])
+            .build(),
+    );
+    history_text.append(
+        &gtk::Label::builder()
+            .label("Saved per terminal pane and restored only when resuming previous workspaces; 0 disables saved history.")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .wrap(true)
+            .css_classes(["field-hint", "settings-shortcut-note"])
+            .build(),
+    );
+    history_row.append(&history_text);
+
+    let history_spin = gtk::SpinButton::with_range(0.0, MAX_TERMINAL_HISTORY_LINES as f64, 100.0);
+    history_spin.set_value(terminal_history_lines as f64);
+    history_spin.set_digits(0);
+    history_spin.set_valign(gtk::Align::Center);
+    history_spin.add_css_class("settings-spin-button");
+    {
+        let current_terminal_history_lines = current_terminal_history_lines.clone();
+        let sync_reset_button = sync_reset_button.clone();
+        let callback = on_terminal_history_lines_changed.clone();
+        history_spin.connect_value_changed(move |spin| {
+            let value = spin.value() as u32;
+            if current_terminal_history_lines.get() != value {
+                current_terminal_history_lines.set(value);
+                callback(value);
+                sync_reset_button();
+            }
+        });
+    }
+    history_row.append(&history_spin);
+    connection_section.append(&history_row);
 
     let diagnostics_section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1226,6 +1287,7 @@ pub fn present(
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
+        let current_terminal_history_lines = current_terminal_history_lines.clone();
         let current_voice = current_voice.clone();
         let theme_strip = theme_strip.clone();
         let density_strip = density_strip.clone();
@@ -1237,6 +1299,7 @@ pub fn present(
         let zoom_out_recorder = zoom_out_recorder.clone();
         let command_palette_recorder = command_palette_recorder.clone();
         let reconnect_spin = reconnect_spin.clone();
+        let history_spin = history_spin.clone();
         let voice_enabled_switch = voice_enabled_switch.clone();
         let microphone_combo = microphone_combo.clone();
         let voice_global_hotkey_switch = voice_global_hotkey_switch.clone();
@@ -1265,6 +1328,7 @@ pub fn present(
                 || current_command_palette_shortcut.borrow().as_str()
                     != defaults.command_palette_shortcut
                 || current_max_reconnect_attempts.get() != defaults.max_reconnect_attempts
+                || current_terminal_history_lines.get() != defaults.terminal_history_lines
                 || *current_voice.borrow() != defaults.voice;
             if !changed {
                 return;
@@ -1279,6 +1343,7 @@ pub fn present(
             current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
             current_command_palette_shortcut.replace(defaults.command_palette_shortcut.clone());
             current_max_reconnect_attempts.set(defaults.max_reconnect_attempts);
+            current_terminal_history_lines.set(defaults.terminal_history_lines);
             current_voice.replace(defaults.voice.clone());
             sync_theme_strip_active(&theme_strip, defaults.default_theme);
             sync_density_strip_active(&density_strip, defaults.default_density);
@@ -1291,6 +1356,7 @@ pub fn present(
             zoom_out_recorder.sync_label(&defaults.workspace_zoom_out_shortcut);
             command_palette_recorder.sync_label(&defaults.command_palette_shortcut);
             reconnect_spin.set_value(defaults.max_reconnect_attempts as f64);
+            history_spin.set_value(defaults.terminal_history_lines as f64);
             suppress_voice_enabled_signal.set(true);
             voice_enabled_switch.set_active(defaults.voice.enabled);
             suppress_voice_enabled_signal.set(false);

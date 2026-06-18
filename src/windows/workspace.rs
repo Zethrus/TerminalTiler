@@ -99,9 +99,12 @@ mod imp {
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::services::runbooks::resolve_runbook;
     use crate::services::session_restore::flatten_window_sessions;
+    use crate::services::terminal_history::restored_terminal_history_text;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::PreferenceStore;
-    use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
+    use crate::storage::session_store::{
+        SavedSession, SavedTab, SavedTerminalHistory, SessionStore,
+    };
     use crate::transcript::TranscriptBuffer;
     use crate::voice::pack::{self, VoicePackHealth};
     use crate::voice::{ParakeetTranscriber, VoiceActivationMode};
@@ -2391,6 +2394,7 @@ mod imp {
         let workspace_root = Some(active_tab(state).workspace_root.clone());
         let on_saved = Rc::new(move || {
             if let Some(state) = unsafe { window_state_mut(hwnd) } {
+                capture_active_tab_terminal_history(state);
                 rebuild_active_tab_content(hwnd, state);
             }
         });
@@ -3572,9 +3576,40 @@ mod imp {
     }
 
     fn current_saved_session(state: &WorkspaceWindowState) -> SavedSession {
+        let mut tabs = state.tabs.clone();
+        if let Some(tab) = tabs.get_mut(state.active_tab_index) {
+            tab.terminal_history = captured_active_terminal_history(state);
+        }
         SavedSession {
-            tabs: state.tabs.clone(),
+            tabs,
             active_tab_index: state.active_tab_index,
+        }
+    }
+
+    fn captured_active_terminal_history(state: &WorkspaceWindowState) -> Vec<SavedTerminalHistory> {
+        let line_limit = state.preference_store.load().terminal_history_lines as usize;
+        if line_limit == 0 {
+            return Vec::new();
+        }
+
+        state
+            .panes
+            .iter()
+            .filter(|pane| pane.tile.tile_kind == TileKind::Terminal)
+            .filter_map(|pane| {
+                let lines = pane.terminal.recent_plain_lines(line_limit);
+                (!lines.is_empty()).then(|| SavedTerminalHistory {
+                    tile_id: pane.tile.id.clone(),
+                    lines,
+                })
+            })
+            .collect()
+    }
+
+    fn capture_active_tab_terminal_history(state: &mut WorkspaceWindowState) {
+        let histories = captured_active_terminal_history(state);
+        if let Some(tab) = state.tabs.get_mut(state.active_tab_index) {
+            tab.terminal_history = histories;
         }
     }
 
@@ -3725,6 +3760,7 @@ mod imp {
         font_points: i32,
         line_height_scale: f64,
         ui_font: HGDIOBJ,
+        restored_history_lines: &[String],
     ) -> Box<PaneState> {
         let initial_web_uri = tile.url.clone();
         let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
@@ -3760,6 +3796,10 @@ mod imp {
             session: None,
             launch_runtime: None,
         });
+        if !restored_history_lines.is_empty() {
+            pane.terminal
+                .process(&restored_terminal_history_text(restored_history_lines));
+        }
         pane.title_hwnd = create_child_window(
             hwnd,
             PANE_HEADER_CLASS,
@@ -3822,6 +3862,11 @@ mod imp {
             .density
             .terminal_line_height_scale();
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        let restored_histories = active_tab(state)
+            .terminal_history
+            .iter()
+            .map(|history| (history.tile_id.clone(), history.lines.clone()))
+            .collect::<HashMap<_, _>>();
 
         let mut existing_panes = state
             .panes
@@ -3846,10 +3891,14 @@ mod imp {
 
             next_panes.push(create_pane_state(
                 hwnd,
-                spec,
+                spec.clone(),
                 font_points,
                 line_height_scale,
                 ui_font,
+                restored_histories
+                    .get(&spec.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
             ));
         }
 
@@ -3928,9 +3977,26 @@ mod imp {
             .density
             .terminal_line_height_scale();
         let ui_font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+        let restored_histories = active_tab(state)
+            .terminal_history
+            .iter()
+            .map(|history| (history.tile_id.clone(), history.lines.clone()))
+            .collect::<HashMap<_, _>>();
         state.panes = tile_specs
             .into_iter()
-            .map(|tile| create_pane_state(hwnd, tile, font_points, line_height_scale, ui_font))
+            .map(|tile| {
+                create_pane_state(
+                    hwnd,
+                    tile.clone(),
+                    font_points,
+                    line_height_scale,
+                    ui_font,
+                    restored_histories
+                        .get(&tile.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                )
+            })
             .collect();
 
         state.focused_web_pane_id = first_web_pane_id(state);
@@ -3967,6 +4033,7 @@ mod imp {
         if index >= state.tabs.len() || index == state.active_tab_index {
             return;
         }
+        capture_active_tab_terminal_history(state);
         state.active_tab_index = index;
         rebuild_active_tab_content(hwnd, state);
     }
@@ -3976,6 +4043,7 @@ mod imp {
             return;
         }
         if index != state.active_tab_index {
+            capture_active_tab_terminal_history(state);
             state.active_tab_index = index;
             rebuild_active_tab_content(hwnd, state);
         }
@@ -4276,6 +4344,7 @@ mod imp {
             return;
         }
 
+        capture_active_tab_terminal_history(state);
         let saved_tab = active_tab(state).clone();
         let title = saved_tab
             .custom_title
@@ -4339,6 +4408,7 @@ mod imp {
             return;
         }
 
+        capture_active_tab_terminal_history(state);
         let saved_tab = active_tab(state).clone();
         let title = saved_tab
             .custom_title
@@ -4379,6 +4449,7 @@ mod imp {
         if let Some(target_hwnd) = registered_main_window_hwnd(preferred_window_id)
             && let Some(target_state) = unsafe { window_state_mut(target_hwnd) }
         {
+            capture_active_tab_terminal_history(target_state);
             target_state.tabs.push(saved_tab);
             target_state.active_tab_index = target_state.tabs.len().saturating_sub(1);
             rebuild_active_tab_content(target_hwnd, target_state);

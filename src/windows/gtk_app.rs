@@ -929,6 +929,7 @@ mod imp {
                 settings_dialog_width: preferences.settings_dialog_width,
                 settings_dialog_height: preferences.settings_dialog_height,
                 max_reconnect_attempts: preferences.max_reconnect_attempts,
+                terminal_history_lines: preferences.terminal_history_lines,
                 voice: preferences.voice,
                 microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
                 product_display_name: options.product.display_name.clone(),
@@ -1097,6 +1098,10 @@ mod imp {
                 on_max_reconnect_attempts_changed: Rc::new({
                     let preference_store = preference_store.clone();
                     move |attempts| preference_store.save_max_reconnect_attempts(attempts)
+                }),
+                on_terminal_history_lines_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    move |lines| preference_store.save_terminal_history_lines(lines)
                 }),
                 on_voice_preferences_changed: Rc::new({
                     let preference_store = preference_store.clone();
@@ -2006,7 +2011,7 @@ mod imp {
                 "Windows GTK shell closing with active terminal runtimes; terminating preview runtimes: {reason}",
             ));
         }
-        shell_state.save_preview_session(reason);
+        shell_state.save_preview_session_capturing_history(reason);
         shell_state.terminate_preview_runtimes(reason);
     }
 
@@ -2170,6 +2175,18 @@ mod imp {
             }
         }
 
+        fn save_preview_session_capturing_history(&self, reason: &str) {
+            let line_limit = PreferenceStore::new().load().terminal_history_lines as usize;
+            if let Some(session) = self.combined_session_snapshot_with_history(line_limit) {
+                persist_windows_gtk_session(&self.session_store, &session, reason);
+            } else {
+                logging::info(format!(
+                    "clearing Windows GTK saved session state reason='{reason}'"
+                ));
+                self.session_store.clear();
+            }
+        }
+
         fn terminate_preview_runtimes(&self, reason: &str) {
             for preview in self.all_previews() {
                 preview.terminate_all(reason);
@@ -2192,17 +2209,33 @@ mod imp {
         }
 
         fn combined_session_snapshot(&self) -> Option<SavedSession> {
+            self.combined_session_snapshot_with(|preview| preview.snapshot())
+        }
+
+        fn combined_session_snapshot_with_history(
+            &self,
+            line_limit: usize,
+        ) -> Option<SavedSession> {
+            self.combined_session_snapshot_with(|preview| {
+                preview.snapshot_with_terminal_history(line_limit)
+            })
+        }
+
+        fn combined_session_snapshot_with(
+            &self,
+            snapshot: impl Fn(&crate::ui::workspace_preview::SessionPreview) -> SavedSession,
+        ) -> Option<SavedSession> {
             let mut tabs = Vec::new();
             let mut active_tab_index = 0;
             if let Some(preview) = self.preview.borrow().as_ref() {
-                let snapshot = preview.snapshot();
-                active_tab_index = snapshot
+                let preview_snapshot = snapshot(preview);
+                active_tab_index = preview_snapshot
                     .active_tab_index
-                    .min(snapshot.tabs.len().saturating_sub(1));
-                tabs.extend(snapshot.tabs);
+                    .min(preview_snapshot.tabs.len().saturating_sub(1));
+                tabs.extend(preview_snapshot.tabs);
             }
             for detached_preview in self.detached_previews.borrow().iter() {
-                tabs.extend(detached_preview.snapshot().tabs);
+                tabs.extend(snapshot(detached_preview).tabs);
             }
             if tabs.is_empty() {
                 None
@@ -3089,6 +3122,7 @@ mod imp {
             workspace_root,
             custom_title: None,
             terminal_zoom_steps: 0,
+            terminal_history: Vec::new(),
         };
 
         if let Some(preview) = shell_state.preview.borrow().as_ref().cloned() {

@@ -37,6 +37,7 @@ const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs"
 const TERMINAL_CONTEXT_MENU_RS: &str = include_str!("../src/ui/terminal_context_menu.rs");
 const TERMINAL_RECOVERY_POPOVER_RS: &str = include_str!("../src/ui/terminal_recovery_popover.rs");
 const TERMINAL_SESSION_RS: &str = include_str!("../src/terminal/session.rs");
+const TERMINAL_HISTORY_RS: &str = include_str!("../src/services/terminal_history.rs");
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
 const TRANSCRIPT_DIALOG_RS: &str = include_str!("../src/ui/transcript_dialog.rs");
@@ -98,6 +99,37 @@ fn main_header_icon_buttons_have_clear_tooltips() {
             "icon_name::ASSETS,\n        \"Open assets manager\"",
         ),
         "main app header icon-only actions should explain their purpose on hover"
+    );
+}
+
+#[test]
+fn saved_terminal_history_setting_does_not_resize_live_scrollback() {
+    assert!(
+        TERMINAL_HISTORY_RS.contains("normalize_saved_terminal_history_line_limit")
+            && TERMINAL_SESSION_RS.contains("LIVE_TERMINAL_SCROLLBACK_LINES")
+            && TERMINAL_SESSION_RS
+                .contains("terminal.set_scrollback_lines(LIVE_TERMINAL_SCROLLBACK_LINES)")
+            && !WORKSPACE_VIEW_RS.contains("set_scrollback_lines(lines)")
+            && !WINDOWS_WORKSPACE_RS.contains("normalize_terminal_history_line_limit")
+            && !WINDOWS_GTK_RUNTIME_RS.contains("normalize_terminal_history_line_limit"),
+        "saved/restored history limits must stay separate from live terminal scrollback"
+    );
+}
+
+#[test]
+fn win32_tab_switch_captures_outgoing_terminal_history_before_rebuild() {
+    assert!(
+        WINDOWS_WORKSPACE_RS.contains("fn captured_active_terminal_history")
+            && WINDOWS_WORKSPACE_RS.contains("fn capture_active_tab_terminal_history")
+            && source_contains(
+                WINDOWS_WORKSPACE_RS,
+                "capture_active_tab_terminal_history(state);\n        state.active_tab_index = index;\n        rebuild_active_tab_content(hwnd, state);"
+            )
+            && source_contains(
+                WINDOWS_WORKSPACE_RS,
+                "capture_active_tab_terminal_history(target_state);\n            target_state.tabs.push(saved_tab);\n            target_state.active_tab_index = target_state.tabs.len().saturating_sub(1);"
+            ),
+        "Win32 must snapshot the outgoing tab before switching/rebuilding panes"
     );
 }
 

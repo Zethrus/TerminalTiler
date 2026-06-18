@@ -41,6 +41,7 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
+    use crate::services::terminal_history::restored_terminal_history_text;
     use crate::storage::session_store::SavedTab;
     use crate::terminal_palette::{TerminalPalette, terminal_palette};
     use crate::transcript::TranscriptBuffer;
@@ -213,6 +214,13 @@ mod imp {
         )));
         {
             let mut terminal_buffer = terminal_buffer.borrow_mut();
+            if let Some(history) = tab
+                .terminal_history
+                .iter()
+                .find(|history| history.tile_id == tile.id)
+            {
+                terminal_buffer.process(&restored_terminal_history_text(&history.lines));
+            }
             terminal_buffer.process(&format!(
                 "[terminaltiler] starting {} in {}\r\n",
                 tile.title,
@@ -422,6 +430,11 @@ mod imp {
             }
         });
 
+        let terminal_history_provider = Rc::new({
+            let terminal_buffer = terminal_buffer.clone();
+            move |line_limit: usize| terminal_buffer.borrow().recent_plain_lines(line_limit)
+        });
+
         TileRuntimeSurface {
             widget: surface.upcast(),
             command_sender: Some(command_sender),
@@ -431,6 +444,7 @@ mod imp {
             web_settings_applier: None,
             shutdown: Some(shutdown),
             active_process_checker: Some(active_process_checker),
+            terminal_history_provider: Some(terminal_history_provider),
             recovery_binder: Some(TileRuntimeRecoveryBinder {
                 bind: Rc::new({
                     let state = state.clone();
@@ -1516,6 +1530,7 @@ mod imp {
             web_settings_applier: Some(web_settings_applier),
             shutdown: Some(shutdown),
             active_process_checker: None,
+            terminal_history_provider: None,
             recovery_binder: None,
         }
     }
