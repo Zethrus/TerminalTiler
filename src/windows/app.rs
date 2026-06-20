@@ -52,6 +52,9 @@ mod imp {
     };
     use crate::platform::{home_dir, resolve_workspace_root};
     use crate::product;
+    use crate::services::agent_resume::{
+        RestoreStartupOverridesByTab, restore_startup_overrides_for_tab_tile_sets,
+    };
     use crate::services::project_suggestions::detect_project_suggestions;
     use crate::services::session_restore::{
         RestoreStartupAction, session_for_restore_mode, session_for_startup_action,
@@ -1861,14 +1864,24 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                     RestoreStartupAction::StartFresh
                 });
                 if let Some(session) = session_for_startup_action(&saved_session, action) {
-                    launch_saved_session(state, &session, "restored");
+                    launch_saved_session(
+                        state,
+                        &session,
+                        "restored",
+                        action == RestoreStartupAction::ResumeAndRerun,
+                    );
                     return;
                 }
                 clear_saved_startup_session(state);
             }
             RestoreLaunchMode::RerunStartupCommands | RestoreLaunchMode::ShellOnly => {
                 if let Some(session) = session_for_restore_mode(&saved_session, restore_mode) {
-                    launch_saved_session(state, &session, "restored");
+                    launch_saved_session(
+                        state,
+                        &session,
+                        "restored",
+                        restore_mode == RestoreLaunchMode::RerunStartupCommands,
+                    );
                 }
             }
         }
@@ -1962,7 +1975,23 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
     }
 
-    fn launch_saved_session(state: &mut AppWindowState, session: &SavedSession, label: &str) {
+    fn restore_startup_overrides_for_session(
+        session: &SavedSession,
+    ) -> RestoreStartupOverridesByTab {
+        restore_startup_overrides_for_tab_tile_sets(
+            session
+                .tabs
+                .iter()
+                .map(|tab| tab.preset.layout.tile_specs()),
+        )
+    }
+
+    fn launch_saved_session(
+        state: &mut AppWindowState,
+        session: &SavedSession,
+        label: &str,
+        apply_agent_resume_overrides: bool,
+    ) {
         let Some(runtime) = state.runtime.as_ref() else {
             return;
         };
@@ -1974,8 +2003,22 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             return;
         }
 
-        match wsl::collect_session_launch_commands(session, runtime) {
-            Ok(_) => match workspace::open_saved_workspaces(session, runtime) {
+        let restore_startup_overrides = if apply_agent_resume_overrides {
+            restore_startup_overrides_for_session(session)
+        } else {
+            RestoreStartupOverridesByTab::new()
+        };
+
+        match wsl::collect_session_launch_commands_with_restore_overrides(
+            session,
+            runtime,
+            &restore_startup_overrides,
+        ) {
+            Ok(_) => match workspace::open_saved_workspaces_with_restore_overrides(
+                session,
+                runtime,
+                restore_startup_overrides,
+            ) {
                 Ok((window_count, pane_count)) => {
                     let status = format!(
                         "Opened {} workspace window(s) with {} owned pane(s) using {}.",
@@ -2017,7 +2060,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         let Some(session) = state.session.clone() else {
             return;
         };
-        launch_saved_session(state, &session, "restored");
+        launch_saved_session(state, &session, "restored", false);
     }
 
     fn clear_saved_startup_session(state: &mut AppWindowState) {

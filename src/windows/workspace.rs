@@ -92,6 +92,10 @@ mod imp {
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
     use crate::model::preset::ApplicationDensity;
     use crate::product;
+    use crate::services::agent_resume::{
+        RestoreStartupOverrideMap, RestoreStartupOverridesByTab,
+        restore_startup_override_for_tab_tile,
+    };
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
     use crate::services::launch_resolution::resolve_tile_launch;
@@ -244,6 +248,7 @@ mod imp {
         // even when the Vec reallocates.
         #[allow(clippy::vec_box)]
         panes: Vec<Box<PaneState>>,
+        restore_startup_overrides: RestoreStartupOverridesByTab,
     }
 
     enum VoiceWorkspaceEvent {
@@ -303,6 +308,7 @@ mod imp {
         termination_requested: bool,
         session: Option<PaneSession>,
         launch_runtime: Option<WindowsLaunchRuntime>,
+        restore_startup_command: Option<String>,
     }
 
     impl Drop for PaneState {
@@ -615,6 +621,18 @@ mod imp {
         session: &SavedSession,
         runtime: &WindowsRuntime,
     ) -> Result<(usize, usize), String> {
+        open_saved_workspaces_with_restore_overrides(
+            session,
+            runtime,
+            RestoreStartupOverridesByTab::new(),
+        )
+    }
+
+    pub fn open_saved_workspaces_with_restore_overrides(
+        session: &SavedSession,
+        runtime: &WindowsRuntime,
+        restore_startup_overrides: RestoreStartupOverridesByTab,
+    ) -> Result<(usize, usize), String> {
         if session.tabs.is_empty() {
             return Ok((0, 0));
         }
@@ -624,7 +642,12 @@ mod imp {
             .iter()
             .map(|tab| tab.preset.layout.tile_specs().len())
             .sum::<usize>();
-        open_workspace_window(session.tabs.clone(), session.active_tab_index, runtime)?;
+        open_workspace_window(
+            session.tabs.clone(),
+            session.active_tab_index,
+            runtime,
+            restore_startup_overrides,
+        )?;
         Ok((1, pane_count))
     }
 
@@ -632,8 +655,15 @@ mod imp {
         tabs: Vec<SavedTab>,
         active_tab_index: usize,
         runtime: &WindowsRuntime,
+        restore_startup_overrides: RestoreStartupOverridesByTab,
     ) -> Result<(), String> {
-        open_workspace_window_with_kind(tabs, active_tab_index, runtime, WorkspaceWindowKind::Main)
+        open_workspace_window_with_kind(
+            tabs,
+            active_tab_index,
+            runtime,
+            WorkspaceWindowKind::Main,
+            restore_startup_overrides,
+        )
     }
 
     fn open_workspace_window_with_kind(
@@ -641,6 +671,7 @@ mod imp {
         active_tab_index: usize,
         runtime: &WindowsRuntime,
         window_kind: WorkspaceWindowKind,
+        restore_startup_overrides: RestoreStartupOverridesByTab,
     ) -> Result<(), String> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
@@ -649,6 +680,8 @@ mod imp {
 
         register_window_classes(instance)?;
         let active_tab_index = active_tab_index.min(tabs.len().saturating_sub(1));
+        let restore_startup_overrides =
+            normalize_restore_startup_overrides(restore_startup_overrides, tabs.len());
         let window_title = tabs
             .get(active_tab_index)
             .and_then(|tab| {
@@ -704,6 +737,7 @@ mod imp {
             voice_global_hotkey_registered: false,
             webview_environment: None,
             panes: Vec::new(),
+            restore_startup_overrides,
         });
         let state_ptr = Box::into_raw(state);
 
@@ -2155,8 +2189,12 @@ mod imp {
             if pane.session.is_some() {
                 continue;
             }
+            let mut launch_tile = pane.tile.clone();
+            if let Some(restore_startup_command) = pane.restore_startup_command.take() {
+                launch_tile.startup_command = Some(restore_startup_command);
+            }
             let resolved_launch =
-                match resolve_tile_launch(&pane.tile, &workspace_root, &asset_outcome.assets) {
+                match resolve_tile_launch(&launch_tile, &workspace_root, &asset_outcome.assets) {
                     Ok(resolved_launch) => resolved_launch,
                     Err(error) => {
                         pane.terminal.process(&format!(
@@ -2169,7 +2207,7 @@ mod imp {
                     }
                 };
             let command = match wsl::build_launch_command(
-                &pane.tile,
+                &launch_tile,
                 &workspace_root,
                 &resolved_launch,
                 &state.runtime,
@@ -3089,12 +3127,79 @@ mod imp {
         }
     }
 
+    fn normalize_restore_startup_overrides(
+        mut overrides: RestoreStartupOverridesByTab,
+        tab_count: usize,
+    ) -> RestoreStartupOverridesByTab {
+        if overrides.is_empty() {
+            return overrides;
+        }
+        overrides.truncate(tab_count);
+        overrides.resize_with(tab_count, RestoreStartupOverrideMap::new);
+        overrides
+    }
+
     fn active_tab(state: &WorkspaceWindowState) -> &SavedTab {
         &state.tabs[state.active_tab_index]
     }
 
     fn active_tab_mut(state: &mut WorkspaceWindowState) -> &mut SavedTab {
         &mut state.tabs[state.active_tab_index]
+    }
+
+    fn active_tab_restore_startup_command(
+        state: &WorkspaceWindowState,
+        tile_id: &str,
+    ) -> Option<String> {
+        restore_startup_override_for_tab_tile(
+            &state.restore_startup_overrides,
+            state.active_tab_index,
+            tile_id,
+        )
+        .map(str::to_owned)
+    }
+
+    fn move_restore_startup_overrides_for_tab(
+        state: &mut WorkspaceWindowState,
+        from_index: usize,
+        to_index: usize,
+    ) {
+        if state.restore_startup_overrides.is_empty()
+            || from_index >= state.restore_startup_overrides.len()
+        {
+            return;
+        }
+        let overrides = state.restore_startup_overrides.remove(from_index);
+        let to_index = to_index.min(state.restore_startup_overrides.len());
+        state.restore_startup_overrides.insert(to_index, overrides);
+    }
+
+    fn swap_restore_startup_overrides_for_tabs(
+        state: &mut WorkspaceWindowState,
+        first_index: usize,
+        second_index: usize,
+    ) {
+        if first_index < state.restore_startup_overrides.len()
+            && second_index < state.restore_startup_overrides.len()
+        {
+            state
+                .restore_startup_overrides
+                .swap(first_index, second_index);
+        }
+    }
+
+    fn remove_restore_startup_overrides_for_tab(state: &mut WorkspaceWindowState, index: usize) {
+        if index < state.restore_startup_overrides.len() {
+            state.restore_startup_overrides.remove(index);
+        }
+    }
+
+    fn push_empty_restore_startup_overrides_for_tab(state: &mut WorkspaceWindowState) {
+        if !state.restore_startup_overrides.is_empty() {
+            state
+                .restore_startup_overrides
+                .push(RestoreStartupOverrideMap::new());
+        }
     }
 
     fn pane_mut_by_id(state: &mut WorkspaceWindowState, pane_id: usize) -> Option<&mut PaneState> {
@@ -3761,6 +3866,7 @@ mod imp {
         line_height_scale: f64,
         ui_font: HGDIOBJ,
         restored_history_lines: &[String],
+        restore_startup_command: Option<String>,
     ) -> Box<PaneState> {
         let initial_web_uri = tile.url.clone();
         let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
@@ -3795,6 +3901,7 @@ mod imp {
             termination_requested: false,
             session: None,
             launch_runtime: None,
+            restore_startup_command,
         });
         if !restored_history_lines.is_empty() {
             pane.terminal
@@ -3899,6 +4006,7 @@ mod imp {
                     .get(&spec.id)
                     .map(Vec::as_slice)
                     .unwrap_or(&[]),
+                active_tab_restore_startup_command(state, &spec.id),
             ));
         }
 
@@ -3995,6 +4103,7 @@ mod imp {
                         .get(&tile.id)
                         .map(Vec::as_slice)
                         .unwrap_or(&[]),
+                    active_tab_restore_startup_command(state, &tile.id),
                 )
             })
             .collect();
@@ -4165,6 +4274,7 @@ mod imp {
         let tab = state.tabs.remove(dragged_index);
         let insert_index = insert_index.min(state.tabs.len());
         state.tabs.insert(insert_index, tab);
+        move_restore_startup_overrides_for_tab(state, dragged_index, insert_index);
         state.active_tab_index =
             remap_active_index_after_move(active_index, dragged_index, insert_index);
         true
@@ -4290,6 +4400,7 @@ mod imp {
             return;
         }
         state.tabs.swap(current as usize, target as usize);
+        swap_restore_startup_overrides_for_tabs(state, current as usize, target as usize);
         state.active_tab_index = target as usize;
         rebuild_tab_buttons(hwnd, state);
         update_tab_action_buttons(state);
@@ -4367,6 +4478,7 @@ mod imp {
             WorkspaceWindowKind::Detached {
                 origin_window_id: state.window_id,
             },
+            RestoreStartupOverridesByTab::new(),
         ) {
             Ok(()) => {
                 logging::info(format!(
@@ -4452,11 +4564,18 @@ mod imp {
             capture_active_tab_terminal_history(target_state);
             target_state.tabs.push(saved_tab);
             target_state.active_tab_index = target_state.tabs.len().saturating_sub(1);
+            push_empty_restore_startup_overrides_for_tab(target_state);
             rebuild_active_tab_content(target_hwnd, target_state);
             return Ok(());
         }
 
-        open_workspace_window_with_kind(vec![saved_tab], 0, runtime, WorkspaceWindowKind::Main)
+        open_workspace_window_with_kind(
+            vec![saved_tab],
+            0,
+            runtime,
+            WorkspaceWindowKind::Main,
+            RestoreStartupOverridesByTab::new(),
+        )
     }
 
     fn remove_active_tab_after_reattach(hwnd: HWND, state: &mut WorkspaceWindowState) {
@@ -4465,6 +4584,7 @@ mod imp {
         }
         let removed_index = state.active_tab_index;
         state.tabs.remove(removed_index);
+        remove_restore_startup_overrides_for_tab(state, removed_index);
         if state.tabs.is_empty() {
             remove_workspace_session_state(state.window_id, &state.session_store);
             unsafe {
@@ -4484,6 +4604,7 @@ mod imp {
         }
         let removed_index = state.active_tab_index;
         state.tabs.remove(removed_index);
+        remove_restore_startup_overrides_for_tab(state, removed_index);
         if state.tabs.is_empty() {
             remove_workspace_session_state(state.window_id, &state.session_store);
             unsafe {
@@ -4508,6 +4629,7 @@ mod imp {
         logging::info(format!("closing Windows workspace tab '{closing_title}'"));
         let removed_index = state.active_tab_index;
         state.tabs.remove(removed_index);
+        remove_restore_startup_overrides_for_tab(state, removed_index);
         if state.tabs.is_empty() {
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
@@ -6199,6 +6321,6 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::open_saved_workspaces;
-#[cfg(target_os = "windows")]
 pub(crate) use imp::probe_webview2_runtime;
+#[cfg(target_os = "windows")]
+pub use imp::{open_saved_workspaces, open_saved_workspaces_with_restore_overrides};

@@ -13,7 +13,12 @@ mod imp {
 
     use crate::extension::RuntimeOptions;
     use crate::logging;
+    use crate::model::assets::RestoreLaunchMode;
     use crate::model::layout::DEFAULT_WEB_URL;
+    use crate::services::agent_resume::{
+        RestoreStartupOverridesByTab, restore_startup_override_for_tab_tile,
+        restore_startup_overrides_for_tab_tile_sets,
+    };
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -835,10 +840,11 @@ mod imp {
             return;
         }
 
+        let restore_mode = preferences.default_restore_mode;
         if let Some(session) = session_outcome
             .session
             .as_ref()
-            .and_then(|session| session_for_restore_mode(session, preferences.default_restore_mode))
+            .and_then(|session| session_for_restore_mode(session, restore_mode))
         {
             let overlay = overlay.clone();
             let title = title.clone();
@@ -861,6 +867,7 @@ mod imp {
                     &launch,
                     workspace_assets,
                     session,
+                    restore_mode == RestoreLaunchMode::RerunStartupCommands,
                 );
             });
         }
@@ -877,6 +884,7 @@ mod imp {
         launch: &gtk::Widget,
         assets: crate::model::assets::WorkspaceAssets,
         session: SavedSession,
+        apply_agent_resume_overrides: bool,
     ) {
         present_workspace_preview(
             window,
@@ -889,6 +897,7 @@ mod imp {
             session,
             assets,
             "restored",
+            apply_agent_resume_overrides,
         );
     }
 
@@ -3172,6 +3181,7 @@ mod imp {
                 session,
                 assets,
                 "opened",
+                false,
             );
         }
     }
@@ -3187,17 +3197,45 @@ mod imp {
         session: SavedSession,
         assets: crate::model::assets::WorkspaceAssets,
         action: &str,
+        apply_agent_resume_overrides: bool,
     ) {
         let (tabs, panes) = crate::ui::workspace_preview::session_shape(&session);
         let session_store = shell_state.session_store.clone();
+        let restore_startup_overrides: RestoreStartupOverridesByTab =
+            if apply_agent_resume_overrides {
+                restore_startup_overrides_for_tab_tile_sets(
+                    session
+                        .tabs
+                        .iter()
+                        .map(|tab| tab.preset.layout.tile_specs()),
+                )
+            } else {
+                RestoreStartupOverridesByTab::new()
+            };
+        let runtime_factory: crate::ui::workspace_preview::TileRuntimeFactory = Rc::new(
+            move |tab_index: usize,
+                  tile: &crate::model::layout::TileSpec,
+                  tab: &SavedTab,
+                  assets: &crate::model::assets::WorkspaceAssets| {
+                crate::windows::gtk_runtime::build_tile_runtime_surface_with_restore_override(
+                    tile,
+                    tab,
+                    assets,
+                    restore_startup_override_for_tab_tile(
+                        &restore_startup_overrides,
+                        tab_index,
+                        &tile.id,
+                    )
+                    .map(str::to_owned),
+                )
+            },
+        );
         let preview =
             crate::ui::workspace_preview::SessionPreview::with_runtime_assets_and_change_handler(
                 &session,
                 false,
                 assets,
-                Some(Rc::new(
-                    crate::windows::gtk_runtime::build_tile_runtime_surface,
-                )),
+                Some(runtime_factory),
                 Some(Rc::new(move |session, reason| {
                     persist_windows_gtk_session(&session_store, &session, reason);
                 })),

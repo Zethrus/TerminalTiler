@@ -10,6 +10,9 @@ use crate::logging;
 
 use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::platform::{home_dir, parse_wsl_unc_path, translate_path_for_wsl};
+use crate::services::agent_resume::{
+    RestoreStartupOverrideMap, restore_startup_override_for_tab_tile,
+};
 use crate::services::launch_resolution::{
     ResolvedLaunchTransport, ResolvedTileLaunch, resolve_tile_launch,
 };
@@ -206,12 +209,27 @@ pub fn collect_session_launch_commands(
     session: &SavedSession,
     runtime: &WindowsRuntime,
 ) -> Result<Vec<WindowsLaunchCommand>, String> {
+    collect_session_launch_commands_with_restore_overrides(session, runtime, &[])
+}
+
+pub fn collect_session_launch_commands_with_restore_overrides(
+    session: &SavedSession,
+    runtime: &WindowsRuntime,
+    restore_startup_overrides: &[RestoreStartupOverrideMap],
+) -> Result<Vec<WindowsLaunchCommand>, String> {
     let mut commands = Vec::new();
     let asset_store = AssetStore::new();
 
-    for tab in &session.tabs {
+    for (tab_index, tab) in session.tabs.iter().enumerate() {
         let asset_outcome = asset_store.load_assets_for_workspace_root(&tab.workspace_root);
-        for tile in tab.preset.layout.tile_specs() {
+        for mut tile in tab.preset.layout.tile_specs() {
+            if let Some(restore_startup_command) = restore_startup_override_for_tab_tile(
+                restore_startup_overrides,
+                tab_index,
+                &tile.id,
+            ) {
+                tile.startup_command = Some(restore_startup_command.to_string());
+            }
             let resolved = resolve_tile_launch(&tile, &tab.workspace_root, &asset_outcome.assets)?;
             commands.push(build_launch_command(
                 &tile,

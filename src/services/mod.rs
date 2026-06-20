@@ -1,3 +1,4 @@
+pub mod agent_resume;
 pub mod alerts;
 pub mod assets_editor;
 pub mod broadcast;

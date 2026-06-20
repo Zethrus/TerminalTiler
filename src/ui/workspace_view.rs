@@ -12,6 +12,7 @@ use crate::logging;
 use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::services::agent_resume::RestoreStartupOverrideMap;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
     BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
@@ -66,6 +67,7 @@ struct WorkspaceRuntimeInner {
     zoom_steps: i32,
     max_reconnect_attempts: u32,
     restored_terminal_history: HashMap<String, Vec<String>>,
+    restore_startup_overrides: RestoreStartupOverrideMap,
     stats: StatsRecorder,
     path_label: gtk::Label,
     url_entry: gtk::Entry,
@@ -699,6 +701,10 @@ impl WorkspaceRuntime {
                         .get(&tile.id)
                         .map(Vec::as_slice)
                         .unwrap_or(&[]),
+                    self.inner
+                        .restore_startup_overrides
+                        .get(&tile.id)
+                        .map(String::as_str),
                     snippet_provider,
                     on_swap,
                     on_close,
@@ -963,6 +969,7 @@ pub fn build_with_layout_change_handler(
     max_reconnect_attempts: u32,
     _terminal_history_lines: u32,
     restored_terminal_history: Vec<SavedTerminalHistory>,
+    restore_startup_overrides: RestoreStartupOverrideMap,
     stats: StatsRecorder,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
 ) -> WorkspaceView {
@@ -1015,6 +1022,7 @@ pub fn build_with_layout_change_handler(
                 .into_iter()
                 .map(|history| (history.tile_id, history.lines))
                 .collect(),
+            restore_startup_overrides,
             stats,
             path_label: path_label.clone(),
             url_entry: url_entry.clone(),

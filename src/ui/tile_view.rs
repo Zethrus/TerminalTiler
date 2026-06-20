@@ -42,6 +42,7 @@ pub fn build(
     density: ApplicationDensity,
     zoom_steps: i32,
     restored_history_lines: &[String],
+    restore_startup_command: Option<&str>,
     snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
@@ -56,6 +57,7 @@ pub fn build(
         density,
         zoom_steps,
         restored_history_lines,
+        restore_startup_command,
         stats,
     );
 

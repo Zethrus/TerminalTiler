@@ -114,6 +114,7 @@ impl TerminalSession {
         density: ApplicationDensity,
         zoom_steps: i32,
         restored_history_lines: &[String],
+        restore_startup_command: Option<&str>,
         stats: StatsRecorder,
     ) -> Self {
         let terminal = vte4::Terminal::new();
@@ -157,39 +158,68 @@ impl TerminalSession {
         }
         install_terminal_input_stats_hook(&terminal, state.clone(), stats.clone());
 
-        let launch_spec = if let Err(error) = validate_working_dir(&working_dir) {
+        let (launch_spec, initial_configured_argv) = if let Err(error) =
+            validate_working_dir(&working_dir)
+        {
             let error = error.to_string();
             report_spawn_problem(&terminal, &descriptor, &error);
             mark_state_exited(&state);
-            Rc::new(TerminalLaunchSpec {
-                working_directory: working_dir.display().to_string(),
-                configured_argv: Vec::new(),
-                local_shell_argv: build_local_shell_argv(&shell),
-                envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
-            })
+            (
+                Rc::new(TerminalLaunchSpec {
+                    working_directory: working_dir.display().to_string(),
+                    configured_argv: Vec::new(),
+                    local_shell_argv: build_local_shell_argv(&shell),
+                    envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                }),
+                None,
+            )
         } else {
             match resolve_tile_launch(tile, workspace_root, assets) {
                 Ok(resolved_launch) => {
                     let launch_shell = shell_for_launch(&shell, &resolved_launch.transport);
-                    Rc::new(TerminalLaunchSpec {
-                        working_directory: working_dir.display().to_string(),
-                        configured_argv: build_spawn_argv(
-                            &launch_shell,
-                            resolved_launch.command.as_deref(),
-                        ),
-                        local_shell_argv: build_local_shell_argv(&launch_shell),
-                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
-                    })
+                    let initial_configured_argv =
+                        restore_startup_command.and_then(|restore_startup_command| {
+                            let mut launch_tile = tile.clone();
+                            launch_tile.startup_command = Some(restore_startup_command.to_string());
+                            match resolve_tile_launch(&launch_tile, workspace_root, assets) {
+                                Ok(restore_launch) => Some(build_spawn_argv(
+                                    &shell_for_launch(&shell, &restore_launch.transport),
+                                    restore_launch.command.as_deref(),
+                                )),
+                                Err(error) => {
+                                    logging::error(format!(
+                                        "could not resolve restore launch override for {}: {}",
+                                        descriptor, error
+                                    ));
+                                    None
+                                }
+                            }
+                        });
+                    (
+                        Rc::new(TerminalLaunchSpec {
+                            working_directory: working_dir.display().to_string(),
+                            configured_argv: build_spawn_argv(
+                                &launch_shell,
+                                resolved_launch.command.as_deref(),
+                            ),
+                            local_shell_argv: build_local_shell_argv(&launch_shell),
+                            envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                        }),
+                        initial_configured_argv,
+                    )
                 }
                 Err(error) => {
                     report_spawn_problem(&terminal, &descriptor, &error);
                     mark_state_exited(&state);
-                    Rc::new(TerminalLaunchSpec {
-                        working_directory: working_dir.display().to_string(),
-                        configured_argv: Vec::new(),
-                        local_shell_argv: build_local_shell_argv(&shell),
-                        envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
-                    })
+                    (
+                        Rc::new(TerminalLaunchSpec {
+                            working_directory: working_dir.display().to_string(),
+                            configured_argv: Vec::new(),
+                            local_shell_argv: build_local_shell_argv(&shell),
+                            envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                        }),
+                        None,
+                    )
                 }
             }
         };
@@ -207,7 +237,12 @@ impl TerminalSession {
             terminal.feed(restored_history.as_bytes());
         }
 
-        if !session.launch_spec.configured_argv.is_empty() {
+        if let Some(initial_configured_argv) = initial_configured_argv
+            .as_ref()
+            .filter(|argv| !argv.is_empty())
+        {
+            session.spawn_argv(initial_configured_argv);
+        } else if !session.launch_spec.configured_argv.is_empty() {
             session.spawn_from_mode(TerminalLaunchMode::ConfiguredSession);
         }
 
@@ -378,6 +413,10 @@ impl TerminalSession {
 
     fn spawn_from_mode(&self, mode: TerminalLaunchMode) {
         let argv = self.launch_spec.argv_for_mode(mode);
+        self.spawn_argv(argv);
+    }
+
+    fn spawn_argv(&self, argv: &[String]) {
         if argv.is_empty() {
             return;
         }

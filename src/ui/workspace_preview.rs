@@ -82,7 +82,7 @@ impl TileRuntimeSurface {
 }
 
 pub type TileRuntimeFactory =
-    Rc<dyn Fn(&TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
+    Rc<dyn Fn(usize, &TileSpec, &SavedTab, &WorkspaceAssets) -> TileRuntimeSurface>;
 pub type SessionChangeHandler = Rc<dyn Fn(SavedSession, &'static str)>;
 
 pub struct DetachedPreviewTab {
@@ -2371,7 +2371,7 @@ fn build_tile(
         let mut surfaces = runtime_surfaces.borrow_mut();
         let surface = surfaces
             .entry(key)
-            .or_insert_with(|| runtime_factory(tile, tab, assets))
+            .or_insert_with(|| runtime_factory(tab_index, tile, tab, assets))
             .clone();
         if let Some(apply_appearance) = &surface.appearance_applier {
             apply_appearance(

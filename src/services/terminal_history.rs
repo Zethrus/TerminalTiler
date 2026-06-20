@@ -11,20 +11,27 @@ pub fn normalize_terminal_history_lines(text: &str, max_lines: usize) -> Vec<Str
     }
 
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let mut lines = normalized
+    let lines = normalized
         .lines()
-        .map(|line| line.trim_end().to_string())
+        .filter_map(sanitize_terminal_history_line)
         .collect::<Vec<_>>();
 
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
-    }
-
     if lines.len() > max_lines {
-        lines.split_off(lines.len() - max_lines)
+        lines[lines.len() - max_lines..].to_vec()
     } else {
         lines
     }
+}
+
+fn sanitize_terminal_history_line(line: &str) -> Option<String> {
+    let sanitized = line
+        .chars()
+        .filter(|ch| !ch.is_control() || *ch == '\t')
+        .collect::<String>()
+        .trim_end()
+        .to_string();
+
+    (!sanitized.trim().is_empty()).then_some(sanitized)
 }
 
 pub fn restored_terminal_history_text(lines: &[String]) -> String {
@@ -70,6 +77,22 @@ mod tests {
         assert_eq!(
             normalize_terminal_history_lines("one\r\ntwo\r\n\r\n", 10),
             vec!["one".to_string(), "two".to_string()]
+        );
+    }
+
+    #[test]
+    fn removes_nul_and_control_only_rows() {
+        assert_eq!(
+            normalize_terminal_history_lines("\0\0\0\nco\0dex\n\x1b\x07\nkeep\tindent\n", 10),
+            vec!["codex".to_string(), "keep\tindent".to_string()]
+        );
+    }
+
+    #[test]
+    fn drops_empty_rows_before_applying_line_limit() {
+        assert_eq!(
+            normalize_terminal_history_lines("one\n\n\0\0\ntwo\nthree", 2),
+            vec!["two".to_string(), "three".to_string()]
         );
     }
 

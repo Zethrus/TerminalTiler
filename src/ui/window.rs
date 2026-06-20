@@ -17,6 +17,9 @@ use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::services::agent_resume::{
+    RestoreStartupOverrideMap, restore_startup_overrides_for_tiles,
+};
 use crate::services::session_restore::{
     flatten_window_sessions, session_for_restore_mode, shell_only_session,
 };
@@ -1626,6 +1629,7 @@ fn present_with_initial_workspace(
                     preferences.max_reconnect_attempts,
                     preferences.terminal_history_lines,
                     Vec::new(),
+                    RestoreStartupOverrideMap::new(),
                     stats_hub::recorder(),
                     {
                         let layout_target = layout_target.clone();
@@ -3470,7 +3474,12 @@ fn present_with_initial_workspace(
                             startup_restore_suppression_for_restore.clone();
                         move || {
                             startup_restore_suppression.borrow_mut().take();
-                            restore_saved_session(&restore_context, resume_session.clone(), true);
+                            restore_saved_session(
+                                &restore_context,
+                                resume_session.clone(),
+                                true,
+                                true,
+                            );
                         }
                     },
                     {
@@ -3480,7 +3489,12 @@ fn present_with_initial_workspace(
                             startup_restore_suppression_for_restore.clone();
                         move || {
                             startup_restore_suppression.borrow_mut().take();
-                            restore_saved_session(&restore_context, shell_session.clone(), true);
+                            restore_saved_session(
+                                &restore_context,
+                                shell_session.clone(),
+                                true,
+                                false,
+                            );
                         }
                     },
                     move || {
@@ -3494,7 +3508,7 @@ fn present_with_initial_workspace(
                         &resume_session,
                         RestoreLaunchMode::RerunStartupCommands,
                     ) {
-                        restore_saved_session(&restore_context, session, true);
+                        restore_saved_session(&restore_context, session, true, true);
                     }
                 }
                 RestoreLaunchMode::ShellOnly => {
@@ -3502,7 +3516,7 @@ fn present_with_initial_workspace(
                     if let Some(session) =
                         session_for_restore_mode(&resume_session, RestoreLaunchMode::ShellOnly)
                     {
-                        restore_saved_session(&restore_context, session, true);
+                        restore_saved_session(&restore_context, session, true, false);
                     }
                 }
             }
@@ -4321,6 +4335,7 @@ fn restore_saved_session(
     context: &RestoreSessionContext,
     saved_session: SavedSession,
     replace_existing: bool,
+    apply_agent_resume_overrides: bool,
 ) {
     let save_guard = context.session_persistence.suppress();
     if replace_existing {
@@ -4360,6 +4375,11 @@ fn restore_saved_session(
             preferences.max_reconnect_attempts,
             preferences.terminal_history_lines,
             terminal_history.clone(),
+            if apply_agent_resume_overrides {
+                restore_startup_overrides_for_tiles(preset.layout.tile_specs().iter())
+            } else {
+                RestoreStartupOverrideMap::new()
+            },
             stats_hub::recorder(),
             {
                 let layout_target = layout_target.clone();

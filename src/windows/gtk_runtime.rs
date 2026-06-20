@@ -175,8 +175,19 @@ mod imp {
         tab: &SavedTab,
         assets: &WorkspaceAssets,
     ) -> TileRuntimeSurface {
+        build_tile_runtime_surface_with_restore_override(tile, tab, assets, None)
+    }
+
+    pub(crate) fn build_tile_runtime_surface_with_restore_override(
+        tile: &TileSpec,
+        tab: &SavedTab,
+        assets: &WorkspaceAssets,
+        restore_startup_command: Option<String>,
+    ) -> TileRuntimeSurface {
         match tile.tile_kind {
-            TileKind::Terminal => build_terminal_runtime_surface(tile, tab, assets),
+            TileKind::Terminal => {
+                build_terminal_runtime_surface(tile, tab, assets, restore_startup_command)
+            }
             TileKind::WebView => build_web_runtime_surface(tile),
         }
     }
@@ -185,6 +196,7 @@ mod imp {
         tile: &TileSpec,
         tab: &SavedTab,
         assets: &WorkspaceAssets,
+        restore_startup_command: Option<String>,
     ) -> TileRuntimeSurface {
         let surface = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -276,6 +288,7 @@ mod imp {
             tab.clone(),
             assets.clone(),
             TerminalLaunchMode::ConfiguredSession,
+            restore_startup_command.clone(),
             event_tx.clone(),
         );
 
@@ -355,6 +368,7 @@ mod imp {
                     tab.clone(),
                     assets.clone(),
                     TerminalLaunchMode::ConfiguredSession,
+                    None,
                     event_tx.clone(),
                 );
             }
@@ -372,6 +386,7 @@ mod imp {
                     tab.clone(),
                     assets.clone(),
                     TerminalLaunchMode::LocalShell,
+                    None,
                     event_tx.clone(),
                 );
             }
@@ -500,6 +515,7 @@ mod imp {
         tab: SavedTab,
         assets: WorkspaceAssets,
         mode: TerminalLaunchMode,
+        restore_startup_command: Option<String>,
         event_tx: mpsc::Sender<TerminalRuntimeEvent>,
     ) {
         if state.borrow().active {
@@ -525,7 +541,16 @@ mod imp {
             };
             let _ = event_tx.send(TerminalRuntimeEvent::Output(notice.into()));
         }
-        spawn_terminal_process(tile, tab, assets, mode, generation, stdin_rx, event_tx);
+        spawn_terminal_process(
+            tile,
+            tab,
+            assets,
+            mode,
+            restore_startup_command,
+            generation,
+            stdin_rx,
+            event_tx,
+        );
     }
 
     fn spawn_terminal_process(
@@ -533,6 +558,7 @@ mod imp {
         tab: SavedTab,
         assets: WorkspaceAssets,
         mode: TerminalLaunchMode,
+        restore_startup_command: Option<String>,
         generation: u64,
         stdin_rx: mpsc::Receiver<String>,
         event_tx: mpsc::Sender<TerminalRuntimeEvent>,
@@ -540,9 +566,20 @@ mod imp {
         std::thread::spawn(move || {
             let launch = wsl::probe_runtime(None).and_then(|runtime| match mode {
                 TerminalLaunchMode::ConfiguredSession => {
-                    resolve_tile_launch(&tile, &tab.workspace_root, &assets).and_then(|resolved| {
-                        wsl::build_launch_command(&tile, &tab.workspace_root, &resolved, &runtime)
-                    })
+                    let mut launch_tile = tile.clone();
+                    if let Some(restore_startup_command) = restore_startup_command.as_deref() {
+                        launch_tile.startup_command = Some(restore_startup_command.to_string());
+                    }
+                    resolve_tile_launch(&launch_tile, &tab.workspace_root, &assets).and_then(
+                        |resolved| {
+                            wsl::build_launch_command(
+                                &launch_tile,
+                                &tab.workspace_root,
+                                &resolved,
+                                &runtime,
+                            )
+                        },
+                    )
                 }
                 TerminalLaunchMode::LocalShell => {
                     wsl::build_local_shell_command(&tile, &tab.workspace_root, &runtime)
@@ -2334,4 +2371,6 @@ mod imp {
 }
 
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
-pub(crate) use imp::build_tile_runtime_surface;
+pub(crate) use imp::{
+    build_tile_runtime_surface, build_tile_runtime_surface_with_restore_override,
+};
