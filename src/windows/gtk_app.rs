@@ -3525,6 +3525,27 @@ mod imp {
                 let options = settings_context.options.clone();
                 move || about_dialog::present(&window, &options.product)
             }),
+            open_shortcuts: Rc::new({
+                let window = window.clone();
+                let preference_store = settings_context.preference_store.clone();
+                move || {
+                    let prefs = preference_store.load();
+                    crate::ui::shortcuts_dialog::present(
+                        &window,
+                        crate::ui::shortcuts_dialog::sections_from_summary(
+                            &crate::ui::shortcuts_dialog::ShortcutSummary {
+                                fullscreen: prefs.workspace_fullscreen_shortcut.clone(),
+                                density: prefs.workspace_density_shortcut.clone(),
+                                zoom_in: prefs.workspace_zoom_in_shortcut.clone(),
+                                zoom_out: prefs.workspace_zoom_out_shortcut.clone(),
+                                command_palette: prefs.command_palette_shortcut.clone(),
+                                maximize: crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL
+                                    .to_string(),
+                            },
+                        ),
+                    );
+                }
+            }),
             new_tab: Rc::new({
                 let window = window.clone();
                 let overlay = overlay.clone();
@@ -3639,6 +3660,9 @@ mod imp {
                                 let _ = preview.focus_next_alert();
                             }
                         }),
+                        // The Windows shell renders a static session preview, so
+                        // there is no live pane layout to maximize.
+                        toggle_maximize: Rc::new(|| {}),
                         add_web_tile: Rc::new({
                             let preview = preview.clone();
                             move || {

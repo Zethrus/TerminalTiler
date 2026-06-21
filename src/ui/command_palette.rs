@@ -1,10 +1,15 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::{gdk, glib};
 
 use crate::model::assets::Runbook;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
+
+/// Activation callbacks for the rows currently shown, indexed by row position.
+type RowActions = Rc<RefCell<Vec<Rc<dyn Fn()>>>>;
 
 #[derive(Clone)]
 pub struct PaletteAction {
@@ -20,6 +25,7 @@ pub struct AppActionCallbacks {
     pub open_stats: Rc<dyn Fn()>,
     pub open_assets_manager: Rc<dyn Fn()>,
     pub open_about: Rc<dyn Fn()>,
+    pub open_shortcuts: Rc<dyn Fn()>,
     pub new_tab: Rc<dyn Fn()>,
     pub open_companion: Option<Rc<dyn Fn()>>,
 }
@@ -27,6 +33,7 @@ pub struct AppActionCallbacks {
 #[derive(Clone)]
 pub struct WorkspaceActionCallbacks {
     pub focus_next_alert: Rc<dyn Fn()>,
+    pub toggle_maximize: Rc<dyn Fn()>,
     pub add_web_tile: Rc<dyn Fn()>,
     pub runbooks: Vec<RunbookAction>,
 }
@@ -61,6 +68,11 @@ pub fn app_actions(callbacks: AppActionCallbacks) -> Vec<PaletteAction> {
             on_activate: callbacks.open_about,
         },
         PaletteAction {
+            title: "Keyboard Shortcuts".into(),
+            subtitle: "View all active keyboard shortcuts.".into(),
+            on_activate: callbacks.open_shortcuts,
+        },
+        PaletteAction {
             title: "New Tab".into(),
             subtitle: "Open a fresh launch deck tab.".into(),
             on_activate: callbacks.new_tab,
@@ -92,6 +104,11 @@ pub fn workspace_actions(callbacks: WorkspaceActionCallbacks) -> Vec<PaletteActi
             title: "Focus Next Alert".into(),
             subtitle: "Jump to the next unread workspace alert.".into(),
             on_activate: callbacks.focus_next_alert,
+        },
+        PaletteAction {
+            title: "Maximize / Restore Focused Pane".into(),
+            subtitle: "Expand the focused pane to fill the workspace, or restore it.".into(),
+            on_activate: callbacks.toggle_maximize,
         },
         PaletteAction {
             title: "Add Web Tile".into(),
@@ -144,7 +161,8 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
     content.append(&search);
 
     let list = gtk::ListBox::new();
-    list.set_selection_mode(gtk::SelectionMode::None);
+    list.set_selection_mode(gtk::SelectionMode::Browse);
+    list.add_css_class("command-palette-list");
     let scroller = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -161,26 +179,41 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
     dialog.set_default_widget(Some(&close_button));
 
     let actions = Rc::new(actions);
+    let row_actions: RowActions = Rc::new(RefCell::new(Vec::new()));
+
+    let activate_row: Rc<dyn Fn(&gtk::ListBoxRow)> = {
+        let row_actions = row_actions.clone();
+        let dialog = dialog.clone();
+        Rc::new(move |row| {
+            let index = row.index();
+            if index < 0 {
+                return;
+            }
+            let on_activate = row_actions.borrow().get(index as usize).cloned();
+            if let Some(on_activate) = on_activate {
+                on_activate();
+                dialog.close();
+            }
+        })
+    };
+
     let rebuild: Rc<dyn Fn()> = {
         let actions = actions.clone();
         let list = list.clone();
         let search = search.clone();
-        let dialog = dialog.clone();
+        let row_actions = row_actions.clone();
         Rc::new(move || {
             while let Some(child) = list.first_child() {
                 list.remove(&child);
             }
+            row_actions.borrow_mut().clear();
+
             let query = search.text().trim().to_ascii_lowercase();
             for action in actions.iter().filter(|action| {
                 query.is_empty()
                     || action.title.to_ascii_lowercase().contains(&query)
                     || action.subtitle.to_ascii_lowercase().contains(&query)
             }) {
-                let row_button = gtk::Button::builder()
-                    .css_classes(["flat"])
-                    .hexpand(true)
-                    .halign(gtk::Align::Fill)
-                    .build();
                 let shell = gtk::Box::builder()
                     .orientation(gtk::Orientation::Vertical)
                     .spacing(4)
@@ -204,22 +237,64 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
                         .css_classes(["field-hint"])
                         .build(),
                 );
-                row_button.set_child(Some(&shell));
-                let on_activate = action.on_activate.clone();
-                let dialog = dialog.clone();
-                row_button.connect_clicked(move |_| {
-                    on_activate();
-                    dialog.close();
-                });
-                list.append(&row_button);
+                let row = gtk::ListBoxRow::builder()
+                    .child(&shell)
+                    .css_classes(["command-palette-row"])
+                    .build();
+                list.append(&row);
+                row_actions.borrow_mut().push(action.on_activate.clone());
+            }
+
+            // Auto-select the first result so Enter runs it immediately.
+            if let Some(first) = list.row_at_index(0) {
+                list.select_row(Some(&first));
             }
         })
     };
     rebuild();
 
     {
+        let activate_row = activate_row.clone();
+        list.connect_row_activated(move |_, row| activate_row(row));
+    }
+
+    {
         let rebuild = rebuild.clone();
         search.connect_changed(move |_| rebuild());
+    }
+
+    // Enter inside the search box runs the highlighted result.
+    {
+        let list = list.clone();
+        let activate_row = activate_row.clone();
+        search.connect_activate(move |_| {
+            if let Some(row) = list.selected_row() {
+                activate_row(&row);
+            }
+        });
+    }
+
+    // Arrow keys move the highlight without leaving the search box; Escape closes.
+    {
+        let list = list.clone();
+        let dialog = dialog.clone();
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |_, key, _, _| match key {
+            gdk::Key::Down => {
+                move_selection(&list, 1);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Up => {
+                move_selection(&list, -1);
+                glib::Propagation::Stop
+            }
+            gdk::Key::Escape => {
+                dialog.close();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+        search.add_controller(key_controller);
     }
 
     {
@@ -231,4 +306,21 @@ pub fn present(window: &adw::ApplicationWindow, actions: Vec<PaletteAction>) {
 
     dialog.present(Some(window));
     search.grab_focus();
+}
+
+/// Move the list selection by `delta` rows, clamped to the available range.
+/// Selection (not focus) moves, so the search box keeps the keyboard.
+fn move_selection(list: &gtk::ListBox, delta: i32) {
+    let mut count = 0;
+    while list.row_at_index(count).is_some() {
+        count += 1;
+    }
+    if count == 0 {
+        return;
+    }
+    let current = list.selected_row().map(|row| row.index()).unwrap_or(-1);
+    let next = (current + delta).clamp(0, count - 1);
+    if let Some(row) = list.row_at_index(next) {
+        list.select_row(Some(&row));
+    }
 }

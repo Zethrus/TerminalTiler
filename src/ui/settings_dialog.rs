@@ -420,6 +420,11 @@ pub fn present(
         icon_name::CLOSE,
         &["pill-button", "ghost-link-button", "settings-close-button"],
     );
+    let reset_button = icons::labeled_button(
+        "Reset Defaults",
+        icon_name::RESET,
+        &["pill-button", "secondary-button", "settings-reset-button"],
+    );
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -437,12 +442,14 @@ pub fn present(
 
     let footer = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .halign(gtk::Align::End)
+        .spacing(12)
         .margin_top(12)
         .margin_bottom(16)
         .margin_start(16)
         .margin_end(16)
         .build();
+    footer.append(&reset_button);
+    footer.append(&gtk::Box::builder().hexpand(true).build());
     footer.append(&close_button);
     root.append(&footer);
     dialog.set_child(Some(&root));
@@ -485,11 +492,6 @@ pub fn present(
     let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
     let current_terminal_history_lines = Rc::new(Cell::new(terminal_history_lines));
     let current_voice = Rc::new(RefCell::new(voice));
-    let reset_button = icons::labeled_button(
-        "Reset Defaults",
-        icon_name::RESET,
-        &["pill-button", "secondary-button", "settings-reset-button"],
-    );
     let sync_reset_button: Rc<dyn Fn()> = {
         let current_theme = current_theme.clone();
         let current_density = current_density.clone();
@@ -525,7 +527,6 @@ pub fn present(
     sync_reset_button();
 
     content.append(&build_settings_summary(
-        &reset_button,
         &product_display_name,
         &settings_summary,
     ));
@@ -1754,11 +1755,7 @@ where
     shell.upcast()
 }
 
-fn build_settings_summary(
-    reset_button: &gtk::Button,
-    product_display_name: &str,
-    settings_summary: &str,
-) -> gtk::Widget {
+fn build_settings_summary(product_display_name: &str, settings_summary: &str) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(14)
@@ -1807,7 +1804,6 @@ fn build_settings_summary(
         .build();
     actions.append(&build_meta_chip("MIT core"));
     actions.append(&build_meta_chip("Public source"));
-    actions.append(reset_button);
     shell.append(&actions);
 
     shell.upcast()

@@ -72,6 +72,8 @@ const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
+const DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT: &str =
+    crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL;
 const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const VOICE_CAPTURE_SAFETY_CAP: Duration = Duration::from_secs(120);
 
@@ -1011,6 +1013,7 @@ fn present_with_initial_workspace(
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let command_palette_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let maximize_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let sync_close_to_background_notice: Rc<dyn Fn()> = {
         let close_to_background_notice = close_to_background_notice.clone();
         let current_close_to_background = current_close_to_background.clone();
@@ -1925,6 +1928,13 @@ fn present_with_initial_workspace(
         &active_tab_id,
         &session_persistence,
         current_zoom_out_shortcut.borrow().as_str(),
+    );
+
+    install_workspace_maximize_shortcut(
+        &window,
+        &maximize_shortcut_controller,
+        &tabs,
+        &active_tab_id,
     );
 
     {
@@ -2995,6 +3005,7 @@ fn present_with_initial_workspace(
         let open_settings_dialog = open_settings_dialog.clone();
         let open_assets_manager = open_assets_manager.clone();
         let open_companion_dialog = open_companion_dialog.clone();
+        let preference_store = preference_store.clone();
         let open_about_dialog: Rc<dyn Fn()> = {
             let window = window.clone();
             Rc::new({
@@ -3022,6 +3033,17 @@ fn present_with_initial_workspace(
                 open_about: Rc::new({
                     let open_about_dialog = open_about_dialog.clone();
                     move || open_about_dialog()
+                }),
+                open_shortcuts: Rc::new({
+                    let window = window.clone();
+                    let preference_store = preference_store.clone();
+                    move || {
+                        let prefs = preference_store.load();
+                        crate::ui::shortcuts_dialog::present(
+                            &window,
+                            build_shortcut_sections(&prefs),
+                        );
+                    }
                 }),
                 new_tab: Rc::new({
                     let add_workspace_tab = add_workspace_tab.clone();
@@ -3112,6 +3134,10 @@ fn present_with_initial_workspace(
                                         alert_store.mark_read(alert.id);
                                     }
                                 }
+                            }),
+                            toggle_maximize: Rc::new({
+                                let runtime_for_maximize = workspace.runtime.clone();
+                                move || runtime_for_maximize.toggle_focused_pane_maximized()
                             }),
                             add_web_tile: Rc::new({
                                 let runtime_for_add_web_tile = workspace.runtime.clone();
@@ -5357,6 +5383,49 @@ fn install_workspace_zoom_out_shortcut(
     );
 }
 
+fn install_workspace_maximize_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+) {
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        "workspace_maximize",
+        &[DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT.to_string()],
+        move || {
+            if let Some(runtime) =
+                active_workspace_runtime(&tabs_for_shortcut, active_for_shortcut.get())
+            {
+                runtime.toggle_focused_pane_maximized();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        },
+    );
+}
+
+/// Build the cheat-sheet rows from current preferences plus the fixed
+/// (non-configurable) shortcuts, for [`crate::ui::shortcuts_dialog`].
+fn build_shortcut_sections(
+    prefs: &AppPreferences,
+) -> Vec<crate::ui::shortcuts_dialog::ShortcutSection> {
+    crate::ui::shortcuts_dialog::sections_from_summary(
+        &crate::ui::shortcuts_dialog::ShortcutSummary {
+            fullscreen: prefs.workspace_fullscreen_shortcut.clone(),
+            density: prefs.workspace_density_shortcut.clone(),
+            zoom_in: prefs.workspace_zoom_in_shortcut.clone(),
+            zoom_out: prefs.workspace_zoom_out_shortcut.clone(),
+            command_palette: prefs.command_palette_shortcut.clone(),
+            maximize: DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT.to_string(),
+        },
+    )
+}
+
 fn sync_fullscreen_chrome(
     window: &adw::ApplicationWindow,
     title_widget: &gtk::Widget,
@@ -6067,17 +6136,19 @@ fn prompt_session_resume<F, G, H>(
 
     let resume_button = gtk::Button::with_label("Resume And Rerun");
     resume_button.add_css_class("session-resume-action");
-    resume_button.add_css_class("suggested-action");
+    resume_button.add_css_class("primary-cta-button");
     resume_button.set_hexpand(true);
     resume_button.set_halign(gtk::Align::Fill);
 
     let shells_button = gtk::Button::with_label("Resume As Shells");
     shells_button.add_css_class("session-resume-action");
+    shells_button.add_css_class("secondary-button");
     shells_button.set_hexpand(true);
     shells_button.set_halign(gtk::Align::Fill);
 
     let fresh_button = gtk::Button::with_label("Start Fresh");
     fresh_button.add_css_class("session-resume-action");
+    fresh_button.add_css_class("secondary-button");
     fresh_button.set_hexpand(true);
     fresh_button.set_halign(gtk::Align::Fill);
 

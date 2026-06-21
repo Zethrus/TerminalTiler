@@ -36,6 +36,7 @@ pub fn build(
     _density: ApplicationDensity,
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
+    on_maximize: Rc<dyn Fn(String)>,
     on_update_settings: Rc<dyn Fn(String, String, Option<u32>)>,
     on_reload: Rc<dyn Fn(String)>,
     get_settings: GetWebTileSettings,
@@ -89,6 +90,21 @@ pub fn build(
     append_web_tile_action_chrome(&actions, &tile_actions);
 
     shell.append(&header.widget);
+
+    // Double-click the header to maximize/restore this pane.
+    {
+        let on_maximize = on_maximize.clone();
+        let tile_id = tile.id.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(gdk::BUTTON_PRIMARY);
+        gesture.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                on_maximize(tile_id.clone());
+            }
+        });
+        left.add_controller(gesture);
+    }
 
     {
         let title_label = title.clone();

@@ -76,6 +76,8 @@ struct WorkspaceRuntimeInner {
     runbook_button: gtk::Button,
     focused_tile_id: RefCell<Option<String>>,
     focused_web_tile_id: RefCell<Option<String>>,
+    maximized_tile: RefCell<Option<String>>,
+    maximized_hidden: RefCell<Vec<gtk::Widget>>,
 }
 
 #[derive(Clone)]
@@ -618,6 +620,7 @@ impl WorkspaceRuntime {
         *self.inner.tiles.borrow_mut() = tiles;
         self.sync_tile_close_buttons();
         self.sync_active_tile_styles();
+        self.sync_maximized_tile_styles();
         self.refresh_navigation_controls();
     }
 
@@ -632,6 +635,12 @@ impl WorkspaceRuntime {
             let runtime = self.clone();
             Rc::new(move |tile_id: String| {
                 let _ = runtime.close_tile(&tile_id);
+            })
+        };
+        let on_maximize = {
+            let runtime = self.clone();
+            Rc::new(move |tile_id: String| {
+                runtime.toggle_maximize(&tile_id);
             })
         };
         let can_close = self.inner.layout.borrow().tile_count() > 1;
@@ -668,6 +677,7 @@ impl WorkspaceRuntime {
                     self.inner.density,
                     on_swap,
                     on_close,
+                    on_maximize,
                     on_update_settings,
                     on_reload,
                     get_settings,
@@ -708,6 +718,7 @@ impl WorkspaceRuntime {
                     snippet_provider,
                     on_swap,
                     on_close,
+                    on_maximize,
                     can_close,
                     self.inner.stats.clone(),
                 );
@@ -817,6 +828,87 @@ impl WorkspaceRuntime {
         }
     }
 
+    fn sync_maximized_tile_styles(&self) {
+        let maximized_tile_id = self.inner.maximized_tile.borrow().clone();
+        for tile in self.inner.tiles.borrow().iter() {
+            if maximized_tile_id.as_deref() == Some(tile.tile.id.as_str()) {
+                tile.widget.add_css_class("is-maximized");
+            } else {
+                tile.widget.remove_css_class("is-maximized");
+            }
+        }
+    }
+
+    fn set_tile_maximized_class(&self, tile_id: &str, maximized: bool) {
+        if let Some(tile) = self
+            .inner
+            .tiles
+            .borrow()
+            .iter()
+            .find(|tile| tile.tile.id == tile_id)
+        {
+            if maximized {
+                tile.widget.add_css_class("is-maximized");
+            } else {
+                tile.widget.remove_css_class("is-maximized");
+            }
+        }
+    }
+
+    /// Toggle whether the pane for `tile_id` fills the whole workspace. If a
+    /// different pane is currently maximized it is restored first. No live
+    /// session is reparented — sibling subtrees are simply hidden/shown (see
+    /// [`crate::ui::pane_zoom`]).
+    pub fn toggle_maximize(&self, tile_id: &str) {
+        if let Some(current) = self.inner.maximized_tile.borrow_mut().take() {
+            let hidden: Vec<gtk::Widget> =
+                self.inner.maximized_hidden.borrow_mut().drain(..).collect();
+            crate::ui::pane_zoom::restore(&hidden);
+            self.set_tile_maximized_class(&current, false);
+            if current == tile_id {
+                return;
+            }
+        }
+
+        let target = self
+            .inner
+            .tiles
+            .borrow()
+            .iter()
+            .enumerate()
+            .find(|(_, tile)| tile.tile.id == tile_id)
+            .map(|(index, tile)| (index, tile.web_view.is_some()));
+        let Some((index, is_web_tile)) = target else {
+            return;
+        };
+        let Some(slot) = self.inner.slots.borrow().get(index).cloned() else {
+            return;
+        };
+        let hidden = crate::ui::pane_zoom::maximize(&self.inner.layout_host, &slot);
+        if hidden.is_empty() {
+            return;
+        }
+        *self.inner.maximized_hidden.borrow_mut() = hidden;
+        *self.inner.maximized_tile.borrow_mut() = Some(tile_id.to_string());
+        self.set_focused_tile(Some(tile_id.to_string()), is_web_tile);
+        self.set_tile_maximized_class(tile_id, true);
+    }
+
+    /// Toggle maximize for the currently focused pane, falling back to the
+    /// first tile when nothing is focused yet.
+    pub fn toggle_focused_pane_maximized(&self) {
+        let target = self.inner.focused_tile_id.borrow().clone().or_else(|| {
+            self.inner
+                .tiles
+                .borrow()
+                .first()
+                .map(|tile| tile.tile.id.clone())
+        });
+        if let Some(tile_id) = target {
+            self.toggle_maximize(&tile_id);
+        }
+    }
+
     fn record_web_tile_uri(&self, tile_id: &str, uri: &str) {
         let next_uri = uri.to_string();
         let changed = {
@@ -883,6 +975,17 @@ impl WorkspaceRuntime {
         }
         self.inner.layout_host.append(&layout_shell.widget);
         *self.inner.slots.borrow_mut() = layout_shell.slots;
+        // Slots were torn down and rebuilt; any previously hidden subtrees are
+        // gone, so drop the maximize state (a structural change auto-restores).
+        if let Some(current) = self.inner.maximized_tile.borrow_mut().take() {
+            let hidden: Vec<gtk::Widget> =
+                self.inner.maximized_hidden.borrow_mut().drain(..).collect();
+            crate::ui::pane_zoom::restore(&hidden);
+            self.set_tile_maximized_class(&current, false);
+        } else {
+            self.inner.maximized_hidden.borrow_mut().clear();
+        }
+        self.sync_maximized_tile_styles();
     }
 
     fn rebuild_from_layout(&self) {
@@ -1031,6 +1134,8 @@ pub fn build_with_layout_change_handler(
             runbook_button: runbook_button.clone(),
             focused_tile_id: RefCell::new(None),
             focused_web_tile_id: RefCell::new(None),
+            maximized_tile: RefCell::new(None),
+            maximized_hidden: RefCell::new(Vec::new()),
         }),
     };
     runtime.rebuild_from_layout();
@@ -1098,6 +1203,15 @@ pub fn build_with_layout_change_handler(
                 pane_id: None,
                 allows_reconnect: false,
             });
+        });
+    }
+
+    {
+        // Pressing Enter in the quick-send entry fires the Send button, so the
+        // entry retention behavior stays identical to clicking Send.
+        let broadcast_button = broadcast_button.clone();
+        broadcast_entry.connect_activate(move |_| {
+            broadcast_button.activate();
         });
     }
 

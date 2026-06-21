@@ -59,6 +59,11 @@ pub(crate) mod pane_status;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod pane_zoom;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod runbook_controls;
 #[cfg(any(
     target_os = "linux",
@@ -70,6 +75,11 @@ pub(crate) mod runbook_dialog;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod settings_dialog;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub mod shortcuts_dialog;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")

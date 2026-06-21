@@ -215,7 +215,7 @@ fn metric(label: &str, value: &str) -> gtk::Widget {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)
-        .css_classes(["settings-toggle-row"])
+        .css_classes(["stats-metric-row"])
         .build();
     row.append(
         &gtk::Label::builder()
@@ -229,7 +229,7 @@ fn metric(label: &str, value: &str) -> gtk::Widget {
         &gtk::Label::builder()
             .label(value)
             .halign(gtk::Align::End)
-            .css_classes(["section-title", "stats-metric-value"])
+            .css_classes(["stats-metric-value"])
             .build(),
     );
     row.upcast()

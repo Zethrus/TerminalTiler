@@ -46,6 +46,7 @@ pub fn build(
     snippets_provider: Rc<dyn Fn() -> Vec<CliSnippet>>,
     on_swap: Rc<dyn Fn(String, String)>,
     on_close: Rc<dyn Fn(String)>,
+    on_maximize: Rc<dyn Fn(String)>,
     can_close: bool,
     stats: StatsRecorder,
 ) -> TileView {
@@ -277,6 +278,21 @@ pub fn build(
         });
     }
     left.add_controller(drag_source);
+
+    // Double-click the header to maximize/restore this pane.
+    {
+        let on_maximize = on_maximize.clone();
+        let tile_id = tile.id.clone();
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(gdk::BUTTON_PRIMARY);
+        gesture.connect_pressed(move |gesture, n_press, _, _| {
+            if n_press == 2 {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                on_maximize(tile_id.clone());
+            }
+        });
+        left.add_controller(gesture);
+    }
 
     let drop_target = gtk::DropTarget::new(TileDragPayload::static_type(), gdk::DragAction::MOVE);
     {

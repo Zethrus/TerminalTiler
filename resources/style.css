@@ -1611,6 +1611,11 @@ button.tile-header-action:disabled {
   opacity: 0.84;
 }
 
+.terminal-card.is-maximized {
+  /* Maximized pane fills the workspace; a brighter amber edge marks the zoom. */
+  border-color: alpha(@tt_amber, 0.7);
+}
+
 .workspace-subtitle,
 .tile-meta {
   font-size: 12px;
@@ -2100,6 +2105,22 @@ button.tile-header-action:disabled {
 .stats-section-heading {
   min-height: 18px;
   padding: 3px 0;
+}
+
+.stats-metric-row {
+  /* Lighter than .settings-toggle-row: read-only data, not an interactive control. */
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: alpha(@tt_white, 0.025);
+  border: 1px solid alpha(@tt_white, 0.05);
+}
+
+.stats-metric-value {
+  /* JetBrains Mono is already loaded; mono digits are tabular = premium, column-aligned data. */
+  font-family: "JetBrains Mono", monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255, 251, 242, 0.95);
 }
 
 .settings-section-copy {
@@ -3085,6 +3106,8 @@ window.windows-gtk-shell .settings-section {
 
 .session-resume-dialog button.session-resume-action {
   min-height: 40px;
+  /* Uniform radius across the amber primary + glass secondaries, overrides the CTA pill. */
+  border-radius: 12px;
 }
 
 .session-resume-dialog.windows-gtk-shell button.session-resume-action {
@@ -3394,6 +3417,18 @@ window.theme-light .settings-dialog-content .settings-toggle-row {
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.72),
     0 8px 18px rgba(15, 23, 42, 0.03);
+}
+
+window.theme-light .stats-dialog-content .stats-metric-row {
+  background: linear-gradient(180deg, alpha(@tt_white, 0.76), rgba(245, 248, 252, 0.88));
+  border-color: rgba(101, 119, 151, 0.15);
+  box-shadow:
+    inset 0 1px alpha(@tt_white, 0.72),
+    0 8px 18px rgba(15, 23, 42, 0.03);
+}
+
+window.theme-light .stats-dialog-content .stats-metric-value {
+  color: #192332;
 }
 
 window.window-shell.theme-light .tile-editor-row,
