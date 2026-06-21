@@ -75,7 +75,7 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   padding: 3px 10px;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.045em;
   text-transform: uppercase;
   color: alpha(@tt_white, 0.74);
   background: linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.03));
@@ -88,6 +88,10 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
     border-color 140ms ease,
     box-shadow 140ms ease,
     color 140ms ease;
+}
+
+window.window-shell headerbar.app-headerbar button.titlebar-action-button .button-text-label {
+  padding-left: 1px;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
@@ -348,7 +352,7 @@ window.profile-compact .preview-card,
 window.profile-compact .selection-summary,
 window.profile-compact .tile-editor-panel,
 window.profile-compact .workspace-summary {
-  border-radius: 14px;
+  border-radius: 0;
 }
 
 window.profile-compact .config-panel,
@@ -1460,7 +1464,7 @@ button.surface-button:disabled {
 
 .workspace-summary {
   padding: 10px 14px;
-  border-radius: 16px;
+  border-radius: 0;
   border: 1px solid alpha(@tt_white, 0.07);
   background:
     linear-gradient(180deg, rgba(20, 20, 25, 0.96), rgba(10, 10, 14, 0.96)),
@@ -2945,6 +2949,10 @@ window.windows-gtk-shell.profile-standard headerbar.app-headerbar button.titleba
   font-size: 10px;
 }
 
+window.windows-gtk-shell headerbar.app-headerbar button.titlebar-action-button .button-text-label {
+  padding-left: 1px;
+}
+
 window.windows-gtk-shell.profile-standard .app-tab-strip {
   margin: 0 4px;
 }
@@ -3030,7 +3038,7 @@ window.windows-gtk-shell combobox.surface-select-control button.combo {
 
 window.windows-gtk-shell .workspace-summary {
   padding: 8px 12px;
-  border-radius: 14px;
+  border-radius: 0;
   margin-bottom: 4px;
 }
 

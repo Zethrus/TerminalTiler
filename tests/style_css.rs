@@ -343,6 +343,40 @@ fn active_terminal_card_draws_full_amber_border() {
 }
 
 #[test]
+fn workspace_summary_square_radius_survives_base_cascade() {
+    let mut final_base_radius = None;
+
+    for (selectors, body) in css_blocks(STYLE_CSS) {
+        let is_base_workspace_summary = selectors
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| candidate == ".workspace-summary");
+
+        if is_base_workspace_summary && let Some(value) = declaration_value(body, "border-radius") {
+            final_base_radius = Some(value);
+        }
+    }
+
+    assert_eq!(
+        final_base_radius,
+        Some("0"),
+        "the default Linux workspace summary radius should be set by the final base .workspace-summary declaration, not an earlier dead override"
+    );
+    assert_css_declaration(
+        "window.profile-compact .workspace-summary",
+        "border-radius",
+        "0",
+        "compact summaries should keep the squared visual contract",
+    );
+    assert_css_declaration(
+        "window.windows-gtk-shell .workspace-summary",
+        "border-radius",
+        "0",
+        "Windows GTK summaries should keep the squared visual contract",
+    );
+}
+
+#[test]
 fn terminal_card_states_have_header_local_indicators() {
     for state in TERMINAL_CARD_STATES {
         assert!(
