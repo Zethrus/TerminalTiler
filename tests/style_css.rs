@@ -2244,7 +2244,6 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
             && CI_YML.contains("windows-gtk-runtime-gvsbuild-v4")
             && CI_YML.contains("actions/cache@v5")
-            && CI_YML.contains("continue-on-error: true")
             && !CI_YML.contains("save-always:")
             && CI_YML.contains("actions/upload-artifact@v6")
             && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
@@ -2601,24 +2600,66 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
 }
 
 #[test]
-fn ci_uses_linux_verify_as_package_gating_source_of_truth() {
+fn ci_requires_linux_and_windows_verify_jobs_as_hard_gates() {
     let linux_verify = workflow_job_block(CI_YML, "verify");
     assert!(
         linux_verify.contains("runs-on: ubuntu-latest")
             && linux_verify.contains("cargo test --features voice-cpal")
             && linux_verify.contains("cargo clippy --all-targets --all-features -- -D warnings")
-            && !linux_verify.contains("continue-on-error: true"),
-        "Linux verify should remain the required source-of-truth CI job for package gating"
+            && !source_contains(
+                &linux_verify,
+                "runs-on: ubuntu-latest\n    continue-on-error: true"
+            ),
+        "Linux verify should remain a required CI gate for package gating"
     );
 
     for job_name in ["verify-windows", "verify-windows-gtk"] {
         let windows_verify = workflow_job_block(CI_YML, job_name);
         assert!(
-            source_contains(
-                &windows_verify,
-                "runs-on: windows-2022\n    continue-on-error: true",
-            ),
-            "{job_name} should keep running for signal without blocking the Linux-authoritative CI conclusion"
+            windows_verify.contains("runs-on: windows-2022")
+                && !source_contains(
+                    &windows_verify,
+                    "runs-on: windows-2022\n    continue-on-error: true",
+                ),
+            "{job_name} should be an authoritative required CI gate rather than a non-blocking signal job"
+        );
+    }
+}
+
+#[test]
+fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
+    assert!(
+        WINDOWS_SMOKE_PS1.contains(
+            "$DiagnosticsRoot = Join-Path $RootDir \"artifacts\\windows-smoke-diagnostics\""
+        ) && WINDOWS_SMOKE_PS1.contains("$script:DiagnosticsRoot = $DiagnosticsRoot")
+            && WINDOWS_SMOKE_PS1.contains("Staged Windows smoke diagnostics at $diagnosticRoot")
+            && WINDOWS_SMOKE_PS1.contains("summary.txt")
+            && WINDOWS_SMOKE_PS1.contains("process-snapshot.txt")
+            && WINDOWS_SMOKE_PS1.contains("application-event-log.txt")
+            && WINDOWS_SMOKE_PS1.contains("sandbox-tree.txt")
+            && WINDOWS_SMOKE_PS1.contains("webview2-tree.txt")
+            && WINDOWS_SMOKE_PS1.contains("TEMP = $env:TEMP")
+            && WINDOWS_SMOKE_PS1.contains("TMP = $env:TMP")
+            && WINDOWS_SMOKE_PS1.contains("$env:TEMP = $profile.Temp")
+            && WINDOWS_SMOKE_PS1.contains("$env:TMP = $profile.Tmp")
+            && WINDOWS_SMOKE_PS1.contains("Test-PreLogLaunchFailure")
+            && WINDOWS_SMOKE_PS1.contains("0xC0000142")
+            && WINDOWS_SMOKE_PS1.contains("retrying once after isolated cleanup")
+            && WINDOWS_SMOKE_PS1.contains("-LaunchStartTime $launchStartTime")
+            && WINDOWS_SMOKE_PS1.contains("StartTime = $LaunchStartTime")
+            && WINDOWS_SMOKE_PS1.contains("*$resolvedExePath*")
+            && WINDOWS_SMOKE_PS1.contains("Stop-TerminalTilerSmokeProcesses -ThrowOnTimeout"),
+        "Windows smoke should isolate TEMP/TMP, retry only pre-log launch initialization failures, filter event logs by launch/exe, and stage diagnostics outside hidden build dirs"
+    );
+
+    for job_name in ["verify-windows", "verify-windows-gtk"] {
+        let windows_verify = workflow_job_block(CI_YML, job_name);
+        assert!(
+            windows_verify.contains("actions/upload-artifact@v6")
+                && windows_verify.contains("path: artifacts/windows-smoke-diagnostics")
+                && windows_verify.contains("if-no-files-found: warn")
+                && !windows_verify.contains("path: packaging/.build/windows-smoke"),
+            "{job_name} should upload staged Windows smoke diagnostics from a non-hidden artifact directory"
         );
     }
 }

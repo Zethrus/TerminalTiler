@@ -68,7 +68,6 @@ jobs:
 
   verify-windows:
     runs-on: windows-2022
-    continue-on-error: true
 
     steps:
       - name: Check out repository
@@ -109,12 +108,11 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-ci
-          path: packaging/.build/windows-smoke
-          if-no-files-found: ignore
+          path: artifacts/windows-smoke-diagnostics
+          if-no-files-found: warn
 
   verify-windows-gtk:
     runs-on: windows-2022
-    continue-on-error: true
 
     steps:
       - name: Check out repository
@@ -163,5 +161,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-gtk-smoke-diagnostics-ci
-          path: packaging/.build/windows-smoke
-          if-no-files-found: ignore
+          path: artifacts/windows-smoke-diagnostics
+          if-no-files-found: warn

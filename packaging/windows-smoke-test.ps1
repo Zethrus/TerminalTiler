@@ -160,9 +160,11 @@ function Initialize-SmokeProfile {
     $dataRoot = Join-Path $profileRoot "data"
     $localDataRoot = Join-Path $profileRoot "local-data"
     $logsRoot = Join-Path $profileRoot "state\logs"
+    $tempRoot = Join-Path $SandboxRoot "Temp"
+    $tmpRoot = Join-Path $SandboxRoot "Tmp"
 
     New-Item -ItemType Directory -Force -Path (Join-Path $workspaceRoot "src") | Out-Null
-    foreach ($dir in @($configRoot, $dataRoot, $localDataRoot, $logsRoot)) {
+    foreach ($dir in @($configRoot, $dataRoot, $localDataRoot, $logsRoot, $tempRoot, $tmpRoot)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
 
@@ -178,6 +180,8 @@ default_restore_mode = "$restoreMode"
         AppData = Join-Path $SandboxRoot "AppData\Roaming"
         LocalAppData = Join-Path $SandboxRoot "AppData\Local"
         UserProfile = Join-Path $SandboxRoot "User"
+        Temp = $tempRoot
+        Tmp = $tmpRoot
     }
 
     if ($ProfileKind -eq "clean-first-run") {
@@ -297,31 +301,78 @@ function Format-ExitCode {
     return "$ExitCode (0x$($unsignedExitCode.ToString('X8')))"
 }
 
+function Convert-ToSafeFileName {
+    param([string]$Value)
+
+    $safe = $Value -replace '[^A-Za-z0-9._-]+', '-'
+    $safe = $safe.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "smoke-diagnostics"
+    }
+
+    return $safe
+}
+
+function Get-TerminalTilerSmokeProcesses {
+    return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -like "TerminalTiler*.exe" -or
+            $_.ExecutablePath -like "*\TerminalTiler*.exe"
+        })
+}
+
 function Write-ApplicationEventLogDiagnostics {
-    param([string]$Label)
+    param(
+        [string]$Label,
+        [string]$ExePath = "",
+        [datetime]$LaunchStartTime = (Get-Date).AddMinutes(-10),
+        [string]$OutputPath = ""
+    )
 
     Write-Host "--- Windows Application Event Log: $Label ---"
     try {
+        $resolvedExePath = ""
+        if (-not [string]::IsNullOrWhiteSpace($ExePath)) {
+            try {
+                $resolvedExePath = [System.IO.Path]::GetFullPath($ExePath)
+            }
+            catch {
+                $resolvedExePath = $ExePath
+            }
+        }
+        $exeName = if ([string]::IsNullOrWhiteSpace($resolvedExePath)) { "TerminalTiler.exe" } else { Split-Path -Leaf $resolvedExePath }
+
         $events = Get-WinEvent -FilterHashtable @{
             LogName = "Application"
-            StartTime = (Get-Date).AddMinutes(-10)
+            StartTime = $LaunchStartTime
         } -ErrorAction Stop |
             Where-Object {
+                $message = [string]$_.Message
                 $_.ProviderName -like "*TerminalTiler*" -or
-                $_.Message -like "*TerminalTiler*.exe*" -or
-                $_.Message -like "*TerminalTiler.exe*"
+                (-not [string]::IsNullOrWhiteSpace($resolvedExePath) -and $message -like "*$resolvedExePath*") -or
+                $message -like "*$exeName*"
             } |
             Select-Object -First 20 TimeCreated, Id, ProviderName, LevelDisplayName, Message
 
+        $output = ""
         if (-not $events) {
-            Write-Host "No recent TerminalTiler Application Event Log entries were found."
-            return
+            $output = "No TerminalTiler Application Event Log entries were found for $exeName after $LaunchStartTime."
+        }
+        else {
+            $output = $events | Format-List | Out-String
         }
 
-        $events | Format-List | Out-String | Write-Host
+        $output | Write-Host
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            Set-Content -Path $OutputPath -Value $output -Encoding UTF8
+        }
     }
     catch {
-        Write-Host "Could not read Windows Application Event Log: $_"
+        $message = "Could not read Windows Application Event Log: $_"
+        Write-Host $message
+        if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+            Set-Content -Path $OutputPath -Value $message -Encoding UTF8
+        }
     }
 }
 
@@ -329,36 +380,131 @@ function Write-SmokeDiagnostics {
     param(
         [string]$SandboxRoot,
         [string]$Label,
-        [object]$ExitCode
+        [object]$ExitCode,
+        [string]$ExePath = "",
+        [datetime]$LaunchStartTime = (Get-Date).AddMinutes(-10)
     )
 
     Write-Host "==> diagnostics for $Label"
-    if ($null -ne $ExitCode) {
-        Write-Host "Process exit code: $(Format-ExitCode -ExitCode $ExitCode)"
+    $safeLabel = Convert-ToSafeFileName -Value $Label
+    $diagnosticRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($script:DiagnosticsRoot)) {
+        $diagnosticRoot = Join-Path $script:DiagnosticsRoot $safeLabel
+        New-Item -ItemType Directory -Force -Path $diagnosticRoot | Out-Null
     }
+
+    $summary = New-Object System.Collections.Generic.List[string]
+    $summary.Add("Label: $Label")
+    $summary.Add("Executable: $ExePath")
+    $summary.Add("SandboxRoot: $SandboxRoot")
+    $summary.Add("LaunchStartTime: $($LaunchStartTime.ToString('o'))")
+    if ($null -ne $ExitCode) {
+        $formattedExitCode = Format-ExitCode -ExitCode $ExitCode
+        Write-Host "Process exit code: $formattedExitCode"
+        $summary.Add("ProcessExitCode: $formattedExitCode")
+    }
+    else {
+        $summary.Add("ProcessExitCode: <not available>")
+    }
+    $summary.Add("APPDATA: $env:APPDATA")
+    $summary.Add("LOCALAPPDATA: $env:LOCALAPPDATA")
+    $summary.Add("USERPROFILE: $env:USERPROFILE")
+    $summary.Add("TEMP: $env:TEMP")
+    $summary.Add("TMP: $env:TMP")
+    $summary.Add("TERMINALTILER_PROFILE_ROOT: $env:TERMINALTILER_PROFILE_ROOT")
+
     $webView2UserDataFolder = Join-Path $SandboxRoot "profile\local-data\webview2"
     Write-Host "Resolved WebView2 user data folder: $webView2UserDataFolder"
+    $summary.Add("WebView2UserDataFolder: $webView2UserDataFolder")
+    if ($diagnosticRoot) {
+        Set-Content -Path (Join-Path $diagnosticRoot "summary.txt") -Value $summary -Encoding UTF8
+    }
+
+    $processSnapshot = Get-TerminalTilerSmokeProcesses |
+        Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine |
+        Format-List |
+        Out-String
+    if ([string]::IsNullOrWhiteSpace($processSnapshot)) {
+        $processSnapshot = "No TerminalTiler process snapshot entries were found."
+    }
+    Write-Host "--- TerminalTiler process snapshot ---"
+    $processSnapshot | Write-Host
+    if ($diagnosticRoot) {
+        Set-Content -Path (Join-Path $diagnosticRoot "process-snapshot.txt") -Value $processSnapshot -Encoding UTF8
+    }
+
     if (Test-Path $webView2UserDataFolder) {
-        Get-ChildItem -Path $webView2UserDataFolder -Force -ErrorAction SilentlyContinue |
-            Select-Object -First 20 FullName, Length, LastWriteTime |
+        $webView2Listing = Get-ChildItem -Path $webView2UserDataFolder -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 200 FullName, Length, LastWriteTime |
             Format-Table -AutoSize |
-            Out-String |
-            Write-Host
+            Out-String
+        $webView2Listing | Write-Host
+        if ($diagnosticRoot) {
+            Set-Content -Path (Join-Path $diagnosticRoot "webview2-tree.txt") -Value $webView2Listing -Encoding UTF8
+        }
     }
     else {
         Write-Host "WebView2 user data folder was not created."
+        if ($diagnosticRoot) {
+            Set-Content -Path (Join-Path $diagnosticRoot "webview2-tree.txt") -Value "WebView2 user data folder was not created." -Encoding UTF8
+        }
     }
+
+    if (Test-Path $SandboxRoot) {
+        $profileTree = Get-ChildItem -Path $SandboxRoot -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 500 FullName, Length, LastWriteTime |
+            Format-Table -AutoSize |
+            Out-String
+        if ($diagnosticRoot) {
+            Set-Content -Path (Join-Path $diagnosticRoot "sandbox-tree.txt") -Value $profileTree -Encoding UTF8
+        }
+    }
+
     $logs = @(Find-SmokeLogs -SandboxRoot $SandboxRoot)
     if ($logs.Count -eq 0) {
         Write-Host "No TerminalTiler logs were found under $SandboxRoot"
     }
     else {
+        $logsRoot = $null
+        if ($diagnosticRoot) {
+            $logsRoot = Join-Path $diagnosticRoot "logs"
+            New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
+        }
         foreach ($log in $logs) {
             Write-Host "--- $($log.FullName) ---"
             Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue | Write-Host
+            if ($logsRoot) {
+                $relativeLogPath = $log.FullName.Substring($SandboxRoot.Length)
+                $relativeLogPath = $relativeLogPath.TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+                $relativeName = Convert-ToSafeFileName -Value $relativeLogPath
+                Copy-Item -Path $log.FullName -Destination (Join-Path $logsRoot $relativeName) -Force -ErrorAction SilentlyContinue
+            }
         }
     }
-    Write-ApplicationEventLogDiagnostics -Label $Label
+
+    $eventLogPath = if ($diagnosticRoot) { Join-Path $diagnosticRoot "application-event-log.txt" } else { "" }
+    Write-ApplicationEventLogDiagnostics -Label $Label -ExePath $ExePath -LaunchStartTime $LaunchStartTime -OutputPath $eventLogPath
+
+    if ($diagnosticRoot) {
+        Write-Host "Staged Windows smoke diagnostics at $diagnosticRoot"
+    }
+}
+
+function Test-PreLogLaunchFailure {
+    param(
+        [string]$SandboxRoot,
+        [object]$ExitCode
+    )
+
+    if ($null -eq $ExitCode) {
+        return $false
+    }
+    if ((Find-SmokeLogs -SandboxRoot $SandboxRoot | Select-Object -First 1)) {
+        return $false
+    }
+
+    $unsignedExitCode = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$ExitCode), 0)
+    return $unsignedExitCode -eq 0xC0000142
 }
 
 function Wait-ForMainWindow {
@@ -439,18 +585,42 @@ function Stop-ProcessTree {
     if (-not $Process.HasExited) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
     }
+
+    foreach ($processId in @($Process.Id) + $processIds) {
+        try {
+            $candidate = Get-Process -Id $processId -ErrorAction Stop
+            $candidate.WaitForExit(5000) | Out-Null
+        }
+        catch {
+        }
+    }
 }
 
 function Stop-TerminalTilerSmokeProcesses {
-    $candidates = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -like "TerminalTiler*.exe" -or
-            $_.ExecutablePath -like "*\TerminalTiler*.exe"
-        }
+    param(
+        [int]$TimeoutSeconds = 15,
+        [switch]$ThrowOnTimeout
+    )
 
-    foreach ($candidate in $candidates) {
+    foreach ($candidate in (Get-TerminalTilerSmokeProcesses)) {
         Stop-Process -Id ([int]$candidate.ProcessId) -Force -ErrorAction SilentlyContinue
     }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $remaining = @(Get-TerminalTilerSmokeProcesses)
+        if ($remaining.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    $remainingSummary = @(Get-TerminalTilerSmokeProcesses | Select-Object ProcessId, ParentProcessId, Name, ExecutablePath | Format-Table -AutoSize | Out-String) -join "`n"
+    $message = "TerminalTiler smoke processes remained after cleanup timeout:`n$remainingSummary"
+    if ($ThrowOnTimeout) {
+        throw $message
+    }
+    Write-Warning $message
 }
 
 function Wait-ProcessOrTimeout {
@@ -559,117 +729,147 @@ function Invoke-LaunchSmoke {
     )
 
     $expectGtkShell = -not $UseWin32Shell
-    $profile = Initialize-SmokeProfile -SandboxRoot $SandboxRoot -ProfileKind $ProfileKind
-    $previousEnvironment = @{
-        APPDATA = $env:APPDATA
-        LOCALAPPDATA = $env:LOCALAPPDATA
-        USERPROFILE = $env:USERPROFILE
-        HOME = $env:HOME
-        TERMINALTILER_PROFILE_ROOT = $env:TERMINALTILER_PROFILE_ROOT
-    }
-    $process = $null
+    $maxLaunchAttempts = 2
 
-    New-Item -ItemType Directory -Force -Path $profile.UserProfile | Out-Null
-    New-Item -ItemType Directory -Force -Path $profile.AppData | Out-Null
-    New-Item -ItemType Directory -Force -Path $profile.LocalAppData | Out-Null
-    $env:APPDATA = $profile.AppData
-    $env:LOCALAPPDATA = $profile.LocalAppData
-    $env:USERPROFILE = $profile.UserProfile
-    $env:HOME = $profile.UserProfile
-    $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
-
-    try {
-        $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
-        Write-Host "$Label WebView2 user data folder: $webView2UserDataFolder"
-        $process = Start-Process -FilePath $ExePath -PassThru
-        $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
-        $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
-        Start-Sleep -Seconds 2
-        $process.Refresh()
-        if ($process.HasExited -and $process.ExitCode -ne 0) {
-            throw "Process $ExePath exited with code $(Format-ExitCode -ExitCode $process.ExitCode)"
+    for ($attempt = 1; $attempt -le $maxLaunchAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Warning "$Label hit a pre-log Windows launch initialization failure; retrying once after isolated cleanup."
+            Remove-Item -Recurse -Force $SandboxRoot -ErrorAction SilentlyContinue
         }
 
-        $requiredPattern = Get-LaunchSmokeRequiredPattern -ExpectGtkShell $expectGtkShell -ProfileKind $ProfileKind
-
-        if (-not $hasMainWindow) {
-            if (-not $expectGtkShell) {
-                throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
-            }
-
-            Write-Host "$Label did not expose a Win32 MainWindowHandle before the smoke timeout; continuing with GTK session-log validation."
+        Stop-TerminalTilerSmokeProcesses -ThrowOnTimeout
+        $profile = Initialize-SmokeProfile -SandboxRoot $SandboxRoot -ProfileKind $ProfileKind
+        $previousEnvironment = @{
+            APPDATA = $env:APPDATA
+            LOCALAPPDATA = $env:LOCALAPPDATA
+            USERPROFILE = $env:USERPROFILE
+            HOME = $env:HOME
+            TEMP = $env:TEMP
+            TMP = $env:TMP
+            TERMINALTILER_PROFILE_ROOT = $env:TERMINALTILER_PROFILE_ROOT
         }
+        $process = $null
+        $launchStartTime = Get-Date
 
-        $logTimeoutSeconds = if ($expectGtkShell -and $ProfileKind -eq "mixed") { $GtkMixedWebView2SmokeTimeoutSeconds } else { 20 }
-        $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds $logTimeoutSeconds
+        New-Item -ItemType Directory -Force -Path $profile.UserProfile | Out-Null
+        New-Item -ItemType Directory -Force -Path $profile.AppData | Out-Null
+        New-Item -ItemType Directory -Force -Path $profile.LocalAppData | Out-Null
+        New-Item -ItemType Directory -Force -Path $profile.Temp | Out-Null
+        New-Item -ItemType Directory -Force -Path $profile.Tmp | Out-Null
+        $env:APPDATA = $profile.AppData
+        $env:LOCALAPPDATA = $profile.LocalAppData
+        $env:USERPROFILE = $profile.UserProfile
+        $env:HOME = $profile.UserProfile
+        $env:TEMP = $profile.Temp
+        $env:TMP = $profile.Tmp
+        $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
 
-        Stop-ProcessTree -Process $process
-        $finalLogText = Get-SmokeSessionLogText -SandboxRoot $SandboxRoot
-        if (-not [string]::IsNullOrWhiteSpace($finalLogText)) {
-            $logText = $finalLogText
-        }
-
-        if ($expectGtkShell) {
-            if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
-                throw "$Label did not complete GTK launcher initialization.`n$logText"
+        try {
+            $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
+            Write-Host "$Label WebView2 user data folder: $webView2UserDataFolder"
+            $process = Start-Process -FilePath $ExePath -PassThru
+            $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
+            $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
+            Start-Sleep -Seconds 2
+            $process.Refresh()
+            if ($process.HasExited -and $process.ExitCode -ne 0) {
+                throw "Process $ExePath exited with code $(Format-ExitCode -ExitCode $process.ExitCode)"
             }
-            if ($ProfileKind -eq "clean-first-run" -and $logText -notmatch "GTK launch deck default workspace root resolved to") {
-                throw "$Label did not log the GTK launch deck default workspace root.`n$logText"
-            }
-            if (-not [string]::IsNullOrWhiteSpace($ExpectedLaunchRoot)) {
-                $expectedRoot = $ExpectedLaunchRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-                $expectedRootPattern = [regex]::Escape($expectedRoot)
-                if ($logText -notmatch $expectedRootPattern) {
-                    throw "$Label did not launch from the expected stable wrapper directory '$ExpectedLaunchRoot'.`n$logText"
+
+            $requiredPattern = Get-LaunchSmokeRequiredPattern -ExpectGtkShell $expectGtkShell -ProfileKind $ProfileKind
+
+            if (-not $hasMainWindow) {
+                if (-not $expectGtkShell) {
+                    throw "$Label did not create a visible launcher/workspace window before the smoke timeout."
                 }
-                if ($logText -match '\\nsx[0-9A-Fa-f]+\.tmp' -or $logText -match '\\AppData\\Local\\Temp\\nsx') {
-                    throw "$Label launched from a temporary NSIS extraction directory instead of a stable workspace root.`n$logText"
-                }
+
+                Write-Host "$Label did not expose a Win32 MainWindowHandle before the smoke timeout; continuing with GTK session-log validation."
             }
-            if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored interactive GTK workspace with") {
-                throw "$Label did not restore inside the shared interactive GTK workspace.`n$logText"
-            }
-            if ($ProfileKind -eq "mixed" -and $logText -notmatch "Windows GTK WebView2 tile navigating to https://example.com") {
-                throw "$Label did not initialize the restored WebView2 browser tile.`n$logText"
-            }
-            if ($logText -match "opened \d+ restored Windows workspace host window") {
-                throw "$Label unexpectedly opened the legacy Win32 workspace host from the GTK parity shell.`n$logText"
-            }
-        }
-        elseif ($ProfileKind -eq "clean-first-run") {
-            if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created" -or $logText -notmatch "Windows startup init complete") {
-                throw "$Label did not complete launcher initialization.`n$logText"
-            }
-            if ($logText -match "opened \d+ restored Windows workspace host window") {
-                throw "$Label unexpectedly restored a workspace during clean first-run.`n$logText"
-            }
-        } else {
-            if ($logText -notmatch "opened 1 restored Windows workspace host window\(s\)") {
-                throw "$Label did not restore a saved workspace session.`n$logText"
-            }
-            if ($ProfileKind -eq "mixed" -and $logText -notmatch "web pane \d+ navigating to https://example.com") {
-                throw "$Label did not restore the web tile.`n$logText"
-            }
-        }
-    }
-    catch {
-        $exitCode = $null
-        if ($process -and $process.HasExited) {
-            $exitCode = $process.ExitCode
-        }
-        Write-SmokeDiagnostics -SandboxRoot $SandboxRoot -Label $Label -ExitCode $exitCode
-        throw
-    }
-    finally {
-        if ($process) {
+
+            $logTimeoutSeconds = if ($expectGtkShell -and $ProfileKind -eq "mixed") { $GtkMixedWebView2SmokeTimeoutSeconds } else { 20 }
+            $logText = Wait-ForSessionLogPattern -SandboxRoot $SandboxRoot -Process $process -Pattern $requiredPattern -TimeoutSeconds $logTimeoutSeconds
+
             Stop-ProcessTree -Process $process
-            Stop-TerminalTilerSmokeProcesses
+            Stop-TerminalTilerSmokeProcesses -ThrowOnTimeout
+            $finalLogText = Get-SmokeSessionLogText -SandboxRoot $SandboxRoot
+            if (-not [string]::IsNullOrWhiteSpace($finalLogText)) {
+                $logText = $finalLogText
+            }
+
+            if ($expectGtkShell) {
+                if ($logText -notmatch "windows GTK shell startup" -or $logText -notmatch "windows GTK shell loaded canonical GTK CSS") {
+                    throw "$Label did not complete GTK launcher initialization.`n$logText"
+                }
+                if ($ProfileKind -eq "clean-first-run" -and $logText -notmatch "GTK launch deck default workspace root resolved to") {
+                    throw "$Label did not log the GTK launch deck default workspace root.`n$logText"
+                }
+                if (-not [string]::IsNullOrWhiteSpace($ExpectedLaunchRoot)) {
+                    $expectedRoot = $ExpectedLaunchRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+                    $expectedRootPattern = [regex]::Escape($expectedRoot)
+                    if ($logText -notmatch $expectedRootPattern) {
+                        throw "$Label did not launch from the expected stable wrapper directory '$ExpectedLaunchRoot'.`n$logText"
+                    }
+                    if ($logText -match '\\nsx[0-9A-Fa-f]+\.tmp' -or $logText -match '\\AppData\\Local\\Temp\\nsx') {
+                        throw "$Label launched from a temporary NSIS extraction directory instead of a stable workspace root.`n$logText"
+                    }
+                }
+                if ($ProfileKind -ne "clean-first-run" -and $logText -notmatch "Windows GTK shell restored interactive GTK workspace with") {
+                    throw "$Label did not restore inside the shared interactive GTK workspace.`n$logText"
+                }
+                if ($ProfileKind -eq "mixed" -and $logText -notmatch "Windows GTK WebView2 tile navigating to https://example.com") {
+                    throw "$Label did not initialize the restored WebView2 browser tile.`n$logText"
+                }
+                if ($logText -match "opened \d+ restored Windows workspace host window") {
+                    throw "$Label unexpectedly opened the legacy Win32 workspace host from the GTK parity shell.`n$logText"
+                }
+            }
+            elseif ($ProfileKind -eq "clean-first-run") {
+                if ($logText -notmatch "windows GUI shell startup" -or $logText -notmatch "Windows launcher window created" -or $logText -notmatch "Windows startup init complete") {
+                    throw "$Label did not complete launcher initialization.`n$logText"
+                }
+                if ($logText -match "opened \d+ restored Windows workspace host window") {
+                    throw "$Label unexpectedly restored a workspace during clean first-run.`n$logText"
+                }
+            } else {
+                if ($logText -notmatch "opened 1 restored Windows workspace host window\(s\)") {
+                    throw "$Label did not restore a saved workspace session.`n$logText"
+                }
+                if ($ProfileKind -eq "mixed" -and $logText -notmatch "web pane \d+ navigating to https://example.com") {
+                    throw "$Label did not restore the web tile.`n$logText"
+                }
+            }
+
+            return
         }
-        $env:APPDATA = $previousEnvironment.APPDATA
-        $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
-        $env:USERPROFILE = $previousEnvironment.USERPROFILE
-        $env:HOME = $previousEnvironment.HOME
-        $env:TERMINALTILER_PROFILE_ROOT = $previousEnvironment.TERMINALTILER_PROFILE_ROOT
+        catch {
+            $exitCode = $null
+            if ($process -and $process.HasExited) {
+                $exitCode = $process.ExitCode
+            }
+            Write-SmokeDiagnostics -SandboxRoot $SandboxRoot -Label $Label -ExitCode $exitCode -ExePath $ExePath -LaunchStartTime $launchStartTime
+            $shouldRetry = $attempt -lt $maxLaunchAttempts -and (Test-PreLogLaunchFailure -SandboxRoot $SandboxRoot -ExitCode $exitCode)
+            if ($shouldRetry) {
+                if ($process) {
+                    Stop-ProcessTree -Process $process
+                }
+                Stop-TerminalTilerSmokeProcesses
+                continue
+            }
+            throw
+        }
+        finally {
+            if ($process) {
+                Stop-ProcessTree -Process $process
+                Stop-TerminalTilerSmokeProcesses
+            }
+            $env:APPDATA = $previousEnvironment.APPDATA
+            $env:LOCALAPPDATA = $previousEnvironment.LOCALAPPDATA
+            $env:USERPROFILE = $previousEnvironment.USERPROFILE
+            $env:HOME = $previousEnvironment.HOME
+            $env:TEMP = $previousEnvironment.TEMP
+            $env:TMP = $previousEnvironment.TMP
+            $env:TERMINALTILER_PROFILE_ROOT = $previousEnvironment.TERMINALTILER_PROFILE_ROOT
+        }
     }
 }
 
@@ -696,6 +896,8 @@ function Invoke-OptionalLaunchSmoke {
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $DistDir = Join-Path $RootDir "dist"
 $SmokeRoot = Join-Path $RootDir "packaging\.build\windows-smoke"
+$DiagnosticsRoot = Join-Path $RootDir "artifacts\windows-smoke-diagnostics"
+$script:DiagnosticsRoot = $DiagnosticsRoot
 $PortableExtractRoot = Join-Path $SmokeRoot "portable"
 $NsisInstallRoot = Join-Path $SmokeRoot "install-nsis"
 $MsiInstallRoot = Join-Path $SmokeRoot "install-msi"
@@ -732,7 +934,9 @@ $InstallerPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64
 $MsiPath = Join-Path $DistDir "TerminalTiler-setup-$ResolvedVersion-x86_64.msi"
 
 Remove-Item -Recurse -Force $SmokeRoot -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $DiagnosticsRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $SmokeRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $DiagnosticsRoot | Out-Null
 
 Write-Host "==> checking Windows release artifacts"
 Assert-Path -Path $PortableExePath -Description "Portable executable"

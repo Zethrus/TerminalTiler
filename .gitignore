@@ -4,6 +4,7 @@
 
 # Packaging and build artifacts
 /packaging/.build
+/artifacts
 /dist
 /*.deb
 *.deb
