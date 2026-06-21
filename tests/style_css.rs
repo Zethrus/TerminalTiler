@@ -1318,6 +1318,7 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_CHROME_RS.contains("\"Broadcast Off\"")
             && WORKSPACE_CHROME_RS.contains("\"Quick send command\"")
             && WORKSPACE_CHROME_RS.contains("workspace-broadcast-entry")
+            && WORKSPACE_CHROME_RS.contains("\"Add Terminal Tile\"")
             && WORKSPACE_CHROME_RS.contains("\"Add Web Tile\"")
             && WORKSPACE_CHROME_RS.contains("workspace-url-entry")
             && WORKSPACE_CHROME_RS.contains("\"Reload\"")
@@ -1330,10 +1331,18 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         source_contains(
             WORKSPACE_CHROME_RS,
-            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&broadcast_state);\n    summary.append(&broadcast_selector);\n    summary.append(&broadcast_entry);\n    summary.append(&broadcast_button);\n    summary.append(&add_web_tile_button);\n    summary.append(&url_entry);\n    summary.append(&url_reload_button);\n    summary.append(&runbook_selector);\n    summary.append(&runbook_button);"
+            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&toolbar_divider());\n    summary.append(&broadcast_group);\n    summary.append(&toolbar_divider());\n    summary.append(&tiles_group);\n    summary.append(&toolbar_divider());\n    summary.append(&runbook_group);\n    summary.append(&path_label);"
         ) && WORKSPACE_PREVIEW_RS.contains("controls_sensitive: true")
             && WORKSPACE_VIEW_RS.contains("controls_sensitive: true"),
-        "Windows GTK workspace preview summary should keep the same visible toolbar ordering as Linux GTK workspaces via shared chrome"
+        "Windows GTK workspace preview summary should keep the same grouped toolbar ordering as Linux GTK workspaces via shared chrome"
+    );
+    assert!(
+        source_contains(
+            WORKSPACE_CHROME_RS,
+            "tiles_group.append(&add_terminal_tile_button);\n    tiles_group.append(&add_web_tile_button);\n    tiles_group.append(&url_entry);\n    tiles_group.append(&url_reload_button);"
+        ) && WORKSPACE_CHROME_RS.contains("css_classes([\"toolbar-group\"])")
+            && WORKSPACE_CHROME_RS.contains("fn toolbar_divider()"),
+        "shared workspace chrome should group the Add-Terminal-Tile/Add-Web-Tile/url controls into one segmented toolbar cluster"
     );
     assert!(
         WORKSPACE_CHROME_RS.contains("pub(crate) fn build_workspace_content_chrome")
@@ -1589,6 +1598,7 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "command_palette::workspace_actions(",
         "present_windows_tab_rename",
         "preview.focus_next_alert()",
+        "preview.add_terminal_tile()",
         "preview.add_web_tile(DEFAULT_WEB_URL)",
         "preview.run_runbook(&runbook_for_callback)",
         ".runbooks()",
@@ -1602,6 +1612,9 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
         "defaults.command_palette_shortcut",
         "install_command_palette_shortcut",
         "command_palette_shortcut_accelerators",
+        "workspace_add_terminal_tile_shortcut_controller",
+        "install_workspace_add_terminal_tile_shortcut",
+        "DEFAULT_ADD_TERMINAL_TILE_ACCEL",
         "<Ctrl><Shift>P",
     ] {
         assert!(
@@ -1649,6 +1662,10 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && COMMAND_PALETTE_RS.contains("title: \"Focus Next Alert\".into()")
             && COMMAND_PALETTE_RS
                 .contains("subtitle: \"Jump to the next unread workspace alert.\".into()")
+            && COMMAND_PALETTE_RS.contains("title: \"Add Terminal Tile\".into()")
+            && COMMAND_PALETTE_RS.contains(
+                "subtitle: \"Insert a new terminal pane beside the focused pane.\".into()"
+            )
             && COMMAND_PALETTE_RS.contains("title: \"Add Web Tile\".into()")
             && COMMAND_PALETTE_RS.contains(
                 "subtitle: \"Insert a new browser tile beside the focused pane.\".into()"
@@ -1657,8 +1674,10 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && COMMAND_PALETTE_RS.contains("fn runbook_subtitle(runbook: &Runbook) -> String")
             && WINDOW_RS.contains("command_palette::active_tab_actions")
             && WINDOW_RS.contains("command_palette::workspace_actions(")
+            && WINDOW_RS.contains("add_terminal_tile: Rc::new(")
             && WINDOWS_GTK_APP_RS.contains("command_palette::active_tab_actions")
-            && WINDOWS_GTK_APP_RS.contains("command_palette::workspace_actions("),
+            && WINDOWS_GTK_APP_RS.contains("command_palette::workspace_actions(")
+            && WINDOWS_GTK_APP_RS.contains("add_terminal_tile: Rc::new("),
         "Linux and Windows GTK active workspace palette actions should share copy, ordering, and runbook subtitle rules"
     );
 
@@ -1675,6 +1694,7 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
 
     assert!(
         WORKSPACE_PREVIEW_RS.contains("pub fn add_web_tile(&self, initial_url: &str) -> bool")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn add_terminal_tile(&self) -> bool")
             && WORKSPACE_PREVIEW_RS
                 .contains("pub fn tab_title(&self, index: usize) -> Option<String>")
             && WORKSPACE_PREVIEW_RS.contains(
@@ -1686,6 +1706,7 @@ fn windows_gtk_shell_exposes_shared_command_palette() {
             && WORKSPACE_PREVIEW_RS.contains("pub fn runbooks(&self) -> Vec<Runbook>")
             && WORKSPACE_PREVIEW_RS.contains("workspace preview tab renamed")
             && WORKSPACE_PREVIEW_RS.contains("workspace preview web tile added")
+            && WORKSPACE_PREVIEW_RS.contains("workspace preview terminal tile added")
             && WORKSPACE_PREVIEW_RS.contains("AlertSourceKind::Runbook")
             && WORKSPACE_PREVIEW_RS.contains("send_command_to_active_runtime_surfaces(")
             && UI_MOD_RS.contains("pub(crate) mod tab_rename_dialog")

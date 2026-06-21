@@ -15,7 +15,9 @@ use crate::services::broadcast::{
     BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
     sent_status_label, target_from_selector_id,
 };
-use crate::services::layout_editor::{close_tile, split_web_tile, update_split_ratio};
+use crate::services::layout_editor::{
+    close_tile, split_tile_with_kind, split_web_tile, update_split_ratio,
+};
 use crate::services::runbooks::resolve_runbook;
 use crate::services::snippets::resolve_snippet;
 use crate::storage::session_store::{SavedSession, SavedTab};
@@ -469,6 +471,17 @@ impl SessionPreview {
         if add_web_tile_to_active_session(&self.session, &self.active_index, initial_url) {
             self.prune_runtime_surfaces("workspace preview web tile added");
             self.notify_session_changed("workspace preview web tile added");
+            self.render();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn add_terminal_tile(&self) -> bool {
+        if add_terminal_tile_to_active_session(&self.session, &self.active_index) {
+            self.prune_runtime_surfaces("workspace preview terminal tile added");
+            self.notify_session_changed("workspace preview terminal tile added");
             self.render();
             true
         } else {
@@ -1418,6 +1431,19 @@ fn build_workspace_summary(
 
     {
         let render_context = render_context.clone();
+        summary.add_terminal_tile_button.connect_clicked(move |_| {
+            if add_terminal_tile_to_active_session(
+                &render_context.session,
+                &render_context.active_index,
+            ) {
+                render_context.prune_and_rerender();
+                render_context.notify_session_changed("workspace preview terminal tile added");
+            }
+        });
+    }
+
+    {
+        let render_context = render_context.clone();
         let url_entry = summary.url_entry.clone();
         summary.add_web_tile_button.connect_clicked(move |_| {
             if add_web_tile_to_active_session(
@@ -1755,6 +1781,36 @@ fn add_web_tile_to_active_session(
         &target_tile_id,
         SplitAxis::Horizontal,
         initial_url,
+    ) else {
+        return false;
+    };
+    session_ref.tabs[tab_index].preset.layout = next_layout;
+    true
+}
+
+fn add_terminal_tile_to_active_session(
+    session: &Rc<RefCell<SavedSession>>,
+    active_index: &Rc<Cell<usize>>,
+) -> bool {
+    let mut session_ref = session.borrow_mut();
+    let Some(tab_index) = active_tab_index(&session_ref, active_index.get()) else {
+        return false;
+    };
+    let Some(target_tile_id) = session_ref.tabs[tab_index]
+        .preset
+        .layout
+        .tile_specs()
+        .first()
+        .map(|tile| tile.id.clone())
+    else {
+        return false;
+    };
+    let Some((next_layout, _new_tile_id)) = split_tile_with_kind(
+        &session_ref.tabs[tab_index].preset.layout,
+        &target_tile_id,
+        SplitAxis::Horizontal,
+        false,
+        TileKind::Terminal,
     ) else {
         return false;
     };

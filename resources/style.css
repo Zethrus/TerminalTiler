@@ -1482,6 +1482,24 @@ button.surface-button:disabled {
   opacity: 0.62;
 }
 
+/* Pill clusters that segment related controls (broadcast / tiles / runbook)
+   inside the summary bar, giving the toolbar an intentional hierarchy. */
+.toolbar-group {
+  padding: 4px 6px;
+  border-radius: 12px;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.05);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
+}
+
+/* Thin vertical rule separating toolbar groups. */
+.workspace-summary separator.toolbar-divider {
+  min-width: 1px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  background: alpha(@tt_white, 0.08);
+}
+
 .terminal-header {
   padding: 10px 12px;
   background:

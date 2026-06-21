@@ -17,6 +17,7 @@ pub(crate) struct WorkspaceSummaryChrome {
     pub(crate) broadcast_selector: gtk::ComboBoxText,
     pub(crate) broadcast_entry: gtk::Entry,
     pub(crate) broadcast_button: gtk::Button,
+    pub(crate) add_terminal_tile_button: gtk::Button,
     pub(crate) add_web_tile_button: gtk::Button,
     pub(crate) url_entry: gtk::Entry,
     pub(crate) url_reload_button: gtk::Button,
@@ -181,6 +182,13 @@ pub(crate) fn build_workspace_summary_chrome(
         icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
     broadcast_button.set_sensitive(input.controls_sensitive);
 
+    let add_terminal_tile_button = icons::labeled_button(
+        "Add Terminal Tile",
+        icon_name::TERMINAL,
+        &["flat", "surface-button"],
+    );
+    add_terminal_tile_button.set_sensitive(input.controls_sensitive);
+
     let add_web_tile_button =
         icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
     add_web_tile_button.set_sensitive(input.controls_sensitive);
@@ -195,6 +203,11 @@ pub(crate) fn build_workspace_summary_chrome(
     let url_reload_button =
         icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
     url_reload_button.set_sensitive(input.controls_sensitive);
+    // URL editing + reload only make sense once a web tile holds focus, so they
+    // stay hidden until the runtime reveals them contextually. Keeps the bar
+    // uncluttered for terminal-only workspaces.
+    url_entry.set_visible(false);
+    url_reload_button.set_visible(false);
 
     let runbook_selector = gtk::ComboBoxText::new();
     runbook_selector.add_css_class("surface-select-control");
@@ -214,17 +227,30 @@ pub(crate) fn build_workspace_summary_chrome(
         .build();
     make_shrinkable(&path_label);
 
+    let broadcast_group = toolbar_group();
+    broadcast_group.append(&broadcast_state);
+    broadcast_group.append(&broadcast_selector);
+    broadcast_group.append(&broadcast_entry);
+    broadcast_group.append(&broadcast_button);
+
+    let tiles_group = toolbar_group();
+    tiles_group.append(&add_terminal_tile_button);
+    tiles_group.append(&add_web_tile_button);
+    tiles_group.append(&url_entry);
+    tiles_group.append(&url_reload_button);
+
+    let runbook_group = toolbar_group();
+    runbook_group.append(&runbook_selector);
+    runbook_group.append(&runbook_button);
+
     summary.append(&name_label);
     summary.append(&alert_button);
-    summary.append(&broadcast_state);
-    summary.append(&broadcast_selector);
-    summary.append(&broadcast_entry);
-    summary.append(&broadcast_button);
-    summary.append(&add_web_tile_button);
-    summary.append(&url_entry);
-    summary.append(&url_reload_button);
-    summary.append(&runbook_selector);
-    summary.append(&runbook_button);
+    summary.append(&toolbar_divider());
+    summary.append(&broadcast_group);
+    summary.append(&toolbar_divider());
+    summary.append(&tiles_group);
+    summary.append(&toolbar_divider());
+    summary.append(&runbook_group);
     summary.append(&path_label);
 
     WorkspaceSummaryChrome {
@@ -234,6 +260,7 @@ pub(crate) fn build_workspace_summary_chrome(
         broadcast_selector,
         broadcast_entry,
         broadcast_button,
+        add_terminal_tile_button,
         add_web_tile_button,
         url_entry,
         url_reload_button,
@@ -241,6 +268,26 @@ pub(crate) fn build_workspace_summary_chrome(
         runbook_button,
         path_label,
     }
+}
+
+/// A pill-shaped cluster that visually groups related toolbar controls. The
+/// `toolbar-group` surface plus the dividers between groups give the workspace
+/// summary bar a segmented, intentional hierarchy instead of a flat row.
+fn toolbar_group() -> gtk::Box {
+    gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .css_classes(["toolbar-group"])
+        .build()
+}
+
+/// A thin vertical rule placed between toolbar groups.
+fn toolbar_divider() -> gtk::Separator {
+    let divider = gtk::Separator::new(gtk::Orientation::Vertical);
+    divider.add_css_class("toolbar-divider");
+    divider.set_valign(gtk::Align::Center);
+    divider
 }
 
 fn make_shrinkable<W: glib::object::IsA<gtk::Widget>>(widget: &W) {

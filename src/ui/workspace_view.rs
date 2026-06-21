@@ -19,7 +19,7 @@ use crate::services::broadcast::{
     sent_status_label, target_from_selector_id,
 };
 use crate::services::layout_editor::{
-    close_tile as close_layout_tile, split_web_tile, update_split_ratio,
+    close_tile as close_layout_tile, split_tile_with_kind, split_web_tile, update_split_ratio,
 };
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
@@ -614,6 +614,54 @@ impl WorkspaceRuntime {
         Some(new_tile_id)
     }
 
+    pub fn add_terminal_tile(&self) -> Option<String> {
+        let target_tile_id = self.inner.focused_tile_id.borrow().clone().or_else(|| {
+            self.inner
+                .tiles
+                .borrow()
+                .first()
+                .map(|tile| tile.tile.id.clone())
+        })?;
+
+        let current_layout = self.inner.layout.borrow().clone();
+        let (next_layout, new_tile_id) = split_tile_with_kind(
+            &current_layout,
+            &target_tile_id,
+            SplitAxis::Horizontal,
+            false,
+            TileKind::Terminal,
+        )?;
+        let ordered_specs = next_layout.tile_specs();
+        let mut existing_tiles = self
+            .inner
+            .tiles
+            .borrow_mut()
+            .drain(..)
+            .map(|tile| (tile.tile.id.clone(), tile))
+            .collect::<HashMap<_, _>>();
+        detach_tile_widgets(existing_tiles.values());
+        let next_tiles = ordered_specs
+            .into_iter()
+            .map(|spec| {
+                if let Some(mut tile) = existing_tiles.remove(&spec.id) {
+                    tile.tile = spec;
+                    tile
+                } else {
+                    self.build_tile(&spec)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.replace_layout_shell(&next_layout);
+        self.set_tiles(next_tiles);
+        self.set_focused_tile(Some(new_tile_id.clone()), false);
+        self.focus_tile(&new_tile_id);
+        (self.inner.on_layout_changed)(next_layout);
+
+        Some(new_tile_id)
+    }
+
     fn set_tiles(&self, mut tiles: Vec<WorkspaceTile>) {
         self.bind_tile_handlers(&mut tiles);
         remount_tiles(&self.inner.slots.borrow(), &tiles);
@@ -1090,6 +1138,7 @@ pub fn build_with_layout_change_handler(
     let url_reload_button = summary.url_reload_button.clone();
     let runbook_selector = summary.runbook_selector.clone();
     let runbook_button = summary.runbook_button.clone();
+    let add_terminal_tile_button = summary.add_terminal_tile_button.clone();
     let add_web_tile_button = summary.add_web_tile_button.clone();
     let broadcast_state = summary.broadcast_state.clone();
     let broadcast_selector = summary.broadcast_selector.clone();
@@ -1160,6 +1209,13 @@ pub fn build_with_layout_change_handler(
             if let Some(tile_id) = runtime.current_focused_web_tile() {
                 runtime.reload_web_tile(&tile_id);
             }
+        });
+    }
+
+    {
+        let runtime = runtime.clone();
+        add_terminal_tile_button.connect_clicked(move |_| {
+            let _ = runtime.add_terminal_tile();
         });
     }
 

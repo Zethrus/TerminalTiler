@@ -74,6 +74,8 @@ const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT: &str =
     crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL;
+const DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT: &str =
+    crate::ui::shortcuts_dialog::DEFAULT_ADD_TERMINAL_TILE_ACCEL;
 const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const VOICE_CAPTURE_SAFETY_CAP: Duration = Duration::from_secs(120);
 
@@ -1014,6 +1016,8 @@ fn present_with_initial_workspace(
     let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let command_palette_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let maximize_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let add_terminal_tile_shortcut_controller: ShortcutControllerHandle =
+        Rc::new(RefCell::new(None));
     let sync_close_to_background_notice: Rc<dyn Fn()> = {
         let close_to_background_notice = close_to_background_notice.clone();
         let current_close_to_background = current_close_to_background.clone();
@@ -1933,6 +1937,13 @@ fn present_with_initial_workspace(
     install_workspace_maximize_shortcut(
         &window,
         &maximize_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+    );
+
+    install_workspace_add_terminal_tile_shortcut(
+        &window,
+        &add_terminal_tile_shortcut_controller,
         &tabs,
         &active_tab_id,
     );
@@ -3138,6 +3149,12 @@ fn present_with_initial_workspace(
                             toggle_maximize: Rc::new({
                                 let runtime_for_maximize = workspace.runtime.clone();
                                 move || runtime_for_maximize.toggle_focused_pane_maximized()
+                            }),
+                            add_terminal_tile: Rc::new({
+                                let runtime_for_add_terminal_tile = workspace.runtime.clone();
+                                move || {
+                                    let _ = runtime_for_add_terminal_tile.add_terminal_tile();
+                                }
                             }),
                             add_web_tile: Rc::new({
                                 let runtime_for_add_web_tile = workspace.runtime.clone();
@@ -5409,6 +5426,32 @@ fn install_workspace_maximize_shortcut(
     );
 }
 
+fn install_workspace_add_terminal_tile_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &ShortcutControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+) {
+    let tabs_for_shortcut = tabs.clone();
+    let active_for_shortcut = active_tab_id.clone();
+    install_shortcut_controller(
+        window,
+        controller_handle,
+        "workspace_add_terminal_tile",
+        &[DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT.to_string()],
+        move || {
+            if let Some(runtime) =
+                active_workspace_runtime(&tabs_for_shortcut, active_for_shortcut.get())
+            {
+                let _ = runtime.add_terminal_tile();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        },
+    );
+}
+
 /// Build the cheat-sheet rows from current preferences plus the fixed
 /// (non-configurable) shortcuts, for [`crate::ui::shortcuts_dialog`].
 fn build_shortcut_sections(
@@ -5422,6 +5465,7 @@ fn build_shortcut_sections(
             zoom_out: prefs.workspace_zoom_out_shortcut.clone(),
             command_palette: prefs.command_palette_shortcut.clone(),
             maximize: DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT.to_string(),
+            add_terminal_tile: DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT.to_string(),
         },
     )
 }

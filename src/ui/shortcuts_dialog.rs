@@ -17,6 +17,10 @@ const SHORTCUTS_DIALOG_TITLE: &str = "Keyboard Shortcuts";
 /// truth shared by the shortcut installer and the cheat sheet.
 pub const DEFAULT_MAXIMIZE_ACCEL: &str = "<Ctrl><Shift>M";
 
+/// Default accelerator for the add-terminal-tile action. Single source of truth
+/// shared by the shortcut installer and the cheat sheet.
+pub const DEFAULT_ADD_TERMINAL_TILE_ACCEL: &str = "<Ctrl><Shift>Return";
+
 /// The configurable accelerators (read from the preference store) needed to
 /// render the cheat sheet. Fixed shortcuts (copy/paste, quick send) are added
 /// by [`sections_from_summary`].
@@ -27,6 +31,7 @@ pub struct ShortcutSummary {
     pub zoom_out: String,
     pub command_palette: String,
     pub maximize: String,
+    pub add_terminal_tile: String,
 }
 
 /// Build the grouped cheat-sheet rows from a [`ShortcutSummary`] plus the fixed
@@ -41,6 +46,7 @@ pub fn sections_from_summary(summary: &ShortcutSummary) -> Vec<ShortcutSection> 
                 ShortcutRow::new("Zoom in text", summary.zoom_in.clone()),
                 ShortcutRow::new("Zoom out text", summary.zoom_out.clone()),
                 ShortcutRow::new("Maximize / restore pane", summary.maximize.clone()),
+                ShortcutRow::new("Add terminal tile", summary.add_terminal_tile.clone()),
             ],
         ),
         ShortcutSection::new(

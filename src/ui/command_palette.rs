@@ -34,6 +34,7 @@ pub struct AppActionCallbacks {
 pub struct WorkspaceActionCallbacks {
     pub focus_next_alert: Rc<dyn Fn()>,
     pub toggle_maximize: Rc<dyn Fn()>,
+    pub add_terminal_tile: Rc<dyn Fn()>,
     pub add_web_tile: Rc<dyn Fn()>,
     pub runbooks: Vec<RunbookAction>,
 }
@@ -109,6 +110,11 @@ pub fn workspace_actions(callbacks: WorkspaceActionCallbacks) -> Vec<PaletteActi
             title: "Maximize / Restore Focused Pane".into(),
             subtitle: "Expand the focused pane to fill the workspace, or restore it.".into(),
             on_activate: callbacks.toggle_maximize,
+        },
+        PaletteAction {
+            title: "Add Terminal Tile".into(),
+            subtitle: "Insert a new terminal pane beside the focused pane.".into(),
+            on_activate: callbacks.add_terminal_tile,
         },
         PaletteAction {
             title: "Add Web Tile".into(),

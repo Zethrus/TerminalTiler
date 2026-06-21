@@ -503,6 +503,8 @@ mod imp {
             Rc::new(RefCell::new(None));
         let workspace_zoom_out_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
+        let workspace_add_terminal_tile_shortcut_controller: ShortcutControllerHandle =
+            Rc::new(RefCell::new(None));
         let command_palette_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
         let open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
@@ -665,6 +667,11 @@ mod imp {
                 &preferences.workspace_zoom_out_shortcut,
                 -1,
                 "workspace_zoom_out",
+            );
+            install_workspace_add_terminal_tile_shortcut(
+                &window,
+                &workspace_add_terminal_tile_shortcut_controller,
+                &shell_state,
             );
             let open_settings_dialog: Rc<dyn Fn()> = Rc::new({
                 let settings_context = settings_context.clone();
@@ -3541,6 +3548,9 @@ mod imp {
                                 command_palette: prefs.command_palette_shortcut.clone(),
                                 maximize: crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL
                                     .to_string(),
+                                add_terminal_tile:
+                                    crate::ui::shortcuts_dialog::DEFAULT_ADD_TERMINAL_TILE_ACCEL
+                                        .to_string(),
                             },
                         ),
                     );
@@ -3663,6 +3673,12 @@ mod imp {
                         // The Windows shell renders a static session preview, so
                         // there is no live pane layout to maximize.
                         toggle_maximize: Rc::new(|| {}),
+                        add_terminal_tile: Rc::new({
+                            let preview = preview.clone();
+                            move || {
+                                let _ = preview.add_terminal_tile();
+                            }
+                        }),
                         add_web_tile: Rc::new({
                             let preview = preview.clone();
                             move || {
@@ -3793,6 +3809,34 @@ mod imp {
                     "Windows GTK adjusted workspace terminal zoom_steps={zoom_steps}"
                 ));
                 glib::Propagation::Stop
+            },
+        );
+    }
+
+    fn install_workspace_add_terminal_tile_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &ShortcutControllerHandle,
+        shell_state: &WindowsGtkShellState,
+    ) {
+        let shell_state_for_shortcut = shell_state.clone();
+        install_shortcut_controller(
+            window,
+            controller_handle,
+            "workspace_add_terminal_tile",
+            &[crate::ui::shortcuts_dialog::DEFAULT_ADD_TERMINAL_TILE_ACCEL.to_string()],
+            move || {
+                if shell_state_for_shortcut.launch_deck_active.get() {
+                    return glib::Propagation::Proceed;
+                }
+                let preview = shell_state_for_shortcut.preview.borrow().clone();
+                let Some(preview) = preview else {
+                    return glib::Propagation::Proceed;
+                };
+                if preview.add_terminal_tile() {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
             },
         );
     }
