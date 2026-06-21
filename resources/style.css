@@ -347,8 +347,7 @@ window.profile-compact .config-panel,
 window.profile-compact .preview-card,
 window.profile-compact .selection-summary,
 window.profile-compact .tile-editor-panel,
-window.profile-compact .workspace-summary,
-window.profile-compact .terminal-card {
+window.profile-compact .workspace-summary {
   border-radius: 14px;
 }
 
@@ -465,7 +464,7 @@ window.profile-compact .workspace-summary {
 }
 
 window.profile-compact .terminal-card {
-  border-radius: 14px;
+  border-radius: 0;
 }
 
 window.profile-compact .terminal-header {
@@ -804,8 +803,7 @@ button.app-tab-add:hover {
 .config-panel,
 .preset-card,
 .preview-card,
-.workspace-summary,
-.terminal-card {
+.workspace-summary {
   border: 1px solid alpha(@tt_white, 0.07);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(11, 11, 13, 0.98), rgba(7, 7, 9, 0.98));
@@ -1490,8 +1488,8 @@ button.surface-button:disabled {
     linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.025)),
     radial-gradient(circle at top left, alpha(@tt_amber, 0.06), transparent 42%);
   border-bottom: 1px solid alpha(@tt_white, 0.07);
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
   transition:
     background 140ms ease,
     border-bottom-color 140ms ease;
@@ -1574,8 +1572,8 @@ button.tile-header-action:disabled {
 
 
 .terminal-card {
-  border-radius: 18px;
-  border: 1px solid alpha(@tt_white, 0.06);
+  border-radius: 0;
+  border: 1px solid alpha(@tt_white, 0.09);
   background: linear-gradient(180deg, rgba(16, 18, 23, 0.98), rgba(9, 10, 14, 0.98));
   /* e1 resting + lit top edge (no hover transform: terminal cards host live VTE) */
   box-shadow:
@@ -1597,6 +1595,16 @@ button.tile-header-action:disabled {
 
 .terminal-card.is-active-tile .tile-title {
   color: alpha(@tt_white, 0.82);
+}
+
+.terminal-card.is-active-tile {
+  /* Full amber border around the focused pane (squared tiles read as crisp panels). */
+  border-color: alpha(@tt_amber, 0.55);
+}
+
+.terminal-card:not(.is-active-tile):hover {
+  /* VTE-safe affordance: brighten the hairline only, no transform (tiles host live terminals). */
+  border-color: alpha(@tt_white, 0.14);
 }
 
 .terminal-card.is-dragging {
@@ -3953,6 +3961,15 @@ window.window-shell.theme-light .terminal-card.is-active-tile .terminal-header {
 
 window.window-shell.theme-light .terminal-card.is-active-tile .tile-title {
   color: rgba(25, 35, 50, 0.94);
+}
+
+window.window-shell.theme-light .terminal-card.is-active-tile {
+  /* Light-theme copper accent (matches the amber active border used in dark theme). */
+  border-color: rgba(196, 112, 54, 0.55);
+}
+
+window.window-shell.theme-light .terminal-card:not(.is-active-tile):hover {
+  border-color: rgba(25, 35, 50, 0.22);
 }
 
 window.window-shell.theme-light .terminal-card.is-disconnected .terminal-header {

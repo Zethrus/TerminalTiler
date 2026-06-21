@@ -285,11 +285,18 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
 
 #[test]
 fn terminal_card_state_selectors_do_not_draw_full_card_rings() {
+    // is-active-tile intentionally draws a full-card amber border (focused-pane emphasis on
+    // squared tiles); disconnected/drop-target stay header-local to avoid noisy split-pane rings.
+    const HEADER_LOCAL_ONLY_STATES: &[&str] = &[
+        ".terminal-card.is-disconnected",
+        ".terminal-card.is-drop-target",
+    ];
+
     let mut checked_selectors = Vec::new();
 
     for (selectors, body) in css_blocks(STYLE_CSS) {
         for selector in selectors.split(',').map(str::trim) {
-            for state in TERMINAL_CARD_STATES {
+            for state in HEADER_LOCAL_ONLY_STATES {
                 if is_full_card_state_selector(selector, state) {
                     checked_selectors.push(selector.to_string());
                     assert_forbidden_full_card_ring_properties(selector, body);
@@ -300,8 +307,38 @@ fn terminal_card_state_selectors_do_not_draw_full_card_rings() {
 
     assert!(
         checked_selectors.is_empty(),
-        "terminal-card state styling should be header-local; found full-card state selector(s): {}",
+        "disconnected/drop-target tile state styling should be header-local; found full-card state selector(s): {}",
         checked_selectors.join(", ")
+    );
+}
+
+#[test]
+fn active_terminal_card_draws_full_amber_border() {
+    // Focused pane gets a full-card accent border in both themes (squared-tile emphasis).
+    let mut dark = false;
+    let mut light = false;
+
+    for (selectors, body) in css_blocks(STYLE_CSS) {
+        for selector in selectors.split(',').map(str::trim) {
+            if is_full_card_state_selector(selector, ".terminal-card.is-active-tile")
+                && declaration_value(body, "border-color").is_some()
+            {
+                if selector.contains("theme-light") {
+                    light = true;
+                } else {
+                    dark = true;
+                }
+            }
+        }
+    }
+
+    assert!(
+        dark,
+        "dark theme active tile must recolor the full card border"
+    );
+    assert!(
+        light,
+        "light theme active tile must recolor the full card border"
     );
 }
 
