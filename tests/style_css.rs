@@ -3088,6 +3088,14 @@ fn source_contains(source: &str, needle: &str) -> bool {
     source.replace("\r\n", "\n").contains(needle)
 }
 
+#[test]
+fn source_contains_matches_lf_needles_in_crlf_source_text() {
+    assert!(source_contains(
+        "gtk::DropTarget::new(\r\n            board_drag::KanbanTaskDragPayload::static_type()",
+        "gtk::DropTarget::new(\n            board_drag::KanbanTaskDragPayload::static_type()",
+    ));
+}
+
 fn workflow_job_block(workflow: &str, job_name: &str) -> String {
     let normalized = workflow.replace("\r\n", "\n");
     let marker = format!("{job_name}:");
@@ -3217,7 +3225,10 @@ fn kanban_board_drag_and_drop_is_wired_natively() {
     assert!(
         BOARD_VIEW_RS.contains("gtk::DragSource::builder()")
             && BOARD_VIEW_RS.contains("KanbanTaskDragPayload::new")
-            && BOARD_VIEW_RS.contains("gtk::DropTarget::new(\n            board_drag::KanbanTaskDragPayload::static_type()"),
+            && source_contains(
+                BOARD_VIEW_RS,
+                "gtk::DropTarget::new(\n            board_drag::KanbanTaskDragPayload::static_type()",
+            ),
         "Kanban cards and columns should use GTK-native DragSource/DropTarget wiring"
     );
     assert!(
