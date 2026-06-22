@@ -122,7 +122,7 @@ impl BoardLock {
                     let _ = fs::write(path.join("owner"), std::process::id().to_string());
                     return Ok(Self { path });
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(error) if is_lock_contention_error(&error, &path) => {
                     if is_stale_lock(&path) {
                         let _ = fs::remove_dir_all(&path);
                         continue;
@@ -158,6 +158,30 @@ fn is_stale_lock(path: &Path) -> bool {
         .ok()
         .and_then(|modified| modified.elapsed().ok())
         .is_some_and(|age| age >= LOCK_STALE_AFTER)
+}
+
+fn is_lock_contention_error(error: &std::io::Error, path: &Path) -> bool {
+    match error.kind() {
+        std::io::ErrorKind::AlreadyExists => true,
+        std::io::ErrorKind::PermissionDenied => is_windows_lock_contention(path),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn is_windows_lock_contention(path: &Path) -> bool {
+    match fs::metadata(path) {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+        ),
+    }
+}
+
+#[cfg(not(windows))]
+fn is_windows_lock_contention(_path: &Path) -> bool {
+    false
 }
 
 /// Modification time of the board file, for cheap change detection by the UI poller.
@@ -238,6 +262,35 @@ mod tests {
                 "missing task-{index}"
             );
         }
+    }
+
+    #[test]
+    fn lock_contention_includes_existing_lock_directory() {
+        let root = temp_root("board-lock-contention-existing");
+        let path = board_dir(&root).join(BOARD_LOCK_DIR_NAME);
+        let error = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+
+        assert!(is_lock_contention_error(&error, &path));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn lock_contention_keeps_permission_denied_fatal_off_windows() {
+        let root = temp_root("board-lock-contention-permission");
+        let path = board_dir(&root).join(BOARD_LOCK_DIR_NAME);
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        assert!(!is_lock_contention_error(&error, &path));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn lock_contention_retries_transient_windows_permission_denied() {
+        let root = temp_root("board-lock-contention-windows-permission");
+        let path = board_dir(&root).join(BOARD_LOCK_DIR_NAME);
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        assert!(is_lock_contention_error(&error, &path));
     }
 
     #[test]
