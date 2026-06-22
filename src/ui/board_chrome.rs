@@ -195,9 +195,19 @@ pub(crate) fn build_agent_run_row(run: &AgentRun) -> AgentRunRowChrome {
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
         .build();
+    let mut agent_label = run.agent_kind.label().to_string();
+    if run.yolo {
+        agent_label.push_str(" YOLO");
+    }
     header.append(
         &gtk::Label::builder()
-            .label(run.agent_kind.label())
+            .label(agent_label)
+            .css_classes(["status-chip", "agent-kind-chip"])
+            .build(),
+    );
+    header.append(
+        &gtk::Label::builder()
+            .label(run.run_kind.label())
             .css_classes(["status-chip", "agent-kind-chip"])
             .build(),
     );

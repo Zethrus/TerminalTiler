@@ -13,11 +13,11 @@ use std::time::{Duration, SystemTime};
 use adw::prelude::*;
 use gtk::glib;
 
-use crate::model::agent_run::AgentKind;
+use crate::model::agent_run::{AgentKind, AgentRunOptions};
 use crate::model::board::{Task, TaskStatus};
 use crate::model::preset::ApplicationDensity;
 use crate::services::agent_orchestrator::AgentOrchestrator;
-use crate::services::{agent_config, board as board_service};
+use crate::services::{agent_config, board as board_service, review_dispatch};
 use crate::storage::board_store;
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{agent_setup_dialog, board_chrome, new_task_dialog};
@@ -252,7 +252,9 @@ fn build_agents_section() -> (gtk::Box, gtk::Box, gtk::Stack) {
 }
 
 fn render(inner: &Rc<Inner>) {
-    let board = board_store::load(&inner.project_root);
+    let mut board = board_store::load(&inner.project_root);
+    dispatch_pending_auto_reviews(inner, &board);
+    board = board_store::load(&inner.project_root);
     render_board(inner, &board);
     render_agents(inner);
 }
@@ -276,7 +278,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
     let card = board_chrome::build_board_card(task);
     let task_id = task.id.clone();
 
-    // Run-with-agent menu (Claude / Codex).
+    // Run-with-agent menu (default/safe/YOLO implementation runs).
     let run_menu = gtk::MenuButton::builder()
         .label("Run agent")
         .css_classes(["flat", "surface-button"])
@@ -286,21 +288,114 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
         .build();
-    for agent in AgentKind::ALL {
-        let agent_button =
-            icons::labeled_button(agent.label(), icon_name::RUN, &["flat", "surface-button"]);
+    let board = board_store::load(&inner.project_root);
+    let default_yolo = board.automation.yolo_default;
+    let default_agent = board
+        .automation
+        .default_agent
+        .or(board.automation.default_reviewer)
+        .unwrap_or(AgentKind::Claude);
+    let default_label = if default_yolo {
+        format!("Default: {} YOLO", default_agent.label())
+    } else {
+        format!("Default: {}", default_agent.label())
+    };
+    let default_button =
+        icons::labeled_button(&default_label, icon_name::RUN, &["flat", "surface-button"]);
+    {
         let inner = inner.clone();
         let task_id = task_id.clone();
         let run_popover = run_popover.clone();
-        agent_button.connect_clicked(move |_| {
+        default_button.connect_clicked(move |_| {
             run_popover.popdown();
-            dispatch_agent(&inner, &task_id, agent);
+            dispatch_agent(&inner, &task_id, default_agent, default_yolo);
         });
-        run_box.append(&agent_button);
+    }
+    run_box.append(&default_button);
+
+    for agent in AgentKind::ALL {
+        for (label, yolo) in [
+            (agent.label().to_string(), false),
+            (format!("{} YOLO", agent.label()), true),
+        ] {
+            let agent_button =
+                icons::labeled_button(&label, icon_name::RUN, &["flat", "surface-button"]);
+            let inner = inner.clone();
+            let task_id = task_id.clone();
+            let run_popover = run_popover.clone();
+            agent_button.connect_clicked(move |_| {
+                run_popover.popdown();
+                dispatch_agent(&inner, &task_id, agent, yolo);
+            });
+            run_box.append(&agent_button);
+        }
     }
     run_popover.set_child(Some(&run_box));
     run_menu.set_popover(Some(&run_popover));
     card.actions.append(&run_menu);
+
+    // Manual review/re-review menu (normal and YOLO review runs).
+    let review_label = if task.review.last_started_at.is_some() {
+        "Re-run review"
+    } else {
+        "Run review"
+    };
+    let review_menu = gtk::MenuButton::builder()
+        .label(review_label)
+        .css_classes(["flat", "surface-button"])
+        .build();
+    let review_popover = gtk::Popover::new();
+    let review_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .build();
+    let default_reviewer = board_service::reviewer_for_task(&board, task);
+    let default_review_label = if default_yolo {
+        format!("Default review: {} YOLO", default_reviewer.label())
+    } else {
+        format!("Default review: {}", default_reviewer.label())
+    };
+    let default_review = icons::labeled_button(
+        &default_review_label,
+        icon_name::SEARCH,
+        &["flat", "surface-button"],
+    );
+    {
+        let inner = inner.clone();
+        let task_id = task_id.clone();
+        let review_popover = review_popover.clone();
+        default_review.connect_clicked(move |_| {
+            review_popover.popdown();
+            dispatch_review(
+                &inner,
+                &task_id,
+                Some(default_reviewer),
+                Some(default_yolo),
+                true,
+            );
+        });
+    }
+    review_box.append(&default_review);
+    for agent in AgentKind::ALL {
+        for (label, yolo) in [
+            (format!("{} review", agent.label()), false),
+            (format!("{} YOLO review", agent.label()), true),
+        ] {
+            let review_button =
+                icons::labeled_button(&label, icon_name::SEARCH, &["flat", "surface-button"]);
+            let inner = inner.clone();
+            let task_id = task_id.clone();
+            let review_popover = review_popover.clone();
+            review_button.connect_clicked(move |_| {
+                review_popover.popdown();
+                dispatch_review(&inner, &task_id, Some(agent), Some(yolo), true);
+            });
+            review_box.append(&review_button);
+        }
+    }
+    review_popover.set_child(Some(&review_box));
+    review_menu.set_popover(Some(&review_popover));
+    card.actions.append(&review_menu);
 
     // Advance to the next column.
     if let Some(next) = next_status(task.status) {
@@ -390,11 +485,11 @@ fn render_agents(inner: &Rc<Inner>) {
     }
 }
 
-fn dispatch_agent(inner: &Rc<Inner>, task_id: &str, agent: AgentKind) {
+fn dispatch_agent(inner: &Rc<Inner>, task_id: &str, agent: AgentKind, yolo: bool) {
     // Make sure the agent can reach the MCP board before it starts.
     let _ = match agent {
         AgentKind::Claude => agent_config::connect_claude(&inner.project_root),
-        AgentKind::Codex => agent_config::connect_codex(),
+        AgentKind::Codex => agent_config::connect_codex(&inner.project_root),
     };
 
     let task = match board_store::update(&inner.project_root, |board| {
@@ -420,6 +515,7 @@ fn dispatch_agent(inner: &Rc<Inner>, task_id: &str, agent: AgentKind) {
         &inner.project_root,
         agent,
         &task,
+        AgentRunOptions::implementation(yolo),
         inner.use_dark_palette,
         inner.density,
     );
@@ -434,11 +530,78 @@ fn dispatch_agent(inner: &Rc<Inner>, task_id: &str, agent: AgentKind) {
     render(inner);
 }
 
-fn render_persisted_board(inner: &Rc<Inner>, board: &crate::model::board::Board) {
+fn dispatch_review(
+    inner: &Rc<Inner>,
+    task_id: &str,
+    requested_agent: Option<AgentKind>,
+    requested_yolo: Option<bool>,
+    force: bool,
+) {
+    let selection = match review_dispatch::claim_pending_review(
+        &inner.project_root,
+        task_id,
+        requested_agent,
+        requested_yolo,
+        force,
+    ) {
+        Ok(Some(selection)) => selection,
+        Ok(None) => return,
+        Err(error) => {
+            crate::logging::error(format!("failed to save board: {error}"));
+            return;
+        }
+    };
+
+    let task = selection.task;
+    let reviewer = selection.reviewer;
+    let yolo = selection.yolo;
+    let _ = match reviewer {
+        AgentKind::Claude => agent_config::connect_claude(&inner.project_root),
+        AgentKind::Codex => agent_config::connect_codex(&inner.project_root),
+    };
     inner
         .last_mtime
         .set(board_store::mtime(&inner.project_root));
-    render_board(inner, board);
+
+    let dispatched = inner.orchestrator.dispatch(
+        &inner.project_root,
+        reviewer,
+        &task,
+        AgentRunOptions::review(yolo),
+        inner.use_dark_palette,
+        inner.density,
+    );
+    dispatched.terminal.set_vexpand(true);
+    inner
+        .terminal_stack
+        .add_named(&dispatched.terminal, Some(&dispatched.run.id));
+    inner
+        .terminal_stack
+        .set_visible_child_name(&dispatched.run.id);
+
+    render(inner);
+}
+
+fn dispatch_pending_auto_reviews(inner: &Rc<Inner>, board: &crate::model::board::Board) {
+    let pending_ids: Vec<String> = board
+        .tasks
+        .iter()
+        .filter(|task| task.needs_auto_review())
+        .map(|task| task.id.clone())
+        .collect();
+
+    for task_id in pending_ids {
+        dispatch_review(inner, &task_id, None, None, false);
+    }
+}
+
+fn render_persisted_board(inner: &Rc<Inner>, board: &crate::model::board::Board) {
+    dispatch_pending_auto_reviews(inner, board);
+    let board = board_store::load(&inner.project_root);
+    inner
+        .last_mtime
+        .set(board_store::mtime(&inner.project_root));
+    render_board(inner, &board);
     render_agents(inner);
 }
 
@@ -452,7 +615,9 @@ fn start_poller(inner: &Rc<Inner>) {
         let current = board_store::mtime(&inner.project_root);
         if current != inner.last_mtime.get() {
             inner.last_mtime.set(current);
-            let board = board_store::load(&inner.project_root);
+            let mut board = board_store::load(&inner.project_root);
+            dispatch_pending_auto_reviews(&inner, &board);
+            board = board_store::load(&inner.project_root);
             render_board(&inner, &board);
         }
         render_agents(&inner);

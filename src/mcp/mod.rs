@@ -2,8 +2,8 @@
 //!
 //! The stdio transport is newline-delimited JSON-RPC over stdin/stdout, so the whole
 //! server is a blocking read loop — no async runtime. The AI client (Claude/Codex) spawns
-//! `terminaltiler-mcp` as a subprocess in the project directory; this module owns the
-//! protocol, while [`tools`] owns the board operations.
+//! `terminaltiler-mcp` with `--project-root <path>` so this module owns protocol and
+//! project-root binding, while [`tools`] owns the board operations.
 
 pub mod tools;
 
@@ -22,13 +22,20 @@ const INSTRUCTIONS: &str = "\
 This server exposes a TerminalTiler Kanban board for the current project. Workflow: call \
 `list_tasks` with status \"todo\" to find work; `claim_task` to move a task to In Progress \
 and record yourself as the assignee; use `add_task_note` to report progress as you go; and \
-`complete_task` when the work is done (or `update_task_status` to move it to \"in_review\"). \
-Always claim a task before starting and post a note or completion when finished so the user \
-can follow along.";
+when implementation is ready, call `update_task_status` to move the task to \"in_review\" \
+before completion so the board can trigger review. Use `complete_task` only when the user \
+explicitly asks you to mark the task Complete. Always claim a task before starting and post \
+a note or status update when finished so the user can follow along.";
 
 /// Run the stdio server loop until stdin closes. This is the binary's entire job.
 pub fn run_stdio() {
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let project_root = match resolve_project_root_from_args(std::env::args_os().skip(1)) {
+        Ok(project_root) => project_root,
+        Err(message) => {
+            eprintln!("terminaltiler-mcp: {message}");
+            return;
+        }
+    };
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     let stdout = std::io::stdout();
@@ -56,6 +63,52 @@ pub fn run_stdio() {
             }
         }
     }
+}
+
+/// Resolve the project root configured for this MCP server invocation.
+///
+/// `--project-root <path>` pins the server to that canonical project. Omitting the flag
+/// preserves the legacy behavior of serving the current working directory.
+pub fn resolve_project_root_from_args<I, S>(args: I) -> Result<PathBuf, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
+    let mut args = args.into_iter().map(Into::into);
+    let mut project_root: Option<PathBuf> = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--project-root" {
+            let value = args
+                .next()
+                .ok_or_else(|| "--project-root requires a path".to_string())?;
+            if project_root.is_some() {
+                return Err("--project-root may only be provided once".to_string());
+            }
+            project_root = Some(PathBuf::from(value));
+        } else {
+            return Err(format!("unknown argument '{}'", arg.to_string_lossy()));
+        }
+    }
+
+    let root = match project_root {
+        Some(path) => path,
+        None => std::env::current_dir()
+            .map_err(|error| format!("could not resolve current directory: {error}"))?,
+    };
+
+    if !root.is_dir() {
+        return Err(format!(
+            "project root '{}' does not exist or is not a directory",
+            root.display()
+        ));
+    }
+    root.canonicalize().map_err(|error| {
+        format!(
+            "could not canonicalize project root '{}': {error}",
+            root.display()
+        )
+    })
 }
 
 /// Handle one JSON-RPC message line. Returns the serialized response, or `None` for
@@ -166,6 +219,51 @@ mod tests {
     }
 
     #[test]
+    fn project_root_arg_selects_canonical_directory() {
+        let root = temp_root();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+
+        let resolved = resolve_project_root_from_args([
+            std::ffi::OsString::from("--project-root"),
+            nested.clone().into_os_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(resolved, nested.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn missing_project_root_arg_falls_back_to_cwd() {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            resolve_project_root_from_args(std::iter::empty::<std::ffi::OsString>()).unwrap(),
+            cwd
+        );
+    }
+
+    #[test]
+    fn invalid_project_root_arg_returns_clear_error() {
+        let missing =
+            std::env::temp_dir().join(format!("terminaltiler-missing-{}", Uuid::new_v4()));
+        let error = resolve_project_root_from_args([
+            std::ffi::OsString::from("--project-root"),
+            missing.clone().into_os_string(),
+        ])
+        .unwrap_err();
+
+        assert!(error.contains("project root"));
+        assert!(error.contains(&missing.display().to_string()));
+    }
+
+    #[test]
+    fn project_root_arg_requires_value() {
+        let error = resolve_project_root_from_args([std::ffi::OsString::from("--project-root")])
+            .unwrap_err();
+        assert!(error.contains("requires a path"));
+    }
+
+    #[test]
     fn initialize_advertises_protocol_and_tools_capability() {
         let root = temp_root();
         let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }).to_string();
@@ -173,7 +271,10 @@ mod tests {
             serde_json::from_str(&handle_request(&request, &root).unwrap()).unwrap();
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert!(response["result"]["capabilities"]["tools"].is_object());
-        assert!(response["result"]["instructions"].is_string());
+        let instructions = response["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("update_task_status"));
+        assert!(instructions.contains("in_review"));
+        assert!(instructions.contains("before completion"));
     }
 
     #[test]
@@ -222,6 +323,45 @@ mod tests {
         let listed = call_tool(&root, "list_tasks", json!({ "status": "todo" }));
         let text = listed["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Wire MCP"));
+    }
+
+    #[test]
+    fn update_status_to_in_review_marks_one_headless_review_from_configured_root() {
+        crate::services::review_dispatch::set_test_disable_headless_review_spawn(true);
+        let root = temp_root();
+        let created = call_tool(&root, "create_task", json!({ "title": "Review via MCP" }));
+        assert_eq!(created["isError"], false);
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+
+        let first = call_tool(
+            &root,
+            "update_task_status",
+            json!({ "id": task_id, "status": "in_review" }),
+        );
+        assert_eq!(first["isError"], false);
+        let text = first["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Started Claude headless review"));
+
+        let second = call_tool(
+            &root,
+            "update_task_status",
+            json!({ "id": task_id, "status": "in_review" }),
+        );
+        assert_eq!(second["isError"], false);
+        let text = second["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("headless review"));
+
+        let board = crate::storage::board_store::load(&root);
+        assert!(crate::storage::board_store::board_path(&root).exists());
+        let task = &board.tasks[0];
+        assert_eq!(task.status, crate::model::board::TaskStatus::InReview);
+        assert_eq!(task.review.attempts, 1);
+        assert_eq!(
+            task.review.last_reviewer,
+            Some(crate::model::agent_run::AgentKind::Claude)
+        );
+        assert!(root.join(".mcp.json").exists());
+        crate::services::review_dispatch::set_test_disable_headless_review_spawn(false);
     }
 
     #[test]

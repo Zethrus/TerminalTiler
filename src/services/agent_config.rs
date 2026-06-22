@@ -45,23 +45,23 @@ pub fn mcp_binary_path() -> PathBuf {
 pub fn connect_claude(project_root: &Path) -> Result<PathBuf, String> {
     let path = project_root.join(".mcp.json");
     let binary = mcp_binary_path().to_string_lossy().into_owned();
-    upsert_claude(&path, &binary)?;
+    upsert_claude(&path, &binary, project_root)?;
     Ok(path)
 }
 
 /// Register the MCP server with Codex (`~/.codex/config.toml`). Returns the written path.
-pub fn connect_codex() -> Result<PathBuf, String> {
+pub fn connect_codex(project_root: &Path) -> Result<PathBuf, String> {
     let home = directories::BaseDirs::new()
         .ok_or_else(|| "could not resolve your home directory".to_string())?
         .home_dir()
         .to_path_buf();
     let path = home.join(".codex").join("config.toml");
     let binary = mcp_binary_path().to_string_lossy().into_owned();
-    upsert_codex(&path, &binary)?;
+    upsert_codex(&path, &binary, project_root)?;
     Ok(path)
 }
 
-fn upsert_claude(path: &Path, binary: &str) -> Result<(), String> {
+fn upsert_claude(path: &Path, binary: &str, project_root: &Path) -> Result<(), String> {
     let mut root = match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<Value>(&raw)
             .map_err(|error| format!("existing {} is not valid JSON: {error}", path.display()))?,
@@ -79,14 +79,14 @@ fn upsert_claude(path: &Path, binary: &str) -> Result<(), String> {
         .ok_or_else(|| "'mcpServers' in .mcp.json is not an object".to_string())?;
     servers.insert(
         SERVER_KEY.to_string(),
-        json!({ "command": binary, "args": [] }),
+        json!({ "command": binary, "args": ["--project-root", project_root.to_string_lossy()] }),
     );
 
     let serialized = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
     atomic_write_private(path, &serialized).map_err(|error| error.to_string())
 }
 
-fn upsert_codex(path: &Path, binary: &str) -> Result<(), String> {
+fn upsert_codex(path: &Path, binary: &str, project_root: &Path) -> Result<(), String> {
     let mut document = match std::fs::read_to_string(path) {
         Ok(raw) => toml::from_str::<toml::Table>(&raw)
             .map_err(|error| format!("existing {} is not valid TOML: {error}", path.display()))?,
@@ -105,7 +105,13 @@ fn upsert_codex(path: &Path, binary: &str) -> Result<(), String> {
         "command".to_string(),
         toml::Value::String(binary.to_string()),
     );
-    entry.insert("args".to_string(), toml::Value::Array(Vec::new()));
+    entry.insert(
+        "args".to_string(),
+        toml::Value::Array(vec![
+            toml::Value::String("--project-root".to_string()),
+            toml::Value::String(project_root.to_string_lossy().into_owned()),
+        ]),
+    );
     servers.insert(SERVER_KEY.to_string(), toml::Value::Table(entry));
 
     let serialized = toml::to_string_pretty(&document).map_err(|error| error.to_string())?;
@@ -129,8 +135,8 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join(".mcp.json");
 
-        upsert_claude(&path, "/opt/tt/terminaltiler-mcp").unwrap();
-        upsert_claude(&path, "/opt/tt/terminaltiler-mcp").unwrap();
+        upsert_claude(&path, "/opt/tt/terminaltiler-mcp", &dir).unwrap();
+        upsert_claude(&path, "/opt/tt/terminaltiler-mcp", &dir).unwrap();
 
         let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let servers = value["mcpServers"].as_object().unwrap();
@@ -138,6 +144,10 @@ mod tests {
         assert_eq!(
             servers["terminaltiler"]["command"],
             "/opt/tt/terminaltiler-mcp"
+        );
+        assert_eq!(
+            servers["terminaltiler"]["args"],
+            json!(["--project-root", dir.to_string_lossy()])
         );
     }
 
@@ -151,7 +161,7 @@ mod tests {
         )
         .unwrap();
 
-        upsert_claude(&path, "/opt/tt/terminaltiler-mcp").unwrap();
+        upsert_claude(&path, "/opt/tt/terminaltiler-mcp", &dir).unwrap();
 
         let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let servers = value["mcpServers"].as_object().unwrap();
@@ -164,8 +174,8 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("config.toml");
 
-        upsert_codex(&path, "/opt/tt/terminaltiler-mcp").unwrap();
-        upsert_codex(&path, "/opt/tt/terminaltiler-mcp").unwrap();
+        upsert_codex(&path, "/opt/tt/terminaltiler-mcp", &dir).unwrap();
+        upsert_codex(&path, "/opt/tt/terminaltiler-mcp", &dir).unwrap();
 
         let document: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let servers = document["mcp_servers"].as_table().unwrap();
@@ -174,5 +184,8 @@ mod tests {
             servers["terminaltiler"]["command"].as_str(),
             Some("/opt/tt/terminaltiler-mcp")
         );
+        let args = servers["terminaltiler"]["args"].as_array().unwrap();
+        assert_eq!(args[0].as_str(), Some("--project-root"));
+        assert_eq!(args[1].as_str(), Some(dir.to_string_lossy().as_ref()));
     }
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::model::board::{Task, TaskStatus};
-use crate::services::board as board_service;
+use crate::services::{board as board_service, review_dispatch};
 use crate::storage::board_store;
 
 /// Tool definitions advertised by `tools/list`.
@@ -66,7 +66,7 @@ pub fn list_json() -> Vec<Value> {
         ),
         tool(
             "update_task_status",
-            "Move a task to a different column.",
+            "Move a task to a different column. Move implementation-ready work to in_review before completion so the board can review it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -78,7 +78,7 @@ pub fn list_json() -> Vec<Value> {
         ),
         tool(
             "complete_task",
-            "Mark a task Complete, optionally with a closing note.",
+            "Mark a task Complete, optionally with a closing note. Prefer in_review first unless the user explicitly asked to complete it.",
             json!({
                 "type": "object",
                 "properties": {
@@ -166,12 +166,23 @@ fn claim_task(arguments: &Value, project_root: &Path) -> Result<String, String> 
 fn update_task_status(arguments: &Value, project_root: &Path) -> Result<String, String> {
     let id = require_str(arguments, "id")?;
     let status = parse_status(require_str(arguments, "status")?)?;
-    board_store::update(project_root, |board| {
-        board_service::set_status(board, id, status).map(|_| ())
-    })
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())?;
-    Ok(format!("Moved task {id} to {}.", status.column_title()))
+    let review = review_dispatch::set_status_and_claim_auto_review(project_root, id, status)?;
+    let mut message = format!("Moved task {id} to {}.", status.column_title());
+    if let Some(selection) = review {
+        match review_dispatch::spawn_headless_review(project_root, &selection) {
+            Ok(run) => message.push_str(&format!(
+                " Started {} headless review (pid {}, log {}).",
+                selection.reviewer.label(),
+                run.pid,
+                run.log_path.display()
+            )),
+            Err(error) => message.push_str(&format!(
+                " Could not start headless review for {}: {error}",
+                selection.reviewer.label()
+            )),
+        }
+    }
+    Ok(message)
 }
 
 fn complete_task(arguments: &Value, project_root: &Path) -> Result<String, String> {

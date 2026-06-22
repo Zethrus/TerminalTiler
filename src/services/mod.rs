@@ -1,7 +1,3 @@
-#[cfg(any(
-    target_os = "linux",
-    all(target_os = "windows", feature = "windows-gtk-shell")
-))]
 pub mod agent_config;
 #[cfg(target_os = "linux")]
 pub mod agent_orchestrator;
@@ -14,6 +10,7 @@ pub mod launch_resolution;
 pub mod layout_editor;
 pub mod output_helpers;
 pub mod project_suggestions;
+pub mod review_dispatch;
 pub mod runbooks;
 pub mod session_restore;
 pub mod snippets;

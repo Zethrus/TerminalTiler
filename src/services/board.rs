@@ -6,7 +6,8 @@
 
 use uuid::Uuid;
 
-use crate::model::board::{Board, Task, TaskNote, TaskStatus, now_epoch_secs};
+use crate::model::agent_run::AgentKind;
+use crate::model::board::{Board, Task, TaskNote, TaskReviewMetadata, TaskStatus, now_epoch_secs};
 
 /// Errors a board mutation can produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,7 @@ pub fn create_task(
         created_at: now,
         updated_at: now,
         notes: Vec::new(),
+        review: TaskReviewMetadata::default(),
     });
     board
         .tasks
@@ -71,6 +73,9 @@ pub fn set_status<'a>(
 ) -> Result<&'a Task, BoardError> {
     let task = task_mut(board, id)?;
     task.status = status;
+    if matches!(status, TaskStatus::Todo | TaskStatus::InProgress) {
+        task.review = TaskReviewMetadata::default();
+    }
     task.updated_at = now_epoch_secs();
     Ok(&*task)
 }
@@ -84,6 +89,7 @@ pub fn claim_task<'a>(
     let task = task_mut(board, id)?;
     task.status = TaskStatus::InProgress;
     task.assignee = Some(assignee.into());
+    task.review = TaskReviewMetadata::default();
     task.updated_at = now_epoch_secs();
     Ok(&*task)
 }
@@ -106,6 +112,32 @@ pub fn complete_task<'a>(
         });
     }
     Ok(&*task)
+}
+
+/// Record that a code review was dispatched for a task. The task remains/enters In Review.
+pub fn start_review<'a>(
+    board: &'a mut Board,
+    id: &str,
+    reviewer: AgentKind,
+) -> Result<&'a Task, BoardError> {
+    let task = task_mut(board, id)?;
+    let now = now_epoch_secs();
+    task.status = TaskStatus::InReview;
+    task.review.last_started_at = Some(now);
+    task.review.last_reviewer = Some(reviewer);
+    task.review.attempts = task.review.attempts.saturating_add(1);
+    task.updated_at = now;
+    Ok(&*task)
+}
+
+/// Resolve the reviewer for a task: recognized assignee first, then board default.
+pub fn reviewer_for_task(board: &Board, task: &Task) -> AgentKind {
+    task.assignee
+        .as_deref()
+        .and_then(AgentKind::from_assignee_id)
+        .or(board.automation.default_reviewer)
+        .or(board.automation.default_agent)
+        .unwrap_or(AgentKind::Claude)
 }
 
 /// Append a progress note to a task.
@@ -167,6 +199,50 @@ mod tests {
         assert_eq!(done.status, TaskStatus::Complete);
         assert_eq!(done.latest_note(), Some("shipped"));
         assert_eq!(done.notes[0].author.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn review_metadata_gates_auto_review_and_manual_retry() {
+        let mut board = Board::default();
+        let id = create_task(&mut board, "Review", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        set_status(&mut board, &id, TaskStatus::InReview).unwrap();
+        assert!(get_task(&board, &id).unwrap().needs_auto_review());
+
+        let reviewed = start_review(&mut board, &id, AgentKind::Codex).unwrap();
+        assert_eq!(reviewed.status, TaskStatus::InReview);
+        assert!(!reviewed.needs_auto_review());
+        assert_eq!(reviewed.review.last_reviewer, Some(AgentKind::Codex));
+        assert_eq!(reviewed.review.attempts, 1);
+
+        let retried = start_review(&mut board, &id, AgentKind::Claude).unwrap();
+        assert_eq!(retried.review.last_reviewer, Some(AgentKind::Claude));
+        assert_eq!(retried.review.attempts, 2);
+
+        claim_task(&mut board, &id, "claude").unwrap();
+        assert!(get_task(&board, &id).unwrap().review.is_default());
+    }
+
+    #[test]
+    fn reviewer_prefers_recognized_assignee_then_board_default() {
+        let mut board = Board::default();
+        board.automation.default_reviewer = Some(AgentKind::Claude);
+        let id = create_task(&mut board, "Review", "", TaskStatus::InReview)
+            .id
+            .clone();
+
+        assert_eq!(
+            reviewer_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Claude
+        );
+
+        board.tasks[0].assignee = Some("codex".into());
+        assert_eq!(
+            reviewer_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Codex
+        );
     }
 
     #[test]

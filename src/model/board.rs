@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::agent_run::AgentKind;
+
 /// Schema version for `board.json`. Bump when the on-disk shape changes incompatibly.
 pub const BOARD_VERSION: u32 = 1;
 
@@ -62,6 +64,61 @@ impl TaskStatus {
     }
 }
 
+/// Board-wide defaults for agent automation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardAutomation {
+    /// Default implementation agent used by the UI's default run action.
+    #[serde(
+        default = "default_agent_kind",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_agent: Option<AgentKind>,
+    /// Default reviewer when a task in review has no recognized assignee.
+    #[serde(
+        default = "default_agent_kind",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_reviewer: Option<AgentKind>,
+    /// Whether UI-dispatched agent runs should use each CLI's unsafe/no-approval flag by default.
+    #[serde(default)]
+    pub yolo_default: bool,
+}
+
+impl Default for BoardAutomation {
+    fn default() -> Self {
+        Self {
+            default_agent: default_agent_kind(),
+            default_reviewer: default_agent_kind(),
+            yolo_default: false,
+        }
+    }
+}
+
+fn default_agent_kind() -> Option<AgentKind> {
+    Some(AgentKind::Claude)
+}
+
+/// Review dispatch bookkeeping for a task.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskReviewMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reviewer: Option<AgentKind>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempts: u32,
+}
+
+impl TaskReviewMetadata {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A single progress note appended to a task (typically by an agent via MCP).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskNote {
@@ -85,12 +142,19 @@ pub struct Task {
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<TaskNote>,
+    #[serde(default, skip_serializing_if = "TaskReviewMetadata::is_default")]
+    pub review: TaskReviewMetadata,
 }
 
 impl Task {
     /// Latest progress note text, if any — handy for the agents panel summary line.
     pub fn latest_note(&self) -> Option<&str> {
         self.notes.last().map(|note| note.text.as_str())
+    }
+
+    /// Whether the UI should start one automatic review for this task.
+    pub fn needs_auto_review(&self) -> bool {
+        self.status == TaskStatus::InReview && self.review.last_started_at.is_none()
     }
 }
 
@@ -101,6 +165,8 @@ pub struct Board {
     pub version: u32,
     #[serde(default)]
     pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub automation: BoardAutomation,
 }
 
 fn default_board_version() -> u32 {
@@ -112,6 +178,7 @@ impl Default for Board {
         Self {
             version: BOARD_VERSION,
             tasks: Vec::new(),
+            automation: BoardAutomation::default(),
         }
     }
 }
@@ -149,5 +216,28 @@ mod tests {
         let board = Board::default();
         assert_eq!(board.version, BOARD_VERSION);
         assert!(board.tasks.is_empty());
+        assert_eq!(board.automation.default_agent, Some(AgentKind::Claude));
+        assert_eq!(board.automation.default_reviewer, Some(AgentKind::Claude));
+        assert!(!board.automation.yolo_default);
+    }
+
+    #[test]
+    fn old_board_json_loads_with_automation_and_review_defaults() {
+        let raw = r#"{
+            "version": 1,
+            "tasks": [{
+                "id": "task-1",
+                "title": "Review me",
+                "description": "legacy",
+                "status": "in_review",
+                "created_at": 10,
+                "updated_at": 11
+            }]
+        }"#;
+
+        let board: Board = serde_json::from_str(raw).unwrap();
+        assert_eq!(board.automation, BoardAutomation::default());
+        assert_eq!(board.tasks[0].review, TaskReviewMetadata::default());
+        assert!(board.tasks[0].needs_auto_review());
     }
 }

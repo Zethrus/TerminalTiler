@@ -393,10 +393,14 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         });
     }
     {
+        let board_path_entry = board_path_entry.clone();
         let board_agent_status = board_agent_status.clone();
         board_codex_button.connect_clicked(move |_| {
             board_agent_status.set_visible(true);
-            match agent_config::connect_codex() {
+            match validate_workspace_path(&board_path_entry)
+                .map_err(|message| message.to_string())
+                .and_then(|project_root| agent_config::connect_codex(&project_root))
+            {
                 Ok(path) => {
                     board_agent_status.remove_css_class("error-text");
                     board_agent_status
