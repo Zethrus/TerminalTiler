@@ -4599,6 +4599,15 @@ window.theme-light .voice-hud-transcript {
   border-left: 3px solid alpha(@tt_white, 0.28);
 }
 
+.kanban-card.is-dragging {
+  opacity: 0.58;
+}
+
+.kanban-column.is-drop-target {
+  border-color: @tt_amber;
+  background: alpha(@tt_amber, 0.08);
+}
+
 .kanban-card.kanban-status-in-progress {
   border-left-color: @tt_amber;
 }

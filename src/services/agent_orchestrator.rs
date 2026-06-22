@@ -86,6 +86,7 @@ impl AgentOrchestrator {
 
         let run = AgentRun {
             id: run_id,
+            task_id: task.id.clone(),
             task_title: task.title.clone(),
             agent_kind: agent,
             run_kind: options.kind,
@@ -130,6 +131,17 @@ impl AgentOrchestrator {
         let mut runs = self.runs.borrow_mut();
         if let Some(active) = runs.iter_mut().find(|active| active.run.id == run_id) {
             terminate_active_run(active, "agent run stopped by user");
+        }
+    }
+
+    /// Stop every live run for a specific board task.
+    pub fn stop_task(&self, task_id: &str, reason: &str) {
+        let mut runs = self.runs.borrow_mut();
+        for active in runs
+            .iter_mut()
+            .filter(|active| active.run.task_id == task_id)
+        {
+            terminate_active_run(active, reason);
         }
     }
 

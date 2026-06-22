@@ -130,6 +130,7 @@ impl AgentRunState {
 #[derive(Clone, Debug)]
 pub struct AgentRun {
     pub id: String,
+    pub task_id: String,
     pub task_title: String,
     pub agent_kind: AgentKind,
     pub run_kind: AgentRunKind,

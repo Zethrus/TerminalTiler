@@ -140,6 +140,17 @@ pub fn reviewer_for_task(board: &Board, task: &Task) -> AgentKind {
         .unwrap_or(AgentKind::Claude)
 }
 
+/// Resolve the implementation agent for a task: recognized assignee first, then
+/// implementation default, reviewer default, and finally Claude as the hard fallback.
+pub fn implementation_agent_for_task(board: &Board, task: &Task) -> AgentKind {
+    task.assignee
+        .as_deref()
+        .and_then(AgentKind::from_assignee_id)
+        .or(board.automation.default_agent)
+        .or(board.automation.default_reviewer)
+        .unwrap_or(AgentKind::Claude)
+}
+
 /// Append a progress note to a task.
 pub fn add_note<'a>(
     board: &'a mut Board,
@@ -242,6 +253,41 @@ mod tests {
         assert_eq!(
             reviewer_for_task(&board, get_task(&board, &id).unwrap()),
             AgentKind::Codex
+        );
+    }
+
+    #[test]
+    fn implementation_agent_prefers_assignee_then_agent_then_reviewer_then_claude() {
+        let mut board = Board::default();
+        board.automation.default_agent = Some(AgentKind::Codex);
+        board.automation.default_reviewer = Some(AgentKind::Claude);
+        let id = create_task(&mut board, "Implement", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        assert_eq!(
+            implementation_agent_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Codex
+        );
+
+        board.tasks[0].assignee = Some("claude".into());
+        assert_eq!(
+            implementation_agent_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Claude
+        );
+
+        board.tasks[0].assignee = Some("unknown".into());
+        board.automation.default_agent = None;
+        board.automation.default_reviewer = Some(AgentKind::Codex);
+        assert_eq!(
+            implementation_agent_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Codex
+        );
+
+        board.automation.default_reviewer = None;
+        assert_eq!(
+            implementation_agent_for_task(&board, get_task(&board, &id).unwrap()),
+            AgentKind::Claude
         );
     }
 

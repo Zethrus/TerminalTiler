@@ -23,6 +23,8 @@ pub mod assets_manager;
 #[cfg(target_os = "linux")]
 pub(crate) mod board_chrome;
 #[cfg(target_os = "linux")]
+pub(crate) mod board_drag;
+#[cfg(target_os = "linux")]
 pub mod board_view;
 #[cfg(any(
     target_os = "linux",

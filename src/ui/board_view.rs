@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
 use adw::prelude::*;
+use gdk::prelude::StaticType;
 use gtk::glib;
 
 use crate::model::agent_run::{AgentKind, AgentRunOptions};
@@ -20,12 +21,13 @@ use crate::services::agent_orchestrator::AgentOrchestrator;
 use crate::services::{agent_config, board as board_service, review_dispatch};
 use crate::storage::board_store;
 use crate::ui::icons::{self, name as icon_name};
-use crate::ui::{agent_setup_dialog, board_chrome, new_task_dialog};
+use crate::ui::{agent_setup_dialog, board_chrome, board_drag, new_task_dialog};
 
 const AGENT_TERMINAL_PLACEHOLDER: &str = "__placeholder__";
 
 struct ColumnHandles {
     status: TaskStatus,
+    widget: gtk::Box,
     count_badge: gtk::Label,
     card_list: gtk::Box,
 }
@@ -86,6 +88,7 @@ impl BoardView {
             columns_row.append(&column.widget);
             columns.push(ColumnHandles {
                 status,
+                widget: column.widget,
                 count_badge: column.count_badge,
                 card_list: column.card_list,
             });
@@ -110,6 +113,7 @@ impl BoardView {
         });
 
         wire_header_buttons(&inner);
+        install_column_drop_targets(&inner);
         inner
             .last_mtime
             .set(board_store::mtime(&inner.project_root));
@@ -214,6 +218,42 @@ fn wire_header_buttons(inner: &Rc<Inner>) {
     }
 }
 
+fn install_column_drop_targets(inner: &Rc<Inner>) {
+    for column in &inner.columns {
+        let drop_target = gtk::DropTarget::new(
+            board_drag::KanbanTaskDragPayload::static_type(),
+            gtk::gdk::DragAction::MOVE,
+        );
+        {
+            let column_widget = column.widget.clone();
+            drop_target.connect_enter(move |_, _, _| {
+                column_widget.add_css_class("is-drop-target");
+                gtk::gdk::DragAction::MOVE
+            });
+        }
+        {
+            let column_widget = column.widget.clone();
+            drop_target.connect_leave(move |_| {
+                column_widget.remove_css_class("is-drop-target");
+            });
+        }
+        {
+            let inner = inner.clone();
+            let column_widget = column.widget.clone();
+            let target_status = column.status;
+            drop_target.connect_drop(move |_, value, _, _| {
+                column_widget.remove_css_class("is-drop-target");
+
+                let Ok(payload) = value.get::<board_drag::KanbanTaskDragPayload>() else {
+                    return false;
+                };
+                handle_task_drop(&inner, payload.into_task_id(), target_status)
+            });
+        }
+        column.widget.add_controller(drop_target);
+    }
+}
+
 fn build_agents_section() -> (gtk::Box, gtk::Box, gtk::Stack) {
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -290,11 +330,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
         .build();
     let board = board_store::load(&inner.project_root);
     let default_yolo = board.automation.yolo_default;
-    let default_agent = board
-        .automation
-        .default_agent
-        .or(board.automation.default_reviewer)
-        .unwrap_or(AgentKind::Claude);
+    let default_agent = board_service::implementation_agent_for_task(&board, task);
     let default_label = if default_yolo {
         format!("Default: {} YOLO", default_agent.label())
     } else {
@@ -443,7 +479,36 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
     }
     card.actions.append(&delete);
 
+    install_card_drag_source(&card.widget, &task_id);
+
     card.widget
+}
+
+fn install_card_drag_source(card: &gtk::Box, task_id: &str) {
+    let drag_source = gtk::DragSource::builder()
+        .actions(gtk::gdk::DragAction::MOVE)
+        .build();
+    {
+        let task_id = task_id.to_string();
+        drag_source.connect_prepare(move |_, _, _| {
+            Some(gtk::gdk::ContentProvider::for_value(
+                &board_drag::KanbanTaskDragPayload::new(task_id.clone()).to_value(),
+            ))
+        });
+    }
+    {
+        let card = card.clone();
+        drag_source.connect_drag_begin(move |_, _| {
+            card.add_css_class("is-dragging");
+        });
+    }
+    {
+        let card = card.clone();
+        drag_source.connect_drag_end(move |_, _, _| {
+            card.remove_css_class("is-dragging");
+        });
+    }
+    card.add_controller(drag_source);
 }
 
 fn render_agents(inner: &Rc<Inner>) {
@@ -482,6 +547,57 @@ fn render_agents(inner: &Rc<Inner>) {
         row.actions.append(&stop);
 
         inner.agents_list.append(&row.widget);
+    }
+}
+
+fn handle_task_drop(inner: &Rc<Inner>, task_id: String, target_status: TaskStatus) -> bool {
+    let board = board_store::load(&inner.project_root);
+    let Some(task) = board_service::get_task(&board, &task_id).cloned() else {
+        return false;
+    };
+    if task.status == target_status {
+        return true;
+    }
+
+    match target_status {
+        TaskStatus::InProgress => {
+            let agent = board_service::implementation_agent_for_task(&board, &task);
+            dispatch_agent(inner, &task_id, agent, board.automation.yolo_default);
+            true
+        }
+        TaskStatus::InReview => persist_dropped_status(inner, &task_id, target_status),
+        TaskStatus::Cancelled => {
+            if persist_dropped_status(inner, &task_id, target_status) {
+                inner
+                    .orchestrator
+                    .stop_task(&task_id, "kanban task moved to Cancelled");
+                render_agents(inner);
+                true
+            } else {
+                false
+            }
+        }
+        TaskStatus::Todo | TaskStatus::Complete => {
+            persist_dropped_status(inner, &task_id, target_status)
+        }
+    }
+}
+
+fn persist_dropped_status(inner: &Rc<Inner>, task_id: &str, status: TaskStatus) -> bool {
+    match board_store::update(&inner.project_root, |board| {
+        board_service::set_status(board, task_id, status)
+            .is_ok()
+            .then(|| board.clone())
+    }) {
+        Ok(Some(board)) => {
+            render_persisted_board(inner, &board);
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            crate::logging::error(format!("failed to save board: {error}"));
+            false
+        }
     }
 }
 

@@ -83,6 +83,7 @@ const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
 const VOICE_HUD_RS: &str = include_str!("../src/ui/voice_hud.rs");
 const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
+const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");
 
 const TERMINAL_CARD_STATES: &[&str] = &[
     ".terminal-card.is-active-tile",
@@ -3199,6 +3200,36 @@ fn kanban_board_styling_extends_existing_design_system() {
     assert!(
         STYLE_CSS.contains(".kanban-count-badge {") && STYLE_CSS.contains("border-radius: 0;"),
         "Kanban count badge should use the app's squared badge style"
+    );
+}
+
+#[test]
+fn kanban_board_drag_and_drop_is_wired_natively() {
+    assert!(
+        UI_MOD_RS.contains("mod board_drag"),
+        "Kanban drag payload module must be compiled into the GTK UI"
+    );
+    assert!(
+        BOARD_DRAG_RS.contains("TerminalTilerKanbanTaskDragPayload")
+            && BOARD_DRAG_RS.contains("into_task_id"),
+        "Kanban DnD should use a typed boxed task payload, not a plain string"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains("gtk::DragSource::builder()")
+            && BOARD_VIEW_RS.contains("KanbanTaskDragPayload::new")
+            && BOARD_VIEW_RS.contains("gtk::DropTarget::new(\n            board_drag::KanbanTaskDragPayload::static_type()"),
+        "Kanban cards and columns should use GTK-native DragSource/DropTarget wiring"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains("implementation_agent_for_task")
+            && BOARD_VIEW_RS.contains("TaskStatus::Cancelled")
+            && BOARD_VIEW_RS.contains("stop_task"),
+        "Kanban drops must preserve automation defaults and cancel task-scoped agents"
+    );
+    assert!(
+        STYLE_CSS.contains(".kanban-card.is-dragging")
+            && STYLE_CSS.contains(".kanban-column.is-drop-target"),
+        "Kanban drag/drop states should have explicit CSS hooks"
     );
 }
 
