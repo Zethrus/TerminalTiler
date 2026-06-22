@@ -105,6 +105,11 @@ pub struct TaskReviewMetadata {
     pub last_started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reviewer: Option<AgentKind>,
+    /// Most recent review launch/dispatch error, if review metadata was claimed but the
+    /// reviewer process could not be started. Kept visible so failed review handoffs do
+    /// not look like successful duplicate-gating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub attempts: u32,
 }

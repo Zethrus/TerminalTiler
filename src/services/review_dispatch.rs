@@ -4,6 +4,8 @@
 //! metadata while holding the board lock. That single claim point prevents duplicate
 //! auto-reviews when a task enters `In Review` from more than one surface.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -17,10 +19,21 @@ use crate::storage::board_store;
 
 #[cfg(test)]
 static DISABLE_HEADLESS_REVIEW_SPAWN: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+thread_local! {
+    static FORCED_HEADLESS_REVIEW_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
 
 #[cfg(test)]
 pub(crate) fn set_test_disable_headless_review_spawn(disabled: bool) {
     DISABLE_HEADLESS_REVIEW_SPAWN.store(disabled, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_headless_review_spawn_error(error: Option<&str>) {
+    FORCED_HEADLESS_REVIEW_ERROR.with(|forced| {
+        *forced.borrow_mut() = error.map(str::to_string);
+    });
 }
 
 /// A task/reviewer pair that has already been recorded in board review metadata.
@@ -36,6 +49,29 @@ pub struct ReviewSelection {
 pub struct HeadlessReviewRun {
     pub pid: u32,
     pub log_path: PathBuf,
+}
+
+/// Result of a review-capable board transition performed while holding the board lock.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewTransition {
+    pub task: Task,
+    pub warnings: Vec<String>,
+    pub selection: Option<ReviewSelection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReviewDispatchError {
+    Board(board_service::BoardError),
+    Storage(String),
+}
+
+impl std::fmt::Display for ReviewDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReviewDispatchError::Board(error) => write!(formatter, "{error}"),
+            ReviewDispatchError::Storage(error) => write!(formatter, "{error}"),
+        }
+    }
 }
 
 /// Concrete process plan used by [`spawn_headless_review`]. Kept separate so tests can
@@ -56,33 +92,25 @@ pub fn set_status_and_claim_auto_review(
     task_id: &str,
     status: TaskStatus,
 ) -> Result<Option<ReviewSelection>, String> {
-    board_store::update(
-        project_root,
-        |board| -> Result<Option<ReviewSelection>, board_service::BoardError> {
-            board_service::set_status(board, task_id, status)?;
-            if status != TaskStatus::InReview {
-                return Ok(None);
-            }
+    set_status_as_and_claim_auto_review(project_root, task_id, status, "user", true)
+        .map(|transition| transition.selection)
+        .map_err(|error| error.to_string())
+}
 
-            let task = board_service::get_task(board, task_id)
-                .cloned()
-                .ok_or_else(|| board_service::BoardError::TaskNotFound(task_id.to_string()))?;
-            if !task.needs_auto_review() {
-                return Ok(None);
-            }
-
-            let reviewer = board_service::reviewer_for_task(board, &task);
-            let yolo = board.automation.yolo_default;
-            let task = board_service::start_review(board, task_id, reviewer)?.clone();
-            Ok(Some(ReviewSelection {
-                task,
-                reviewer,
-                yolo,
-            }))
-        },
-    )
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+/// Move a task to a status with ownership guards and claim review metadata atomically
+/// when the destination is `InReview`.
+pub fn set_status_as_and_claim_auto_review(
+    project_root: &Path,
+    task_id: &str,
+    status: TaskStatus,
+    actor: impl Into<String>,
+    force: bool,
+) -> Result<ReviewTransition, ReviewDispatchError> {
+    let actor = actor.into();
+    transition_and_claim_auto_review(project_root, task_id, |board| {
+        let transition = board_service::set_status_as(board, task_id, status, actor, force)?;
+        Ok((transition.task.clone(), transition.warnings))
+    })
 }
 
 /// Mark work ready for review and claim one pending automatic review under the same board
@@ -95,29 +123,24 @@ pub fn ready_for_review_and_claim_auto_review(
     summary: String,
     author: Option<String>,
 ) -> Result<Option<ReviewSelection>, String> {
-    board_store::update(
-        project_root,
-        |board| -> Result<Option<ReviewSelection>, board_service::BoardError> {
-            board_service::ready_for_review(board, task_id, summary.clone(), author.clone())?;
-            let task = board_service::get_task(board, task_id)
-                .cloned()
-                .ok_or_else(|| board_service::BoardError::TaskNotFound(task_id.to_string()))?;
-            if !task.needs_auto_review() {
-                return Ok(None);
-            }
+    ready_for_review_as_and_claim_auto_review(project_root, task_id, summary, author, true)
+        .map(|transition| transition.selection)
+        .map_err(|error| error.to_string())
+}
 
-            let reviewer = board_service::reviewer_for_task(board, &task);
-            let yolo = board.automation.yolo_default;
-            let task = board_service::start_review(board, task_id, reviewer)?.clone();
-            Ok(Some(ReviewSelection {
-                task,
-                reviewer,
-                yolo,
-            }))
-        },
-    )
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+/// Mark work ready for review with ownership guards and claim review metadata atomically.
+pub fn ready_for_review_as_and_claim_auto_review(
+    project_root: &Path,
+    task_id: &str,
+    summary: String,
+    author: Option<String>,
+    force: bool,
+) -> Result<ReviewTransition, ReviewDispatchError> {
+    transition_and_claim_auto_review(project_root, task_id, |board| {
+        let transition =
+            board_service::ready_for_review_as(board, task_id, summary.clone(), author, force)?;
+        Ok((transition.task.clone(), transition.warnings))
+    })
 }
 
 /// Claim a pending review for the visible UI path. `force` keeps the existing manual
@@ -151,6 +174,54 @@ pub fn claim_pending_review(
             }))
         },
     )
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
+fn transition_and_claim_auto_review(
+    project_root: &Path,
+    task_id: &str,
+    transition: impl FnOnce(
+        &mut crate::model::board::Board,
+    ) -> Result<(Task, Vec<String>), board_service::BoardError>,
+) -> Result<ReviewTransition, ReviewDispatchError> {
+    board_store::update(
+        project_root,
+        |board| -> Result<ReviewTransition, board_service::BoardError> {
+            let (mut task, warnings) = transition(board)?;
+            let selection = if task.status == TaskStatus::InReview && task.needs_auto_review() {
+                let reviewer = board_service::reviewer_for_task(board, &task);
+                let yolo = board.automation.yolo_default;
+                task = board_service::start_review(board, task_id, reviewer)?.clone();
+                Some(ReviewSelection {
+                    task: task.clone(),
+                    reviewer,
+                    yolo,
+                })
+            } else {
+                None
+            };
+            Ok(ReviewTransition {
+                task,
+                warnings,
+                selection,
+            })
+        },
+    )
+    .map_err(|error| ReviewDispatchError::Storage(error.to_string()))?
+    .map_err(ReviewDispatchError::Board)
+}
+
+/// Persist a review launch failure on the task as both metadata and a progress note.
+pub fn record_review_spawn_failure(
+    project_root: &Path,
+    task_id: &str,
+    reviewer: AgentKind,
+    error: &str,
+) -> Result<Task, String> {
+    board_store::update(project_root, |board| {
+        board_service::record_review_error(board, task_id, reviewer, error).cloned()
+    })
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())
 }
@@ -198,6 +269,11 @@ pub fn spawn_headless_review(
     project_root: &Path,
     selection: &ReviewSelection,
 ) -> Result<HeadlessReviewRun, String> {
+    #[cfg(test)]
+    if let Some(error) = FORCED_HEADLESS_REVIEW_ERROR.with(|forced| forced.borrow().clone()) {
+        return Err(error);
+    }
+
     match selection.reviewer {
         AgentKind::Claude => agent_config::connect_claude(project_root)?,
         AgentKind::Codex => agent_config::connect_codex(project_root)?,
@@ -318,6 +394,48 @@ mod tests {
 
         let ui_selection = claim_pending_review(&root, &id, None, None, false).unwrap();
         assert!(ui_selection.is_none());
+    }
+
+    #[test]
+    fn spawn_failure_does_not_resurrect_concurrently_moved_task() {
+        let root = temp_root("review-failure-status");
+        let id = board_store::update(&root, |board| {
+            create_task(board, "Review then move", "", TaskStatus::Todo)
+                .id
+                .clone()
+        })
+        .unwrap();
+
+        let selection = set_status_and_claim_auto_review(&root, &id, TaskStatus::InReview)
+            .unwrap()
+            .expect("review selection");
+
+        board_store::update(&root, |board| {
+            board_service::set_status(board, &id, TaskStatus::Complete).unwrap();
+        })
+        .unwrap();
+
+        let recorded = record_review_spawn_failure(
+            &root,
+            &selection.task.id,
+            selection.reviewer,
+            "missing reviewer binary",
+        )
+        .unwrap();
+
+        assert_eq!(recorded.status, TaskStatus::Complete);
+        assert_eq!(
+            recorded.review.last_error.as_deref(),
+            Some("missing reviewer binary")
+        );
+
+        let board = board_store::load(&root);
+        let task = board_service::get_task(&board, &id).unwrap();
+        assert_eq!(task.status, TaskStatus::Complete);
+        assert_eq!(
+            task.latest_note(),
+            Some("Review launch failed for Claude: missing reviewer binary")
+        );
     }
 
     #[test]

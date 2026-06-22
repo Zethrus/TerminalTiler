@@ -88,7 +88,12 @@ fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
         }
     ));
     panel.mcp_binary.set_text(&format!(
-        "MCP binary: {} ({})",
+        "MCP binary [{}]: {} ({})",
+        if diagnostics.mcp_binary_exists {
+            "ready"
+        } else {
+            "missing binary"
+        },
         diagnostics.mcp_binary_path.display(),
         if diagnostics.mcp_binary_exists {
             "present"
@@ -97,12 +102,14 @@ fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
         }
     ));
     panel.claude_state.set_text(&format!(
-        "Claude config: {} — {}",
+        "Claude config [{}]: {} — {}",
+        config_state_label(diagnostics.claude_configured, &diagnostics.claude_detail),
         diagnostics.claude_config_path.display(),
         diagnostics.claude_detail
     ));
     panel.codex_state.set_text(&format!(
-        "Codex config: {} — {}",
+        "Codex config [{}]: {} — {}",
+        config_state_label(diagnostics.codex_configured, &diagnostics.codex_detail),
         diagnostics
             .codex_config_path
             .as_ref()
@@ -110,4 +117,16 @@ fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
             .unwrap_or_else(|| "<unresolved>".to_string()),
         diagnostics.codex_detail
     ));
+}
+
+fn config_state_label(configured: bool, detail: &str) -> &'static str {
+    if configured {
+        "ready"
+    } else if detail.contains("does not target this project root") {
+        "wrong project root"
+    } else if detail.contains("not installed") || detail.contains("entry missing") {
+        "missing config"
+    } else {
+        "needs repair"
+    }
 }

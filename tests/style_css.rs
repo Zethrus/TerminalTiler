@@ -3351,6 +3351,38 @@ fn kanban_mcp_health_panel_is_reused_and_refreshes_after_connect() {
 }
 
 #[test]
+fn kanban_mission_control_run_next_banner_and_health_states_are_visible() {
+    assert!(
+        BOARD_VIEW_RS.contains("kanban-run-next")
+            && BOARD_VIEW_RS.contains("run_next_available")
+            && BOARD_VIEW_RS.contains("next_available_work")
+            && BOARD_VIEW_RS.contains("start_work(board, task_id")
+            && BOARD_VIEW_RS.contains("Take over and run")
+            && BOARD_VIEW_RS.contains("allow_takeover_prompt")
+            && BOARD_VIEW_RS.contains("kanban-status-banner"),
+        "board mission control should expose Run next, claim-before-launch, explicit takeover, and a visible status banner"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains("connect_agent_for_board")
+            && BOARD_VIEW_RS.contains("Could not prepare")
+            && BOARD_VIEW_RS.contains("MCP ready"),
+        "agent dispatch should surface MCP setup repair success/failure before spawning terminals"
+    );
+    assert!(
+        MCP_HEALTH_PANEL_RS.contains("missing binary")
+            && MCP_HEALTH_PANEL_RS.contains("wrong project root")
+            && MCP_HEALTH_PANEL_RS.contains("missing config")
+            && MCP_HEALTH_PANEL_RS.contains("needs repair"),
+        "MCP health panel should name actionable setup states clearly"
+    );
+    assert!(
+        STYLE_CSS.contains(".kanban-status-banner")
+            && STYLE_CSS.contains(".kanban-status-banner-label"),
+        "mission-control status banner should have CSS hooks"
+    );
+}
+
+#[test]
 fn kanban_board_drag_and_drop_is_wired_natively() {
     assert!(
         UI_MOD_RS.contains("mod board_drag"),

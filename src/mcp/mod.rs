@@ -149,15 +149,15 @@ pub fn handle_request(line: &str, project_root: &Path) -> Option<String> {
             id_or_null(id),
             resources_list_result(project_root),
         )),
-        Some("resources/read") => Some(success_response(
-            id_or_null(id),
-            resources_read_result(&params, project_root),
-        )),
+        Some("resources/read") => match resources_read_result(&params, project_root) {
+            Ok(result) => Some(success_response(id_or_null(id), result)),
+            Err(message) => Some(error_response(id_or_null(id), -32602, &message)),
+        },
         Some("prompts/list") => Some(success_response(id_or_null(id), prompts_list_result())),
-        Some("prompts/get") => Some(success_response(
-            id_or_null(id),
-            prompts_get_result(&params, project_root),
-        )),
+        Some("prompts/get") => match prompts_get_result(&params, project_root) {
+            Ok(result) => Some(success_response(id_or_null(id), result)),
+            Err(message) => Some(error_response(id_or_null(id), -32602, &message)),
+        },
         // Notifications (no id, e.g. "notifications/initialized") need no response.
         Some(_) if id.is_none() => None,
         Some(other) => Some(error_response(
@@ -252,23 +252,17 @@ fn resources_list_result(project_root: &Path) -> Value {
     json!({ "resources": resources })
 }
 
-fn resources_read_result(params: &Value, project_root: &Path) -> Value {
+fn resources_read_result(params: &Value, project_root: &Path) -> Result<Value, String> {
     let uri = params
         .get("uri")
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    match read_resource(uri, project_root) {
-        Ok((mime_type, text)) => json!({
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "resources/read requires a non-empty string parameter 'uri'".to_string())?;
+    read_resource(uri, project_root).map(|(mime_type, text)| {
+        json!({
             "contents": [{ "uri": uri, "mimeType": mime_type, "text": text }]
-        }),
-        Err(message) => json!({
-            "contents": [{
-                "uri": uri,
-                "mimeType": "text/plain",
-                "text": format!("Resource error: {message}")
-            }]
-        }),
-    }
+        })
+    })
 }
 
 fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String), String> {
@@ -332,11 +326,12 @@ fn prompts_list_result() -> Value {
     })
 }
 
-fn prompts_get_result(params: &Value, project_root: &Path) -> Value {
+fn prompts_get_result(params: &Value, project_root: &Path) -> Result<Value, String> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "prompts/get requires a non-empty string parameter 'name'".to_string())?;
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     let task_id = arguments
         .get("task_id")
@@ -363,15 +358,15 @@ fn prompts_get_result(params: &Value, project_root: &Path) -> Value {
         "triage_board" => {
             "Call `get_board_summary` and `get_my_work`, inspect blocked/stale/in_review counts, then recommend the next available tasks and any ownership conflicts to resolve.".to_string()
         }
-        _ => format!("Unknown TerminalTiler prompt `{name}`."),
+        _ => return Err(format!("unknown TerminalTiler prompt '{name}'")),
     };
-    json!({
+    Ok(json!({
         "description": name,
         "messages": [{
             "role": "user",
             "content": { "type": "text", "text": text }
         }]
-    })
+    }))
 }
 
 fn id_or_null(id: Option<Value>) -> Value {
@@ -526,6 +521,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "start_work")
             .unwrap();
+        assert_eq!(start_work["title"], "Start Work");
         assert!(start_work["outputSchema"].is_object());
         assert!(
             response["result"]["tools"]
@@ -620,6 +616,32 @@ mod tests {
         assert!(next_prompt_text.contains("get_my_work"));
         assert!(next_prompt_text.contains("start_next_work"));
         assert!(next_prompt_text.contains("codex"));
+    }
+
+    #[test]
+    fn unknown_resources_and_prompts_return_invalid_params() {
+        let root = temp_root();
+        let resource_request = json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "resources/read",
+            "params": { "uri": "terminaltiler://missing" }
+        })
+        .to_string();
+        let resource: Value =
+            serde_json::from_str(&handle_request(&resource_request, &root).unwrap()).unwrap();
+        assert_eq!(resource["error"]["code"], -32602);
+
+        let prompt_request = json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "prompts/get",
+            "params": { "name": "missing_prompt" }
+        })
+        .to_string();
+        let prompt: Value =
+            serde_json::from_str(&handle_request(&prompt_request, &root).unwrap()).unwrap();
+        assert_eq!(prompt["error"]["code"], -32602);
     }
 
     #[test]
@@ -919,6 +941,46 @@ mod tests {
         assert_eq!(task.status, crate::model::board::TaskStatus::InReview);
         assert_eq!(task.review.attempts, 1);
         assert!(task.latest_note().unwrap().contains("changes_requested"));
+    }
+
+    #[test]
+    fn review_spawn_failures_are_structured_and_visible_on_task() {
+        crate::services::review_dispatch::set_test_headless_review_spawn_error(Some(
+            "synthetic spawn failure",
+        ));
+        let root = temp_root();
+        call_tool(&root, "create_task", json!({ "title": "Review failure" }));
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+        call_tool(
+            &root,
+            "start_work",
+            json!({ "id": task_id, "assignee": "codex" }),
+        );
+
+        let ready = call_tool(
+            &root,
+            "ready_for_review",
+            json!({ "id": task_id, "summary": "Implemented", "author": "codex" }),
+        );
+        crate::services::review_dispatch::set_test_headless_review_spawn_error(None);
+
+        assert_eq!(ready["isError"], false);
+        assert_eq!(ready["structuredContent"]["review_started"], Value::Null);
+        assert_eq!(
+            ready["structuredContent"]["review_error"]["message"],
+            "synthetic spawn failure"
+        );
+        let board = crate::storage::board_store::load(&root);
+        let task = &board.tasks[0];
+        assert_eq!(
+            task.review.last_error.as_deref(),
+            Some("synthetic spawn failure")
+        );
+        assert!(
+            task.latest_note()
+                .unwrap()
+                .contains("Review launch failed for")
+        );
     }
 
     #[test]

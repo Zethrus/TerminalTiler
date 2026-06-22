@@ -123,6 +123,7 @@ pub fn set_status<'a>(
 }
 
 /// Claim a task for an agent: move it to In Progress and record the assignee.
+#[allow(dead_code)]
 pub fn claim_task<'a>(
     board: &'a mut Board,
     id: &str,
@@ -557,7 +558,31 @@ pub fn start_review<'a>(
     task.status = TaskStatus::InReview;
     task.review.last_started_at = Some(now);
     task.review.last_reviewer = Some(reviewer);
+    task.review.last_error = None;
     task.review.attempts = task.review.attempts.saturating_add(1);
+    task.updated_at = now;
+    Ok(&*task)
+}
+
+/// Record that a previously claimed review could not be launched without changing the
+/// task's current column. The failure remains visible in metadata and notes for
+/// diagnosis/retry even if another surface has already moved the task.
+pub fn record_review_error<'a>(
+    board: &'a mut Board,
+    id: &str,
+    reviewer: AgentKind,
+    error: impl Into<String>,
+) -> Result<&'a Task, BoardError> {
+    let now = now_epoch_secs();
+    let task = task_mut(board, id)?;
+    let error = error.into();
+    task.review.last_reviewer = Some(reviewer);
+    task.review.last_error = Some(error.clone());
+    task.notes.push(TaskNote {
+        text: format!("Review launch failed for {}: {error}", reviewer.label()),
+        author: Some("terminaltiler".to_string()),
+        created_at: now,
+    });
     task.updated_at = now;
     Ok(&*task)
 }
@@ -836,6 +861,27 @@ mod tests {
 
         claim_task(&mut board, &id, "claude").unwrap();
         assert!(get_task(&board, &id).unwrap().review.is_default());
+    }
+
+    #[test]
+    fn review_error_preserves_concurrent_status_transition() {
+        let mut board = Board::default();
+        let id = create_task(&mut board, "Review", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        start_review(&mut board, &id, AgentKind::Codex).unwrap();
+        set_status(&mut board, &id, TaskStatus::Complete).unwrap();
+
+        let recorded =
+            record_review_error(&mut board, &id, AgentKind::Codex, "spawn failed").unwrap();
+        assert_eq!(recorded.status, TaskStatus::Complete);
+        assert_eq!(recorded.review.last_reviewer, Some(AgentKind::Codex));
+        assert_eq!(recorded.review.last_error.as_deref(), Some("spawn failed"));
+        assert_eq!(
+            recorded.latest_note(),
+            Some("Review launch failed for Codex: spawn failed")
+        );
     }
 
     #[test]

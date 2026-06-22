@@ -4548,6 +4548,17 @@ window.theme-light .voice-hud-transcript {
   color: @tt_text;
 }
 
+.kanban-status-banner {
+  padding: 8px 10px;
+  border-radius: 0;
+  background: alpha(@tt_amber, 0.10);
+  border: 1px solid alpha(@tt_amber, 0.35);
+}
+
+.kanban-status-banner-label {
+  color: @tt_text;
+}
+
 .kanban-columns-scroll {
   min-width: 0;
 }

@@ -543,50 +543,21 @@ fn update_task_status(
     let status = parse_status(require_str(arguments, "status")?)?;
     let actor = actor_argument(arguments);
     let force = optional_bool(arguments, "force").unwrap_or(false);
-    let transition = board_store::update(
+    let transition = review_dispatch::set_status_as_and_claim_auto_review(
         project_root,
-        |board| -> Result<board_service::LifecycleTransition<Task>, board_service::BoardError> {
-            let transition = board_service::set_status_as(board, id, status, actor.clone(), force)?;
-            Ok(board_service::LifecycleTransition {
-                task: transition.task.clone(),
-                warnings: transition.warnings,
-            })
-        },
+        id,
+        status,
+        actor,
+        force,
     )
-    .map_err(io_error)?
-    .map_err(board_error)?;
-    let review = if status == TaskStatus::InReview {
-        claim_auto_review(project_root, id).map_err(text_error)?
-    } else {
-        None
-    };
+    .map_err(review_dispatch_error)?;
     let mut message = format!("Moved task {id} to {}.", status.column_title());
-    let mut review_started = None;
-    if let Some(selection) = review {
-        match review_dispatch::spawn_headless_review(project_root, &selection) {
-            Ok(run) => {
-                message.push_str(&format!(
-                    " Started {} headless review (pid {}, log {}).",
-                    selection.reviewer.label(),
-                    run.pid,
-                    run.log_path.display()
-                ));
-                review_started = Some(json!({
-                    "reviewer": selection.reviewer.assignee_id(),
-                    "pid": run.pid,
-                    "log_path": run.log_path.display().to_string()
-                }));
-            }
-            Err(error) => message.push_str(&format!(
-                " Could not start headless review for {}: {error}",
-                selection.reviewer.label()
-            )),
-        }
-    }
+    let (review_started, review_error) =
+        spawn_claimed_review(project_root, transition.selection.as_ref(), &mut message);
     let board = board_store::load(project_root);
     let task = board_service::get_task(&board, id)
         .cloned()
-        .or(Some(transition.task));
+        .unwrap_or(transition.task);
     Ok(output(
         message,
         Some(json!({
@@ -597,6 +568,7 @@ fn update_task_status(
             "task": task,
             "warnings": transition.warnings,
             "review_started": review_started,
+            "review_error": review_error,
         })),
     ))
 }
@@ -836,54 +808,24 @@ fn ready_for_review(
     let summary = require_str(arguments, "summary")?.to_string();
     let author = Some(actor_argument(arguments));
     let force = optional_bool(arguments, "force").unwrap_or(false);
-    let transition = board_store::update(
+    let transition = review_dispatch::ready_for_review_as_and_claim_auto_review(
         project_root,
-        |board| -> Result<board_service::LifecycleTransition<Task>, board_service::BoardError> {
-            let transition = board_service::ready_for_review_as(
-                board,
-                id,
-                summary.clone(),
-                author.clone(),
-                force,
-            )?;
-            Ok(board_service::LifecycleTransition {
-                task: transition.task.clone(),
-                warnings: transition.warnings,
-            })
-        },
+        id,
+        summary,
+        author,
+        force,
     )
-    .map_err(io_error)?
-    .map_err(board_error)?;
-    let review = claim_auto_review(project_root, id).map_err(text_error)?;
+    .map_err(review_dispatch_error)?;
     let mut message = format!("Moved task {id} to In Review with handoff summary.");
-    let mut review_started = None;
-    if let Some(selection) = review {
-        match review_dispatch::spawn_headless_review(project_root, &selection) {
-            Ok(run) => {
-                message.push_str(&format!(
-                    " Started {} headless review (pid {}, log {}).",
-                    selection.reviewer.label(),
-                    run.pid,
-                    run.log_path.display()
-                ));
-                review_started = Some(json!({
-                    "reviewer": selection.reviewer.assignee_id(),
-                    "pid": run.pid,
-                    "log_path": run.log_path.display().to_string()
-                }));
-            }
-            Err(error) => message.push_str(&format!(
-                " Could not start headless review for {}: {error}",
-                selection.reviewer.label()
-            )),
-        }
-    }
+    let (review_started, review_error) =
+        spawn_claimed_review(project_root, transition.selection.as_ref(), &mut message);
     let board = board_store::load(project_root);
     let task = board_service::get_task(&board, id)
         .cloned()
         .unwrap_or(transition.task);
     let mut structured = task_structured("ready_for_review", &task, transition.warnings);
     structured["review_started"] = review_started.unwrap_or(Value::Null);
+    structured["review_error"] = review_error.unwrap_or(Value::Null);
     Ok(output(message, Some(structured)))
 }
 
@@ -921,10 +863,24 @@ fn tool_with_output(
 ) -> Value {
     json!({
         "name": name,
+        "title": tool_title(name),
         "description": description,
         "inputSchema": input_schema,
         "outputSchema": output_schema,
     })
+}
+
+fn tool_title(name: &str) -> String {
+    name.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn basic_output_schema() -> Value {
@@ -950,6 +906,7 @@ fn lifecycle_output_schema() -> Value {
             "warnings": { "type": "array", "items": { "type": "string" } },
             "conflict": { "type": ["object", "null"] },
             "review_started": { "type": ["object", "null"] },
+            "review_error": { "type": ["object", "null"] },
             "reason": { "type": ["string", "null"] }
         },
         "required": ["ok", "action", "task_id", "warnings"]
@@ -1009,9 +966,19 @@ fn board_summary_output_schema() -> Value {
                 },
                 "required": ["active", "stale", "blocked", "in_review"]
             },
-            "available": { "type": "array", "items": { "type": "object" } }
+            "available": { "type": "array", "items": { "type": "object" } },
+            "queues": {
+                "type": "object",
+                "properties": {
+                    "available": { "type": "array", "items": { "type": "object" } },
+                    "stale": { "type": "array", "items": { "type": "object" } },
+                    "blocked": { "type": "array", "items": { "type": "object" } },
+                    "in_review": { "type": "array", "items": { "type": "object" } }
+                },
+                "required": ["available", "stale", "blocked", "in_review"]
+            }
         },
-        "required": ["ok", "action", "total", "by_status", "lifecycle", "available"]
+        "required": ["ok", "action", "total", "by_status", "lifecycle", "available", "queues"]
     })
 }
 
@@ -1108,6 +1075,24 @@ pub fn board_summary_value(board: &Board) -> Value {
         })
         .take(5)
         .collect();
+    let stale_tasks: Vec<&Task> = board
+        .tasks
+        .iter()
+        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
+        .take(5)
+        .collect();
+    let blocked_tasks: Vec<&Task> = board
+        .tasks
+        .iter()
+        .filter(|task| task.blocked.is_some())
+        .take(5)
+        .collect();
+    let in_review_tasks: Vec<&Task> = board
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InReview)
+        .take(5)
+        .collect();
 
     json!({
         "ok": true,
@@ -1120,7 +1105,13 @@ pub fn board_summary_value(board: &Board) -> Value {
             "blocked": blocked,
             "in_review": review,
         },
-        "available": available,
+        "available": available.clone(),
+        "queues": {
+            "available": available,
+            "stale": stale_tasks,
+            "blocked": blocked_tasks,
+            "in_review": in_review_tasks,
+        },
     })
 }
 
@@ -1244,32 +1235,51 @@ fn actor_argument(arguments: &Value) -> String {
         .to_string()
 }
 
-fn claim_auto_review(
+fn spawn_claimed_review(
     project_root: &Path,
-    task_id: &str,
-) -> Result<Option<review_dispatch::ReviewSelection>, String> {
-    board_store::update(
-        project_root,
-        |board| -> Result<Option<review_dispatch::ReviewSelection>, board_service::BoardError> {
-            let task = board_service::get_task(board, task_id)
-                .cloned()
-                .ok_or_else(|| board_service::BoardError::TaskNotFound(task_id.to_string()))?;
-            if !task.needs_auto_review() {
-                return Ok(None);
-            }
-
-            let reviewer = board_service::reviewer_for_task(board, &task);
-            let yolo = board.automation.yolo_default;
-            let task = board_service::start_review(board, task_id, reviewer)?.clone();
-            Ok(Some(review_dispatch::ReviewSelection {
-                task,
-                reviewer,
-                yolo,
-            }))
-        },
-    )
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    selection: Option<&review_dispatch::ReviewSelection>,
+    message: &mut String,
+) -> (Option<Value>, Option<Value>) {
+    let Some(selection) = selection else {
+        return (None, None);
+    };
+    match review_dispatch::spawn_headless_review(project_root, selection) {
+        Ok(run) => {
+            message.push_str(&format!(
+                " Started {} headless review (pid {}, log {}).",
+                selection.reviewer.label(),
+                run.pid,
+                run.log_path.display()
+            ));
+            (
+                Some(json!({
+                    "reviewer": selection.reviewer.assignee_id(),
+                    "pid": run.pid,
+                    "log_path": run.log_path.display().to_string()
+                })),
+                None,
+            )
+        }
+        Err(error) => {
+            message.push_str(&format!(
+                " Could not start headless review for {}: {error}",
+                selection.reviewer.label()
+            ));
+            let _ = review_dispatch::record_review_spawn_failure(
+                project_root,
+                &selection.task.id,
+                selection.reviewer,
+                &error,
+            );
+            (
+                None,
+                Some(json!({
+                    "reviewer": selection.reviewer.assignee_id(),
+                    "message": error,
+                })),
+            )
+        }
+    }
 }
 
 fn require_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolCallError> {
@@ -1360,6 +1370,13 @@ fn board_error(error: board_service::BoardError) -> ToolCallError {
     }
 }
 
+fn review_dispatch_error(error: review_dispatch::ReviewDispatchError) -> ToolCallError {
+    match error {
+        review_dispatch::ReviewDispatchError::Board(error) => board_error(error),
+        review_dispatch::ReviewDispatchError::Storage(error) => text_error(error),
+    }
+}
+
 fn task_structured(action: &str, task: &Task, warnings: Vec<String>) -> Value {
     let now = now_epoch_secs();
     json!({
@@ -1410,8 +1427,13 @@ mod tests {
         assert!(summary_required.contains(&"by_status"));
         assert!(summary_required.contains(&"lifecycle"));
         assert!(summary_required.contains(&"available"));
+        assert!(summary_required.contains(&"queues"));
         assert!(!summary_required.contains(&"task_id"));
         assert!(!summary_required.contains(&"warnings"));
+        assert_eq!(
+            tool_definition(&tools, "get_board_summary")["title"],
+            "Get Board Summary"
+        );
 
         let my_work_schema = &tool_definition(&tools, "get_my_work")["outputSchema"];
         let my_work_required = required_fields(my_work_schema);
@@ -1429,6 +1451,7 @@ mod tests {
         let lifecycle_required = required_fields(lifecycle_schema);
         assert!(lifecycle_required.contains(&"task_id"));
         assert!(lifecycle_required.contains(&"warnings"));
+        assert!(lifecycle_schema["properties"]["review_error"].is_object());
 
         let next_schema = &tool_definition(&tools, "start_next_work")["outputSchema"];
         let next_required = required_fields(next_schema);

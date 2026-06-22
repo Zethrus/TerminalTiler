@@ -27,6 +27,8 @@ use crate::ui::{
 
 const AGENT_TERMINAL_PLACEHOLDER: &str = "__placeholder__";
 
+type BannerAction = (&'static str, Box<dyn Fn() + 'static>);
+
 struct ColumnHandles {
     status: TaskStatus,
     widget: gtk::Box,
@@ -40,6 +42,7 @@ struct Inner {
     use_dark_palette: bool,
     density: ApplicationDensity,
     root: gtk::Box,
+    status_banner: gtk::Box,
     columns: Vec<ColumnHandles>,
     agents_section: gtk::Box,
     agents_list: gtk::Box,
@@ -76,6 +79,8 @@ impl BoardView {
         make_shrinkable(&root);
 
         root.append(&build_header(project_name));
+        let status_banner = build_status_banner();
+        root.append(&status_banner);
 
         let columns_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -121,6 +126,7 @@ impl BoardView {
             use_dark_palette,
             density,
             root,
+            status_banner,
             columns,
             agents_section,
             agents_list,
@@ -194,6 +200,12 @@ fn build_header(project_name: &str) -> gtk::Box {
         &["pill-button", "surface-button"],
     );
     connect.set_widget_name("kanban-connect-agent");
+    let run_next = icons::labeled_button(
+        "Run next",
+        icon_name::RUN,
+        &["pill-button", "surface-button"],
+    );
+    run_next.set_widget_name("kanban-run-next");
     let refresh = icons::icon_button(
         icon_name::REFRESH,
         "Reload board",
@@ -202,8 +214,19 @@ fn build_header(project_name: &str) -> gtk::Box {
     refresh.set_widget_name("kanban-refresh");
     header.append(&new_task);
     header.append(&connect);
+    header.append(&run_next);
     header.append(&refresh);
     header
+}
+
+fn build_status_banner() -> gtk::Box {
+    let banner = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["kanban-status-banner"])
+        .build();
+    banner.set_visible(false);
+    banner
 }
 
 fn header_button(inner: &Rc<Inner>, name: &str) -> Option<gtk::Button> {
@@ -255,6 +278,10 @@ fn wire_header_buttons(inner: &Rc<Inner>) {
         button.connect_clicked(move |_| {
             agent_setup_dialog::present(&inner.window, inner.project_root.clone());
         });
+    }
+    if let Some(button) = header_button(inner, "kanban-run-next") {
+        let inner = inner.clone();
+        button.connect_clicked(move |_| run_next_available(&inner));
     }
     if let Some(button) = header_button(inner, "kanban-refresh") {
         let inner = inner.clone();
@@ -426,7 +453,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
         let run_popover = run_popover.clone();
         default_button.connect_clicked(move |_| {
             run_popover.popdown();
-            dispatch_agent(&inner, &task_id, default_agent, default_yolo);
+            dispatch_agent(&inner, &task_id, default_agent, default_yolo, false, true);
         });
     }
     run_box.append(&default_button);
@@ -443,7 +470,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
             let run_popover = run_popover.clone();
             agent_button.connect_clicked(move |_| {
                 run_popover.popdown();
-                dispatch_agent(&inner, &task_id, agent, yolo);
+                dispatch_agent(&inner, &task_id, agent, yolo, false, true);
             });
             run_box.append(&agent_button);
         }
@@ -582,7 +609,9 @@ fn install_card_detail_click(
     };
     let on_run: Rc<dyn Fn(String)> = {
         let inner = inner.clone();
-        Rc::new(move |id: String| dispatch_agent(&inner, &id, default_agent, default_yolo))
+        Rc::new(move |id: String| {
+            dispatch_agent(&inner, &id, default_agent, default_yolo, false, true)
+        })
     };
     let on_delete: Rc<dyn Fn(String)> = {
         let inner = inner.clone();
@@ -685,6 +714,29 @@ fn render_agents(inner: &Rc<Inner>) {
     }
 }
 
+fn run_next_available(inner: &Rc<Inner>) {
+    let board = board_store::load(&inner.project_root);
+    let now = crate::model::board::now_epoch_secs();
+    let Some(task) = board_service::next_available_work(&board, now).cloned() else {
+        show_status_banner(
+            inner,
+            "No available work",
+            "There are no unblocked To Do tasks without a fresh active lease.",
+            None,
+        );
+        return;
+    };
+    let agent = board_service::implementation_agent_for_task(&board, &task);
+    dispatch_agent(
+        inner,
+        &task.id,
+        agent,
+        board.automation.yolo_default,
+        false,
+        true,
+    );
+}
+
 fn handle_task_drop(inner: &Rc<Inner>, task_id: String, target_status: TaskStatus) -> bool {
     let board = board_store::load(&inner.project_root);
     let Some(task) = board_service::get_task(&board, &task_id).cloned() else {
@@ -697,7 +749,14 @@ fn handle_task_drop(inner: &Rc<Inner>, task_id: String, target_status: TaskStatu
     match target_status {
         TaskStatus::InProgress => {
             let agent = board_service::implementation_agent_for_task(&board, &task);
-            dispatch_agent(inner, &task_id, agent, board.automation.yolo_default);
+            dispatch_agent(
+                inner,
+                &task_id,
+                agent,
+                board.automation.yolo_default,
+                false,
+                false,
+            );
             true
         }
         TaskStatus::InReview => persist_dropped_status(inner, &task_id, target_status),
@@ -736,23 +795,102 @@ fn persist_dropped_status(inner: &Rc<Inner>, task_id: &str, status: TaskStatus) 
     }
 }
 
-fn dispatch_agent(inner: &Rc<Inner>, task_id: &str, agent: AgentKind, yolo: bool) {
-    // Make sure the agent can reach the MCP board before it starts.
-    let _ = match agent {
+fn connect_agent_for_board(inner: &Rc<Inner>, agent: AgentKind) -> Result<(), String> {
+    match agent {
         AgentKind::Claude => agent_config::connect_claude(&inner.project_root),
         AgentKind::Codex => agent_config::connect_codex(&inner.project_root),
-    };
+    }?;
+    show_status_banner(
+        inner,
+        "MCP ready",
+        &format!(
+            "{} can reach this board through TerminalTiler MCP.",
+            agent.label()
+        ),
+        None,
+    );
+    Ok(())
+}
+
+fn show_status_banner(inner: &Rc<Inner>, title: &str, message: &str, action: Option<BannerAction>) {
+    clear_box(&inner.status_banner);
+    inner.status_banner.set_visible(true);
+
+    let text = gtk::Label::builder()
+        .label(format!("{title}: {message}"))
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .wrap(true)
+        .css_classes(["kanban-status-banner-label"])
+        .build();
+    inner.status_banner.append(&text);
+
+    if let Some((label, callback)) = action {
+        let button = icons::labeled_button(label, icon_name::RUN, &["pill-button", "warning"]);
+        button.set_widget_name("kanban-status-banner-action");
+        button.connect_clicked(move |_| callback());
+        inner.status_banner.append(&button);
+    }
+
+    let dismiss = icons::icon_button(icon_name::CLOSE, "Dismiss board status", &["flat"]);
+    dismiss.set_widget_name("kanban-status-banner-dismiss");
+    {
+        let banner = inner.status_banner.clone();
+        dismiss.connect_clicked(move |_| banner.set_visible(false));
+    }
+    inner.status_banner.append(&dismiss);
+}
+
+fn dispatch_agent(
+    inner: &Rc<Inner>,
+    task_id: &str,
+    agent: AgentKind,
+    yolo: bool,
+    force: bool,
+    allow_takeover_prompt: bool,
+) {
+    if let Err(error) = connect_agent_for_board(inner, agent) {
+        show_status_banner(
+            inner,
+            "MCP setup failed",
+            &format!("Could not prepare {} MCP config: {error}", agent.label()),
+            None,
+        );
+        return;
+    }
 
     let task = match board_store::update(&inner.project_root, |board| {
-        let task = board_service::get_task(board, task_id).cloned();
-        // Reflect the claim immediately; the agent will also do this via MCP.
-        if task.is_some() {
-            let _ = board_service::claim_task(board, task_id, agent.assignee_id());
-        }
-        task
+        board_service::start_work(board, task_id, agent.assignee_id(), None, force)
+            .map(|transition| transition.task.clone())
     }) {
-        Ok(Some(task)) => task,
-        Ok(None) => return,
+        Ok(Ok(task)) => task,
+        Ok(Err(board_service::BoardError::OwnershipConflict(conflict))) => {
+            let message = format!(
+                "Task is already active for '{}'. Use takeover only if that run is abandoned.",
+                conflict.current_assignee
+            );
+            let action = allow_takeover_prompt.then(|| {
+                let takeover_inner = inner.clone();
+                let takeover_task_id = task_id.to_string();
+                (
+                    "Take over and run",
+                    Box::new(move || {
+                        dispatch_agent(&takeover_inner, &takeover_task_id, agent, yolo, true, true)
+                    }) as Box<dyn Fn() + 'static>,
+                )
+            });
+            show_status_banner(inner, "Claim conflict", &message, action);
+            return;
+        }
+        Ok(Err(board_service::BoardError::TaskNotFound(_))) => {
+            show_status_banner(
+                inner,
+                "No task",
+                "That task is no longer on the board.",
+                None,
+            );
+            return;
+        }
         Err(error) => {
             crate::logging::error(format!("failed to save board: {error}"));
             return;

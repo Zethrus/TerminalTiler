@@ -59,9 +59,9 @@ Each board has five columns: To Do, In Progress, In Review, Complete, and Cancel
 - file attachments copied under `.terminaltiler/attachments/<task_id>/`
 - progress notes and assignee metadata
 
-The **Connect Agent** action registers the bundled `terminaltiler-mcp` server with Claude Code or Codex. Claude uses a project `.mcp.json`; Codex uses `~/.codex/config.toml`. Once connected, agents can use the board tools to list tasks, claim work, append notes, capture research findings, and move implementation-ready tasks to `in_review`.
+The **Connect Agent** action registers the bundled `terminaltiler-mcp` server with Claude Code or Codex. Claude uses a project `.mcp.json`; Codex uses `~/.codex/config.toml`. The board health panel calls out missing binaries, missing config, and wrong-project-root registrations so the same Connect/Repair action can fix them. Once connected, agents can use the board tools to list tasks, inspect queue summaries, claim work, append notes, capture research findings, and move implementation-ready tasks to `in_review`.
 
-Board-launched implementation runs spawn Claude or Codex in a live terminal pane rooted at the project directory. Moving a task to In Review can start one duplicate-gated review run. Completion remains a manual board decision after review.
+Board-launched implementation runs first claim/start the task with TerminalTiler's soft-lease guard, then spawn Claude or Codex in a live terminal pane rooted at the project directory. Fresh lease conflicts show a board banner instead of launching; the card **Run agent** action can explicitly take over, while drag-to-**In Progress** only reports the conflict. The header **Run next** action uses the same available-task selection as the MCP `start_next_work` tool. Moving a task to In Review can start one duplicate-gated review run, and review launch failures are saved in task review metadata plus notes for diagnosis. Completion remains a manual board decision after review.
 
 See [docs/kanban-board.md](docs/kanban-board.md) for the full board workflow, MCP tool reference, storage paths, and packaging notes.
 

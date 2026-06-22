@@ -16,7 +16,7 @@ The board schema is versioned and currently stores:
 - additional instructions for agent prompts
 - knowledge entries captured by agents
 - attachment metadata for files copied into `.terminaltiler/attachments/<task_id>/`
-- review metadata used to avoid duplicate automatic review dispatch
+- review metadata used to avoid duplicate automatic review dispatch, including the latest review launch error when a claimed review could not start
 - board automation defaults for implementation agent, reviewer, and YOLO mode
 
 All board mutations go through a cross-process lock at `.terminaltiler/board.lock` and are written atomically. This keeps the desktop UI, live agent terminals, and headless MCP clients from overwriting each other.
@@ -45,7 +45,9 @@ The board has five columns:
 
 Use **New Task** to create a card with title, description, and initial column. Cards can be dragged between columns, advanced to the next column with the card action button, refreshed from disk, deleted, or opened for task details.
 
-Use a card's **Run agent** menu to dispatch an implementation agent. Dragging a card into **In Progress** also dispatches the default implementation agent for that task. Moving a card to **In Review** can start one automatic review. Moving a card to **Cancelled** stops live agent runs for that task.
+Use a card's **Run agent** menu to dispatch an implementation agent. TerminalTiler repairs/checks the agent MCP setup, claims the task with the selected agent assignee, and only then opens the live terminal. If another assignee has a fresh active lease, the board shows a conflict banner and does not launch automatically; the **Run agent** flow is the only place that offers **Take over and run**.
+
+The board header also includes **Run next**, which uses the same queue rules as the MCP `start_next_work` tool: first unblocked To Do task in board order, skipping fresh active leases. Dragging a card into **In Progress** uses the same safe claim path but never forces takeover; conflicts and missing tasks are shown in the status banner. Moving a card to **In Review** can start one automatic review. Moving a card to **Cancelled** stops live agent runs for that task.
 
 ## Task details
 
@@ -72,7 +74,13 @@ Supported agent CLIs:
 - Claude Code, registered in the project `.mcp.json`
 - Codex, registered in `~/.codex/config.toml`
 
-The connection step is idempotent and preserves other MCP servers in the existing config. The generated server entry passes `--project-root <project-root>`, so the MCP server always serves the selected project board rather than whichever directory the agent process starts in.
+The connection step is idempotent and preserves other MCP servers in the existing config. The generated server entry passes `--project-root <project-root>`, so the MCP server always serves the selected project board rather than whichever directory the agent process starts in. The MCP health panel distinguishes these setup states:
+
+- MCP binary present vs. missing/PATH lookup failure
+- Claude config ready, missing, unreadable, or targeting the wrong project root
+- Codex config ready, missing, unreadable, or targeting the wrong project root
+
+Use **Connect Agent** again to repair a missing or mismatched registration.
 
 Example Claude config shape:
 
@@ -108,13 +116,13 @@ Board-launched implementation runs spawn a live terminal pane running Claude or 
 
 Board-launched review runs use the same live-terminal flow, but the prompt asks for a concise severity-rated review note and tells the reviewer to leave the task in In Review.
 
-When an MCP client moves a task to `in_review`, TerminalTiler claims one duplicate-gated headless review and writes its log under:
+When an MCP client moves a task to `in_review` through `update_task_status` or `ready_for_review`, TerminalTiler performs the status transition, ownership guard, lifecycle cleanup, handoff note, and duplicate-gated review metadata claim under one board lock. It then starts one headless reviewer and writes its log under:
 
 ```text
 <project-root>/.terminaltiler/reviews/
 ```
 
-The duplicate gate is stored in task review metadata. Manual UI review retries can still be requested.
+The duplicate gate is stored in task review metadata. If the review process cannot be launched, TerminalTiler records `review.last_error`, appends a task note, and returns `review_error` in MCP `structuredContent`; manual UI review retries can still be requested.
 
 ## MCP server
 
@@ -132,14 +140,39 @@ Without `--project-root`, the server falls back to the current working directory
 
 The server exposes these tools:
 
-- `list_tasks`: list all tasks or filter by status.
-- `get_task`: return full task details by id.
+- `get_board_summary`: compact counts plus `queues.available`, `queues.stale`, `queues.blocked`, and `queues.in_review` slices for mission-control triage. The legacy top-level `available` field remains.
+- `get_my_work`: resume-focused owned work grouped as active, stale, paused, and in review.
+- `list_tasks`: list tasks or filter by status, assignee, blocked state, or availability.
+- `get_task` / `get_task_brief`: return full JSON or a concise Markdown task brief.
+- `diagnose_mcp`: inspect project root, board file, MCP binary, Claude config, and Codex config without changing files.
 - `create_task`: create a task, defaulting to To Do.
-- `claim_task`: move a task to In Progress and set the assignee.
-- `update_task_status`: move a task between columns. Moving to `in_review` may start a headless review.
+- `start_work` / `start_next_work`: lifecycle-aware claim helpers with soft-lease conflicts and stale/paused takeover warnings. Prefer these over legacy `claim_task`.
+- `heartbeat_task`, `pause_work`, `release_task`, `reassign_task`, `block_task`, `unblock_task`: active-work lifecycle and blocker helpers.
+- `ready_for_review`: append a handoff summary, move to In Review, clear active lifecycle metadata, and trigger the duplicate-gated review path.
+- `update_task_status`: legacy-compatible status changes; moving to `in_review` uses the same review transition helper and may return `review_started` or `review_error`.
+- `submit_review`: append a structured review verdict while leaving completion manual.
 - `complete_task`: mark a task Complete, optionally with a closing note. Agents should use this only when explicitly instructed.
 - `add_task_note`: append a progress note.
 - `add_task_knowledge`: append a captured finding with a short title and detail.
+
+All advertised tools include `title`, `inputSchema`, and `outputSchema`. Tool failures remain JSON-RPC successes with `isError: true` and structured conflict details where applicable; invalid resource or prompt requests return JSON-RPC `-32602` invalid-params errors.
+
+### Resources and prompts
+
+Resources:
+
+- `terminaltiler://board/summary`
+- `terminaltiler://board/tasks`
+- `terminaltiler://workflow/guide`
+- `terminaltiler://task/<task_id>.json`
+- `terminaltiler://task/<task_id>.md`
+
+Prompts:
+
+- `implement_task`
+- `work_next_task`
+- `review_task`
+- `triage_board`
 
 Status wire IDs are:
 
