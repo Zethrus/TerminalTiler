@@ -3210,6 +3210,15 @@ fn kanban_board_styling_extends_existing_design_system() {
         STYLE_CSS.contains(".kanban-count-badge {") && STYLE_CSS.contains("border-radius: 0;"),
         "Kanban count badge should use the app's squared badge style"
     );
+    // The board dialogs ship real premium input + error styling (previously missing).
+    assert!(
+        STYLE_CSS.contains(".dialog-input")
+            && STYLE_CSS.contains(".kanban-description-scroller {")
+            && STYLE_CSS.contains("dropdown.dialog-select button")
+            && !STYLE_CSS.contains("combobox.dialog-select")
+            && STYLE_CSS.contains(".error-text {"),
+        "board dialog inputs, GtkDropDown selects, and error text must be styled, not raw GTK defaults"
+    );
 }
 
 #[test]
@@ -3273,6 +3282,15 @@ fn kanban_board_uses_shared_icon_and_dialog_chrome() {
             "{surface} should inherit theme/density chrome like other dialogs"
         );
     }
+    // Connect Agent saves automation defaults on an explicit click, not silently on
+    // every toggle (which made the status line appear with no user action).
+    assert!(
+        AGENT_SETUP_DIALOG_RS.contains("Save defaults")
+            && AGENT_SETUP_DIALOG_RS.contains("save_button.connect_clicked")
+            && !AGENT_SETUP_DIALOG_RS.contains("connect_active_notify")
+            && !AGENT_SETUP_DIALOG_RS.contains("connect_toggled"),
+        "agent setup dialog should persist defaults via an explicit Save button only"
+    );
 }
 
 #[test]
@@ -3281,7 +3299,8 @@ fn kanban_board_modules_and_mcp_binary_are_wired() {
         UI_MOD_RS.contains("pub mod board_view;")
             && UI_MOD_RS.contains("pub(crate) mod board_chrome;")
             && UI_MOD_RS.contains("pub(crate) mod new_task_dialog;")
-            && UI_MOD_RS.contains("pub(crate) mod agent_setup_dialog;"),
+            && UI_MOD_RS.contains("pub(crate) mod agent_setup_dialog;")
+            && UI_MOD_RS.contains("pub(crate) mod dialog_form;"),
         "board UI modules must be declared in ui/mod.rs"
     );
     // The MCP server ships as a bundled binary and the version reflects this large feature.

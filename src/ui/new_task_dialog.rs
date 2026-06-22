@@ -7,6 +7,7 @@ use adw::prelude::*;
 
 use crate::model::board::TaskStatus;
 use crate::ui::dialog_chrome;
+use crate::ui::dialog_form;
 use crate::ui::icons::{self, name as icon_name};
 
 /// Present the dialog. `on_submit` receives `(title, description, status)` when applied
@@ -29,32 +30,21 @@ where
         .margin_end(18)
         .build();
 
-    let title_entry = gtk::Entry::builder()
-        .hexpand(true)
-        .placeholder_text("Task title")
-        .activates_default(true)
-        .build();
-    content.append(&field_label("Title"));
+    let title_entry = dialog_form::text_input("Task title");
+    content.append(&dialog_form::field_label("Title"));
     content.append(&title_entry);
 
-    let description_view = gtk::TextView::builder()
-        .wrap_mode(gtk::WrapMode::Word)
-        .accepts_tab(false)
-        .css_classes(["kanban-description-input"])
-        .build();
-    let description_scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(96)
-        .css_classes(["kanban-description-scroller"])
-        .build();
-    description_scroller.set_child(Some(&description_view));
-    content.append(&field_label("Description"));
+    let (description_scroller, description_view) = dialog_form::multiline_input(96);
+    content.append(&dialog_form::field_label("Description"));
     content.append(&description_scroller);
 
     let status_labels: Vec<&str> = TaskStatus::ALL.iter().map(|s| s.column_title()).collect();
     let status_model = gtk::StringList::new(&status_labels);
-    let status_dropdown = gtk::DropDown::builder().model(&status_model).build();
-    content.append(&field_label("Column"));
+    let status_dropdown = gtk::DropDown::builder()
+        .model(&status_model)
+        .css_classes(["dialog-select"])
+        .build();
+    content.append(&dialog_form::field_label("Column"));
     content.append(&status_dropdown);
 
     let action_row = gtk::Box::builder()
@@ -110,12 +100,4 @@ where
 
     dialog.present(Some(window));
     title_entry.grab_focus();
-}
-
-fn field_label(text: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .label(text)
-        .halign(gtk::Align::Start)
-        .css_classes(["eyebrow", "field-label"])
-        .build()
 }

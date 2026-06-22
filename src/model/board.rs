@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::agent_run::AgentKind;
 
 /// Schema version for `board.json`. Bump when the on-disk shape changes incompatibly.
-pub const BOARD_VERSION: u32 = 1;
+pub const BOARD_VERSION: u32 = 2;
 
 /// Kanban column a task currently lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +128,40 @@ pub struct TaskNote {
     pub created_at: u64,
 }
 
+/// A discrete piece of knowledge captured for a task — typically researched and recorded
+/// by an agent via the `add_task_knowledge` MCP tool as it works.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeEntry {
+    pub title: String,
+    pub content: String,
+    /// Origin of the entry, e.g. `"agent"` or `"user"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Free-form tag, e.g. `"api_ref"`, `"blocker"`, `"example"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    pub created_at: u64,
+}
+
+/// A file attachment for a task. The file is copied into the project under
+/// `.terminaltiler/attachments/<task_id>/` and referenced here by a path relative to the
+/// project root, so the board stays portable.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskAttachment {
+    /// Path relative to the project root, e.g.
+    /// `".terminaltiler/attachments/<task_id>/shot.png"`.
+    pub path: String,
+    /// Original filename, shown in the UI.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size_bytes: u64,
+    pub added_at: u64,
+}
+
 /// A board task / card.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
@@ -144,12 +178,28 @@ pub struct Task {
     pub notes: Vec<TaskNote>,
     #[serde(default, skip_serializing_if = "TaskReviewMetadata::is_default")]
     pub review: TaskReviewMetadata,
+    /// Extra instructions for agents working this task, injected into the seed prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_instructions: Option<String>,
+    /// Knowledge captured for this task (by agents or the user).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<KnowledgeEntry>,
+    /// Files attached for additional context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<TaskAttachment>,
 }
 
 impl Task {
     /// Latest progress note text, if any — handy for the agents panel summary line.
     pub fn latest_note(&self) -> Option<&str> {
         self.notes.last().map(|note| note.text.as_str())
+    }
+
+    /// Whether this task carries non-empty additional instructions.
+    pub fn has_instructions(&self) -> bool {
+        self.additional_instructions
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
     }
 
     /// Whether the UI should start one automatic review for this task.
@@ -239,5 +289,27 @@ mod tests {
         assert_eq!(board.automation, BoardAutomation::default());
         assert_eq!(board.tasks[0].review, TaskReviewMetadata::default());
         assert!(board.tasks[0].needs_auto_review());
+    }
+
+    #[test]
+    fn old_board_json_loads_with_new_task_fields_defaulted() {
+        let raw = r#"{
+            "version": 1,
+            "tasks": [{
+                "id": "task-1",
+                "title": "Legacy task",
+                "description": "no extra fields",
+                "status": "todo",
+                "created_at": 10,
+                "updated_at": 11
+            }]
+        }"#;
+
+        let board: Board = serde_json::from_str(raw).unwrap();
+        let task = &board.tasks[0];
+        assert_eq!(task.additional_instructions, None);
+        assert!(task.knowledge.is_empty());
+        assert!(task.attachments.is_empty());
+        assert!(!task.has_instructions());
     }
 }

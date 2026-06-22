@@ -145,6 +145,33 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
     }
     card.append(&meta);
 
+    // Compact indicators for the richer per-task settings.
+    let mut indicators: Vec<String> = Vec::new();
+    if task.has_instructions() {
+        indicators.push("✎ instructions".to_string());
+    }
+    if !task.knowledge.is_empty() {
+        indicators.push(format!("📖 {}", task.knowledge.len()));
+    }
+    if !task.attachments.is_empty() {
+        indicators.push(format!("📎 {}", task.attachments.len()));
+    }
+    if !indicators.is_empty() {
+        let indicator_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        for text in indicators {
+            indicator_row.append(
+                &gtk::Label::builder()
+                    .label(text)
+                    .css_classes(["status-chip", "kanban-card-indicator"])
+                    .build(),
+            );
+        }
+        card.append(&indicator_row);
+    }
+
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)

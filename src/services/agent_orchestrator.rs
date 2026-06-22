@@ -68,7 +68,7 @@ impl AgentOrchestrator {
         };
         spec.accent_class = "accent-amber".into();
         spec.working_directory = WorkingDirectory::Absolute(project_root.to_path_buf());
-        spec.startup_command = Some(build_agent_command(agent, task, options));
+        spec.startup_command = Some(build_agent_command(project_root, agent, task, options));
 
         let assets = WorkspaceAssets::default();
         let session = TerminalSession::spawn(
@@ -161,10 +161,15 @@ fn terminate_active_run(active: &mut ActiveRun, reason: &str) {
     }
 }
 
-fn build_agent_command(agent: AgentKind, task: &Task, options: AgentRunOptions) -> String {
+fn build_agent_command(
+    project_root: &Path,
+    agent: AgentKind,
+    task: &Task,
+    options: AgentRunOptions,
+) -> String {
     let prompt = match options.kind {
-        AgentRunKind::Implementation => build_implementation_prompt(task),
-        AgentRunKind::Review => build_review_prompt(agent, task),
+        AgentRunKind::Implementation => build_implementation_prompt(project_root, task),
+        AgentRunKind::Review => build_review_prompt(project_root, agent, task),
     };
 
     let mut parts = vec![agent.binary().to_string()];
@@ -175,7 +180,7 @@ fn build_agent_command(agent: AgentKind, task: &Task, options: AgentRunOptions) 
     parts.join(" ")
 }
 
-fn build_implementation_prompt(task: &Task) -> String {
+fn build_implementation_prompt(project_root: &Path, task: &Task) -> String {
     let mut prompt = format!(
         "You are working on TerminalTiler Kanban task {id} titled \"{title}\".",
         id = task.id,
@@ -186,6 +191,12 @@ fn build_implementation_prompt(task: &Task) -> String {
         prompt.push(' ');
         prompt.push_str(description);
     }
+    append_task_context(&mut prompt, project_root, task);
+    prompt.push_str(
+        " Before and while implementing, research the relevant docs, APIs, and code context \
+         for this task and record each useful finding by calling add_task_knowledge (a short \
+         title plus the detail).",
+    );
     prompt.push_str(
         " Use the terminaltiler MCP tools: call claim_task to mark it In Progress, \
          add_task_note to report progress, and when implementation is ready for review call \
@@ -195,7 +206,7 @@ fn build_implementation_prompt(task: &Task) -> String {
     prompt
 }
 
-fn build_review_prompt(agent: AgentKind, task: &Task) -> String {
+fn build_review_prompt(project_root: &Path, agent: AgentKind, task: &Task) -> String {
     let mut prompt = format!(
         "Run a code review for TerminalTiler Kanban task {id} titled \"{title}\".",
         id = task.id,
@@ -206,11 +217,39 @@ fn build_review_prompt(agent: AgentKind, task: &Task) -> String {
         prompt.push(' ');
         prompt.push_str(description);
     }
+    append_task_context(&mut prompt, project_root, task);
     prompt.push_str(&format!(
         " Inspect the current worktree/branch for issues related to this task. Use the terminaltiler MCP tools to call add_task_note with author \"{}-reviewer\" and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
         agent.assignee_id()
     ));
     prompt
+}
+
+/// Append the task's additional instructions and attachment paths (when present) to a prompt.
+/// Attachments are referenced by absolute path so the agent can open them directly.
+fn append_task_context(prompt: &mut String, project_root: &Path, task: &Task) {
+    if let Some(instructions) = task
+        .additional_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        prompt.push_str(" Additional instructions: ");
+        prompt.push_str(instructions);
+        if !instructions.ends_with('.') {
+            prompt.push('.');
+        }
+    }
+    if !task.attachments.is_empty() {
+        let paths: Vec<String> = task
+            .attachments
+            .iter()
+            .map(|attachment| project_root.join(&attachment.path).display().to_string())
+            .collect();
+        prompt.push_str(" Reference attachments (read these for context): ");
+        prompt.push_str(&paths.join(", "));
+        prompt.push('.');
+    }
 }
 
 /// POSIX single-quote escaping so the prompt survives the shell as one argument.
@@ -231,6 +270,7 @@ mod tests {
             create_task(&mut board, "Fix it's bug", "do the thing", TaskStatus::Todo).clone();
 
         let command = build_agent_command(
+            Path::new("/tmp/project"),
             AgentKind::Claude,
             &task,
             AgentRunOptions::implementation(false),
@@ -240,6 +280,43 @@ mod tests {
         assert!(command.contains("update_task_status"));
         assert!(command.contains("in_review"));
         assert!(command.contains("Do not mark the task Complete"));
+        // Auto-gather directive is always present on implementation runs.
+        assert!(command.contains("add_task_knowledge"));
+    }
+
+    #[test]
+    fn implementation_prompt_injects_instructions_and_attachments() {
+        let mut board = crate::model::board::Board::default();
+        let id = create_task(&mut board, "Task", "do it", TaskStatus::Todo)
+            .id
+            .clone();
+        crate::services::board::set_additional_instructions(&mut board, &id, "use bunny CDN")
+            .unwrap();
+        crate::services::board::add_attachment(
+            &mut board,
+            &id,
+            crate::model::board::TaskAttachment {
+                path: format!(".terminaltiler/attachments/{id}/shot.png"),
+                name: "shot.png".into(),
+                mime_type: Some("image/png".into()),
+                size_bytes: 1,
+                added_at: 0,
+            },
+        )
+        .unwrap();
+        let task = crate::services::board::get_task(&board, &id)
+            .unwrap()
+            .clone();
+
+        let command = build_agent_command(
+            Path::new("/tmp/project"),
+            AgentKind::Claude,
+            &task,
+            AgentRunOptions::implementation(false),
+        );
+        assert!(command.contains("Additional instructions: use bunny CDN."));
+        assert!(command.contains("/tmp/project/.terminaltiler/attachments/"));
+        assert!(command.contains("shot.png"));
     }
 
     #[test]
@@ -248,6 +325,7 @@ mod tests {
         let task = create_task(&mut board, "Task", "", TaskStatus::Todo).clone();
 
         let codex = build_agent_command(
+            Path::new("/tmp/project"),
             AgentKind::Codex,
             &task,
             AgentRunOptions::implementation(true),
@@ -255,6 +333,7 @@ mod tests {
         assert!(codex.starts_with("codex --dangerously-bypass-approvals-and-sandbox "));
 
         let claude = build_agent_command(
+            Path::new("/tmp/project"),
             AgentKind::Claude,
             &task,
             AgentRunOptions::implementation(true),
@@ -267,7 +346,12 @@ mod tests {
         let mut board = crate::model::board::Board::default();
         let task = create_task(&mut board, "Review target", "", TaskStatus::InReview).clone();
 
-        let command = build_agent_command(AgentKind::Codex, &task, AgentRunOptions::review(false));
+        let command = build_agent_command(
+            Path::new("/tmp/project"),
+            AgentKind::Codex,
+            &task,
+            AgentRunOptions::review(false),
+        );
         assert!(command.starts_with("codex '"));
         assert!(command.contains("Run a code review"));
         assert!(command.contains("add_task_note"));

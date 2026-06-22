@@ -25,7 +25,9 @@ and record yourself as the assignee; use `add_task_note` to report progress as y
 when implementation is ready, call `update_task_status` to move the task to \"in_review\" \
 before completion so the board can trigger review. Use `complete_task` only when the user \
 explicitly asks you to mark the task Complete. Always claim a task before starting and post \
-a note or status update when finished so the user can follow along.";
+a note or status update when finished so the user can follow along. As you work, gather the \
+relevant docs, APIs, and code context for the task and record each useful finding with \
+`add_task_knowledge` (a short title plus the detail) so the knowledge accrues on the board.";
 
 /// Run the stdio server loop until stdin closes. This is the binary's entire job.
 pub fn run_stdio() {

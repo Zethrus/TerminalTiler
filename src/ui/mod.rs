@@ -50,6 +50,11 @@ pub(crate) mod dialog_chrome;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod dialog_form;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub(crate) mod dialog_smoke;
 pub(crate) mod icons;
 pub mod launch_screen;
@@ -105,6 +110,8 @@ pub mod stats_dialog;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub(crate) mod tab_rename_dialog;
+#[cfg(target_os = "linux")]
+pub(crate) mod task_detail_dialog;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")

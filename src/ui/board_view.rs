@@ -21,7 +21,9 @@ use crate::services::agent_orchestrator::AgentOrchestrator;
 use crate::services::{agent_config, board as board_service, review_dispatch};
 use crate::storage::board_store;
 use crate::ui::icons::{self, name as icon_name};
-use crate::ui::{agent_setup_dialog, board_chrome, board_drag, new_task_dialog};
+use crate::ui::{
+    agent_setup_dialog, board_chrome, board_drag, new_task_dialog, task_detail_dialog,
+};
 
 const AGENT_TERMINAL_PLACEHOLDER: &str = "__placeholder__";
 
@@ -479,9 +481,60 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
     }
     card.actions.append(&delete);
 
+    install_card_detail_click(inner, &card.widget, &task_id, default_agent, default_yolo);
     install_card_drag_source(&card.widget, &task_id);
 
     card.widget
+}
+
+/// Open the task-detail modal when the card body is clicked. Clicks on the action buttons
+/// claim the gesture sequence first, so they don't also trigger this.
+fn install_card_detail_click(
+    inner: &Rc<Inner>,
+    card: &gtk::Box,
+    task_id: &str,
+    default_agent: AgentKind,
+    default_yolo: bool,
+) {
+    let on_changed: Rc<dyn Fn()> = {
+        let inner = inner.clone();
+        Rc::new(move || render(&inner))
+    };
+    let on_run: Rc<dyn Fn(String)> = {
+        let inner = inner.clone();
+        Rc::new(move |id: String| dispatch_agent(&inner, &id, default_agent, default_yolo))
+    };
+    let on_delete: Rc<dyn Fn(String)> = {
+        let inner = inner.clone();
+        Rc::new(move |id: String| {
+            match board_store::update(&inner.project_root, |board| {
+                board_service::delete_task(board, &id)
+                    .is_ok()
+                    .then(|| board.clone())
+            }) {
+                Ok(Some(board)) => render_persisted_board(&inner, &board),
+                Ok(None) => {}
+                Err(error) => crate::logging::error(format!("failed to save board: {error}")),
+            }
+        })
+    };
+
+    let gesture = gtk::GestureClick::new();
+    {
+        let inner = inner.clone();
+        let task_id = task_id.to_string();
+        gesture.connect_released(move |_, _, _, _| {
+            task_detail_dialog::present(
+                &inner.window,
+                inner.project_root.clone(),
+                task_id.clone(),
+                on_changed.clone(),
+                on_run.clone(),
+                on_delete.clone(),
+            );
+        });
+    }
+    card.add_controller(gesture);
 }
 
 fn install_card_drag_source(card: &gtk::Box, task_id: &str) {

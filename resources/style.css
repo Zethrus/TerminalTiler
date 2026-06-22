@@ -4671,3 +4671,156 @@ window.theme-light .voice-hud-transcript {
 .kanban-agent-terminals {
   border: 1px solid alpha(@tt_white, 0.08);
 }
+
+/* Board dialogs — premium inputs for New Task + Connect Agent (shares token palette) */
+.new-task-dialog-window .dialog-input,
+.agent-setup-dialog-window .dialog-input,
+.new-task-dialog-window .kanban-description-scroller,
+.task-detail-dialog-window .kanban-description-scroller,
+.new-task-dialog-window dropdown.dialog-select button {
+  min-height: 40px;
+  border-radius: 12px;
+  background: alpha(@tt_white, 0.035);
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
+  color: #f5f5f1;
+}
+
+.new-task-dialog-window .dialog-input,
+.agent-setup-dialog-window .dialog-input,
+.new-task-dialog-window dropdown.dialog-select button {
+  padding: 0 12px;
+}
+
+.new-task-dialog-window .kanban-description-scroller,
+.task-detail-dialog-window .kanban-description-scroller {
+  padding: 4px;
+}
+
+.new-task-dialog-window .kanban-description-input,
+.new-task-dialog-window .kanban-description-input text,
+.task-detail-dialog-window .kanban-description-input,
+.task-detail-dialog-window .kanban-description-input text {
+  background: transparent;
+  color: #f5f5f1;
+}
+
+.new-task-dialog-window .kanban-description-input,
+.task-detail-dialog-window .kanban-description-input {
+  padding: 6px 8px;
+}
+
+.field-label {
+  margin-bottom: 2px;
+}
+
+.new-task-dialog-window .dialog-input:focus,
+.agent-setup-dialog-window .dialog-input:focus,
+.new-task-dialog-window .kanban-description-scroller:focus-within,
+.task-detail-dialog-window .kanban-description-scroller:focus-within,
+.new-task-dialog-window dropdown.dialog-select button:focus {
+  border-color: alpha(@tt_amber, 0.55);
+  box-shadow:
+    0 0 0 2px alpha(@tt_amber, 0.18),
+    inset 0 1px alpha(@tt_white, 0.04);
+}
+
+/* Error status text (used by board + launch agent status). */
+.error-text {
+  color: rgba(255, 120, 120, 0.92);
+  font-weight: 600;
+}
+
+/* Light-theme parity for the board dialog inputs. */
+window.theme-light .new-task-dialog-window .dialog-input,
+window.theme-light .agent-setup-dialog-window .dialog-input,
+window.theme-light .new-task-dialog-window .kanban-description-scroller,
+window.theme-light .task-detail-dialog-window .kanban-description-scroller,
+window.theme-light .new-task-dialog-window .kanban-description-input,
+window.theme-light .task-detail-dialog-window .kanban-description-input,
+window.theme-light .new-task-dialog-window .kanban-description-input text,
+window.theme-light .task-detail-dialog-window .kanban-description-input text,
+window.theme-light .new-task-dialog-window dropdown.dialog-select button {
+  background: alpha(@tt_white, 0.7);
+  border-color: rgba(17, 18, 22, 0.12);
+  color: #1c1d22;
+}
+
+/* Task-detail modal — tabs, knowledge entries, attachments. */
+.task-detail-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.task-detail-status-chip {
+  color: @tt_text;
+  background: alpha(@tt_white, 0.10);
+  border: 1px solid alpha(@tt_white, 0.08);
+}
+
+.task-detail-tabs {
+  border-bottom: 1px solid alpha(@tt_white, 0.08);
+  margin-top: 4px;
+}
+
+.task-detail-tab {
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 6px 8px;
+  color: alpha(@tt_white, 0.55);
+}
+
+.task-detail-tab:hover {
+  background: alpha(@tt_white, 0.04);
+}
+
+.task-detail-tab:checked {
+  color: @tt_text;
+  border-bottom: 2px solid @tt_amber;
+}
+
+.task-detail-knowledge-entry,
+.task-detail-attachment-row {
+  padding: 10px;
+  border-radius: 10px;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+}
+
+.task-detail-dropzone {
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px dashed alpha(@tt_white, 0.18);
+  background: alpha(@tt_white, 0.02);
+}
+
+.task-detail-dropzone.is-drop-target {
+  border-color: @tt_amber;
+  background: alpha(@tt_amber, 0.08);
+}
+
+.task-detail-footer {
+  border-top: 1px solid alpha(@tt_white, 0.08);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.kanban-card-indicator {
+  font-size: 10px;
+  color: alpha(@tt_white, 0.62);
+  background: alpha(@tt_white, 0.06);
+  border: 1px solid alpha(@tt_white, 0.06);
+}
+
+window.theme-light .task-detail-knowledge-entry,
+window.theme-light .task-detail-attachment-row {
+  background: alpha(@tt_white, 0.7);
+  border-color: rgba(17, 18, 22, 0.10);
+}
+
+window.theme-light .task-detail-dropzone {
+  border-color: rgba(17, 18, 22, 0.18);
+  background: alpha(@tt_white, 0.4);
+}

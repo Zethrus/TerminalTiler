@@ -7,7 +7,10 @@
 use uuid::Uuid;
 
 use crate::model::agent_run::AgentKind;
-use crate::model::board::{Board, Task, TaskNote, TaskReviewMetadata, TaskStatus, now_epoch_secs};
+use crate::model::board::{
+    Board, KnowledgeEntry, Task, TaskAttachment, TaskNote, TaskReviewMetadata, TaskStatus,
+    now_epoch_secs,
+};
 
 /// Errors a board mutation can produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +47,9 @@ pub fn create_task(
         updated_at: now,
         notes: Vec::new(),
         review: TaskReviewMetadata::default(),
+        additional_instructions: None,
+        knowledge: Vec::new(),
+        attachments: Vec::new(),
     });
     board
         .tasks
@@ -167,6 +173,83 @@ pub fn add_note<'a>(
     });
     task.updated_at = now;
     Ok(&*task)
+}
+
+/// Set (or clear, when blank) the additional instructions for a task.
+pub fn set_additional_instructions<'a>(
+    board: &'a mut Board,
+    id: &str,
+    instructions: impl Into<String>,
+) -> Result<&'a Task, BoardError> {
+    let instructions = instructions.into();
+    let task = task_mut(board, id)?;
+    let trimmed = instructions.trim();
+    task.additional_instructions = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    task.updated_at = now_epoch_secs();
+    Ok(&*task)
+}
+
+/// Append a captured knowledge entry to a task.
+#[allow(clippy::too_many_arguments)]
+pub fn add_knowledge<'a>(
+    board: &'a mut Board,
+    id: &str,
+    title: impl Into<String>,
+    content: impl Into<String>,
+    source: Option<String>,
+    category: Option<String>,
+    author: Option<String>,
+) -> Result<&'a Task, BoardError> {
+    let now = now_epoch_secs();
+    let task = task_mut(board, id)?;
+    task.knowledge.push(KnowledgeEntry {
+        title: title.into(),
+        content: content.into(),
+        source,
+        category,
+        author,
+        created_at: now,
+    });
+    task.updated_at = now;
+    Ok(&*task)
+}
+
+/// Attach an already-copied file to a task. The caller is responsible for placing the file
+/// on disk (see the UI attachment helper); this only records the metadata.
+pub fn add_attachment<'a>(
+    board: &'a mut Board,
+    id: &str,
+    attachment: TaskAttachment,
+) -> Result<&'a Task, BoardError> {
+    let task = task_mut(board, id)?;
+    task.attachments.push(attachment);
+    task.updated_at = now_epoch_secs();
+    Ok(&*task)
+}
+
+/// Remove an attachment (matched by relative path) from a task. Returns the removed entry so
+/// the caller can delete the backing file. Errors if the task is missing; returns `Ok(None)`
+/// when the task exists but has no attachment at that path.
+pub fn remove_attachment(
+    board: &mut Board,
+    id: &str,
+    path: &str,
+) -> Result<Option<TaskAttachment>, BoardError> {
+    let task = task_mut(board, id)?;
+    let Some(index) = task
+        .attachments
+        .iter()
+        .position(|attachment| attachment.path == path)
+    else {
+        return Ok(None);
+    };
+    let removed = task.attachments.remove(index);
+    task.updated_at = now_epoch_secs();
+    Ok(Some(removed))
 }
 
 /// Remove a task from the board.
@@ -309,6 +392,64 @@ mod tests {
         let error = set_status(&mut board, "ghost", TaskStatus::Complete).unwrap_err();
         assert_eq!(error, BoardError::TaskNotFound("ghost".into()));
         assert!(delete_task(&mut board, "ghost").is_err());
+    }
+
+    #[test]
+    fn instructions_knowledge_and_attachments_round_trip() {
+        let mut board = Board::default();
+        let id = create_task(&mut board, "Task", "desc", TaskStatus::Todo)
+            .id
+            .clone();
+
+        let task = set_additional_instructions(&mut board, &id, "  use bunny CDN  ").unwrap();
+        assert_eq!(
+            task.additional_instructions.as_deref(),
+            Some("use bunny CDN")
+        );
+        assert!(task.has_instructions());
+
+        // Blank input clears it.
+        let task = set_additional_instructions(&mut board, &id, "   ").unwrap();
+        assert_eq!(task.additional_instructions, None);
+
+        let task = add_knowledge(
+            &mut board,
+            &id,
+            "Bunny CDN base url",
+            "https://docs.bunny.net/cdn",
+            Some("agent".into()),
+            Some("api_ref".into()),
+            Some("claude".into()),
+        )
+        .unwrap();
+        assert_eq!(task.knowledge.len(), 1);
+        assert_eq!(task.knowledge[0].title, "Bunny CDN base url");
+        assert_eq!(task.knowledge[0].category.as_deref(), Some("api_ref"));
+
+        let attachment = TaskAttachment {
+            path: format!(".terminaltiler/attachments/{id}/shot.png"),
+            name: "shot.png".into(),
+            mime_type: Some("image/png".into()),
+            size_bytes: 1234,
+            added_at: 0,
+        };
+        let task = add_attachment(&mut board, &id, attachment.clone()).unwrap();
+        assert_eq!(task.attachments.len(), 1);
+
+        let removed = remove_attachment(&mut board, &id, &attachment.path).unwrap();
+        assert_eq!(removed, Some(attachment));
+        assert!(get_task(&board, &id).unwrap().attachments.is_empty());
+
+        // Removing a missing path is a no-op, not an error.
+        assert_eq!(remove_attachment(&mut board, &id, "nope").unwrap(), None);
+    }
+
+    #[test]
+    fn new_task_ops_report_missing_task() {
+        let mut board = Board::default();
+        assert!(set_additional_instructions(&mut board, "ghost", "x").is_err());
+        assert!(add_knowledge(&mut board, "ghost", "t", "c", None, None, None).is_err());
+        assert!(remove_attachment(&mut board, "ghost", "p").is_err());
     }
 
     #[test]

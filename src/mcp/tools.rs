@@ -101,6 +101,22 @@ pub fn list_json() -> Vec<Value> {
                 "required": ["id", "text"]
             }),
         ),
+        tool(
+            "add_task_knowledge",
+            "Record a captured knowledge entry on a task (docs, API references, examples, blockers) so it accrues for later work and the user can review it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "title": { "type": "string", "description": "Short label for the finding." },
+                    "content": { "type": "string", "description": "The detail of the finding." },
+                    "source": { "type": "string", "description": "Origin, e.g. 'agent' (default) or 'user'." },
+                    "category": { "type": "string", "description": "Optional tag, e.g. 'api_ref', 'example', 'blocker'." },
+                    "author": { "type": "string" }
+                },
+                "required": ["id", "title", "content"]
+            }),
+        ),
     ]
 }
 
@@ -115,6 +131,7 @@ pub fn call(name: &str, arguments: &Value, project_root: &Path) -> Result<String
         "update_task_status" => update_task_status(arguments, project_root),
         "complete_task" => complete_task(arguments, project_root),
         "add_task_note" => add_task_note(arguments, project_root),
+        "add_task_knowledge" => add_task_knowledge(arguments, project_root),
         other => Err(format!("unknown tool '{other}'")),
     }
 }
@@ -206,6 +223,26 @@ fn add_task_note(arguments: &Value, project_root: &Path) -> Result<String, Strin
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
     Ok(format!("Added note to task {id}."))
+}
+
+fn add_task_knowledge(arguments: &Value, project_root: &Path) -> Result<String, String> {
+    let id = require_str(arguments, "id")?;
+    let title = require_str(arguments, "title")?;
+    let content = require_str(arguments, "content")?;
+    let source = Some(
+        optional_str(arguments, "source")
+            .unwrap_or("agent")
+            .to_string(),
+    );
+    let category = optional_str(arguments, "category").map(str::to_string);
+    let author = optional_str(arguments, "author").map(str::to_string);
+    board_store::update(project_root, |board| {
+        board_service::add_knowledge(board, id, title, content, source, category, author)
+            .map(|_| ())
+    })
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok(format!("Recorded knowledge on task {id}."))
 }
 
 fn parse_status(raw: &str) -> Result<TaskStatus, String> {

@@ -130,6 +130,18 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
     );
     yolo_row.append(&yolo_switch);
     automation_panel.append(&yolo_row);
+
+    let save_button = icons::labeled_button(
+        "Save defaults",
+        icon_name::SAVE,
+        &["pill-button", "surface-button"],
+    );
+    let save_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::End)
+        .build();
+    save_row.append(&save_button);
+    automation_panel.append(&save_row);
     content.append(&automation_panel);
 
     let save_automation: Rc<dyn Fn()> = Rc::new({
@@ -168,22 +180,9 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
         }
     });
 
-    for button in [
-        default_agent_claude.clone(),
-        default_agent_codex.clone(),
-        default_reviewer_claude.clone(),
-        default_reviewer_codex.clone(),
-    ] {
-        let save = save_automation.clone();
-        button.connect_toggled(move |button| {
-            if button.is_active() {
-                save();
-            }
-        });
-    }
     {
         let save = save_automation.clone();
-        yolo_switch.connect_active_notify(move |_| save());
+        save_button.connect_clicked(move |_| save());
     }
 
     let button_row = gtk::Box::builder()
