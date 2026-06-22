@@ -16,6 +16,8 @@ use crate::extension::RuntimeOptions;
 use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
+use crate::model::board::Board;
+use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::agent_resume::{
     RestoreStartupOverrideMap, restore_startup_overrides_for_tiles,
@@ -25,6 +27,8 @@ use crate::services::session_restore::{
 };
 use crate::stats_hub;
 use crate::storage::asset_store::AssetStore;
+use crate::storage::board_store;
+use crate::storage::board_workspace_store::BoardWorkspaceStore;
 use crate::storage::preference_store::{AppPreferences, PreferenceStore};
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::{SavedSession, SavedTab, SavedTerminalHistory, SessionStore};
@@ -60,6 +64,7 @@ type TabPredicateHandle = Rc<RefCell<Option<Box<dyn Fn(usize) -> bool>>>>;
 type RenameTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, Option<String>)>>>>;
 type ReorderTabHandle = Rc<RefCell<Option<Box<dyn Fn(usize, usize)>>>>;
 type ShowWorkspaceHandle = Rc<RefCell<Option<Box<dyn Fn(usize, WorkspacePreset, PathBuf)>>>>;
+type ShowBoardHandle = Rc<RefCell<Option<Box<dyn Fn(usize, BoardLaunchRequest)>>>>;
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
 type VoiceKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
@@ -140,6 +145,10 @@ enum TabContent {
 struct BoardState {
     #[allow(dead_code)]
     view: crate::ui::board_view::BoardView,
+    name: String,
+    project_root: PathBuf,
+    theme: crate::model::preset::ThemeMode,
+    density: ApplicationDensity,
 }
 
 #[derive(Clone)]
@@ -718,6 +727,7 @@ struct LaunchTabContext {
     preset_store: Rc<PresetStore>,
     asset_store: Rc<AssetStore>,
     show_workspace_handle: ShowWorkspaceHandle,
+    show_board_handle: ShowBoardHandle,
     close_tab_handle: TabActionHandle,
     refresh_launch_tabs: VoidHandle,
 }
@@ -954,6 +964,7 @@ fn present_with_initial_workspace(
     let apply_tab_rename: RenameTabHandle = Rc::new(RefCell::new(None));
     let reorder_tab: ReorderTabHandle = Rc::new(RefCell::new(None));
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
+    let show_board_in_tab: ShowBoardHandle = Rc::new(RefCell::new(None));
     let refresh_launch_tabs: VoidHandle = Rc::new(RefCell::new(None));
     let add_workspace_tab: VoidHandle = Rc::new(RefCell::new(None));
     let open_board_tab: VoidHandle = Rc::new(RefCell::new(None));
@@ -1398,7 +1409,7 @@ fn present_with_initial_workspace(
         let session_persistence_for_select = session_persistence.clone();
         let sync_selected_tab: Rc<dyn Fn(usize)> = Rc::new(move |tab_id| {
             note_linux_main_attach_target_active(window_id);
-            let (is_workspace, workspace_profile) = {
+            let (is_workspace, is_returnable, workspace_profile, board_profile) = {
                 let tabs = tabs_for_sync.borrow();
                 let active = tabs
                     .iter()
@@ -1406,15 +1417,27 @@ fn present_with_initial_workspace(
                     .cloned()
                     .expect("active workspace tab should exist");
                 match active.content {
-                    TabContent::Board(_) => (false, None),
-                    TabContent::LaunchDeck => (false, None),
+                    TabContent::Board(board) => (
+                        false,
+                        true,
+                        None,
+                        Some((
+                            board.name.clone(),
+                            board.project_root.clone(),
+                            board.theme,
+                            board.density,
+                        )),
+                    ),
+                    TabContent::LaunchDeck => (false, false, None, None),
                     TabContent::Workspace(workspace) => (
+                        true,
                         true,
                         Some((
                             workspace.preset,
                             workspace.runtime,
                             workspace.terminal_zoom_steps,
                         )),
+                        None,
                     ),
                 }
             };
@@ -1428,6 +1451,17 @@ fn present_with_initial_workspace(
                     preset.density,
                     *terminal_zoom_steps,
                 );
+            } else if let Some((name, project_root, theme, density)) = board_profile {
+                configure_window_controls(&header_for_select);
+                logging::info(format!(
+                    "applying Kanban board profile name='{}' root='{}' theme={} density={}",
+                    name,
+                    project_root.display(),
+                    theme.label(),
+                    density.label()
+                ));
+                apply_theme_mode(&window_for_select, theme);
+                apply_optional_window_density(&window_for_select, Some(density));
             } else {
                 apply_launch_profile(
                     &header_for_select,
@@ -1435,7 +1469,7 @@ fn present_with_initial_workspace(
                     &preference_store_for_select.load(),
                 );
             }
-            back_for_select.set_visible(is_workspace);
+            back_for_select.set_visible(is_returnable);
             sync_fullscreen_chrome(
                 &window_for_select,
                 title_root_for_select.upcast_ref(),
@@ -1720,12 +1754,99 @@ fn present_with_initial_workspace(
     }
 
     {
+        let tabs_for_board = tabs.clone();
+        let tab_view_for_board = tab_view.clone();
+        let select_for_board = select_tab.clone();
+        let refresh_tab_strip_for_board = refresh_tab_strip.clone();
+        let window_for_board = window.clone();
+        let session_persistence_for_board = session_persistence.clone();
+
+        *show_board_in_tab.borrow_mut() = Some(Box::new(move |tab_id, request| {
+            if !board_store::board_path(&request.project_root).exists()
+                && let Err(error) = board_store::save(&request.project_root, &Board::default())
+            {
+                logging::error(format!(
+                    "failed to initialize Kanban board '{}': {error}",
+                    board_store::board_path(&request.project_root).display()
+                ));
+                return;
+            }
+
+            let use_dark_palette = resolved_theme_uses_dark_palette(request.theme);
+            let view = crate::ui::board_view::BoardView::new(
+                &window_for_board,
+                request.project_root.clone(),
+                &request.name,
+                use_dark_palette,
+                request.density,
+            );
+
+            let (page_shell, previous_runtime, previous_board_view) = {
+                let mut tabs = tabs_for_board.borrow_mut();
+                let tab = tabs
+                    .iter_mut()
+                    .find(|tab| tab.id == tab_id)
+                    .expect("board launch tab should exist");
+                let (previous_runtime, previous_board_view) = match &tab.content {
+                    TabContent::Workspace(workspace) => (Some(workspace.runtime.clone()), None),
+                    TabContent::Board(board) => (None, Some(board.view.clone())),
+                    TabContent::LaunchDeck => (None, None),
+                };
+                tab.default_title = format!("{} Kanban", request.name);
+                tab.subtitle = request.project_root.display().to_string();
+                tab.content = TabContent::Board(Box::new(BoardState {
+                    view: view.clone(),
+                    name: request.name.clone(),
+                    project_root: request.project_root.clone(),
+                    theme: request.theme,
+                    density: request.density,
+                }));
+                tab.workspace_root = Some(request.project_root.clone());
+                (
+                    tab.page_shell.clone(),
+                    previous_runtime,
+                    previous_board_view,
+                )
+            };
+
+            if let Some(runtime) = previous_runtime {
+                runtime.terminate_all("replacing workspace view with board");
+            }
+            if let Some(board_view) = previous_board_view {
+                board_view.terminate_agents("replacing board view");
+            }
+
+            replace_tab_page_content(&page_shell, &view.widget());
+            {
+                let tabs = tabs_for_board.borrow();
+                if let Some(tab) = tabs.iter().find(|tab| tab.id == tab_id) {
+                    sync_tab_page_metadata(&tab_view_for_board, tab);
+                }
+            }
+            refresh_tab_strip_for_board();
+
+            logging::info(format!(
+                "Kanban board tab {} opened name='{}' root='{}'",
+                tab_id,
+                request.name,
+                request.project_root.display()
+            ));
+
+            if let Some(select) = select_for_board.borrow().as_ref() {
+                select(tab_id);
+            }
+            session_persistence_for_board.save_now("Kanban board tab launched");
+        }));
+    }
+
+    {
         let tabs_for_refresh = tabs.clone();
         let window_for_refresh = window.clone();
         let preference_store = preference_store.clone();
         let preset_store = preset_store.clone();
         let asset_store = asset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
+        let show_board_handle = show_board_in_tab.clone();
         let close_tab_for_refresh = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
         let active_for_refresh = active_tab_id.clone();
@@ -1749,6 +1870,7 @@ fn present_with_initial_workspace(
                         preset_store: preset_store.clone(),
                         asset_store: asset_store.clone(),
                         show_workspace_handle: show_workspace_handle.clone(),
+                        show_board_handle: show_board_handle.clone(),
                         close_tab_handle: close_tab_for_refresh.clone(),
                         refresh_launch_tabs: refresh_handle.clone(),
                     },
@@ -2018,6 +2140,7 @@ fn present_with_initial_workspace(
         let preset_store = preset_store.clone();
         let asset_store = asset_store.clone();
         let show_workspace_handle = show_workspace_in_tab.clone();
+        let show_board_handle = show_board_in_tab.clone();
         let close_tab_for_add = close_tab.clone();
         let refresh_handle = refresh_launch_tabs.clone();
         let select_for_add = select_tab.clone();
@@ -2058,6 +2181,7 @@ fn present_with_initial_workspace(
                     preset_store: preset_store.clone(),
                     asset_store: asset_store.clone(),
                     show_workspace_handle: show_workspace_handle.clone(),
+                    show_board_handle: show_board_handle.clone(),
                     close_tab_handle: close_tab_for_add.clone(),
                     refresh_launch_tabs: refresh_handle.clone(),
                 },
@@ -2130,7 +2254,13 @@ fn present_with_initial_workspace(
                 custom_title: None,
                 subtitle: root.display().to_string(),
                 page_shell: page_shell.clone(),
-                content: TabContent::Board(Box::new(BoardState { view })),
+                content: TabContent::Board(Box::new(BoardState {
+                    view,
+                    name: name.clone(),
+                    project_root: root.clone(),
+                    theme: crate::model::preset::ThemeMode::System,
+                    density,
+                })),
                 workspace_root: Some(root),
             });
             let tab = {
@@ -3271,6 +3401,14 @@ fn present_with_initial_workspace(
                                     let _ = runtime_for_add_web_tile.add_web_tile();
                                 }
                             }),
+                            open_board: Rc::new({
+                                let open_board_tab = open_board_tab.clone();
+                                move || {
+                                    if let Some(open) = open_board_tab.borrow().as_ref() {
+                                        open();
+                                    }
+                                }
+                            }),
                             runbooks,
                         },
                     ));
@@ -3412,6 +3550,7 @@ fn present_with_initial_workspace(
     let preset_store_for_back = preset_store.clone();
     let asset_store_for_back = asset_store.clone();
     let show_workspace_for_back = show_workspace_in_tab.clone();
+    let show_board_for_back = show_board_in_tab.clone();
     let close_tab_for_back = close_tab.clone();
     let refresh_for_back = refresh_launch_tabs.clone();
     let select_for_back = select_tab.clone();
@@ -3437,6 +3576,7 @@ fn present_with_initial_workspace(
             let preset_store_for_back = preset_store_for_back.clone();
             let asset_store_for_back = asset_store_for_back.clone();
             let show_workspace_for_back = show_workspace_for_back.clone();
+            let show_board_for_back = show_board_for_back.clone();
             let close_tab_for_back = close_tab_for_back.clone();
             let refresh_for_back = refresh_for_back.clone();
             let select_for_back = select_for_back.clone();
@@ -3476,6 +3616,7 @@ fn present_with_initial_workspace(
                         preset_store: preset_store_for_back.clone(),
                         asset_store: asset_store_for_back.clone(),
                         show_workspace_handle: show_workspace_for_back.clone(),
+                        show_board_handle: show_board_for_back.clone(),
                         close_tab_handle: close_tab_for_back.clone(),
                         refresh_launch_tabs: refresh_for_back.clone(),
                     },
@@ -4406,15 +4547,20 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
         .expect("launch tab should exist");
 
     let load_outcome = context.preset_store.load_presets_with_status();
+    let board_workspace_store = BoardWorkspaceStore::new();
+    let board_load_outcome = board_workspace_store.load_with_status();
     let asset_outcome = std::env::current_dir()
         .ok()
         .map(|root| context.asset_store.load_assets_for_workspace_root(&root))
         .unwrap_or_else(|| context.asset_store.load_assets_with_status());
     let presets = load_outcome.presets;
+    let board_workspaces = board_load_outcome.boards;
     let preferences = context.preference_store.load();
     let preset_store = context.preset_store.as_ref().clone();
+    let board_workspace_store = board_workspace_store.clone();
     let window = context.window.clone();
     let show_workspace_handle = context.show_workspace_handle.clone();
+    let show_board_handle = context.show_board_handle.clone();
     let close_tab_handle = context.close_tab_handle.clone();
     let refresh_handle = context.refresh_launch_tabs.clone();
 
@@ -4423,13 +4569,18 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
 
     let launch_surface = launch_screen::build(
         launch_screen::LaunchScreenInput {
-            load_warning: combine_warnings(load_outcome.warning, asset_outcome.warning),
+            load_warning: combine_warnings(
+                combine_warnings(load_outcome.warning, board_load_outcome.warning),
+                asset_outcome.warning,
+            ),
             presets,
+            board_workspaces: Some(board_workspaces),
             assets: asset_outcome.assets,
             default_theme: preferences.default_theme,
             default_density: preferences.default_density,
             default_restore_mode: preferences.default_restore_mode,
             preset_store,
+            board_workspace_store: Some(board_workspace_store),
         },
         launch_screen::LaunchScreenActions {
             on_theme_preview: Rc::new(move |theme| {
@@ -4445,6 +4596,11 @@ fn rebuild_launch_tab(tab_id: usize, context: &LaunchTabContext) {
                     show_workspace(tab_id, preset, workspace_root);
                 }
             }),
+            on_launch_board: Some(Rc::new(move |request| {
+                if let Some(show_board) = show_board_handle.borrow().as_ref() {
+                    show_board(tab_id, request);
+                }
+            })),
             on_cancel: Rc::new({
                 let close_tab_handle = close_tab_handle.clone();
                 move || {
@@ -5582,6 +5738,7 @@ fn build_shortcut_sections(
             command_palette: prefs.command_palette_shortcut.clone(),
             maximize: DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT.to_string(),
             add_terminal_tile: DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT.to_string(),
+            open_board: DEFAULT_WORKSPACE_OPEN_BOARD_SHORTCUT.to_string(),
         },
     )
 }

@@ -36,6 +36,7 @@ pub struct WorkspaceActionCallbacks {
     pub toggle_maximize: Rc<dyn Fn()>,
     pub add_terminal_tile: Rc<dyn Fn()>,
     pub add_web_tile: Rc<dyn Fn()>,
+    pub open_board: Rc<dyn Fn()>,
     pub runbooks: Vec<RunbookAction>,
 }
 
@@ -120,6 +121,11 @@ pub fn workspace_actions(callbacks: WorkspaceActionCallbacks) -> Vec<PaletteActi
             title: "Add Web Tile".into(),
             subtitle: "Insert a new browser tile beside the focused pane.".into(),
             on_activate: callbacks.add_web_tile,
+        },
+        PaletteAction {
+            title: "Open Kanban Board".into(),
+            subtitle: "Open this workspace's per-project task board.".into(),
+            on_activate: callbacks.open_board,
         },
     ];
 

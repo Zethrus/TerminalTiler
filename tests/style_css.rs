@@ -70,6 +70,8 @@ const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const BOARD_VIEW_RS: &str = include_str!("../src/ui/board_view.rs");
 const BOARD_CHROME_RS: &str = include_str!("../src/ui/board_chrome.rs");
+const BOARD_WORKSPACE_RS: &str = include_str!("../src/model/board_workspace.rs");
+const BOARD_WORKSPACE_STORE_RS: &str = include_str!("../src/storage/board_workspace_store.rs");
 const NEW_TASK_DIALOG_RS: &str = include_str!("../src/ui/new_task_dialog.rs");
 const AGENT_SETUP_DIALOG_RS: &str = include_str!("../src/ui/agent_setup_dialog.rs");
 const WORKSPACE_NAVIGATION_RS: &str = include_str!("../src/ui/workspace_navigation.rs");
@@ -3247,5 +3249,42 @@ fn kanban_board_modules_and_mcp_binary_are_wired() {
     assert!(
         CARGO_TOML.contains("version = \"0.3.0\""),
         "the app version should be bumped to 0.3.0 for the Kanban + MCP feature"
+    );
+}
+
+#[test]
+fn launch_deck_can_create_and_reopen_kanban_boards() {
+    assert!(
+        BOARD_WORKSPACE_RS.contains("pub struct BoardWorkspace")
+            && BOARD_WORKSPACE_RS.contains("pub struct BoardLaunchRequest")
+            && BOARD_WORKSPACE_STORE_RS.contains("pub struct BoardWorkspaceStore")
+            && BOARD_WORKSPACE_STORE_RS.contains("board-workspaces.toml")
+            && BOARD_WORKSPACE_STORE_RS.contains("delete(&self, id: &str)"),
+        "Kanban launch shortcuts should have a first-class model/store with delete-bookmark semantics"
+    );
+    assert!(
+        LAUNCH_SCREEN_RS.contains("New Kanban Board")
+            && LAUNCH_SCREEN_RS.contains("Open Kanban Board")
+            && LAUNCH_SCREEN_RS.contains("saved-board-card")
+            && LAUNCH_SCREEN_RS.contains("BoardLaunchRequest")
+            && LAUNCH_SCREEN_RS.contains("Connect Claude")
+            && LAUNCH_SCREEN_RS.contains("Connect Codex"),
+        "launch deck should expose the board CTA, board wizard, saved board cards, and explicit agent setup actions"
+    );
+    assert!(
+        WINDOW_RS.contains("show_board_in_tab")
+            && WINDOW_RS.contains("BoardView::new")
+            && WINDOW_RS.contains("board_store::save(&request.project_root, &Board::default())")
+            && WINDOW_RS.contains("TabContent::Board")
+            && WINDOW_RS.contains("back_for_select.set_visible(is_returnable)"),
+        "board launches should replace the current launch tab and remain returnable to the launch deck"
+    );
+    assert!(
+        COMMAND_PALETTE_RS.contains("Open Kanban Board")
+            && WINDOW_RS.contains("DEFAULT_WORKSPACE_OPEN_BOARD_SHORTCUT")
+            && WINDOW_RS.contains("open_board: DEFAULT_WORKSPACE_OPEN_BOARD_SHORTCUT.to_string()")
+            && STYLE_CSS.contains("button.new-kanban-board-button")
+            && STYLE_CSS.contains(".saved-board-card"),
+        "Kanban board entry points should be discoverable through dashboard, command palette, shortcuts, and CSS hooks"
     );
 }

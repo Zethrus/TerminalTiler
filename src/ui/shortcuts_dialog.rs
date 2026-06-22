@@ -32,6 +32,7 @@ pub struct ShortcutSummary {
     pub command_palette: String,
     pub maximize: String,
     pub add_terminal_tile: String,
+    pub open_board: String,
 }
 
 /// Build the grouped cheat-sheet rows from a [`ShortcutSummary`] plus the fixed
@@ -47,6 +48,7 @@ pub fn sections_from_summary(summary: &ShortcutSummary) -> Vec<ShortcutSection> 
                 ShortcutRow::new("Zoom out text", summary.zoom_out.clone()),
                 ShortcutRow::new("Maximize / restore pane", summary.maximize.clone()),
                 ShortcutRow::new("Add terminal tile", summary.add_terminal_tile.clone()),
+                ShortcutRow::new("Open Kanban board", summary.open_board.clone()),
             ],
         ),
         ShortcutSection::new(

@@ -2652,6 +2652,12 @@ button.new-workspace-layout-button {
   padding-right: 17px;
 }
 
+button.new-kanban-board-button {
+  min-height: 38px;
+  padding-left: 17px;
+  padding-right: 17px;
+}
+
 .saved-workspaces-panel {
   min-width: 0;
   padding: 14px;
@@ -2667,6 +2673,47 @@ button.new-workspace-layout-button {
 .saved-workspaces-panel .section-header .field-hint {
   font-size: 12px;
   color: alpha(@tt_white, 0.68);
+}
+
+.saved-boards-panel {
+  min-width: 0;
+  padding: 14px;
+  box-shadow:
+    0 14px 32px alpha(@tt_shadow, 0.20),
+    inset 0 1px alpha(@tt_white, 0.03);
+}
+
+.saved-board-card {
+  border-color: alpha(@tt_amber, 0.10);
+}
+
+.saved-board-kind-chip {
+  padding: 4px 9px;
+  font-size: 10px;
+  color: alpha(@tt_amber, 0.78);
+  background: alpha(@tt_amber, 0.08);
+  border-color: alpha(@tt_amber, 0.14);
+}
+
+.board-wizard-shell,
+.board-wizard-steps,
+.board-setup-panel,
+.board-agent-panel,
+.board-review-panel {
+  min-width: 0;
+}
+
+.board-mcp-server-chip {
+  max-width: 680px;
+}
+
+.board-agent-actions,
+.board-action-bar {
+  min-width: 0;
+}
+
+.board-review-name {
+  font-size: 15px;
 }
 
 .saved-workspace-grid {

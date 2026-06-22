@@ -1,5 +1,6 @@
 pub mod asset_store;
 pub mod board_store;
+pub mod board_workspace_store;
 mod document;
 pub mod fs_utils;
 pub mod preference_store;

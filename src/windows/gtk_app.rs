@@ -1933,6 +1933,7 @@ mod imp {
                     }
                 }
             }),
+            on_launch_board: None,
             on_cancel: Rc::new({
                 let context = context.clone();
                 move || {
@@ -1972,11 +1973,13 @@ mod imp {
             LaunchScreenInput {
                 load_warning,
                 presets,
+                board_workspaces: None,
                 assets,
                 default_theme: preferences.default_theme,
                 default_density: preferences.default_density,
                 default_restore_mode: preferences.default_restore_mode,
                 preset_store: context.preset_store.clone(),
+                board_workspace_store: None,
             },
             actions,
         )
@@ -3551,6 +3554,7 @@ mod imp {
                                 add_terminal_tile:
                                     crate::ui::shortcuts_dialog::DEFAULT_ADD_TERMINAL_TILE_ACCEL
                                         .to_string(),
+                                open_board: "<Ctrl><Shift>K".to_string(),
                             },
                         ),
                     );
@@ -3685,6 +3689,8 @@ mod imp {
                                 let _ = preview.add_web_tile(DEFAULT_WEB_URL);
                             }
                         }),
+                        // The Windows preview shell does not yet host Kanban board tabs.
+                        open_board: Rc::new(|| {}),
                         runbooks,
                     },
                 ));

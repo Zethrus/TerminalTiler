@@ -10,18 +10,21 @@ use uuid::Uuid;
 
 use crate::logging;
 use crate::model::assets::{RestoreLaunchMode, WorkspaceAssets};
+use crate::model::board_workspace::{BoardLaunchRequest, BoardWorkspace};
 use crate::model::layout::{
     DEFAULT_WEB_URL, LayoutNode, LayoutTemplate, SplitAxis, TileKind, TileSpec, builtin_templates,
     generate_layout, normalize_web_url,
 };
 use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id};
 use crate::platform::{home_dir, resolve_workspace_root};
+use crate::services::agent_config;
 use crate::services::layout_editor::{close_tile, split_tile};
 use crate::services::project_suggestions::detect_project_suggestions;
 use crate::services::tile_draft::{
     apply_project_suggestion as apply_suggestion_to_layout, apply_role_to_tile, resize_layout,
     resolve_role,
 };
+use crate::storage::board_workspace_store::BoardWorkspaceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
@@ -50,11 +53,13 @@ struct WizardStepper {
 pub struct LaunchScreenInput {
     pub load_warning: Option<String>,
     pub presets: Vec<WorkspacePreset>,
+    pub board_workspaces: Option<Vec<BoardWorkspace>>,
     pub assets: WorkspaceAssets,
     pub default_theme: ThemeMode,
     pub default_density: ApplicationDensity,
     pub default_restore_mode: RestoreLaunchMode,
     pub preset_store: PresetStore,
+    pub board_workspace_store: Option<BoardWorkspaceStore>,
 }
 
 #[derive(Clone)]
@@ -62,6 +67,7 @@ pub struct LaunchScreenActions {
     pub on_theme_preview: Rc<dyn Fn(ThemeMode)>,
     pub on_density_preview: Rc<dyn Fn(ApplicationDensity)>,
     pub on_launch: Rc<dyn Fn(WorkspacePreset, PathBuf)>,
+    pub on_launch_board: Option<Rc<dyn Fn(BoardLaunchRequest)>>,
     pub on_cancel: Rc<dyn Fn()>,
     pub on_presets_changed: Rc<dyn Fn()>,
 }
@@ -70,16 +76,19 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     let LaunchScreenInput {
         load_warning,
         presets,
+        board_workspaces,
         assets,
         default_theme,
         default_density,
         default_restore_mode,
         preset_store,
+        board_workspace_store,
     } = input;
     let LaunchScreenActions {
         on_theme_preview,
         on_density_preview,
         on_launch,
+        on_launch_board,
         on_cancel,
         on_presets_changed,
     } = actions;
@@ -93,11 +102,17 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     ));
     let templates = builtin_templates();
     let presets = Rc::new(presets);
+    let board_workspaces = board_workspaces.map(Rc::new);
     let assets = Rc::new(assets);
     let launch_callback = on_launch;
     let theme_preview_callback = on_theme_preview;
     let density_preview_callback = on_density_preview;
     let preset_store = Rc::new(preset_store);
+    let board_workspace_store = board_workspace_store.map(Rc::new);
+    let board_launch_callback = on_launch_board;
+    let board_launch_supported = board_workspaces.is_some()
+        && board_workspace_store.is_some()
+        && board_launch_callback.is_some();
     let selected: Rc<Cell<Selection>> = Rc::new(Cell::new(Selection::Template(0)));
     let chosen_theme: Rc<Cell<ThemeMode>> = Rc::new(Cell::new(default_theme));
     let chosen_density: Rc<Cell<ApplicationDensity>> = Rc::new(Cell::new(default_density));
@@ -191,6 +206,270 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
     let wizard_step_index = Rc::new(Cell::new(0usize));
     let wizard_step_names = Rc::new(vec!["setup", "appearance", "layout", "tiles"]);
+
+    let board_wizard = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["launch-wizard-shell", "board-wizard-shell"])
+        .build();
+    mode_stack.add_named(&board_wizard, Some("board-wizard"));
+
+    let board_stepper = build_board_wizard_stepper();
+    board_wizard.append(&board_stepper.root);
+
+    let board_steps = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::SlideLeftRight)
+        .transition_duration(180)
+        .hhomogeneous(false)
+        .vhomogeneous(false)
+        .hexpand(true)
+        .vexpand(false)
+        .css_classes(["launch-wizard-steps", "board-wizard-steps"])
+        .build();
+    board_wizard.append(&board_steps);
+
+    let board_step_index = Rc::new(Cell::new(0usize));
+    let board_step_names = Rc::new(vec!["board-setup", "board-agent", "board-review"]);
+    let editing_board_id: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
+    let board_setup_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "directory-panel", "board-setup-panel"])
+        .build();
+    board_steps.add_named(&board_setup_panel, Some("board-setup"));
+    board_setup_panel.append(&build_section_header(
+        "Step 1",
+        "Kanban project",
+        "Choose the project directory that owns .terminaltiler/board.json and name the board shortcut.",
+    ));
+
+    board_setup_panel.append(
+        &gtk::Label::builder()
+            .label("Project directory")
+            .halign(gtk::Align::Start)
+            .css_classes(["eyebrow"])
+            .build(),
+    );
+    let board_path_entry = gtk::Entry::builder()
+        .hexpand(true)
+        .text(current_dir.display().to_string())
+        .placeholder_text("/path/to/project")
+        .css_classes(["workspace-path", "board-project-path"])
+        .primary_icon_name("folder-symbolic")
+        .build();
+    let board_path_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["workspace-path-row", "launch-field-row"])
+        .build();
+    board_path_row.append(&board_path_entry);
+    let board_browse_button = icons::labeled_button(
+        "Browse",
+        icon_name::FOLDER,
+        &[
+            "pill-button",
+            "secondary-button",
+            "workspace-browse-button",
+            "launch-browse-button",
+        ],
+    );
+    board_path_row.append(&board_browse_button);
+    board_setup_panel.append(&board_path_row);
+    {
+        let board_path_entry = board_path_entry.clone();
+        board_path_entry.connect_icon_press(move |entry, position| {
+            if position == gtk::EntryIconPosition::Primary {
+                prompt_for_workspace_directory(entry);
+            }
+        });
+    }
+    {
+        let board_path_entry = board_path_entry.clone();
+        board_browse_button.connect_clicked(move |_| {
+            prompt_for_workspace_directory(&board_path_entry);
+        });
+    }
+    board_path_entry.connect_changed(move |entry| match validate_workspace_path(entry) {
+        Ok(_) => {
+            entry.remove_css_class("path-invalid");
+            entry.add_css_class("path-valid");
+        }
+        Err(_) => {
+            entry.remove_css_class("path-valid");
+            entry.add_css_class("path-invalid");
+        }
+    });
+
+    board_setup_panel.append(
+        &gtk::Label::builder()
+            .label("Board name")
+            .halign(gtk::Align::Start)
+            .css_classes(["eyebrow"])
+            .build(),
+    );
+    let board_name_entry = gtk::Entry::builder()
+        .hexpand(true)
+        .placeholder_text("Kanban board name, for example: Project Delivery")
+        .text("Project Kanban")
+        .css_classes(["workspace-path", "board-name-entry"])
+        .build();
+    board_setup_panel.append(&board_name_entry);
+
+    let board_agent_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "board-agent-panel"])
+        .build();
+    board_steps.add_named(&board_agent_panel, Some("board-agent"));
+    board_agent_panel.append(&build_section_header(
+        "Step 2",
+        "MCP / agent setup",
+        "Connect Claude Code or Codex so agents can update this project's board through the bundled MCP server.",
+    ));
+    board_agent_panel.append(
+        &gtk::Label::builder()
+            .label(format!(
+                "Server: {}",
+                agent_config::mcp_binary_path().display()
+            ))
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .css_classes(["status-chip", "settings-meta-chip", "board-mcp-server-chip"])
+            .build(),
+    );
+    let board_agent_status = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .visible(false)
+        .css_classes(["field-hint", "board-agent-status"])
+        .build();
+    let board_agent_actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["board-agent-actions"])
+        .build();
+    let board_claude_button = icons::labeled_button(
+        "Connect Claude",
+        icon_name::TERMINAL,
+        &[
+            "pill-button",
+            "suggested-action",
+            "board-connect-claude-button",
+        ],
+    );
+    let board_codex_button = icons::labeled_button(
+        "Connect Codex",
+        icon_name::TERMINAL,
+        &[
+            "pill-button",
+            "surface-button",
+            "board-connect-codex-button",
+        ],
+    );
+    board_agent_actions.append(&board_claude_button);
+    board_agent_actions.append(&board_codex_button);
+    board_agent_panel.append(&board_agent_actions);
+    board_agent_panel.append(&board_agent_status);
+    {
+        let board_path_entry = board_path_entry.clone();
+        let board_agent_status = board_agent_status.clone();
+        board_claude_button.connect_clicked(move |_| {
+            board_agent_status.set_visible(true);
+            match validate_workspace_path(&board_path_entry)
+                .map_err(|message| message.to_string())
+                .and_then(|project_root| agent_config::connect_claude(&project_root))
+            {
+                Ok(path) => {
+                    board_agent_status.remove_css_class("error-text");
+                    board_agent_status
+                        .set_text(&format!("Connected Claude. Wrote {}", path.display()));
+                }
+                Err(message) => {
+                    board_agent_status.add_css_class("error-text");
+                    board_agent_status.set_text(&format!("Could not connect Claude: {message}"));
+                }
+            }
+        });
+    }
+    {
+        let board_agent_status = board_agent_status.clone();
+        board_codex_button.connect_clicked(move |_| {
+            board_agent_status.set_visible(true);
+            match agent_config::connect_codex() {
+                Ok(path) => {
+                    board_agent_status.remove_css_class("error-text");
+                    board_agent_status
+                        .set_text(&format!("Connected Codex. Wrote {}", path.display()));
+                }
+                Err(message) => {
+                    board_agent_status.add_css_class("error-text");
+                    board_agent_status.set_text(&format!("Could not connect Codex: {message}"));
+                }
+            }
+        });
+    }
+
+    let board_review_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["config-panel", "board-review-panel"])
+        .build();
+    board_steps.add_named(&board_review_panel, Some("board-review"));
+    board_review_panel.append(&build_section_header(
+        "Step 3",
+        "Review & open",
+        "TerminalTiler will save a launch-deck shortcut and create an empty board file if this project does not have one yet.",
+    ));
+    let board_review_name = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .css_classes(["card-title", "board-review-name"])
+        .build();
+    let board_review_path = gtk::Label::builder()
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+        .css_classes(["field-hint", "board-review-path"])
+        .build();
+    board_review_panel.append(&board_review_name);
+    board_review_panel.append(&board_review_path);
+
+    let board_action_bar = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .hexpand(true)
+        .css_classes(["action-bar-bottom", "launch-action-bar", "board-action-bar"])
+        .build();
+    board_wizard.append(&board_action_bar);
+    let board_dashboard_button = icons::labeled_button(
+        "Workspaces",
+        icon_name::WORKSPACES,
+        &["pill-button", "secondary-button"],
+    );
+    {
+        let mode_stack = mode_stack.clone();
+        board_dashboard_button.connect_clicked(move |_| {
+            mode_stack.set_visible_child_name("dashboard");
+        });
+    }
+    board_action_bar.append(&board_dashboard_button);
+    let board_back_button = icons::labeled_button(
+        "Back",
+        icon_name::BACK,
+        &["pill-button", "secondary-button"],
+    );
+    board_action_bar.append(&board_back_button);
+    let board_spacer = gtk::Box::builder().hexpand(true).build();
+    board_action_bar.append(&board_spacer);
+    let board_next_button = icons::labeled_button(
+        "Next",
+        icon_name::NEXT,
+        &[
+            "pill-button",
+            "primary-cta-button",
+            "open-kanban-board-button",
+        ],
+    );
+    board_action_bar.append(&board_next_button);
 
     let directory_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -962,6 +1241,149 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
     go_to_wizard_step(0);
 
+    let sync_board_review = Rc::new({
+        let board_name_entry = board_name_entry.clone();
+        let board_path_entry = board_path_entry.clone();
+        let board_review_name = board_review_name.clone();
+        let board_review_path = board_review_path.clone();
+        move || {
+            let name = board_name_entry.text().trim().to_string();
+            board_review_name.set_text(if name.is_empty() {
+                "Untitled Kanban Board"
+            } else {
+                &name
+            });
+            board_review_path.set_text(&format!(
+                "Project directory: {}",
+                board_path_entry.text().as_str()
+            ));
+        }
+    });
+    sync_board_review();
+
+    let sync_board_wizard_navigation = Rc::new({
+        let board_stepper = board_stepper.clone();
+        let board_step_names = board_step_names.clone();
+        let board_step_index = board_step_index.clone();
+        let board_back_button = board_back_button.clone();
+        let board_next_button = board_next_button.clone();
+        let sync_board_review = sync_board_review.clone();
+        move || {
+            let index = board_step_index
+                .get()
+                .min(board_step_names.len().saturating_sub(1));
+            board_step_index.set(index);
+            board_back_button.set_sensitive(index > 0);
+            if index + 1 == board_step_names.len() {
+                sync_board_review();
+                icons::set_button_icon_label(
+                    &board_next_button,
+                    "Open Kanban Board",
+                    icon_name::LAUNCH,
+                );
+            } else {
+                icons::set_button_icon_label(&board_next_button, "Next", icon_name::NEXT);
+            }
+            for (step_index, label) in board_stepper.steps.iter().enumerate() {
+                label.remove_css_class("is-active");
+                label.remove_css_class("is-complete");
+                if step_index == index {
+                    label.add_css_class("is-active");
+                } else if step_index < index {
+                    label.add_css_class("is-complete");
+                }
+            }
+        }
+    });
+
+    let go_to_board_step: Rc<dyn Fn(usize)> = Rc::new({
+        let board_steps = board_steps.clone();
+        let board_step_names = board_step_names.clone();
+        let board_step_index = board_step_index.clone();
+        let sync_board_wizard_navigation = sync_board_wizard_navigation.clone();
+        move |target_index| {
+            let last_index = board_step_names.len().saturating_sub(1);
+            let current_index = board_step_index.get().min(last_index);
+            let next_index = target_index.min(last_index);
+            let transition = if next_index > current_index {
+                gtk::StackTransitionType::SlideLeft
+            } else {
+                gtk::StackTransitionType::SlideRight
+            };
+
+            board_step_index.set(next_index);
+            if next_index == current_index {
+                sync_board_wizard_navigation();
+                return;
+            }
+            board_steps.set_visible_child_full(board_step_names[next_index], transition);
+            sync_board_wizard_navigation();
+        }
+    });
+
+    for (step_index, step_button) in board_stepper.steps.iter().enumerate() {
+        let go_to_board_step = go_to_board_step.clone();
+        step_button.connect_clicked(move |_| {
+            go_to_board_step(step_index);
+        });
+    }
+
+    {
+        let board_step_index = board_step_index.clone();
+        let go_to_board_step = go_to_board_step.clone();
+        board_back_button.connect_clicked(move |_| {
+            let index = board_step_index.get();
+            if index > 0 {
+                go_to_board_step(index - 1);
+            }
+        });
+    }
+
+    {
+        let board_step_index = board_step_index.clone();
+        let board_step_names = board_step_names.clone();
+        let go_to_board_step = go_to_board_step.clone();
+        let board_name_entry = board_name_entry.clone();
+        let board_path_entry = board_path_entry.clone();
+        let editing_board_id = editing_board_id.clone();
+        let board_workspace_store = board_workspace_store.clone();
+        let board_launch_callback = board_launch_callback.clone();
+        board_next_button.connect_clicked(move |_| {
+            let index = board_step_index.get();
+            if index + 1 < board_step_names.len() {
+                go_to_board_step(index + 1);
+                return;
+            }
+
+            if board_workspace_store.is_none() || board_launch_callback.is_none() {
+                return;
+            }
+
+            match build_board_launch_request(
+                &board_name_entry,
+                &board_path_entry,
+                editing_board_id.borrow().clone(),
+                default_theme,
+                default_density,
+            ) {
+                Ok(request) => {
+                    if let Some(store) = board_workspace_store.as_ref()
+                        && let Err(error) = store.upsert_from_launch_request(request.clone())
+                    {
+                        logging::error(format!("Failed to save Kanban shortcut: {error}"));
+                    }
+                    if let Some(callback) = board_launch_callback.as_ref() {
+                        callback(request);
+                    }
+                }
+                Err(message) => {
+                    logging::error(format!("Cannot open Kanban board: {message}"));
+                }
+            }
+        });
+    }
+    go_to_board_step(0);
+
     let show_new_workspace_wizard: Rc<dyn Fn()> = Rc::new({
         let selected = selected.clone();
         let summary = summary.clone();
@@ -1011,6 +1433,102 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             mode_stack.set_visible_child_name("wizard");
         }
     });
+
+    let show_new_board_wizard: Option<Rc<dyn Fn()>> = if board_launch_supported {
+        let mode_stack = mode_stack.clone();
+        let go_to_board_step = go_to_board_step.clone();
+        let board_path_entry = board_path_entry.clone();
+        let board_name_entry = board_name_entry.clone();
+        let editing_board_id = editing_board_id.clone();
+        let board_default_dir = current_dir.clone();
+        Some(Rc::new(move || {
+            *editing_board_id.borrow_mut() = None;
+            board_path_entry.set_text(&board_default_dir.display().to_string());
+            board_name_entry.set_text("Project Kanban");
+            go_to_board_step(0);
+            mode_stack.set_visible_child_name("board-wizard");
+        }) as Rc<dyn Fn()>)
+    } else {
+        None
+    };
+
+    let edit_board_from_dashboard: Option<Rc<dyn Fn(usize)>> = if board_launch_supported {
+        let board_workspaces = board_workspaces.clone();
+        let mode_stack = mode_stack.clone();
+        let go_to_board_step = go_to_board_step.clone();
+        let board_path_entry = board_path_entry.clone();
+        let board_name_entry = board_name_entry.clone();
+        let editing_board_id = editing_board_id.clone();
+        Some(Rc::new(move |idx: usize| {
+            let Some(boards): Option<&Rc<Vec<BoardWorkspace>>> = board_workspaces.as_ref() else {
+                return;
+            };
+            let boards: &Vec<BoardWorkspace> = Rc::as_ref(boards);
+            let Some(board) = boards.get(idx) else {
+                return;
+            };
+            *editing_board_id.borrow_mut() = Some(board.id.clone());
+            board_path_entry.set_text(&board.project_root.display().to_string());
+            board_name_entry.set_text(&board.name);
+            go_to_board_step(0);
+            mode_stack.set_visible_child_name("board-wizard");
+        }) as Rc<dyn Fn(usize)>)
+    } else {
+        None
+    };
+
+    let open_board_from_dashboard: Option<Rc<dyn Fn(usize)>> = if board_launch_supported {
+        let board_workspaces = board_workspaces.clone();
+        let board_launch_callback = board_launch_callback.clone();
+        let edit_board_from_dashboard = edit_board_from_dashboard.clone();
+        Some(Rc::new(move |idx: usize| {
+            let Some(boards): Option<&Rc<Vec<BoardWorkspace>>> = board_workspaces.as_ref() else {
+                return;
+            };
+            let boards: &Vec<BoardWorkspace> = Rc::as_ref(boards);
+            let Some(board) = boards.get(idx).cloned() else {
+                return;
+            };
+            match resolve_workspace_root(&board.project_root) {
+                Ok(project_root) if project_root.is_dir() => {
+                    if let Some(callback) = board_launch_callback.as_ref() {
+                        logging::info(format!(
+                            "opening saved Kanban board '{}' from dashboard root='{}'",
+                            board.name,
+                            project_root.display()
+                        ));
+                        callback(BoardLaunchRequest {
+                            id: Some(board.id),
+                            name: board.name,
+                            project_root,
+                            theme: board.theme,
+                            density: board.density,
+                        });
+                    }
+                }
+                Ok(project_root) => {
+                    logging::error(format!(
+                        "Saved Kanban project root is not a directory: {}",
+                        project_root.display()
+                    ));
+                    if let Some(edit) = edit_board_from_dashboard.as_ref() {
+                        edit(idx);
+                    }
+                }
+                Err(error) => {
+                    logging::error(format!(
+                        "Cannot open saved Kanban board '{}': {}",
+                        board.name, error
+                    ));
+                    if let Some(edit) = edit_board_from_dashboard.as_ref() {
+                        edit(idx);
+                    }
+                }
+            }
+        }) as Rc<dyn Fn(usize)>)
+    } else {
+        None
+    };
 
     let edit_workspace_from_dashboard: Rc<dyn Fn(usize)> = Rc::new({
         let selected = selected.clone();
@@ -1112,56 +1630,116 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         }
     });
 
-    dashboard.append(&build_dashboard_intro(presets.len(), {
-        let show_new_workspace_wizard = show_new_workspace_wizard.clone();
-        move || show_new_workspace_wizard()
-    }));
+    let saved_board_count = board_workspaces
+        .as_ref()
+        .map(|boards| boards.len())
+        .unwrap_or(0);
+    dashboard.append(&build_dashboard_intro(
+        presets.len(),
+        saved_board_count,
+        {
+            let show_new_workspace_wizard = show_new_workspace_wizard.clone();
+            move || show_new_workspace_wizard()
+        },
+        show_new_board_wizard.clone(),
+    ));
 
-    if presets.is_empty() {
+    if presets.is_empty() && saved_board_count == 0 {
         dashboard.append(&build_dashboard_empty_state());
     } else {
-        let saved_panel = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(12)
-            .css_classes(["config-panel", "saved-workspaces-panel"])
-            .build();
-        saved_panel.append(&build_section_header(
-            "Saved workspaces",
-            "Load or edit an existing workspace",
-            "Open a saved layout immediately, or edit it in the wizard before launching.",
-        ));
+        if let (Some(boards), Some(open_board), Some(edit_board), Some(store)) = (
+            board_workspaces.as_ref(),
+            open_board_from_dashboard.as_ref(),
+            edit_board_from_dashboard.as_ref(),
+            board_workspace_store.as_ref(),
+        ) && !boards.is_empty()
+        {
+            let boards_panel = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(12)
+                .css_classes(["config-panel", "saved-boards-panel"])
+                .build();
+            boards_panel.append(&build_section_header(
+                "Saved Kanban boards",
+                "Open or edit a project board",
+                "Board cards are launch-deck bookmarks. Deleting one does not remove .terminaltiler/board.json.",
+            ));
 
-        let cards = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .row_spacing(12)
-            .column_spacing(12)
-            .min_children_per_line(1)
-            .max_children_per_line(4)
-            .homogeneous(true)
-            .hexpand(true)
-            .css_classes(["saved-workspace-grid"])
-            .build();
-        for (index, preset) in presets.iter().enumerate() {
-            cards.insert(
-                &build_saved_workspace_card(
-                    preset,
-                    index,
-                    &preset_store,
-                    &on_presets_changed,
-                    {
-                        let open_workspace_from_dashboard = open_workspace_from_dashboard.clone();
-                        move |idx| open_workspace_from_dashboard(idx)
-                    },
-                    {
-                        let edit_workspace_from_dashboard = edit_workspace_from_dashboard.clone();
-                        move |idx| edit_workspace_from_dashboard(idx)
-                    },
-                ),
-                -1,
-            );
+            let board_cards = gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .row_spacing(12)
+                .column_spacing(12)
+                .min_children_per_line(1)
+                .max_children_per_line(4)
+                .homogeneous(true)
+                .hexpand(true)
+                .css_classes(["saved-workspace-grid", "saved-board-grid"])
+                .build();
+            for (index, board) in boards.iter().enumerate() {
+                let open_board = open_board.clone();
+                let edit_board = edit_board.clone();
+                board_cards.insert(
+                    &build_saved_board_card(
+                        board,
+                        index,
+                        store,
+                        &on_presets_changed,
+                        move |idx| open_board(idx),
+                        move |idx| edit_board(idx),
+                    ),
+                    -1,
+                );
+            }
+            boards_panel.append(&board_cards);
+            dashboard.append(&boards_panel);
         }
-        saved_panel.append(&cards);
-        dashboard.append(&saved_panel);
+
+        if !presets.is_empty() {
+            let saved_panel = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(12)
+                .css_classes(["config-panel", "saved-workspaces-panel"])
+                .build();
+            saved_panel.append(&build_section_header(
+                "Saved workspaces",
+                "Load or edit an existing workspace",
+                "Open a saved layout immediately, or edit it in the wizard before launching.",
+            ));
+
+            let cards = gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .row_spacing(12)
+                .column_spacing(12)
+                .min_children_per_line(1)
+                .max_children_per_line(4)
+                .homogeneous(true)
+                .hexpand(true)
+                .css_classes(["saved-workspace-grid"])
+                .build();
+            for (index, preset) in presets.iter().enumerate() {
+                cards.insert(
+                    &build_saved_workspace_card(
+                        preset,
+                        index,
+                        &preset_store,
+                        &on_presets_changed,
+                        {
+                            let open_workspace_from_dashboard =
+                                open_workspace_from_dashboard.clone();
+                            move |idx| open_workspace_from_dashboard(idx)
+                        },
+                        {
+                            let edit_workspace_from_dashboard =
+                                edit_workspace_from_dashboard.clone();
+                            move |idx| edit_workspace_from_dashboard(idx)
+                        },
+                    ),
+                    -1,
+                );
+            }
+            saved_panel.append(&cards);
+            dashboard.append(&saved_panel);
+        }
     }
 
     mode_stack.set_visible_child_name("dashboard");
@@ -1193,6 +1771,30 @@ fn build_wizard_stepper() -> WizardStepper {
         ("Appearance", icon_name::THEME),
         ("Layout", icon_name::LAYOUT),
         ("Review", icon_name::APPLY),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let step = build_wizard_step_button(index + 1, label, icon);
+        root.append(&step);
+        steps.push(step);
+    }
+
+    WizardStepper { root, steps }
+}
+
+fn build_board_wizard_stepper() -> WizardStepper {
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["wizard-stepper", "config-panel", "board-wizard-stepper"])
+        .build();
+
+    let mut steps = Vec::new();
+    for (index, (label, icon)) in [
+        ("Project", icon_name::FOLDER),
+        ("Agents", icon_name::TERMINAL),
+        ("Open", icon_name::APPLY),
     ]
     .iter()
     .enumerate()
@@ -1249,7 +1851,12 @@ fn build_wizard_step_button(index: usize, label: &str, icon_name: &str) -> gtk::
     step
 }
 
-fn build_dashboard_intro<F>(saved_count: usize, on_new_workspace: F) -> gtk::Widget
+fn build_dashboard_intro<F>(
+    saved_count: usize,
+    saved_board_count: usize,
+    on_new_workspace: F,
+    on_new_board: Option<Rc<dyn Fn()>>,
+) -> gtk::Widget
 where
     F: Fn() + 'static,
 {
@@ -1281,10 +1888,10 @@ where
     );
     copy.append(
         &gtk::Label::builder()
-            .label(if saved_count == 0 {
-                "No saved workspaces yet. Use the wizard to choose a folder, pick a layout, and configure tiles one step at a time."
+            .label(if saved_count == 0 && saved_board_count == 0 {
+                "No saved workspaces yet. Use the workspace wizard to choose a folder and layout, or create a Kanban board directly from a project directory."
             } else {
-                "Open a known workspace immediately, edit a saved setup, or start a fresh layout."
+                "Open a known workspace or Kanban board immediately, edit a saved setup, or start fresh."
             })
             .halign(gtk::Align::Start)
             .wrap(true)
@@ -1292,7 +1899,10 @@ where
             .build(),
     );
     let meta = gtk::Label::builder()
-        .label(format!("{} saved", saved_count))
+        .label(format!(
+            "{} workspaces • {} boards",
+            saved_count, saved_board_count
+        ))
         .halign(gtk::Align::Start)
         .css_classes(["status-chip", "launch-dashboard-count"])
         .build();
@@ -1312,6 +1922,18 @@ where
     new_button.set_valign(gtk::Align::Center);
     new_button.connect_clicked(move |_| on_new_workspace());
     card.append(&new_button);
+
+    if let Some(on_new_board) = on_new_board {
+        let board_button = icons::labeled_button(
+            "New Kanban Board",
+            icon_name::TERMINAL,
+            &["pill-button", "secondary-button", "new-kanban-board-button"],
+        );
+        board_button.set_halign(gtk::Align::End);
+        board_button.set_valign(gtk::Align::Center);
+        board_button.connect_clicked(move |_| on_new_board());
+        card.append(&board_button);
+    }
 
     card.upcast()
 }
@@ -1476,6 +2098,205 @@ where
     card.append(&footer);
 
     card.upcast()
+}
+
+fn build_saved_board_card<FOpen, FEdit>(
+    board: &BoardWorkspace,
+    index: usize,
+    board_workspace_store: &Rc<BoardWorkspaceStore>,
+    on_boards_changed: &Rc<dyn Fn()>,
+    on_open: FOpen,
+    on_edit: FEdit,
+) -> gtk::Widget
+where
+    FOpen: Fn(usize) + 'static,
+    FEdit: Fn(usize) + 'static,
+{
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .hexpand(false)
+        .css_classes([
+            "preset-card-compact",
+            "saved-workspace-card",
+            "saved-board-card",
+        ])
+        .build();
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    header.append(
+        &gtk::Label::builder()
+            .label(&board.name)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    header.append(
+        &gtk::Label::builder()
+            .label("Kanban")
+            .halign(gtk::Align::End)
+            .css_classes(["status-chip", "saved-board-kind-chip"])
+            .build(),
+    );
+    card.append(&header);
+
+    card.append(
+        &gtk::Label::builder()
+            .label("Per-project task board for humans and MCP-connected agents.")
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .max_width_chars(48)
+            .css_classes(["card-meta"])
+            .build(),
+    );
+
+    let footer_spacer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .vexpand(true)
+        .build();
+    card.append(&footer_spacer);
+
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["saved-workspace-footer", "saved-board-footer"])
+        .build();
+    footer.append(
+        &gtk::Label::builder()
+            .label(board.project_label())
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
+            .hexpand(true)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(36)
+            .css_classes(["field-hint", "saved-workspace-root", "saved-board-root"])
+            .build(),
+    );
+
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Center)
+        .css_classes(["saved-workspace-actions", "saved-board-actions"])
+        .build();
+    let open_button = icons::labeled_button(
+        "Open",
+        icon_name::OPEN,
+        &[
+            "pill-button",
+            "primary-cta-button",
+            "compact-action-button",
+            "saved-board-open-button",
+        ],
+    );
+    open_button.connect_clicked(move |_| on_open(index));
+    actions.append(&open_button);
+
+    let edit_button = icons::labeled_button(
+        "Edit",
+        icon_name::EDIT,
+        &[
+            "pill-button",
+            "secondary-button",
+            "compact-action-button",
+            "saved-board-edit-button",
+        ],
+    );
+    edit_button.connect_clicked(move |_| on_edit(index));
+    actions.append(&edit_button);
+
+    let delete_button = icons::icon_button(
+        icon_name::DELETE,
+        "Delete saved Kanban shortcut",
+        &[
+            "pill-button",
+            "destructive-button",
+            "compact-icon-button",
+            "saved-board-delete-button",
+        ],
+    );
+    connect_delete_board_button(
+        &delete_button,
+        board,
+        board_workspace_store,
+        on_boards_changed,
+    );
+    actions.append(&delete_button);
+    footer.append(&actions);
+    card.append(&footer);
+
+    card.upcast()
+}
+
+fn connect_delete_board_button(
+    button: &gtk::Button,
+    board: &BoardWorkspace,
+    board_workspace_store: &Rc<BoardWorkspaceStore>,
+    on_boards_changed: &Rc<dyn Fn()>,
+) {
+    let board_id = board.id.clone();
+    let board_name = board.name.clone();
+    let board_workspace_store = board_workspace_store.clone();
+    let on_boards_changed = on_boards_changed.clone();
+
+    button.connect_clicked(move |button| {
+        let window = button.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+        present_delete_board_confirmation(
+            window.as_ref(),
+            board_id.clone(),
+            board_name.clone(),
+            board_workspace_store.clone(),
+            on_boards_changed.clone(),
+        );
+    });
+}
+
+fn present_delete_board_confirmation(
+    window: Option<&gtk::Window>,
+    board_id: String,
+    board_name: String,
+    board_workspace_store: Rc<BoardWorkspaceStore>,
+    on_boards_changed: Rc<dyn Fn()>,
+) {
+    let dialog = adw::MessageDialog::builder()
+        .modal(true)
+        .heading("Delete Kanban Shortcut?")
+        .body(format!(
+            "\"{}\" will be removed from the launch deck. The project board file stays on disk.",
+            board_name
+        ))
+        .build();
+
+    if let Some(win) = window {
+        dialog.set_transient_for(Some(win));
+        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-delete-board-dialog");
+    }
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete Shortcut");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "delete" {
+            if let Err(err) = board_workspace_store.delete(&board_id) {
+                logging::error(format!("Failed to delete Kanban shortcut: {}", err));
+            } else {
+                on_boards_changed();
+            }
+        }
+        dialog.close();
+    });
+
+    dialog.present();
 }
 
 fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
@@ -2957,6 +3778,33 @@ fn preset_workspace_root(path_entry: &gtk::Entry) -> Option<PathBuf> {
             (!raw_path.is_empty()).then(|| PathBuf::from(raw_path))
         }
     }
+}
+
+fn build_board_launch_request(
+    name_entry: &gtk::Entry,
+    path_entry: &gtk::Entry,
+    id: Option<String>,
+    theme: ThemeMode,
+    density: ApplicationDensity,
+) -> Result<BoardLaunchRequest, String> {
+    let project_root = validate_workspace_path(path_entry)?;
+    let name = name_entry.text().trim().to_string();
+    let name = if name.is_empty() {
+        project_root
+            .file_name()
+            .map(|name| format!("{} Kanban", name.to_string_lossy()))
+            .unwrap_or_else(|| "Project Kanban".into())
+    } else {
+        name
+    };
+
+    Ok(BoardLaunchRequest {
+        id,
+        name,
+        project_root,
+        theme,
+        density,
+    })
 }
 
 fn validate_workspace_path_text(text: &str) -> Result<PathBuf, String> {
