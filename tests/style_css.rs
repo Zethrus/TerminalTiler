@@ -3224,6 +3224,62 @@ fn kanban_board_styling_extends_existing_design_system() {
 }
 
 #[test]
+fn kanban_board_layout_does_not_force_window_minimum_width() {
+    assert!(
+        source_contains(
+            BOARD_VIEW_RS,
+            "let columns_scroller = gtk::ScrolledWindow::builder()\n            .hscrollbar_policy(gtk::PolicyType::Automatic)\n            .vscrollbar_policy(gtk::PolicyType::Never)"
+        ) && source_contains(
+            BOARD_VIEW_RS,
+            "columns_scroller.set_child(Some(&columns_row));"
+        ) && source_contains(BOARD_VIEW_RS, "root.append(&columns_scroller);"),
+        "Kanban columns should live inside a horizontal ScrolledWindow instead of dictating the toplevel window width"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains(".propagate_natural_width(false)")
+            && BOARD_VIEW_RS.contains(".min_content_width(0)")
+            && BOARD_CHROME_RS.contains(".propagate_natural_width(false)")
+            && BOARD_CHROME_RS.contains(".min_content_width(0)"),
+        "board scrollers should not propagate child natural widths into the window minimum"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains("fn make_shrinkable(widget: &impl IsA<gtk::Widget>)")
+            && BOARD_VIEW_RS.contains("make_shrinkable(&root)")
+            && BOARD_VIEW_RS.contains("make_shrinkable(&columns_row)")
+            && BOARD_VIEW_RS.contains("make_shrinkable(&columns_scroller)")
+            && BOARD_VIEW_RS.contains("make_shrinkable(&section)")
+            && BOARD_CHROME_RS.contains("make_shrinkable(&column)")
+            && BOARD_CHROME_RS.contains("make_shrinkable(&card)")
+            && BOARD_CHROME_RS.contains("widget.set_size_request(0, 0)")
+            && BOARD_CHROME_RS.contains("widget.set_overflow(gtk::Overflow::Hidden)"),
+        "board root, columns, cards, and agents panel should opt into TerminalTiler's shrinkable widget contract"
+    );
+    assert!(
+        BOARD_CHROME_RS.contains("actions: gtk::FlowBox")
+            && BOARD_CHROME_RS.contains("pub(crate) fn append_action")
+            && BOARD_CHROME_RS.contains("gtk::FlowBox::builder()")
+            && BOARD_CHROME_RS.contains(".selection_mode(gtk::SelectionMode::None)")
+            && BOARD_CHROME_RS.contains(".min_children_per_line(1)")
+            && BOARD_VIEW_RS.contains("card.append_action(&run_menu)")
+            && !BOARD_VIEW_RS.contains("card.actions.append"),
+        "Kanban card actions should wrap in a FlowBox through an append_action API instead of one wide horizontal Box"
+    );
+    for selector in [
+        ".kanban-columns-scroll",
+        ".kanban-columns",
+        ".kanban-card",
+        ".kanban-card-actions",
+        ".kanban-agents-panel",
+    ] {
+        assert_css_block_contains(
+            selector,
+            "min-width: 0",
+            "Kanban shrinkability CSS hooks should keep board content from becoming the window minimum",
+        );
+    }
+}
+
+#[test]
 fn kanban_lifecycle_metadata_has_lightweight_ui_indicators() {
     assert!(
         BOARD_CHROME_RS.contains("lifecycle_indicators(task")

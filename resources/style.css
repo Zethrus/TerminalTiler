@@ -4531,6 +4531,7 @@ window.theme-light .voice-hud-transcript {
 /* Kanban board — per-project task board (shares config-panel + card chrome) */
 .kanban-board {
   background: transparent;
+  min-width: 0;
 }
 
 .kanban-board-title {
@@ -4539,7 +4540,12 @@ window.theme-light .voice-hud-transcript {
   color: @tt_text;
 }
 
+.kanban-columns-scroll {
+  min-width: 0;
+}
+
 .kanban-columns {
+  min-width: 0;
   min-height: 0;
 }
 
@@ -4594,9 +4600,14 @@ window.theme-light .voice-hud-transcript {
 .kanban-card {
   padding: 10px;
   border-radius: 0;
+  min-width: 0;
   background: alpha(@tt_white, 0.03);
   border: 1px solid alpha(@tt_white, 0.06);
   border-left: 3px solid alpha(@tt_white, 0.28);
+}
+
+.kanban-card-actions {
+  min-width: 0;
 }
 
 .kanban-card.is-dragging {
@@ -4649,6 +4660,7 @@ window.theme-light .voice-hud-transcript {
 .kanban-agents-panel {
   border-radius: 0;
   padding: 12px;
+  min-width: 0;
 }
 
 .kanban-agents-title {

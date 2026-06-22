@@ -18,10 +18,21 @@ pub(crate) struct BoardColumnChrome {
     pub(crate) card_list: gtk::Box,
 }
 
-/// A rendered card, exposing an `actions` row the view fills with buttons.
+/// A rendered card, exposing a wrapping actions container through `append_action`.
 pub(crate) struct BoardCardChrome {
     pub(crate) widget: gtk::Box,
-    pub(crate) actions: gtk::Box,
+    actions: gtk::FlowBox,
+}
+
+impl BoardCardChrome {
+    pub(crate) fn append_action(&self, action: &impl IsA<gtk::Widget>) {
+        self.actions.append(action);
+    }
+}
+
+fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
+    widget.set_size_request(0, 0);
+    widget.set_overflow(gtk::Overflow::Hidden);
 }
 
 /// CSS modifier class for a column/card based on its status.
@@ -46,6 +57,7 @@ pub(crate) fn build_board_column(status: TaskStatus) -> BoardColumnChrome {
         .vexpand(true)
         .css_classes(["config-panel", "kanban-column", modifier])
         .build();
+    make_shrinkable(&column);
 
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -76,11 +88,16 @@ pub(crate) fn build_board_column(status: TaskStatus) -> BoardColumnChrome {
         .spacing(8)
         .valign(gtk::Align::Start)
         .build();
+    make_shrinkable(&card_list);
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .propagate_natural_width(false)
+        .min_content_width(0)
+        .hexpand(true)
         .vexpand(true)
         .build();
+    make_shrinkable(&scroller);
     scroller.set_child(Some(&card_list));
     column.append(&scroller);
 
@@ -91,7 +108,7 @@ pub(crate) fn build_board_column(status: TaskStatus) -> BoardColumnChrome {
     }
 }
 
-/// Build a task card. The view appends action buttons to `actions` and wires a click.
+/// Build a task card. The view appends action buttons through `append_action` and wires clicks.
 pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
     let modifier = status_modifier_class(task.status);
     let card = gtk::Box::builder()
@@ -99,6 +116,7 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
         .spacing(6)
         .css_classes(["kanban-card", modifier])
         .build();
+    make_shrinkable(&card);
 
     let title = gtk::Label::builder()
         .label(&task.title)
@@ -125,6 +143,7 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
         .orientation(gtk::Orientation::Horizontal)
         .spacing(6)
         .build();
+    make_shrinkable(&meta);
     if let Some(assignee) = task.assignee.as_deref() {
         meta.append(
             &gtk::Label::builder()
@@ -167,6 +186,7 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
             .orientation(gtk::Orientation::Horizontal)
             .spacing(6)
             .build();
+        make_shrinkable(&indicator_row);
         for text in indicators {
             let lifecycle_class = lifecycle_indicator_class(&text);
             indicator_row.append(
@@ -179,12 +199,18 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
         card.append(&indicator_row);
     }
 
-    let actions = gtk::Box::builder()
+    let actions = gtk::FlowBox::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
+        .selection_mode(gtk::SelectionMode::None)
+        .min_children_per_line(1)
+        .max_children_per_line(4)
+        .column_spacing(6)
+        .row_spacing(6)
         .margin_top(2)
+        .hexpand(true)
         .css_classes(["kanban-card-actions"])
         .build();
+    make_shrinkable(&actions);
     card.append(&actions);
 
     BoardCardChrome {

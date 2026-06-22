@@ -73,6 +73,7 @@ impl BoardView {
         root.set_margin_bottom(8);
         root.set_margin_start(8);
         root.set_margin_end(8);
+        make_shrinkable(&root);
 
         root.append(&build_header(project_name));
 
@@ -84,6 +85,19 @@ impl BoardView {
             .homogeneous(true)
             .css_classes(["kanban-columns"])
             .build();
+        make_shrinkable(&columns_row);
+
+        let columns_scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_width(false)
+            .min_content_width(0)
+            .hexpand(true)
+            .vexpand(true)
+            .css_classes(["kanban-columns-scroll"])
+            .build();
+        make_shrinkable(&columns_scroller);
+
         let mut columns = Vec::new();
         for status in TaskStatus::ALL {
             let column = board_chrome::build_board_column(status);
@@ -95,7 +109,8 @@ impl BoardView {
                 card_list: column.card_list,
             });
         }
-        root.append(&columns_row);
+        columns_scroller.set_child(Some(&columns_row));
+        root.append(&columns_scroller);
 
         let (agents_section, agents_list, terminal_stack) = build_agents_section();
         root.append(&agents_section);
@@ -136,6 +151,11 @@ impl BoardView {
     pub fn terminate_agents(&self, reason: &str) {
         self.inner.orchestrator.terminate_all(reason);
     }
+}
+
+fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
+    widget.set_size_request(0, 0);
+    widget.set_overflow(gtk::Overflow::Hidden);
 }
 
 fn build_header(project_name: &str) -> gtk::Box {
@@ -262,6 +282,7 @@ fn build_agents_section() -> (gtk::Box, gtk::Box, gtk::Stack) {
         .spacing(8)
         .css_classes(["config-panel", "kanban-agents-panel"])
         .build();
+    make_shrinkable(&section);
     section.set_visible(false);
 
     section.append(
@@ -276,13 +297,15 @@ fn build_agents_section() -> (gtk::Box, gtk::Box, gtk::Stack) {
         .orientation(gtk::Orientation::Vertical)
         .spacing(6)
         .build();
+    make_shrinkable(&agents_list);
     section.append(&agents_list);
 
     let terminal_stack = gtk::Stack::builder()
         .vhomogeneous(false)
         .css_classes(["kanban-agent-terminals"])
         .build();
-    terminal_stack.set_size_request(-1, 240);
+    terminal_stack.set_size_request(0, 240);
+    terminal_stack.set_overflow(gtk::Overflow::Hidden);
     let placeholder = gtk::Label::builder()
         .label("Dispatch a task to an agent to see its live terminal here.")
         .css_classes(["field-hint"])
@@ -370,7 +393,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
     }
     run_popover.set_child(Some(&run_box));
     run_menu.set_popover(Some(&run_popover));
-    card.actions.append(&run_menu);
+    card.append_action(&run_menu);
 
     // Manual review/re-review menu (normal and YOLO review runs).
     let review_label = if task.review.last_started_at.is_some() {
@@ -433,7 +456,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
     }
     review_popover.set_child(Some(&review_box));
     review_menu.set_popover(Some(&review_popover));
-    card.actions.append(&review_menu);
+    card.append_action(&review_menu);
 
     // Advance to the next column.
     if let Some(next) = next_status(task.status) {
@@ -455,7 +478,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
                 Err(error) => crate::logging::error(format!("failed to save board: {error}")),
             }
         });
-        card.actions.append(&advance);
+        card.append_action(&advance);
     }
 
     // Delete.
@@ -479,7 +502,7 @@ fn build_card(inner: &Rc<Inner>, task: &Task) -> gtk::Box {
             }
         });
     }
-    card.actions.append(&delete);
+    card.append_action(&delete);
 
     install_card_detail_click(inner, &card.widget, &task_id, default_agent, default_yolo);
     install_card_drag_source(&card.widget, &task_id);
