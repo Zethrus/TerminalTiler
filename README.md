@@ -1,6 +1,6 @@
 # TerminalTiler
 
-TerminalTiler is a native desktop application for launching polished multi-terminal workspaces from reusable templates. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 release builds use the GTK/libadwaita parity shell with interactive Windows terminal panes, and prefer WSL2 while falling back to PowerShell when WSL2 is unavailable; the native Win32 shell remains an explicit compatibility fallback.
+TerminalTiler is a native desktop application for launching polished multi-terminal workspaces from reusable templates and coordinating per-project Kanban task boards for human and AI-agent work. Linux builds use Rust, GTK4, libadwaita, and VTE. Windows 11 release builds use the GTK/libadwaita parity shell with interactive Windows terminal panes, and prefer WSL2 while falling back to PowerShell when WSL2 is unavailable; the native Win32 shell remains an explicit compatibility fallback.
 
 - Product site: <https://terminaltiler.app>
 - Source code: <https://github.com/Zethrus/TerminalTiler>
@@ -9,12 +9,16 @@ TerminalTiler is a native desktop application for launching polished multi-termi
 ## Current scope
 
 - Native libadwaita application shell
-- Launch deck with preset templates
+- Launch dashboard with saved workspace cards, saved Kanban board cards, and preset templates
 - Exact tile-count preset editing from the launch deck
 - Recursive split-pane layout rendering
 - Per-tile working directory resolution
 - Per-tile startup command execution through VTE
 - Per-tile agent labeling with editable preset save and update flows
+- Per-project Kanban boards with To Do, In Progress, In Review, Complete, and Cancelled columns
+- Task cards with descriptions, assignees, notes, additional instructions, knowledge entries, and file attachments
+- Live Claude/Codex task dispatch from the board into terminal panes
+- Bundled `terminaltiler-mcp` server so MCP-connected agents can claim tasks, add progress notes, record knowledge, and move work to review
 - XDG config seeding for user-editable presets
 - Native Windows 11 workspace host with WSL2-first and PowerShell-fallback runtime selection
 - Linux `.deb` and AppImage packaging
@@ -37,6 +41,29 @@ The dependency direction is intentionally one-way: External projects may use Cor
 This public repository contains TerminalTiler Core: the MIT-licensed desktop app, local workspace launcher, release packaging, and public development history. Core should remain useful without external repositories, external services, external credentials, or unpublished build steps.
 
 External materials must stay outside this repository; this repository remains the source of truth for the open-source core.
+
+## Kanban boards and AI agents
+
+TerminalTiler includes local, per-project Kanban boards for coordinating work beside a terminal workspace. Create a board from the launch dashboard with **New Kanban Board**, or open the board for the active workspace with **Ctrl+Shift+K** or the command palette. Board data is stored in the project itself:
+
+```text
+<project-root>/.terminaltiler/board.json
+```
+
+Saved board cards on the launch dashboard are only shortcuts back to project roots. They are stored in the app config directory and deleting a shortcut does not delete the project board file.
+
+Each board has five columns: To Do, In Progress, In Review, Complete, and Cancelled. Cards can be created in any column, dragged between columns, advanced with the card action button, deleted, or opened for detail editing. Task details include:
+
+- additional instructions injected into agent prompts
+- knowledge entries captured by agents through MCP
+- file attachments copied under `.terminaltiler/attachments/<task_id>/`
+- progress notes and assignee metadata
+
+The **Connect Agent** action registers the bundled `terminaltiler-mcp` server with Claude Code or Codex. Claude uses a project `.mcp.json`; Codex uses `~/.codex/config.toml`. Once connected, agents can use the board tools to list tasks, claim work, append notes, capture research findings, and move implementation-ready tasks to `in_review`.
+
+Board-launched implementation runs spawn Claude or Codex in a live terminal pane rooted at the project directory. Moving a task to In Review can start one duplicate-gated review run. Completion remains a manual board decision after review.
+
+See [docs/kanban-board.md](docs/kanban-board.md) for the full board workflow, MCP tool reference, storage paths, and packaging notes.
 
 ## Build-time dependencies
 
@@ -87,14 +114,21 @@ when pip is damaged or the venv Python is incompatible.
 
 ```bash
 cargo check
-cargo run
+cargo test
+cargo run --bin terminaltiler
+```
+
+The Kanban MCP server is built as a second binary and normally runs under an MCP client. For local protocol testing, point it at a project root:
+
+```bash
+cargo run --bin terminaltiler-mcp -- --project-root "$PWD"
 ```
 
 For a Windows-targeted compile from a Windows machine:
 
 ```powershell
 cargo check --target x86_64-pc-windows-msvc
-cargo run --target x86_64-pc-windows-msvc
+cargo run --bin terminaltiler --target x86_64-pc-windows-msvc
 ```
 
 The first launch seeds presets at the XDG config location for the app. On Linux this is typically:
@@ -121,6 +155,20 @@ Launcher stderr from desktop or packaged starts is also appended separately to:
 ~/.local/state/terminaltiler/logs/launcher-stderr.log
 ```
 
+Project board data lives under each project root:
+
+```text
+<project-root>/.terminaltiler/board.json
+<project-root>/.terminaltiler/attachments/
+<project-root>/.terminaltiler/reviews/
+```
+
+Saved Kanban board shortcuts are stored with user configuration. On Linux this is typically:
+
+```text
+~/.config/TerminalTiler/board-workspaces.toml
+```
+
 ## Packaging
 
 The repo includes release tooling for:
@@ -131,13 +179,13 @@ The repo includes release tooling for:
 
 The packaging scripts produce self-contained runtime bundles:
 
-- `packaging/build-appimage.sh` generates a fresh AppDir under `packaging/.build/appimage`, bundles GTK/libadwaita/VTE shared libraries, GSettings schemas, and gdk-pixbuf loaders, then runs `appimagetool`
-- `packaging/build-deb.sh` stages the application under `packaging/.build/deb-root/opt/terminaltiler`, bundles the same runtime payload, and installs a launcher at `/usr/bin/terminaltiler`
+- `packaging/build-appimage.sh` generates a fresh AppDir under `packaging/.build/appimage`, bundles GTK/libadwaita/VTE shared libraries, GSettings schemas, gdk-pixbuf loaders, and `terminaltiler-mcp`, then runs `appimagetool`
+- `packaging/build-deb.sh` stages the application under `packaging/.build/deb-root/opt/terminaltiler`, bundles the same runtime payload plus `terminaltiler-mcp`, and installs a launcher at `/usr/bin/terminaltiler`
 - `packaging/build-linux-release.sh` builds the release binary once, then emits both Linux artifacts with one shared semantic version
 - `packaging/build-in-container.sh` runs the Linux packaging flow inside a pinned Debian 12 build container for reproducible release artifacts
 - `packaging/release-smoke-test.sh` validates AppStream metadata, builds or reuses both Linux artifacts, inspects their payloads, and performs timed headless launch smoke tests when `xvfb-run` is available
 - `packaging/resolve-package-version.sh` resolves deterministic package versions for local builds, default-branch snapshot builds, and tagged releases
-- `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload, emits a direct portable `.exe`, a portable zip, an NSIS installer `.exe`, and a WiX `.msi`
+- `packaging/build-windows.ps1` builds `TerminalTiler.exe`, stages the Windows payload with `terminaltiler-mcp.exe`, emits a direct portable `.exe`, a portable zip, an NSIS installer `.exe`, and a WiX `.msi`
 - `packaging/windows-smoke-test.ps1` validates the direct portable `.exe`, the portable zip payload, the NSIS installer, and the MSI package before launch smoke coverage
 
 Local packaging runs still derive a clean semantic version from the most recent successful build within the same `major.minor` line. If `Cargo.toml` is at `0.2.0` and no prior successful local packaging run has been recorded, the first build emits `0.2.0`, then `0.2.1`, then `0.2.2`, and so on.

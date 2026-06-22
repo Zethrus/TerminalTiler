@@ -105,17 +105,9 @@ impl AgentOrchestrator {
     /// Snapshot of all runs, with active runs whose process has exited promoted to
     /// `Completed` so the UI reflects reality without a separate exit callback.
     pub fn runs(&self) -> Vec<AgentRun> {
-        self.runs
-            .borrow()
-            .iter()
-            .map(|active| {
-                let mut run = active.run.clone();
-                if run.state.is_active() && !active.session.has_active_process() {
-                    run.state = AgentRunState::Completed;
-                }
-                run
-            })
-            .collect()
+        let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
+        runs.iter().map(|active| active.run.clone()).collect()
     }
 
     /// Whether any registered agent session still has a live process.
@@ -129,34 +121,45 @@ impl AgentOrchestrator {
     /// Stop a run: terminate its process and mark it cancelled.
     pub fn stop(&self, run_id: &str) {
         let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
         if let Some(active) = runs.iter_mut().find(|active| active.run.id == run_id) {
-            terminate_active_run(active, "agent run stopped by user");
+            terminate_active_run_immediately(active, "agent run stopped by user");
         }
     }
 
     /// Stop every live run for a specific board task.
     pub fn stop_task(&self, task_id: &str, reason: &str) {
         let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
         for active in runs
             .iter_mut()
             .filter(|active| active.run.task_id == task_id)
         {
-            terminate_active_run(active, reason);
+            terminate_active_run_immediately(active, reason);
         }
     }
 
     /// Terminate every live agent process owned by this board.
     pub fn terminate_all(&self, reason: &str) {
         let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
         for active in runs.iter_mut() {
-            terminate_active_run(active, reason);
+            terminate_active_run_immediately(active, reason);
         }
     }
 }
 
-fn terminate_active_run(active: &mut ActiveRun, reason: &str) {
-    if active.run.state.is_active() && active.session.has_active_process() {
-        active.session.terminate(reason);
+fn refresh_completed_runs(runs: &mut [ActiveRun]) {
+    for active in runs {
+        if active.run.state.is_active() && !active.session.has_active_process() {
+            active.run.state = AgentRunState::Completed;
+        }
+    }
+}
+
+fn terminate_active_run_immediately(active: &mut ActiveRun, reason: &str) {
+    if active.run.state.is_active() {
+        active.session.terminate_immediately(reason);
         active.run.state = AgentRunState::Cancelled;
     }
 }

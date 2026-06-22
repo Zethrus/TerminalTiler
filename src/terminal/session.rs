@@ -1,5 +1,7 @@
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -45,6 +47,7 @@ struct TerminalSessionState {
     auto_reconnect_attempts: u8,
     auto_reconnect_pending: bool,
     kill_timeout: Option<glib::SourceId>,
+    immediate_termination_requested: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +152,7 @@ impl TerminalSession {
                 state.exited = true;
                 state.child_pid = None;
                 state.last_exit_status = Some(status);
+                state.immediate_termination_requested = false;
                 state.clear_kill_timeout();
                 logging::info(format!(
                     "terminal child exited status={} {}",
@@ -255,6 +259,10 @@ impl TerminalSession {
 
     pub fn terminate(&self, reason: &str) {
         request_process_termination(&self.state, &self.descriptor, reason);
+    }
+
+    pub fn terminate_immediately(&self, reason: &str) {
+        request_process_termination_immediately(&self.state, &self.descriptor, reason);
     }
 
     pub fn apply_appearance(
@@ -433,6 +441,7 @@ impl TerminalSession {
             state.child_pid = None;
             state.last_exit_status = None;
             state.termination_requested = false;
+            state.immediate_termination_requested = false;
             state.auto_reconnect_pending = false;
             state.clear_kill_timeout();
         }
@@ -454,11 +463,14 @@ impl TerminalSession {
             move |result| match result {
                 Ok(pid) => {
                     let pid = pid.0 as libc::pid_t;
-                    let terminate_immediately = {
+                    let (termination_requested, immediate_termination_requested) = {
                         let mut state = state_for_spawn.borrow_mut();
                         state.child_pid = Some(pid);
                         state.exited = false;
-                        state.termination_requested
+                        (
+                            state.termination_requested,
+                            state.immediate_termination_requested,
+                        )
                     };
 
                     logging::info(format!(
@@ -466,12 +478,20 @@ impl TerminalSession {
                         pid, descriptor_for_spawn
                     ));
 
-                    if terminate_immediately {
-                        request_process_termination(
-                            &state_for_spawn,
-                            &descriptor_for_spawn,
-                            "workspace closed before spawn completed",
-                        );
+                    if termination_requested {
+                        if immediate_termination_requested {
+                            request_process_termination_immediately(
+                                &state_for_spawn,
+                                &descriptor_for_spawn,
+                                "workspace closed before spawn completed",
+                            );
+                        } else {
+                            request_process_termination(
+                                &state_for_spawn,
+                                &descriptor_for_spawn,
+                                "workspace closed before spawn completed",
+                            );
+                        }
                     }
                 }
                 Err(error) => {
@@ -676,6 +696,7 @@ fn mark_state_exited(state: &Rc<RefCell<TerminalSessionState>>) {
     state.child_pid = None;
     state.last_exit_status = None;
     state.auto_reconnect_pending = false;
+    state.immediate_termination_requested = false;
     state.clear_kill_timeout();
 }
 
@@ -684,36 +705,18 @@ fn request_process_termination(
     descriptor: &str,
     reason: &str,
 ) {
-    let pid = {
-        let mut state = state.borrow_mut();
-        if state.exited {
-            logging::info(format!(
-                "termination skipped for already-exited terminal {}",
-                descriptor
-            ));
-            return;
-        }
-
-        state.termination_requested = true;
-        state.auto_reconnect_pending = false;
-        state.clear_kill_timeout();
-        state.child_pid
-    };
-
+    let pid = prepare_process_termination(state, descriptor, reason, false);
     let Some(pid) = pid else {
-        logging::info(format!(
-            "queued terminal termination until spawn completes reason='{}' {}",
-            reason, descriptor
-        ));
         return;
     };
 
     logging::info(format!(
-        "terminating terminal process group pid={} reason='{}' {}",
+        "terminating terminal process tree pid={} reason='{}' {}",
         pid, reason, descriptor
     ));
-    send_signal_to_process_group(pid, libc::SIGHUP, descriptor);
-    send_signal_to_process_group(pid, libc::SIGTERM, descriptor);
+    let targets = process_signal_targets(pid);
+    send_signal_to_targets(&targets, libc::SIGHUP, descriptor);
+    send_signal_to_targets(&targets, libc::SIGTERM, descriptor);
 
     let descriptor = descriptor.to_string();
     let state_weak = Rc::downgrade(state);
@@ -723,6 +726,58 @@ fn request_process_termination(
         }
     });
     state.borrow_mut().kill_timeout = Some(timeout);
+}
+
+fn request_process_termination_immediately(
+    state: &Rc<RefCell<TerminalSessionState>>,
+    descriptor: &str,
+    reason: &str,
+) {
+    let pid = prepare_process_termination(state, descriptor, reason, true);
+    let Some(pid) = pid else {
+        return;
+    };
+
+    logging::info(format!(
+        "immediately terminating terminal process tree pid={} reason='{}' {}",
+        pid, reason, descriptor
+    ));
+    let targets = process_signal_targets(pid);
+    send_signal_to_targets(&targets, libc::SIGHUP, descriptor);
+    send_signal_to_targets(&targets, libc::SIGTERM, descriptor);
+    send_signal_to_targets(&targets, libc::SIGKILL, descriptor);
+}
+
+fn prepare_process_termination(
+    state: &Rc<RefCell<TerminalSessionState>>,
+    descriptor: &str,
+    reason: &str,
+    immediate: bool,
+) -> Option<libc::pid_t> {
+    let pid = {
+        let mut state = state.borrow_mut();
+        if state.exited {
+            logging::info(format!(
+                "termination skipped for already-exited terminal {}",
+                descriptor
+            ));
+            return None;
+        }
+
+        state.termination_requested = true;
+        state.immediate_termination_requested |= immediate;
+        state.auto_reconnect_pending = false;
+        state.clear_kill_timeout();
+        state.child_pid
+    };
+
+    if pid.is_none() {
+        logging::info(format!(
+            "queued terminal termination until spawn completes reason='{}' {}",
+            reason, descriptor
+        ));
+    }
+    pid
 }
 
 fn escalate_termination(state: &Rc<RefCell<TerminalSessionState>>, descriptor: &str) {
@@ -739,22 +794,191 @@ fn escalate_termination(state: &Rc<RefCell<TerminalSessionState>>, descriptor: &
         return;
     };
 
-    if process_group_exists(pid) {
+    let targets = process_signal_targets(pid);
+    if targets.iter().any(|target| signal_target_exists(*target)) {
         logging::info(format!(
             "escalating terminal termination with SIGKILL pid={} {}",
             pid, descriptor
         ));
-        send_signal_to_process_group(pid, libc::SIGKILL, descriptor);
+        send_signal_to_targets(&targets, libc::SIGKILL, descriptor);
     }
 }
 
-fn process_group_exists(pid: libc::pid_t) -> bool {
-    let Some(target) = process_group_target(pid) else {
-        return false;
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum ProcessSignalTarget {
+    Process(libc::pid_t),
+    ProcessGroup(libc::pid_t),
+}
+
+impl ProcessSignalTarget {
+    fn kill_target(self) -> libc::pid_t {
+        match self {
+            Self::Process(pid) => pid,
+            Self::ProcessGroup(pgid) => -pgid,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Process(_) => "process",
+            Self::ProcessGroup(_) => "process group",
+        }
+    }
+
+    fn id(self) -> libc::pid_t {
+        match self {
+            Self::Process(pid) | Self::ProcessGroup(pid) => pid,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessRecord {
+    pid: libc::pid_t,
+    ppid: libc::pid_t,
+    pgid: libc::pid_t,
+}
+
+fn process_signal_targets(root_pid: libc::pid_t) -> Vec<ProcessSignalTarget> {
+    let process_table = read_linux_process_table();
+    collect_process_signal_targets(root_pid, &process_table)
+}
+
+fn collect_process_signal_targets(
+    root_pid: libc::pid_t,
+    process_table: &[ProcessRecord],
+) -> Vec<ProcessSignalTarget> {
+    if root_pid <= 0 {
+        return Vec::new();
+    }
+
+    let by_pid = process_table
+        .iter()
+        .map(|record| (record.pid, *record))
+        .collect::<HashMap<_, _>>();
+    let current_pgrp = current_process_group();
+    let mut children_by_parent: HashMap<libc::pid_t, Vec<libc::pid_t>> = HashMap::new();
+    for record in process_table {
+        children_by_parent
+            .entry(record.ppid)
+            .or_default()
+            .push(record.pid);
+    }
+
+    let mut targets = Vec::new();
+    let mut seen_targets = HashSet::new();
+    let mut seen_processes = HashSet::new();
+    let mut queue = VecDeque::from([root_pid]);
+
+    while let Some(pid) = queue.pop_front() {
+        if !seen_processes.insert(pid) {
+            continue;
+        }
+
+        if let Some(record) = by_pid.get(&pid) {
+            add_signal_target(
+                signal_target_for_record(*record, current_pgrp),
+                &mut targets,
+                &mut seen_targets,
+            );
+        } else if pid == root_pid {
+            let fallback = if root_pid == current_pgrp {
+                ProcessSignalTarget::Process(root_pid)
+            } else {
+                ProcessSignalTarget::ProcessGroup(root_pid)
+            };
+            add_signal_target(fallback, &mut targets, &mut seen_targets);
+        } else {
+            add_signal_target(
+                ProcessSignalTarget::Process(pid),
+                &mut targets,
+                &mut seen_targets,
+            );
+        }
+
+        if let Some(children) = children_by_parent.get(&pid) {
+            queue.extend(children);
+        }
+    }
+
+    targets
+}
+
+fn signal_target_for_record(
+    record: ProcessRecord,
+    current_pgrp: libc::pid_t,
+) -> ProcessSignalTarget {
+    if record.pgid > 0 && record.pgid != current_pgrp {
+        ProcessSignalTarget::ProcessGroup(record.pgid)
+    } else {
+        ProcessSignalTarget::Process(record.pid)
+    }
+}
+
+fn current_process_group() -> libc::pid_t {
+    unsafe { libc::getpgrp() }
+}
+
+fn add_signal_target(
+    target: ProcessSignalTarget,
+    targets: &mut Vec<ProcessSignalTarget>,
+    seen: &mut HashSet<ProcessSignalTarget>,
+) {
+    match target {
+        ProcessSignalTarget::Process(pid) | ProcessSignalTarget::ProcessGroup(pid) if pid <= 0 => {
+            return;
+        }
+        _ => {}
+    }
+
+    if seen.insert(target) {
+        targets.push(target);
+    }
+}
+
+fn read_linux_process_table() -> Vec<ProcessRecord> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
     };
 
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_string_lossy().parse().ok()?;
+            let stat = fs::read_to_string(entry.path().join("stat")).ok()?;
+            parse_linux_stat(pid, &stat)
+        })
+        .collect()
+}
+
+fn parse_linux_stat(pid: libc::pid_t, stat: &str) -> Option<ProcessRecord> {
+    let after_comm = stat.rsplit_once(") ")?.1;
+    let fields = after_comm.split_whitespace().collect::<Vec<_>>();
+    Some(ProcessRecord {
+        pid,
+        ppid: fields.get(1)?.parse().ok()?,
+        pgid: fields.get(2)?.parse().ok()?,
+    })
+}
+
+fn send_signal_to_targets(targets: &[ProcessSignalTarget], signal: libc::c_int, descriptor: &str) {
+    if targets.is_empty() {
+        logging::error(format!(
+            "no terminal process targets found while sending {} {}",
+            signal_name(signal),
+            descriptor
+        ));
+        return;
+    }
+
+    for target in targets {
+        send_signal_to_target(*target, signal, descriptor);
+    }
+}
+
+fn signal_target_exists(target: ProcessSignalTarget) -> bool {
     unsafe {
-        if libc::kill(target, 0) == 0 {
+        if libc::kill(target.kill_target(), 0) == 0 {
             true
         } else {
             io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
@@ -762,18 +986,8 @@ fn process_group_exists(pid: libc::pid_t) -> bool {
     }
 }
 
-fn send_signal_to_process_group(pid: libc::pid_t, signal: libc::c_int, descriptor: &str) {
-    let Some(target) = process_group_target(pid) else {
-        logging::error(format!(
-            "invalid terminal pid {} while sending {} {}",
-            pid,
-            signal_name(signal),
-            descriptor
-        ));
-        return;
-    };
-
-    let result = unsafe { libc::kill(target, signal) };
+fn send_signal_to_target(target: ProcessSignalTarget, signal: libc::c_int, descriptor: &str) {
+    let result = unsafe { libc::kill(target.kill_target(), signal) };
     if result == 0 {
         return;
     }
@@ -783,17 +997,14 @@ fn send_signal_to_process_group(pid: libc::pid_t, signal: libc::c_int, descripto
         .unwrap_or_default();
     if errno != libc::ESRCH {
         logging::error(format!(
-            "failed to send {} to terminal process group pid={} errno={} {}",
+            "failed to send {} to terminal {} id={} errno={} {}",
             signal_name(signal),
-            pid,
+            target.label(),
+            target.id(),
             errno,
             descriptor
         ));
     }
-}
-
-fn process_group_target(pid: libc::pid_t) -> Option<libc::pid_t> {
-    if pid > 0 { Some(-pid) } else { None }
 }
 
 fn signal_name(signal: libc::c_int) -> &'static str {
@@ -861,8 +1072,9 @@ fn report_spawn_problem(terminal: &vte4::Terminal, descriptor: &str, message: &s
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkingDirectoryValidationError, build_local_shell_argv, build_spawn_argv,
-        process_group_target, shell_for_launch, supports_recovery_options, validate_working_dir,
+        ProcessRecord, ProcessSignalTarget, WorkingDirectoryValidationError,
+        build_local_shell_argv, build_spawn_argv, collect_process_signal_targets, parse_linux_stat,
+        shell_for_launch, supports_recovery_options, validate_working_dir,
     };
     use crate::services::launch_resolution::ResolvedLaunchTransport;
     use std::path::Path;
@@ -947,8 +1159,78 @@ mod tests {
     }
 
     #[test]
-    fn derives_negative_process_group_signal_target() {
-        assert_eq!(process_group_target(4242), Some(-4242));
-        assert_eq!(process_group_target(0), None);
+    fn process_group_signal_target_uses_negative_kill_target() {
+        assert_eq!(ProcessSignalTarget::ProcessGroup(4242).kill_target(), -4242);
+        assert_eq!(ProcessSignalTarget::Process(4242).kill_target(), 4242);
+    }
+
+    #[test]
+    fn process_signal_targets_include_descendant_process_groups_once() {
+        let process_table = vec![
+            ProcessRecord {
+                pid: 99000,
+                ppid: 1,
+                pgid: 99000,
+            },
+            ProcessRecord {
+                pid: 99001,
+                ppid: 99000,
+                pgid: 99000,
+            },
+            ProcessRecord {
+                pid: 99002,
+                ppid: 99001,
+                pgid: 99002,
+            },
+            ProcessRecord {
+                pid: 99003,
+                ppid: 99002,
+                pgid: 99002,
+            },
+            ProcessRecord {
+                pid: 99004,
+                ppid: 99000,
+                pgid: 99004,
+            },
+            ProcessRecord {
+                pid: 99005,
+                ppid: 99004,
+                pgid: 99002,
+            },
+        ];
+
+        let targets = collect_process_signal_targets(99000, &process_table);
+
+        assert_eq!(targets.len(), 3);
+        assert!(targets.contains(&ProcessSignalTarget::ProcessGroup(99000)));
+        assert!(targets.contains(&ProcessSignalTarget::ProcessGroup(99002)));
+        assert!(targets.contains(&ProcessSignalTarget::ProcessGroup(99004)));
+    }
+
+    #[test]
+    fn process_signal_targets_fall_back_to_root_process_group_without_proc_record() {
+        assert_eq!(
+            collect_process_signal_targets(99999, &[]),
+            vec![ProcessSignalTarget::ProcessGroup(99999)]
+        );
+        assert!(collect_process_signal_targets(0, &[]).is_empty());
+    }
+
+    #[test]
+    fn parses_linux_stat_with_spaces_and_parentheses_in_command_name() {
+        let record = parse_linux_stat(
+            123,
+            "123 (agent (worker) shell) S 45 67 67 34816 123 4194304",
+        )
+        .expect("stat line should parse");
+
+        assert_eq!(
+            record,
+            ProcessRecord {
+                pid: 123,
+                ppid: 45,
+                pgid: 67,
+            }
+        );
     }
 }

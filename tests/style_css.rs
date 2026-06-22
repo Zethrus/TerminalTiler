@@ -70,6 +70,7 @@ const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const BOARD_VIEW_RS: &str = include_str!("../src/ui/board_view.rs");
 const BOARD_CHROME_RS: &str = include_str!("../src/ui/board_chrome.rs");
+const AGENT_ORCHESTRATOR_RS: &str = include_str!("../src/services/agent_orchestrator.rs");
 const BOARD_WORKSPACE_RS: &str = include_str!("../src/model/board_workspace.rs");
 const BOARD_WORKSPACE_STORE_RS: &str = include_str!("../src/storage/board_workspace_store.rs");
 const NEW_TASK_DIALOG_RS: &str = include_str!("../src/ui/new_task_dialog.rs");
@@ -3251,6 +3252,28 @@ fn kanban_board_drag_and_drop_is_wired_natively() {
         STYLE_CSS.contains(".kanban-card.is-dragging")
             && STYLE_CSS.contains(".kanban-column.is-drop-target"),
         "Kanban drag/drop states should have explicit CSS hooks"
+    );
+}
+
+#[test]
+fn kanban_agent_stop_uses_immediate_termination_and_hides_when_inactive() {
+    assert!(
+        TERMINAL_SESSION_RS.contains("pub fn terminate_immediately(&self, reason: &str)")
+            && TERMINAL_SESSION_RS.contains("request_process_termination_immediately")
+            && TERMINAL_SESSION_RS.contains("send_signal_to_targets(&targets, libc::SIGKILL"),
+        "Terminal sessions should expose an immediate process-tree termination path for Kanban Stop"
+    );
+    assert!(
+        AGENT_ORCHESTRATOR_RS.contains("terminate_active_run_immediately")
+            && AGENT_ORCHESTRATOR_RS.contains("active.session.terminate_immediately(reason)")
+            && AGENT_ORCHESTRATOR_RS.contains("active.run.state = AgentRunState::Cancelled"),
+        "Kanban Stop should mark live runs cancelled and use immediate cleanup"
+    );
+    assert!(
+        BOARD_VIEW_RS.contains("if run.state.is_active()")
+            && BOARD_VIEW_RS.contains("inner.orchestrator.stop(&run_id)")
+            && BOARD_VIEW_RS.contains("render_agents(&inner)"),
+        "Agent rows should only render Stop for active runs and refresh immediately after Stop"
     );
 }
 

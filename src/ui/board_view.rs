@@ -588,16 +588,18 @@ fn render_agents(inner: &Rc<Inner>) {
         }
         row.actions.append(&view);
 
-        let stop = icons::labeled_button("Stop", icon_name::CLOSE, &["flat", "surface-button"]);
-        {
-            let inner = inner.clone();
-            let run_id = run.id.clone();
-            stop.connect_clicked(move |_| {
-                inner.orchestrator.stop(&run_id);
-                render_agents(&inner);
-            });
+        if run.state.is_active() {
+            let stop = icons::labeled_button("Stop", icon_name::CLOSE, &["flat", "surface-button"]);
+            {
+                let inner = inner.clone();
+                let run_id = run.id.clone();
+                stop.connect_clicked(move |_| {
+                    inner.orchestrator.stop(&run_id);
+                    render_agents(&inner);
+                });
+            }
+            row.actions.append(&stop);
         }
-        row.actions.append(&stop);
 
         inner.agents_list.append(&row.widget);
     }
