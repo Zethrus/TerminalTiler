@@ -143,6 +143,19 @@ pub fn handle_request(line: &str, project_root: &Path) -> Option<String> {
             id_or_null(id),
             tools_call_result(&params, project_root),
         )),
+        Some("resources/list") => Some(success_response(
+            id_or_null(id),
+            resources_list_result(project_root),
+        )),
+        Some("resources/read") => Some(success_response(
+            id_or_null(id),
+            resources_read_result(&params, project_root),
+        )),
+        Some("prompts/list") => Some(success_response(id_or_null(id), prompts_list_result())),
+        Some("prompts/get") => Some(success_response(
+            id_or_null(id),
+            prompts_get_result(&params, project_root),
+        )),
         // Notifications (no id, e.g. "notifications/initialized") need no response.
         Some(_) if id.is_none() => None,
         Some(other) => Some(error_response(
@@ -188,13 +201,160 @@ fn tools_call_result(params: &Value, project_root: &Path) -> Value {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
+        "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
         "serverInfo": {
             "name": SERVER_NAME,
             "title": "TerminalTiler Kanban",
             "version": env!("CARGO_PKG_VERSION")
         },
         "instructions": INSTRUCTIONS
+    })
+}
+
+fn resources_list_result(project_root: &Path) -> Value {
+    let board = crate::storage::board_store::load(project_root);
+    let mut resources = vec![
+        json!({
+            "uri": "terminaltiler://board/summary",
+            "name": "Board summary",
+            "description": "Compact task and lifecycle counts for this TerminalTiler board.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "terminaltiler://board/tasks",
+            "name": "Task list",
+            "description": "All board tasks as JSON.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "terminaltiler://workflow/guide",
+            "name": "Workflow guide",
+            "description": "Recommended MCP workflow and ownership guardrails.",
+            "mimeType": "text/markdown"
+        }),
+    ];
+    for task in &board.tasks {
+        resources.push(json!({
+            "uri": format!("terminaltiler://task/{}.json", task.id),
+            "name": format!("Task JSON: {}", task.title),
+            "description": "Full task JSON.",
+            "mimeType": "application/json"
+        }));
+        resources.push(json!({
+            "uri": format!("terminaltiler://task/{}.md", task.id),
+            "name": format!("Task brief: {}", task.title),
+            "description": "Markdown task brief.",
+            "mimeType": "text/markdown"
+        }));
+    }
+    json!({ "resources": resources })
+}
+
+fn resources_read_result(params: &Value, project_root: &Path) -> Value {
+    let uri = params
+        .get("uri")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match read_resource(uri, project_root) {
+        Ok((mime_type, text)) => json!({
+            "contents": [{ "uri": uri, "mimeType": mime_type, "text": text }]
+        }),
+        Err(message) => json!({
+            "contents": [{
+                "uri": uri,
+                "mimeType": "text/plain",
+                "text": format!("Resource error: {message}")
+            }]
+        }),
+    }
+}
+
+fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String), String> {
+    let board = crate::storage::board_store::load(project_root);
+    match uri {
+        "terminaltiler://board/summary" => {
+            serde_json::to_string_pretty(&tools::board_summary_value(&board))
+                .map(|text| ("application/json", text))
+                .map_err(|error| error.to_string())
+        }
+        "terminaltiler://board/tasks" => serde_json::to_string_pretty(&board.tasks)
+            .map(|text| ("application/json", text))
+            .map_err(|error| error.to_string()),
+        "terminaltiler://workflow/guide" => Ok(("text/markdown", tools::workflow_guide_markdown())),
+        _ if uri.starts_with("terminaltiler://task/") && uri.ends_with(".json") => {
+            let id = uri
+                .trim_start_matches("terminaltiler://task/")
+                .trim_end_matches(".json");
+            let task = crate::services::board::get_task(&board, id)
+                .ok_or_else(|| format!("no task with id '{id}'"))?;
+            serde_json::to_string_pretty(task)
+                .map(|text| ("application/json", text))
+                .map_err(|error| error.to_string())
+        }
+        _ if uri.starts_with("terminaltiler://task/") && uri.ends_with(".md") => {
+            let id = uri
+                .trim_start_matches("terminaltiler://task/")
+                .trim_end_matches(".md");
+            let task = crate::services::board::get_task(&board, id)
+                .ok_or_else(|| format!("no task with id '{id}'"))?;
+            Ok(("text/markdown", tools::task_brief_markdown(task)))
+        }
+        _ => Err(format!("unknown resource URI '{uri}'")),
+    }
+}
+
+fn prompts_list_result() -> Value {
+    json!({
+        "prompts": [
+            {
+                "name": "implement_task",
+                "description": "Claim and implement a TerminalTiler Kanban task safely.",
+                "arguments": [{ "name": "task_id", "description": "Task id to implement.", "required": true }]
+            },
+            {
+                "name": "review_task",
+                "description": "Review a TerminalTiler Kanban task and submit a verdict.",
+                "arguments": [{ "name": "task_id", "description": "Task id to review.", "required": true }]
+            },
+            {
+                "name": "triage_board",
+                "description": "Summarize board state, blockers, and recommended next tasks.",
+                "arguments": []
+            }
+        ]
+    })
+}
+
+fn prompts_get_result(params: &Value, project_root: &Path) -> Value {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+    let task_id = arguments
+        .get("task_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<task-id>");
+    let text = match name {
+        "implement_task" => format!(
+            "{}\n\nImplement task `{task_id}`: read `terminaltiler://task/{task_id}.md`, call `start_work` with your assignee, update notes/knowledge as you work, then call `ready_for_review` with your author id and a concise handoff summary.",
+            tools::workflow_guide_markdown()
+        ),
+        "review_task" => format!(
+            "Review task `{task_id}` using `terminaltiler://task/{task_id}.md`. Inspect the project root `{}`. Call `submit_review` with your reviewer author id, verdict, and severity-rated summary. Do not call `complete_task`.",
+            project_root.display()
+        ),
+        "triage_board" => {
+            "Call `get_board_summary`, inspect blocked/stale/in_review counts, then recommend the next available tasks and any ownership conflicts to resolve.".to_string()
+        }
+        _ => format!("Unknown TerminalTiler prompt `{name}`."),
+    };
+    json!({
+        "description": name,
+        "messages": [{
+            "role": "user",
+            "content": { "type": "text", "text": text }
+        }]
     })
 }
 
@@ -286,6 +446,8 @@ mod tests {
             serde_json::from_str(&handle_request(&request, &root).unwrap()).unwrap();
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert!(response["result"]["capabilities"]["resources"].is_object());
+        assert!(response["result"]["capabilities"]["prompts"].is_object());
         let instructions = response["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("start_work"));
         assert!(instructions.contains("ready_for_review"));
@@ -316,7 +478,10 @@ mod tests {
             .collect();
         for expected in [
             "list_tasks",
+            "get_board_summary",
             "get_task",
+            "get_task_brief",
+            "diagnose_mcp",
             "create_task",
             "claim_task",
             "update_task_status",
@@ -342,6 +507,82 @@ mod tests {
             .find(|tool| tool["name"] == "start_work")
             .unwrap();
         assert!(start_work["outputSchema"].is_object());
+        assert!(
+            response["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["outputSchema"].is_object())
+        );
+    }
+
+    #[test]
+    fn resources_and_prompts_are_advertised_and_readable() {
+        let root = temp_root();
+        call_tool(&root, "create_task", json!({ "title": "Resource task" }));
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+
+        let list_request =
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }).to_string();
+        let listed: Value =
+            serde_json::from_str(&handle_request(&list_request, &root).unwrap()).unwrap();
+        let resources = listed["result"]["resources"].as_array().unwrap();
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource["uri"] == "terminaltiler://board/summary")
+        );
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource["uri"] == format!("terminaltiler://task/{task_id}.md"))
+        );
+
+        let read_request = json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "resources/read",
+            "params": { "uri": format!("terminaltiler://task/{task_id}.md") }
+        })
+        .to_string();
+        let read: Value =
+            serde_json::from_str(&handle_request(&read_request, &root).unwrap()).unwrap();
+        assert!(
+            read["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Resource task")
+        );
+
+        let prompts_request =
+            json!({ "jsonrpc": "2.0", "id": 5, "method": "prompts/list" }).to_string();
+        let prompts: Value =
+            serde_json::from_str(&handle_request(&prompts_request, &root).unwrap()).unwrap();
+        let names: Vec<&str> = prompts["result"]["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|prompt| prompt["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"implement_task"));
+        assert!(names.contains(&"review_task"));
+        assert!(names.contains(&"triage_board"));
+
+        let prompt_request = json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "prompts/get",
+            "params": { "name": "implement_task", "arguments": { "task_id": task_id } }
+        })
+        .to_string();
+        let prompt: Value =
+            serde_json::from_str(&handle_request(&prompt_request, &root).unwrap()).unwrap();
+        assert!(
+            prompt["result"]["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("ready_for_review")
+        );
     }
 
     #[test]
@@ -439,6 +680,54 @@ mod tests {
         );
         assert_eq!(heartbeat["isError"], false);
         assert_eq!(heartbeat["structuredContent"]["action"], "heartbeat_task");
+    }
+
+    #[test]
+    fn legacy_mcp_paths_enforce_ownership_with_force_override() {
+        crate::services::review_dispatch::set_test_disable_headless_review_spawn(true);
+        let root = temp_root();
+        call_tool(&root, "create_task", json!({ "title": "Guarded" }));
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+        call_tool(
+            &root,
+            "claim_task",
+            json!({ "id": task_id, "assignee": "alice" }),
+        );
+
+        let competing_claim = call_tool(
+            &root,
+            "claim_task",
+            json!({ "id": task_id, "assignee": "bob" }),
+        );
+        assert_eq!(competing_claim["isError"], true);
+        assert_eq!(
+            competing_claim["structuredContent"]["action"],
+            "ownership_conflict"
+        );
+
+        let competing_review = call_tool(
+            &root,
+            "ready_for_review",
+            json!({ "id": task_id, "summary": "done", "author": "bob" }),
+        );
+        assert_eq!(competing_review["isError"], true);
+        assert_eq!(
+            competing_review["structuredContent"]["conflict"]["current_assignee"],
+            "alice"
+        );
+
+        let forced = call_tool(
+            &root,
+            "complete_task",
+            json!({ "id": task_id, "author": "bob", "force": true, "note": "forced close" }),
+        );
+        assert_eq!(forced["isError"], false);
+        assert!(
+            forced["structuredContent"]["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("force took over")
+        );
     }
 
     #[test]

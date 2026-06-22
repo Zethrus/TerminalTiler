@@ -173,6 +173,14 @@ fn build_header(project_name: &str) -> gtk::Box {
             .css_classes(["kanban-board-title"])
             .build(),
     );
+    let lifecycle_summary = gtk::Label::builder()
+        .label("0 active · 0 stale · 0 blocked · 0 review")
+        .halign(gtk::Align::End)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .css_classes(["status-chip", "kanban-lifecycle-summary"])
+        .build();
+    lifecycle_summary.set_widget_name("kanban-lifecycle-summary");
+    header.append(&lifecycle_summary);
     // Buttons are appended/wired by name in wire_header_buttons via well-known order.
     let new_task = icons::labeled_button(
         "New Task",
@@ -206,6 +214,20 @@ fn header_button(inner: &Rc<Inner>, name: &str) -> Option<gtk::Button> {
             && let Ok(button) = widget.clone().downcast::<gtk::Button>()
         {
             return Some(button);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+fn header_label(inner: &Rc<Inner>, name: &str) -> Option<gtk::Label> {
+    let header = inner.root.first_child()?;
+    let mut child = header.first_child();
+    while let Some(widget) = child {
+        if widget.widget_name() == name
+            && let Ok(label) = widget.clone().downcast::<gtk::Label>()
+        {
+            return Some(label);
         }
         child = widget.next_sibling();
     }
@@ -325,6 +347,7 @@ fn render(inner: &Rc<Inner>) {
 }
 
 fn render_board(inner: &Rc<Inner>, board: &crate::model::board::Board) {
+    update_lifecycle_summary(inner, board);
     for column in &inner.columns {
         clear_box(&column.card_list);
         let tasks = board_service::tasks_by_status(board, column.status);
@@ -336,6 +359,40 @@ fn render_board(inner: &Rc<Inner>, board: &crate::model::board::Board) {
         for task in tasks {
             column.card_list.append(&build_card(inner, task));
         }
+    }
+}
+
+fn update_lifecycle_summary(inner: &Rc<Inner>, board: &crate::model::board::Board) {
+    let now = crate::model::board::now_epoch_secs();
+    let active = board
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.assignee.is_some()
+                && task.heartbeat_at.or(task.claimed_at).is_some()
+                && !board_service::task_is_stale(task, now)
+                && task.paused.is_none()
+        })
+        .count();
+    let stale = board
+        .tasks
+        .iter()
+        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
+        .count();
+    let blocked = board
+        .tasks
+        .iter()
+        .filter(|task| task.blocked.is_some())
+        .count();
+    let review = board
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InReview)
+        .count();
+    if let Some(label) = header_label(inner, "kanban-lifecycle-summary") {
+        label.set_text(&format!(
+            "{active} active · {stale} stale · {blocked} blocked · {review} review"
+        ));
     }
 }
 

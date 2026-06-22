@@ -76,6 +76,7 @@ const BOARD_WORKSPACE_RS: &str = include_str!("../src/model/board_workspace.rs")
 const BOARD_WORKSPACE_STORE_RS: &str = include_str!("../src/storage/board_workspace_store.rs");
 const NEW_TASK_DIALOG_RS: &str = include_str!("../src/ui/new_task_dialog.rs");
 const AGENT_SETUP_DIALOG_RS: &str = include_str!("../src/ui/agent_setup_dialog.rs");
+const MCP_HEALTH_PANEL_RS: &str = include_str!("../src/ui/mcp_health_panel.rs");
 const WORKSPACE_NAVIGATION_RS: &str = include_str!("../src/ui/workspace_navigation.rs");
 const WORKSPACE_TILE_STATE_RS: &str = include_str!("../src/ui/workspace_tile_state.rs");
 const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
@@ -3302,6 +3303,7 @@ fn kanban_lifecycle_metadata_has_lightweight_ui_indicators() {
         ".kanban-lifecycle-stale",
         ".kanban-lifecycle-paused",
         ".kanban-lifecycle-active",
+        ".kanban-lifecycle-summary",
         ".task-detail-lifecycle-panel",
     ] {
         assert!(
@@ -3309,6 +3311,40 @@ fn kanban_lifecycle_metadata_has_lightweight_ui_indicators() {
             "lifecycle indicator CSS hook {class} should be styled"
         );
     }
+    assert!(
+        BOARD_VIEW_RS.contains("kanban-lifecycle-summary")
+            && BOARD_VIEW_RS.contains("active ·")
+            && BOARD_VIEW_RS.contains("blocked ·")
+            && BOARD_VIEW_RS.contains("review"),
+        "board header should show compact active/stale/blocked/review lifecycle counts"
+    );
+}
+
+#[test]
+fn kanban_mcp_health_panel_is_reused_and_refreshes_after_connect() {
+    assert!(
+        UI_MOD_RS.contains("mod mcp_health_panel")
+            && MCP_HEALTH_PANEL_RS.contains("McpHealthPanel")
+            && MCP_HEALTH_PANEL_RS.contains("project_root")
+            && MCP_HEALTH_PANEL_RS.contains("board_path")
+            && MCP_HEALTH_PANEL_RS.contains("mcp_binary")
+            && MCP_HEALTH_PANEL_RS.contains("claude_state")
+            && MCP_HEALTH_PANEL_RS.contains("codex_state"),
+        "MCP health panel should report project root, board path, binary, Claude, and Codex state"
+    );
+    assert!(
+        AGENT_SETUP_DIALOG_RS.contains("McpHealthPanel::new")
+            && AGENT_SETUP_DIALOG_RS.contains("mcp_health.refresh")
+            && LAUNCH_SCREEN_RS.contains("McpHealthPanel::new")
+            && LAUNCH_SCREEN_RS.contains("board_mcp_health.refresh")
+            && LAUNCH_SCREEN_RS.contains("board_health_project_root")
+            && LAUNCH_SCREEN_RS.contains("board_path_entry.connect_changed"),
+        "Connect Agent and launch board setup should reuse and refresh MCP diagnostics"
+    );
+    assert!(
+        STYLE_CSS.contains(".mcp-health-panel") && STYLE_CSS.contains(".mcp-health-row"),
+        "MCP health panel should have CSS hooks"
+    );
 }
 
 #[test]

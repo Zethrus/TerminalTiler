@@ -7,8 +7,9 @@
 //! - Claude Code: project-scoped `<project_root>/.mcp.json`.
 //! - Codex: `~/.codex/config.toml`.
 
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -165,6 +166,196 @@ pub fn connect_codex(project_root: &Path) -> Result<PathBuf, String> {
     let binary = mcp_binary_path().to_string_lossy().into_owned();
     upsert_codex(&path, &binary, project_root)?;
     Ok(path)
+}
+
+/// Snapshot of MCP setup health for UI panels and the `diagnose_mcp` tool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpDiagnostics {
+    pub project_root: PathBuf,
+    pub board_path: PathBuf,
+    pub board_exists: bool,
+    pub mcp_binary_path: PathBuf,
+    pub mcp_binary_exists: bool,
+    pub claude_config_path: PathBuf,
+    pub claude_configured: bool,
+    pub claude_detail: String,
+    pub codex_config_path: Option<PathBuf>,
+    pub codex_configured: bool,
+    pub codex_detail: String,
+}
+
+impl McpDiagnostics {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "project_root": self.project_root.display().to_string(),
+            "board_path": self.board_path.display().to_string(),
+            "board_exists": self.board_exists,
+            "mcp_binary_path": self.mcp_binary_path.display().to_string(),
+            "mcp_binary_exists": self.mcp_binary_exists,
+            "claude": {
+                "config_path": self.claude_config_path.display().to_string(),
+                "configured": self.claude_configured,
+                "detail": self.claude_detail,
+            },
+            "codex": {
+                "config_path": self.codex_config_path.as_ref().map(|path| path.display().to_string()),
+                "configured": self.codex_configured,
+                "detail": self.codex_detail,
+            }
+        })
+    }
+}
+
+/// Inspect project-scoped Claude and user-scoped Codex MCP registration without mutating
+/// either config. Missing files are reported as not configured rather than errors.
+pub fn diagnose_mcp(project_root: &Path) -> McpDiagnostics {
+    let mcp_binary_path = mcp_binary_path();
+    let mcp_binary_exists = mcp_binary_available(&mcp_binary_path);
+    let claude_config_path = project_root.join(".mcp.json");
+    let (claude_configured, claude_detail) =
+        inspect_claude_config(&claude_config_path, project_root);
+    let codex_config_path =
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex").join("config.toml"));
+    let (codex_configured, codex_detail) = codex_config_path
+        .as_ref()
+        .map(|path| inspect_codex_config(path, project_root))
+        .unwrap_or_else(|| (false, "could not resolve home directory".to_string()));
+
+    McpDiagnostics {
+        project_root: project_root.to_path_buf(),
+        board_path: crate::storage::board_store::board_path(project_root),
+        board_exists: crate::storage::board_store::board_exists(project_root),
+        mcp_binary_path,
+        mcp_binary_exists,
+        claude_config_path,
+        claude_configured,
+        claude_detail,
+        codex_config_path,
+        codex_configured,
+        codex_detail,
+    }
+}
+
+fn mcp_binary_available(path: &Path) -> bool {
+    path.exists() || (is_bare_command(path) && path.file_name().is_some_and(command_on_path))
+}
+
+fn is_bare_command(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+fn command_on_path(command: &OsStr) -> bool {
+    command_on_search_path(command, std::env::var_os("PATH"))
+}
+
+fn command_on_search_path(command: &OsStr, path_var: Option<OsString>) -> bool {
+    let Some(path_var) = path_var else {
+        return false;
+    };
+    std::env::split_paths(&path_var).any(|dir| command_candidate_available(&dir.join(command)))
+}
+
+#[cfg(unix)]
+fn command_candidate_available(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn command_candidate_available(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn inspect_claude_config(path: &Path, project_root: &Path) -> (bool, String) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (false, "not installed for this project".to_string());
+        }
+        Err(error) => return (false, format!("could not read config: {error}")),
+    };
+    let value: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => return (false, format!("invalid JSON: {error}")),
+    };
+    let Some(server) = value
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .and_then(|servers| servers.get(SERVER_KEY))
+    else {
+        return (false, "terminaltiler server entry missing".to_string());
+    };
+    inspect_server_entry(
+        server.get("command").and_then(Value::as_str),
+        server.get("args").and_then(Value::as_array).map(|args| {
+            args.iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        }),
+        project_root,
+    )
+}
+
+fn inspect_codex_config(path: &Path, project_root: &Path) -> (bool, String) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (false, "not installed in Codex config".to_string());
+        }
+        Err(error) => return (false, format!("could not read config: {error}")),
+    };
+    let document: toml::Table = match toml::from_str(&raw) {
+        Ok(document) => document,
+        Err(error) => return (false, format!("invalid TOML: {error}")),
+    };
+    let Some(server) = document
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .and_then(|servers| servers.get(SERVER_KEY))
+        .and_then(toml::Value::as_table)
+    else {
+        return (false, "terminaltiler server entry missing".to_string());
+    };
+    let command = server.get("command").and_then(toml::Value::as_str);
+    let args = server
+        .get("args")
+        .and_then(toml::Value::as_array)
+        .map(|args| {
+            args.iter()
+                .filter_map(toml::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
+    inspect_server_entry(command, args, project_root)
+}
+
+fn inspect_server_entry(
+    command: Option<&str>,
+    args: Option<Vec<String>>,
+    project_root: &Path,
+) -> (bool, String) {
+    let Some(command) = command.filter(|value| !value.trim().is_empty()) else {
+        return (false, "server command missing".to_string());
+    };
+    let args = args.unwrap_or_default();
+    let expected_root = project_root.to_string_lossy();
+    let has_project_root = args
+        .windows(2)
+        .any(|pair| pair[0] == "--project-root" && pair[1] == expected_root);
+    if !has_project_root {
+        return (
+            false,
+            "server entry exists but does not target this project root".to_string(),
+        );
+    }
+    (
+        true,
+        format!("configured: {command} --project-root {expected_root}"),
+    )
 }
 
 fn upsert_claude(path: &Path, binary: &str, project_root: &Path) -> Result<(), String> {
@@ -381,5 +572,23 @@ mod tests {
         );
         install_stable_binary(&source, &dest_dir).unwrap();
         assert_eq!(fs::read(&installed).unwrap(), b"binary-v2");
+    }
+
+    #[test]
+    fn bare_mcp_binary_is_resolved_through_search_path() {
+        let dir = temp_dir();
+        let bin_dir = dir.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let binary = bin_dir.join(mcp_binary_file_name());
+        fs::write(&binary, b"fake-binary").unwrap();
+        set_executable(&binary).unwrap();
+        let search_path = std::env::join_paths([bin_dir]).unwrap();
+
+        assert!(command_on_search_path(
+            OsStr::new(mcp_binary_file_name()),
+            Some(search_path)
+        ));
+        assert!(is_bare_command(Path::new(mcp_binary_file_name())));
+        assert!(!is_bare_command(Path::new("/opt/terminaltiler-mcp")));
     }
 }

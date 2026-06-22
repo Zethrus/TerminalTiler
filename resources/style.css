@@ -2707,6 +2707,14 @@ button.new-kanban-board-button {
   max-width: 680px;
 }
 
+.mcp-health-panel {
+  padding: 10px;
+}
+
+.mcp-health-row {
+  min-width: 0;
+}
+
 .board-agent-actions,
 .board-action-bar {
   min-width: 0;
@@ -4824,6 +4832,12 @@ window.theme-light .new-task-dialog-window dropdown.dialog-select button {
   color: alpha(@tt_white, 0.62);
   background: alpha(@tt_white, 0.06);
   border: 1px solid alpha(@tt_white, 0.06);
+}
+
+.kanban-lifecycle-summary {
+  font-size: 10px;
+  color: alpha(@tt_white, 0.72);
+  background: alpha(@tt_white, 0.06);
 }
 
 .kanban-lifecycle-active {

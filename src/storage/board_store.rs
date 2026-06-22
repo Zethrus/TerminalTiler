@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::logging;
-use crate::model::board::Board;
+use crate::model::board::{BOARD_VERSION, Board};
 use crate::storage::document::preserve_corrupt_warning;
 use crate::storage::fs_utils::atomic_write_private;
 
@@ -92,7 +92,9 @@ pub fn update<R>(project_root: &Path, mutate: impl FnOnce(&mut Board) -> R) -> s
 
 fn save_unlocked(project_root: &Path, board: &Board) -> std::io::Result<()> {
     let path = board_path(project_root);
-    let serialized = serde_json::to_string_pretty(board)
+    let mut normalized = board.clone();
+    normalized.version = BOARD_VERSION;
+    let serialized = serde_json::to_string_pretty(&normalized)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     atomic_write_private(&path, &serialized)
 }
@@ -224,6 +226,21 @@ mod tests {
         let loaded = load(&root);
         assert_eq!(loaded, board);
         assert!(mtime(&root).is_some());
+    }
+
+    #[test]
+    fn save_normalizes_legacy_board_version() {
+        let root = temp_root("board-version-normalize");
+        let mut board = Board {
+            version: 1,
+            ..Board::default()
+        };
+        create_task(&mut board, "Version", "", TaskStatus::Todo);
+
+        save(&root, &board).unwrap();
+
+        let loaded = load(&root);
+        assert_eq!(loaded.version, BOARD_VERSION);
     }
 
     #[test]

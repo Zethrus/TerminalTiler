@@ -128,17 +128,7 @@ pub fn claim_task<'a>(
     id: &str,
     assignee: impl Into<String>,
 ) -> Result<&'a Task, BoardError> {
-    let task = task_mut(board, id)?;
-    task.status = TaskStatus::InProgress;
-    task.assignee = Some(assignee.into());
-    let now = now_epoch_secs();
-    task.claimed_at = Some(now);
-    task.heartbeat_at = Some(now);
-    task.stale_after_secs = Some(DEFAULT_STALE_AFTER_SECS);
-    task.paused = None;
-    task.review = TaskReviewMetadata::default();
-    task.updated_at = now;
-    Ok(&*task)
+    Ok(start_work(board, id, assignee, None, false)?.task)
 }
 
 /// Start or resume active work with soft-lease conflict checks.
@@ -311,6 +301,7 @@ pub fn unblock_task<'a>(
 }
 
 /// Move owned work to review, append a handoff summary, and clear active lifecycle state.
+#[allow(dead_code)]
 pub fn ready_for_review<'a>(
     board: &'a mut Board,
     id: &str,
@@ -331,6 +322,37 @@ pub fn ready_for_review<'a>(
     clear_active_lease(task);
     task.updated_at = now;
     Ok(&*task)
+}
+
+/// Move owned work to review, appending a handoff summary and rejecting fresh
+/// active leases owned by another assignee unless `force` is explicit.
+pub fn ready_for_review_as<'a>(
+    board: &'a mut Board,
+    id: &str,
+    summary: impl Into<String>,
+    author: Option<String>,
+    force: bool,
+) -> Result<LifecycleTransition<&'a Task>, BoardError> {
+    let now = now_epoch_secs();
+    let task = task_mut(board, id)?;
+    let actor = author.as_deref().unwrap_or("agent");
+    let mut warnings = Vec::new();
+    guard_active_owner(task, actor, now, force, &mut warnings)?;
+    let summary = summary.into();
+    if !summary.trim().is_empty() {
+        task.notes.push(TaskNote {
+            text: summary,
+            author,
+            created_at: now,
+        });
+    }
+    task.status = TaskStatus::InReview;
+    clear_active_lease(task);
+    task.updated_at = now;
+    Ok(LifecycleTransition {
+        task: &*task,
+        warnings,
+    })
 }
 
 /// Append a structured review note/verdict while leaving the task in In Review.
@@ -361,6 +383,7 @@ pub fn submit_review<'a>(
 }
 
 /// Mark a task complete, optionally appending a closing progress note.
+#[allow(dead_code)]
 pub fn complete_task<'a>(
     board: &'a mut Board,
     id: &str,
@@ -380,6 +403,71 @@ pub fn complete_task<'a>(
         });
     }
     Ok(&*task)
+}
+
+/// Mark owned work complete. If another assignee has a fresh active lease, callers must
+/// either identify as that assignee or set `force`.
+pub fn complete_task_as<'a>(
+    board: &'a mut Board,
+    id: &str,
+    note: Option<String>,
+    author: Option<String>,
+    force: bool,
+) -> Result<LifecycleTransition<&'a Task>, BoardError> {
+    let task = task_mut(board, id)?;
+    let now = now_epoch_secs();
+    let actor = author.as_deref().unwrap_or("agent");
+    let mut warnings = Vec::new();
+    guard_active_owner(task, actor, now, force, &mut warnings)?;
+    task.status = TaskStatus::Complete;
+    task.updated_at = now;
+    let note_author = author.or_else(|| task.assignee.clone());
+    clear_active_lifecycle(task);
+    if let Some(text) = note.filter(|text| !text.trim().is_empty()) {
+        task.notes.push(TaskNote {
+            text,
+            author: note_author,
+            created_at: now,
+        });
+    }
+    Ok(LifecycleTransition {
+        task: &*task,
+        warnings,
+    })
+}
+
+/// Move a task to a new column on behalf of an MCP/agent caller. Fresh active leases
+/// owned by someone else require `force`.
+pub fn set_status_as<'a>(
+    board: &'a mut Board,
+    id: &str,
+    status: TaskStatus,
+    actor: impl Into<String>,
+    force: bool,
+) -> Result<LifecycleTransition<&'a Task>, BoardError> {
+    let actor = actor.into();
+    let now = now_epoch_secs();
+    let task = task_mut(board, id)?;
+    let mut warnings = Vec::new();
+    guard_active_owner(task, &actor, now, force, &mut warnings)?;
+    task.status = status;
+    if matches!(status, TaskStatus::Todo | TaskStatus::InProgress) {
+        task.review = TaskReviewMetadata::default();
+    }
+    if status == TaskStatus::InReview {
+        clear_active_lease(task);
+    }
+    if matches!(
+        status,
+        TaskStatus::Todo | TaskStatus::Complete | TaskStatus::Cancelled
+    ) {
+        clear_active_lifecycle(task);
+    }
+    task.updated_at = now;
+    Ok(LifecycleTransition {
+        task: &*task,
+        warnings,
+    })
 }
 
 /// Record that a code review was dispatched for a task. The task remains/enters In Review.
@@ -902,6 +990,74 @@ mod tests {
         assert_eq!(
             forced.warnings,
             vec!["force took over fresh active task from 'bob'"]
+        );
+    }
+
+    #[test]
+    fn legacy_claim_blocks_fresh_takeover_without_force() {
+        let mut board = Board::default();
+        let id = create_task(&mut board, "Legacy claim guard", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        claim_task(&mut board, &id, "alice").unwrap();
+        let conflict = claim_task(&mut board, &id, "bob").unwrap_err();
+
+        assert!(matches!(conflict, BoardError::OwnershipConflict(_)));
+        assert_eq!(
+            get_task(&board, &id).unwrap().assignee.as_deref(),
+            Some("alice")
+        );
+    }
+
+    #[test]
+    fn owned_review_and_completion_block_non_owner_but_allow_force_and_stale() {
+        let mut board = Board::default();
+        let id = create_task(&mut board, "Owned transitions", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        start_work(&mut board, &id, "alice", Some(60), false).unwrap();
+        let review_conflict =
+            ready_for_review_as(&mut board, &id, "done", Some("bob".into()), false).unwrap_err();
+        assert!(matches!(review_conflict, BoardError::OwnershipConflict(_)));
+
+        let complete_conflict = complete_task_as(
+            &mut board,
+            &id,
+            Some("done".into()),
+            Some("bob".into()),
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            complete_conflict,
+            BoardError::OwnershipConflict(_)
+        ));
+
+        let task = board.tasks.iter_mut().find(|task| task.id == id).unwrap();
+        task.heartbeat_at = Some(now_epoch_secs().saturating_sub(120));
+        let stale_handoff =
+            ready_for_review_as(&mut board, &id, "handoff", Some("bob".into()), false).unwrap();
+        assert_eq!(stale_handoff.task.status, TaskStatus::InReview);
+        assert_eq!(
+            stale_handoff.warnings,
+            vec!["took over stale task from 'alice'"]
+        );
+
+        start_work(&mut board, &id, "alice", Some(60), false).unwrap();
+        let forced = complete_task_as(
+            &mut board,
+            &id,
+            Some("ship".into()),
+            Some("bob".into()),
+            true,
+        )
+        .unwrap();
+        assert_eq!(forced.task.status, TaskStatus::Complete);
+        assert_eq!(
+            forced.warnings,
+            vec!["force took over fresh active task from 'alice'"]
         );
     }
 

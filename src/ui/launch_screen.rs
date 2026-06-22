@@ -28,6 +28,7 @@ use crate::storage::board_workspace_store::BoardWorkspaceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::mcp_health_panel::McpHealthPanel;
 
 #[derive(Clone, Copy, Debug)]
 enum Selection {
@@ -327,17 +328,15 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         "MCP / agent setup",
         "Connect Claude Code or Codex so agents can update this project's board through the bundled MCP server.",
     ));
-    board_agent_panel.append(
-        &gtk::Label::builder()
-            .label(format!(
-                "Server: {}",
-                agent_config::mcp_binary_path().display()
-            ))
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::Middle)
-            .css_classes(["status-chip", "settings-meta-chip", "board-mcp-server-chip"])
-            .build(),
-    );
+    let initial_mcp_root = board_health_project_root(&board_path_entry);
+    let board_mcp_health = Rc::new(McpHealthPanel::new(&initial_mcp_root));
+    board_agent_panel.append(&board_mcp_health.widget);
+    {
+        let board_mcp_health = board_mcp_health.clone();
+        board_path_entry.connect_changed(move |entry| {
+            board_mcp_health.refresh(&board_health_project_root(entry));
+        });
+    }
     let board_agent_status = gtk::Label::builder()
         .halign(gtk::Align::Start)
         .wrap(true)
@@ -374,12 +373,16 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     {
         let board_path_entry = board_path_entry.clone();
         let board_agent_status = board_agent_status.clone();
+        let board_mcp_health = board_mcp_health.clone();
         board_claude_button.connect_clicked(move |_| {
             board_agent_status.set_visible(true);
             match validate_workspace_path(&board_path_entry)
                 .map_err(|message| message.to_string())
-                .and_then(|project_root| agent_config::connect_claude(&project_root))
-            {
+                .and_then(|project_root| {
+                    let result = agent_config::connect_claude(&project_root);
+                    board_mcp_health.refresh(&project_root);
+                    result
+                }) {
                 Ok(path) => {
                     board_agent_status.remove_css_class("error-text");
                     board_agent_status
@@ -395,12 +398,16 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     {
         let board_path_entry = board_path_entry.clone();
         let board_agent_status = board_agent_status.clone();
+        let board_mcp_health = board_mcp_health.clone();
         board_codex_button.connect_clicked(move |_| {
             board_agent_status.set_visible(true);
             match validate_workspace_path(&board_path_entry)
                 .map_err(|message| message.to_string())
-                .and_then(|project_root| agent_config::connect_codex(&project_root))
-            {
+                .and_then(|project_root| {
+                    let result = agent_config::connect_codex(&project_root);
+                    board_mcp_health.refresh(&project_root);
+                    result
+                }) {
                 Ok(path) => {
                     board_agent_status.remove_css_class("error-text");
                     board_agent_status
@@ -1305,6 +1312,8 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         let board_step_names = board_step_names.clone();
         let board_step_index = board_step_index.clone();
         let sync_board_wizard_navigation = sync_board_wizard_navigation.clone();
+        let board_path_entry = board_path_entry.clone();
+        let board_mcp_health = board_mcp_health.clone();
         move |target_index| {
             let last_index = board_step_names.len().saturating_sub(1);
             let current_index = board_step_index.get().min(last_index);
@@ -1316,6 +1325,9 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
             };
 
             board_step_index.set(next_index);
+            if board_step_names[next_index] == "board-agent" {
+                board_mcp_health.refresh(&board_health_project_root(&board_path_entry));
+            }
             if next_index == current_index {
                 sync_board_wizard_navigation();
                 return;
@@ -3768,6 +3780,17 @@ fn prompt_for_workspace_directory(path_entry: &gtk::Entry) {
 fn validate_workspace_path(path_entry: &gtk::Entry) -> Result<PathBuf, String> {
     let text = path_entry.text();
     validate_workspace_path_text(text.as_str())
+}
+
+fn board_health_project_root(path_entry: &gtk::Entry) -> PathBuf {
+    validate_workspace_path(path_entry).unwrap_or_else(|_| {
+        let raw_path = path_entry.text().trim().to_string();
+        if raw_path.is_empty() {
+            PathBuf::from(".")
+        } else {
+            PathBuf::from(raw_path)
+        }
+    })
 }
 
 fn preset_workspace_root(path_entry: &gtk::Entry) -> Option<PathBuf> {

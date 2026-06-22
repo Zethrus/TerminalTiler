@@ -64,6 +64,8 @@ pub mod launch_screen;
 ))]
 pub mod layout_tree;
 #[cfg(target_os = "linux")]
+pub(crate) mod mcp_health_panel;
+#[cfg(target_os = "linux")]
 pub(crate) mod new_task_dialog;
 #[cfg(any(
     target_os = "linux",

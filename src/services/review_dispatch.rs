@@ -50,6 +50,7 @@ pub struct HeadlessReviewProcessSpec {
 
 /// Move a task to `status` and, when that status is `InReview`, claim one pending
 /// automatic review under the same board lock.
+#[allow(dead_code)]
 pub fn set_status_and_claim_auto_review(
     project_root: &Path,
     task_id: &str,
@@ -87,6 +88,7 @@ pub fn set_status_and_claim_auto_review(
 /// Mark work ready for review and claim one pending automatic review under the same board
 /// lock. This is the MCP lifecycle helper path equivalent of moving to In Review, with
 /// handoff note and lifecycle cleanup handled by the board service.
+#[allow(dead_code)]
 pub fn ready_for_review_and_claim_auto_review(
     project_root: &Path,
     task_id: &str,

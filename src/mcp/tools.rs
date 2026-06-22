@@ -8,8 +8,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::model::board::{Task, TaskStatus, now_epoch_secs};
-use crate::services::{board as board_service, review_dispatch};
+use crate::model::board::{Board, Task, TaskStatus, now_epoch_secs};
+use crate::services::{agent_config, board as board_service, review_dispatch};
 use crate::storage::board_store;
 
 /// Successful MCP tool output. `text` keeps backwards-compatible human-readable content;
@@ -37,13 +37,22 @@ pub fn list_json() -> Vec<Value> {
     vec![
         tool(
             "list_tasks",
-            "List board tasks, optionally filtered to a single column (status).",
+            "List board tasks, optionally filtered by column, assignee, blocked state, or availability.",
             json!({
                 "type": "object",
                 "properties": {
-                    "status": { "type": "string", "enum": status_enum, "description": "Optional column filter." }
+                    "status": { "type": "string", "enum": status_enum, "description": "Optional column filter." },
+                    "available_only": { "type": "boolean", "description": "Only tasks that are not blocked and have no active fresh assignee lease." },
+                    "assignee": { "type": "string", "description": "Only tasks assigned to this id." },
+                    "blocked": { "type": "boolean", "description": "Filter blocked or unblocked tasks." }
                 }
             }),
+        ),
+        tool_with_output(
+            "get_board_summary",
+            "Return compact board counts, lifecycle counts, and recommended next available tasks.",
+            json!({ "type": "object", "properties": {} }),
+            board_summary_output_schema(),
         ),
         tool(
             "get_task",
@@ -53,6 +62,21 @@ pub fn list_json() -> Vec<Value> {
                 "properties": { "id": { "type": "string" } },
                 "required": ["id"]
             }),
+        ),
+        tool(
+            "get_task_brief",
+            "Get a concise markdown brief for one task, including lifecycle, notes, knowledge, and attachments.",
+            json!({
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"]
+            }),
+        ),
+        tool_with_output(
+            "diagnose_mcp",
+            "Inspect TerminalTiler MCP setup for this project without changing configuration.",
+            json!({ "type": "object", "properties": {} }),
+            mcp_diagnostics_output_schema(),
         ),
         tool(
             "create_task",
@@ -74,7 +98,8 @@ pub fn list_json() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
-                    "assignee": { "type": "string", "description": "Defaults to 'agent'." }
+                    "assignee": { "type": "string", "description": "Defaults to 'agent'." },
+                    "force": { "type": "boolean", "description": "Take over a fresh active lease intentionally." }
                 },
                 "required": ["id"]
             }),
@@ -86,7 +111,10 @@ pub fn list_json() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
-                    "status": { "type": "string", "enum": status_enum.clone() }
+                    "status": { "type": "string", "enum": status_enum.clone() },
+                    "assignee": { "type": "string", "description": "Caller/owner id; defaults to 'agent'." },
+                    "author": { "type": "string", "description": "Alias for assignee for status changes." },
+                    "force": { "type": "boolean", "description": "Override a fresh active lease owned by someone else." }
                 },
                 "required": ["id", "status"]
             }),
@@ -98,7 +126,10 @@ pub fn list_json() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
-                    "note": { "type": "string" }
+                    "note": { "type": "string" },
+                    "author": { "type": "string", "description": "Caller/owner id; defaults to 'agent'." },
+                    "assignee": { "type": "string", "description": "Alias for author." },
+                    "force": { "type": "boolean", "description": "Override a fresh active lease owned by someone else." }
                 },
                 "required": ["id"]
             }),
@@ -241,7 +272,9 @@ pub fn list_json() -> Vec<Value> {
                 "properties": {
                     "id": { "type": "string" },
                     "summary": { "type": "string" },
-                    "author": { "type": "string" }
+                    "author": { "type": "string" },
+                    "assignee": { "type": "string", "description": "Alias for author." },
+                    "force": { "type": "boolean", "description": "Override a fresh active lease owned by someone else." }
                 },
                 "required": ["id", "summary"]
             }),
@@ -274,7 +307,10 @@ pub fn call(
 ) -> Result<ToolCallOutput, ToolCallError> {
     match name {
         "list_tasks" => list_tasks(arguments, project_root),
+        "get_board_summary" => get_board_summary(arguments, project_root),
         "get_task" => get_task(arguments, project_root),
+        "get_task_brief" => get_task_brief(arguments, project_root),
+        "diagnose_mcp" => diagnose_mcp(arguments, project_root),
         "create_task" => create_task(arguments, project_root),
         "claim_task" => claim_task(arguments, project_root),
         "update_task_status" => update_task_status(arguments, project_root),
@@ -296,12 +332,52 @@ pub fn call(
 
 fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let board = board_store::load(project_root);
-    let tasks: Vec<&Task> = match optional_str(arguments, "status") {
-        Some(raw) => board_service::tasks_by_status(&board, parse_status(raw)?),
-        None => board.tasks.iter().collect(),
-    };
+    let status = optional_str(arguments, "status")
+        .map(parse_status)
+        .transpose()?;
+    let assignee = optional_str(arguments, "assignee");
+    let blocked = optional_bool(arguments, "blocked");
+    let available_only = optional_bool(arguments, "available_only").unwrap_or(false);
+    let now = now_epoch_secs();
+    let tasks: Vec<&Task> = board
+        .tasks
+        .iter()
+        .filter(|task| status.is_none_or(|status| task.status == status))
+        .filter(|task| assignee.is_none_or(|assignee| task.assignee.as_deref() == Some(assignee)))
+        .filter(|task| blocked.is_none_or(|blocked| task.blocked.is_some() == blocked))
+        .filter(|task| {
+            !available_only
+                || (task.status == TaskStatus::Todo
+                    && task.blocked.is_none()
+                    && (!has_fresh_active_lease(task, now)))
+        })
+        .collect();
     let text = serde_json::to_string_pretty(&tasks).map_err(json_error)?;
-    Ok(output(text, Some(json!({ "tasks": tasks }))))
+    Ok(output(
+        text,
+        Some(json!({
+            "ok": true,
+            "action": "list_tasks",
+            "tasks": tasks,
+            "count": tasks.len(),
+            "filters": {
+                "status": status.map(|status| status.wire_id()),
+                "available_only": available_only,
+                "assignee": assignee,
+                "blocked": blocked,
+            }
+        })),
+    ))
+}
+
+fn get_board_summary(
+    _arguments: &Value,
+    project_root: &Path,
+) -> Result<ToolCallOutput, ToolCallError> {
+    let board = board_store::load(project_root);
+    let structured = board_summary_value(&board);
+    let text = board_summary_text(&board);
+    Ok(output(text, Some(structured)))
 }
 
 fn get_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
@@ -310,7 +386,56 @@ fn get_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, To
     let task = board_service::get_task(&board, id)
         .ok_or_else(|| text_error(format!("no task with id '{id}'")))?;
     let text = serde_json::to_string_pretty(task).map_err(json_error)?;
-    Ok(output(text, Some(json!({ "task": task }))))
+    Ok(output(
+        text,
+        Some(json!({ "ok": true, "action": "get_task", "task_id": id, "task": task })),
+    ))
+}
+
+fn get_task_brief(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
+    let id = require_str(arguments, "id")?;
+    let board = board_store::load(project_root);
+    let task = board_service::get_task(&board, id)
+        .ok_or_else(|| text_error(format!("no task with id '{id}'")))?;
+    let text = task_brief_markdown(task);
+    Ok(output(
+        text.clone(),
+        Some(
+            json!({ "ok": true, "action": "get_task_brief", "task_id": id, "task": task, "brief": text }),
+        ),
+    ))
+}
+
+fn diagnose_mcp(_arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
+    let diagnostics = agent_config::diagnose_mcp(project_root);
+    let text = format!(
+        "Project: {}\nBoard: {} ({})\nMCP binary: {} ({})\nClaude: {} ({})\nCodex: {} ({})",
+        diagnostics.project_root.display(),
+        diagnostics.board_path.display(),
+        if diagnostics.board_exists {
+            "present"
+        } else {
+            "missing"
+        },
+        diagnostics.mcp_binary_path.display(),
+        if diagnostics.mcp_binary_exists {
+            "present"
+        } else {
+            "PATH lookup or missing"
+        },
+        diagnostics.claude_config_path.display(),
+        diagnostics.claude_detail,
+        diagnostics
+            .codex_config_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unresolved>".to_string()),
+        diagnostics.codex_detail,
+    );
+    Ok(output(
+        text,
+        Some(json!({ "ok": true, "action": "diagnose_mcp", "diagnostics": diagnostics.to_json() })),
+    ))
 }
 
 fn create_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
@@ -333,14 +458,20 @@ fn create_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
 fn claim_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let assignee = optional_str(arguments, "assignee").unwrap_or("agent");
+    let force = optional_bool(arguments, "force").unwrap_or(false);
     let task = board_store::update(project_root, |board| {
-        board_service::claim_task(board, id, assignee).cloned()
+        board_service::start_work(board, id, assignee, None, force).map(|transition| {
+            board_service::LifecycleTransition {
+                task: transition.task.clone(),
+                warnings: transition.warnings,
+            }
+        })
     })
     .map_err(io_error)?
     .map_err(board_error)?;
     Ok(output(
         format!("Claimed task {id} as '{assignee}' (In Progress)."),
-        Some(task_structured("claim_task", &task, Vec::new())),
+        Some(task_structured("claim_task", &task.task, task.warnings)),
     ))
 }
 
@@ -350,8 +481,25 @@ fn update_task_status(
 ) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let status = parse_status(require_str(arguments, "status")?)?;
-    let review = review_dispatch::set_status_and_claim_auto_review(project_root, id, status)
-        .map_err(text_error)?;
+    let actor = actor_argument(arguments);
+    let force = optional_bool(arguments, "force").unwrap_or(false);
+    let transition = board_store::update(
+        project_root,
+        |board| -> Result<board_service::LifecycleTransition<Task>, board_service::BoardError> {
+            let transition = board_service::set_status_as(board, id, status, actor.clone(), force)?;
+            Ok(board_service::LifecycleTransition {
+                task: transition.task.clone(),
+                warnings: transition.warnings,
+            })
+        },
+    )
+    .map_err(io_error)?
+    .map_err(board_error)?;
+    let review = if status == TaskStatus::InReview {
+        claim_auto_review(project_root, id).map_err(text_error)?
+    } else {
+        None
+    };
     let mut message = format!("Moved task {id} to {}.", status.column_title());
     let mut review_started = None;
     if let Some(selection) = review {
@@ -376,7 +524,9 @@ fn update_task_status(
         }
     }
     let board = board_store::load(project_root);
-    let task = board_service::get_task(&board, id).cloned();
+    let task = board_service::get_task(&board, id)
+        .cloned()
+        .or(Some(transition.task));
     Ok(output(
         message,
         Some(json!({
@@ -385,6 +535,7 @@ fn update_task_status(
             "task_id": id,
             "status": status.wire_id(),
             "task": task,
+            "warnings": transition.warnings,
             "review_started": review_started,
         })),
     ))
@@ -393,14 +544,21 @@ fn update_task_status(
 fn complete_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let note = optional_str(arguments, "note").map(str::to_string);
+    let author = Some(actor_argument(arguments));
+    let force = optional_bool(arguments, "force").unwrap_or(false);
     let task = board_store::update(project_root, |board| {
-        board_service::complete_task(board, id, note).cloned()
+        board_service::complete_task_as(board, id, note, author, force).map(|transition| {
+            board_service::LifecycleTransition {
+                task: transition.task.clone(),
+                warnings: transition.warnings,
+            }
+        })
     })
     .map_err(io_error)?
     .map_err(board_error)?;
     Ok(output(
         format!("Completed task {id}."),
-        Some(task_structured("complete_task", &task, Vec::new())),
+        Some(task_structured("complete_task", &task.task, task.warnings)),
     ))
 }
 
@@ -576,14 +734,27 @@ fn ready_for_review(
 ) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let summary = require_str(arguments, "summary")?.to_string();
-    let author = optional_str(arguments, "author").map(str::to_string);
-    let review = review_dispatch::ready_for_review_and_claim_auto_review(
+    let author = Some(actor_argument(arguments));
+    let force = optional_bool(arguments, "force").unwrap_or(false);
+    let transition = board_store::update(
         project_root,
-        id,
-        summary,
-        author.clone(),
+        |board| -> Result<board_service::LifecycleTransition<Task>, board_service::BoardError> {
+            let transition = board_service::ready_for_review_as(
+                board,
+                id,
+                summary.clone(),
+                author.clone(),
+                force,
+            )?;
+            Ok(board_service::LifecycleTransition {
+                task: transition.task.clone(),
+                warnings: transition.warnings,
+            })
+        },
     )
-    .map_err(text_error)?;
+    .map_err(io_error)?
+    .map_err(board_error)?;
+    let review = claim_auto_review(project_root, id).map_err(text_error)?;
     let mut message = format!("Moved task {id} to In Review with handoff summary.");
     let mut review_started = None;
     if let Some(selection) = review {
@@ -610,8 +781,8 @@ fn ready_for_review(
     let board = board_store::load(project_root);
     let task = board_service::get_task(&board, id)
         .cloned()
-        .ok_or_else(|| text_error(format!("no task with id '{id}'")))?;
-    let mut structured = task_structured("ready_for_review", &task, Vec::new());
+        .unwrap_or(transition.task);
+    let mut structured = task_structured("ready_for_review", &task, transition.warnings);
     structured["review_started"] = review_started.unwrap_or(Value::Null);
     Ok(output(message, Some(structured)))
 }
@@ -639,7 +810,7 @@ fn parse_status(raw: &str) -> Result<TaskStatus, ToolCallError> {
 }
 
 fn tool(name: &str, description: &str, input_schema: Value) -> Value {
-    json!({ "name": name, "description": description, "inputSchema": input_schema })
+    tool_with_output(name, description, input_schema, basic_output_schema())
 }
 
 fn tool_with_output(
@@ -653,6 +824,17 @@ fn tool_with_output(
         "description": description,
         "inputSchema": input_schema,
         "outputSchema": output_schema,
+    })
+}
+
+fn basic_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "action": { "type": "string" }
+        },
+        "required": ["ok", "action"]
     })
 }
 
@@ -671,6 +853,295 @@ fn lifecycle_output_schema() -> Value {
         },
         "required": ["ok", "action", "task_id", "warnings"]
     })
+}
+
+fn board_summary_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "action": { "type": "string" },
+            "total": { "type": "integer", "minimum": 0 },
+            "by_status": {
+                "type": "object",
+                "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "lifecycle": {
+                "type": "object",
+                "properties": {
+                    "active": { "type": "integer", "minimum": 0 },
+                    "stale": { "type": "integer", "minimum": 0 },
+                    "blocked": { "type": "integer", "minimum": 0 },
+                    "in_review": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["active", "stale", "blocked", "in_review"]
+            },
+            "available": { "type": "array", "items": { "type": "object" } }
+        },
+        "required": ["ok", "action", "total", "by_status", "lifecycle", "available"]
+    })
+}
+
+fn mcp_diagnostics_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "action": { "type": "string" },
+            "diagnostics": {
+                "type": "object",
+                "properties": {
+                    "project_root": { "type": "string" },
+                    "board_path": { "type": "string" },
+                    "board_exists": { "type": "boolean" },
+                    "mcp_binary_path": { "type": "string" },
+                    "mcp_binary_exists": { "type": "boolean" },
+                    "claude": {
+                        "type": "object",
+                        "properties": {
+                            "config_path": { "type": "string" },
+                            "configured": { "type": "boolean" },
+                            "detail": { "type": "string" }
+                        },
+                        "required": ["config_path", "configured", "detail"]
+                    },
+                    "codex": {
+                        "type": "object",
+                        "properties": {
+                            "config_path": { "type": ["string", "null"] },
+                            "configured": { "type": "boolean" },
+                            "detail": { "type": "string" }
+                        },
+                        "required": ["config_path", "configured", "detail"]
+                    }
+                },
+                "required": [
+                    "project_root",
+                    "board_path",
+                    "board_exists",
+                    "mcp_binary_path",
+                    "mcp_binary_exists",
+                    "claude",
+                    "codex"
+                ]
+            }
+        },
+        "required": ["ok", "action", "diagnostics"]
+    })
+}
+
+pub fn board_summary_value(board: &Board) -> Value {
+    let now = now_epoch_secs();
+    let mut by_status = serde_json::Map::new();
+    for status in TaskStatus::ALL {
+        by_status.insert(
+            status.wire_id().to_string(),
+            json!(
+                board
+                    .tasks
+                    .iter()
+                    .filter(|task| task.status == status)
+                    .count()
+            ),
+        );
+    }
+    let active = board
+        .tasks
+        .iter()
+        .filter(|task| has_fresh_active_lease(task, now))
+        .count();
+    let stale = board
+        .tasks
+        .iter()
+        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
+        .count();
+    let blocked = board
+        .tasks
+        .iter()
+        .filter(|task| task.blocked.is_some())
+        .count();
+    let review = board
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InReview)
+        .count();
+    let available: Vec<&Task> = board
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.status == TaskStatus::Todo
+                && task.blocked.is_none()
+                && !has_fresh_active_lease(task, now)
+        })
+        .take(5)
+        .collect();
+
+    json!({
+        "ok": true,
+        "action": "get_board_summary",
+        "total": board.tasks.len(),
+        "by_status": by_status,
+        "lifecycle": {
+            "active": active,
+            "stale": stale,
+            "blocked": blocked,
+            "in_review": review,
+        },
+        "available": available,
+    })
+}
+
+pub fn board_summary_text(board: &Board) -> String {
+    let now = now_epoch_secs();
+    let active = board
+        .tasks
+        .iter()
+        .filter(|task| has_fresh_active_lease(task, now))
+        .count();
+    let stale = board
+        .tasks
+        .iter()
+        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
+        .count();
+    let blocked = board
+        .tasks
+        .iter()
+        .filter(|task| task.blocked.is_some())
+        .count();
+    let review = board
+        .tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InReview)
+        .count();
+    let mut lines = vec![
+        format!("Total tasks: {}", board.tasks.len()),
+        format!("Lifecycle: {active} active, {stale} stale, {blocked} blocked, {review} in review"),
+    ];
+    for status in TaskStatus::ALL {
+        let count = board
+            .tasks
+            .iter()
+            .filter(|task| task.status == status)
+            .count();
+        lines.push(format!("{}: {count}", status.column_title()));
+    }
+    lines.join("\n")
+}
+
+pub fn task_brief_markdown(task: &Task) -> String {
+    let mut text = format!(
+        "# {} ({})\n\n- id: `{}`\n- status: `{}`\n",
+        task.title,
+        task.status.column_title(),
+        task.id,
+        task.status.wire_id()
+    );
+    if let Some(assignee) = task.assignee.as_deref() {
+        text.push_str(&format!("- assignee: `{assignee}`\n"));
+    }
+    if let Some(claimed_at) = task.claimed_at {
+        text.push_str(&format!("- claimed_at: {claimed_at}\n"));
+    }
+    if let Some(heartbeat_at) = task.heartbeat_at {
+        text.push_str(&format!("- heartbeat_at: {heartbeat_at}\n"));
+    }
+    for indicator in board_service::lifecycle_indicators(task, now_epoch_secs()) {
+        text.push_str(&format!("- lifecycle: {indicator}\n"));
+    }
+    if !task.description.trim().is_empty() {
+        text.push_str("\n## Description\n\n");
+        text.push_str(task.description.trim());
+        text.push('\n');
+    }
+    if let Some(instructions) = task.additional_instructions.as_deref() {
+        text.push_str("\n## Additional instructions\n\n");
+        text.push_str(instructions.trim());
+        text.push('\n');
+    }
+    if let Some(blocked) = task.blocked.as_ref() {
+        text.push_str("\n## Blocked\n\n");
+        text.push_str(&blocked.reason);
+        text.push('\n');
+    }
+    if !task.notes.is_empty() {
+        text.push_str("\n## Notes\n\n");
+        for note in &task.notes {
+            let author = note.author.as_deref().unwrap_or("unknown");
+            text.push_str(&format!(
+                "- [{}] {}: {}\n",
+                note.created_at, author, note.text
+            ));
+        }
+    }
+    if !task.knowledge.is_empty() {
+        text.push_str("\n## Knowledge\n\n");
+        for entry in &task.knowledge {
+            text.push_str(&format!("- **{}**: {}\n", entry.title, entry.content));
+        }
+    }
+    if !task.attachments.is_empty() {
+        text.push_str("\n## Attachments\n\n");
+        for attachment in &task.attachments {
+            text.push_str(&format!("- {} (`{}`)\n", attachment.name, attachment.path));
+        }
+    }
+    text
+}
+
+pub fn workflow_guide_markdown() -> String {
+    [
+        "# TerminalTiler Kanban MCP workflow",
+        "",
+        "1. Call `get_board_summary` or `list_tasks` to find work.",
+        "2. Call `start_work` or legacy `claim_task` with your `assignee` before editing.",
+        "3. Send `heartbeat_task`, `add_task_note`, and `add_task_knowledge` while working.",
+        "4. Call `ready_for_review` with `author` and a handoff summary when implementation is ready.",
+        "5. Reviewers call `submit_review`; only call `complete_task` when explicitly closing the task.",
+        "",
+        "Fresh active leases owned by another assignee return an `ownership_conflict` tool error unless `force` is set.",
+    ]
+    .join("\n")
+}
+
+fn actor_argument(arguments: &Value) -> String {
+    optional_str(arguments, "author")
+        .or_else(|| optional_str(arguments, "assignee"))
+        .unwrap_or("agent")
+        .to_string()
+}
+
+fn has_fresh_active_lease(task: &Task, now: u64) -> bool {
+    task.heartbeat_at.or(task.claimed_at).is_some()
+        && task.paused.is_none()
+        && !board_service::task_is_stale(task, now)
+}
+
+fn claim_auto_review(
+    project_root: &Path,
+    task_id: &str,
+) -> Result<Option<review_dispatch::ReviewSelection>, String> {
+    board_store::update(
+        project_root,
+        |board| -> Result<Option<review_dispatch::ReviewSelection>, board_service::BoardError> {
+            let task = board_service::get_task(board, task_id)
+                .cloned()
+                .ok_or_else(|| board_service::BoardError::TaskNotFound(task_id.to_string()))?;
+            if !task.needs_auto_review() {
+                return Ok(None);
+            }
+
+            let reviewer = board_service::reviewer_for_task(board, &task);
+            let yolo = board.automation.yolo_default;
+            let task = board_service::start_review(board, task_id, reviewer)?.clone();
+            Ok(Some(review_dispatch::ReviewSelection {
+                task,
+                reviewer,
+                yolo,
+            }))
+        },
+    )
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 fn require_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolCallError> {
@@ -781,4 +1252,48 @@ fn task_structured(action: &str, task: &Task, warnings: Vec<String>) -> Value {
         "warnings": warnings,
         "conflict": null,
     })
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_definition<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool definition for {name}"))
+    }
+
+    fn required_fields(schema: &Value) -> Vec<&str> {
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn summary_and_diagnostic_tools_advertise_matching_output_schemas() {
+        let tools = list_json();
+        let summary_schema = &tool_definition(&tools, "get_board_summary")["outputSchema"];
+        let summary_required = required_fields(summary_schema);
+        assert!(summary_required.contains(&"total"));
+        assert!(summary_required.contains(&"by_status"));
+        assert!(summary_required.contains(&"lifecycle"));
+        assert!(summary_required.contains(&"available"));
+        assert!(!summary_required.contains(&"task_id"));
+        assert!(!summary_required.contains(&"warnings"));
+
+        let diagnostics_schema = &tool_definition(&tools, "diagnose_mcp")["outputSchema"];
+        let diagnostics_required = required_fields(diagnostics_schema);
+        assert!(diagnostics_required.contains(&"diagnostics"));
+        assert!(!diagnostics_required.contains(&"task_id"));
+        assert!(!diagnostics_required.contains(&"warnings"));
+
+        let lifecycle_schema = &tool_definition(&tools, "start_work")["outputSchema"];
+        let lifecycle_required = required_fields(lifecycle_schema);
+        assert!(lifecycle_required.contains(&"task_id"));
+        assert!(lifecycle_required.contains(&"warnings"));
+    }
 }

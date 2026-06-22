@@ -11,6 +11,7 @@ use crate::services::agent_config;
 use crate::storage::board_store;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
+use crate::ui::mcp_health_panel::McpHealthPanel;
 
 /// Present the connect dialog for a project root.
 pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
@@ -37,17 +38,8 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
             .build(),
     );
 
-    content.append(
-        &gtk::Label::builder()
-            .label(format!(
-                "Server: {}",
-                agent_config::mcp_binary_path().display()
-            ))
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::Middle)
-            .css_classes(["status-chip", "settings-meta-chip"])
-            .build(),
-    );
+    let mcp_health = Rc::new(McpHealthPanel::new(&project_root));
+    content.append(&mcp_health.widget);
 
     let status_label = gtk::Label::builder()
         .label("")
@@ -206,6 +198,8 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
 
     let report = Rc::new({
         let status_label = status_label.clone();
+        let mcp_health = mcp_health.clone();
+        let project_root = project_root.clone();
         move |result: Result<PathBuf, String>| {
             status_label.set_visible(true);
             match result {
@@ -218,6 +212,7 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
                     status_label.set_text(&format!("Could not connect: {message}"));
                 }
             }
+            mcp_health.refresh(&project_root);
         }
     });
 
