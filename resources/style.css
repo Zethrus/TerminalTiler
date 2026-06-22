@@ -4814,8 +4814,40 @@ window.theme-light .new-task-dialog-window dropdown.dialog-select button {
   border: 1px solid alpha(@tt_white, 0.06);
 }
 
+.kanban-lifecycle-active {
+  color: @tt_ink;
+  background: @tt_amber;
+}
+
+.kanban-lifecycle-paused {
+  color: @tt_text;
+  background: alpha(@tt_white, 0.12);
+}
+
+.kanban-lifecycle-stale {
+  color: @tt_ink;
+  background: @tt_copper_hi;
+}
+
+.kanban-lifecycle-blocked {
+  color: #fff7f7;
+  background: alpha(@tt_danger, 0.72);
+}
+
+.task-detail-lifecycle-panel {
+  padding: 10px;
+  border-radius: 10px;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+}
+
+.task-detail-lifecycle-line {
+  color: alpha(@tt_white, 0.70);
+}
+
 window.theme-light .task-detail-knowledge-entry,
-window.theme-light .task-detail-attachment-row {
+window.theme-light .task-detail-attachment-row,
+window.theme-light .task-detail-lifecycle-panel {
   background: alpha(@tt_white, 0.7);
   border-color: rgba(17, 18, 22, 0.10);
 }

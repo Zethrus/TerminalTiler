@@ -70,6 +70,7 @@ const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
 const BOARD_VIEW_RS: &str = include_str!("../src/ui/board_view.rs");
 const BOARD_CHROME_RS: &str = include_str!("../src/ui/board_chrome.rs");
+const TASK_DETAIL_DIALOG_RS: &str = include_str!("../src/ui/task_detail_dialog.rs");
 const AGENT_ORCHESTRATOR_RS: &str = include_str!("../src/services/agent_orchestrator.rs");
 const BOARD_WORKSPACE_RS: &str = include_str!("../src/model/board_workspace.rs");
 const BOARD_WORKSPACE_STORE_RS: &str = include_str!("../src/storage/board_workspace_store.rs");
@@ -3220,6 +3221,38 @@ fn kanban_board_styling_extends_existing_design_system() {
             && STYLE_CSS.contains(".error-text {"),
         "board dialog inputs, GtkDropDown selects, and error text must be styled, not raw GTK defaults"
     );
+}
+
+#[test]
+fn kanban_lifecycle_metadata_has_lightweight_ui_indicators() {
+    assert!(
+        BOARD_CHROME_RS.contains("lifecycle_indicators(task")
+            && BOARD_CHROME_RS.contains("kanban-lifecycle-blocked")
+            && BOARD_CHROME_RS.contains("kanban-lifecycle-stale")
+            && BOARD_CHROME_RS.contains("kanban-lifecycle-paused")
+            && BOARD_CHROME_RS.contains("kanban-lifecycle-active"),
+        "Kanban cards should expose blocked/stale/paused/active lifecycle indicators"
+    );
+    assert!(
+        TASK_DETAIL_DIALOG_RS.contains("append_lifecycle_metadata")
+            && TASK_DETAIL_DIALOG_RS.contains("task-detail-lifecycle-panel")
+            && TASK_DETAIL_DIALOG_RS.contains("claimed_at")
+            && TASK_DETAIL_DIALOG_RS.contains("heartbeat_at")
+            && TASK_DETAIL_DIALOG_RS.contains("blocked"),
+        "task detail should show lifecycle metadata without adding a board column"
+    );
+    for class in [
+        ".kanban-lifecycle-blocked",
+        ".kanban-lifecycle-stale",
+        ".kanban-lifecycle-paused",
+        ".kanban-lifecycle-active",
+        ".task-detail-lifecycle-panel",
+    ] {
+        assert!(
+            STYLE_CSS.contains(class),
+            "lifecycle indicator CSS hook {class} should be styled"
+        );
+    }
 }
 
 #[test]

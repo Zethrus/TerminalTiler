@@ -9,6 +9,7 @@ use adw::prelude::*;
 
 use crate::model::agent_run::AgentRun;
 use crate::model::board::{Task, TaskStatus};
+use crate::services::board as board_service;
 
 /// One Kanban column: header with a live count badge plus a scrollable card list.
 pub(crate) struct BoardColumnChrome {
@@ -156,16 +157,22 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
     if !task.attachments.is_empty() {
         indicators.push(format!("📎 {}", task.attachments.len()));
     }
+    for indicator in
+        board_service::lifecycle_indicators(task, crate::model::board::now_epoch_secs())
+    {
+        indicators.push(format!("● {indicator}"));
+    }
     if !indicators.is_empty() {
         let indicator_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(6)
             .build();
         for text in indicators {
+            let lifecycle_class = lifecycle_indicator_class(&text);
             indicator_row.append(
                 &gtk::Label::builder()
                     .label(text)
-                    .css_classes(["status-chip", "kanban-card-indicator"])
+                    .css_classes(["status-chip", "kanban-card-indicator", lifecycle_class])
                     .build(),
             );
         }
@@ -183,6 +190,20 @@ pub(crate) fn build_board_card(task: &Task) -> BoardCardChrome {
     BoardCardChrome {
         widget: card,
         actions,
+    }
+}
+
+fn lifecycle_indicator_class(text: &str) -> &'static str {
+    if text.contains("blocked") {
+        "kanban-lifecycle-blocked"
+    } else if text.contains("paused") {
+        "kanban-lifecycle-paused"
+    } else if text.contains("stale") {
+        "kanban-lifecycle-stale"
+    } else if text.contains("active") {
+        "kanban-lifecycle-active"
+    } else {
+        "kanban-lifecycle-neutral"
     }
 }
 

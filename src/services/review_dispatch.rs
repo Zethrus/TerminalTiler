@@ -84,6 +84,40 @@ pub fn set_status_and_claim_auto_review(
     .map_err(|error| error.to_string())
 }
 
+/// Mark work ready for review and claim one pending automatic review under the same board
+/// lock. This is the MCP lifecycle helper path equivalent of moving to In Review, with
+/// handoff note and lifecycle cleanup handled by the board service.
+pub fn ready_for_review_and_claim_auto_review(
+    project_root: &Path,
+    task_id: &str,
+    summary: String,
+    author: Option<String>,
+) -> Result<Option<ReviewSelection>, String> {
+    board_store::update(
+        project_root,
+        |board| -> Result<Option<ReviewSelection>, board_service::BoardError> {
+            board_service::ready_for_review(board, task_id, summary.clone(), author.clone())?;
+            let task = board_service::get_task(board, task_id)
+                .cloned()
+                .ok_or_else(|| board_service::BoardError::TaskNotFound(task_id.to_string()))?;
+            if !task.needs_auto_review() {
+                return Ok(None);
+            }
+
+            let reviewer = board_service::reviewer_for_task(board, &task);
+            let yolo = board.automation.yolo_default;
+            let task = board_service::start_review(board, task_id, reviewer)?.clone();
+            Ok(Some(ReviewSelection {
+                task,
+                reviewer,
+                yolo,
+            }))
+        },
+    )
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
+}
+
 /// Claim a pending review for the visible UI path. `force` keeps the existing manual
 /// retry behavior; automatic calls pass `false` and are duplicate-gated by metadata.
 pub fn claim_pending_review(
@@ -219,7 +253,7 @@ fn build_headless_review_prompt(agent: AgentKind, task: &Task) -> String {
         prompt.push_str(description);
     }
     prompt.push_str(&format!(
-        " Your current working directory is the configured project root for this board. Inspect only this project/worktree for issues related to the task. Use the terminaltiler MCP tools to call add_task_note with author \"{}-reviewer\" and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
+        " Your current working directory is the configured project root for this board. Inspect only this project/worktree for issues related to the task. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
         agent.assignee_id()
     ));
     prompt

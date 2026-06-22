@@ -13,21 +13,22 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 /// MCP protocol revision this server implements.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
 /// Server identity reported during `initialize`.
 pub const SERVER_NAME: &str = "terminaltiler";
 
 /// Guidance returned to the agent so it knows how to work the board.
 const INSTRUCTIONS: &str = "\
 This server exposes a TerminalTiler Kanban board for the current project. Workflow: call \
-`list_tasks` with status \"todo\" to find work; `claim_task` to move a task to In Progress \
-and record yourself as the assignee; use `add_task_note` to report progress as you go; and \
-when implementation is ready, call `update_task_status` to move the task to \"in_review\" \
-before completion so the board can trigger review. Use `complete_task` only when the user \
-explicitly asks you to mark the task Complete. Always claim a task before starting and post \
-a note or status update when finished so the user can follow along. As you work, gather the \
-relevant docs, APIs, and code context for the task and record each useful finding with \
-`add_task_knowledge` (a short title plus the detail) so the knowledge accrues on the board.";
+`list_tasks` with status \"todo\" to find work; `start_work` to claim or resume a task \
+with lifecycle-aware soft leases; use `heartbeat_task` plus `add_task_note` and \
+`add_task_knowledge` to report progress and durable findings as you work; when \
+implementation is ready, call `ready_for_review` with a handoff summary so the task moves \
+to \"in_review\" and the duplicate-gated review path can run; reviewers should call \
+`submit_review` with a verdict and leave completion manual. Existing tools such as \
+`claim_task` and `update_task_status` remain available for compatibility, but lifecycle \
+helpers are preferred. Use `complete_task` only when the user explicitly asks you to mark \
+the task Complete.";
 
 /// Run the stdio server loop until stdin closes. This is the binary's entire job.
 pub fn run_stdio() {
@@ -161,14 +162,26 @@ fn tools_call_result(params: &Value, project_root: &Path) -> Value {
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
 
     match tools::call(name, &arguments, project_root) {
-        Ok(text) => json!({
-            "content": [{ "type": "text", "text": text }],
-            "isError": false
-        }),
-        Err(message) => json!({
-            "content": [{ "type": "text", "text": message }],
-            "isError": true
-        }),
+        Ok(output) => {
+            let mut result = json!({
+                "content": [{ "type": "text", "text": output.text }],
+                "isError": false
+            });
+            if let Some(structured) = output.structured {
+                result["structuredContent"] = structured;
+            }
+            result
+        }
+        Err(error) => {
+            let mut result = json!({
+                "content": [{ "type": "text", "text": error.text }],
+                "isError": true
+            });
+            if let Some(structured) = error.structured {
+                result["structuredContent"] = structured;
+            }
+            result
+        }
     }
 }
 
@@ -274,9 +287,11 @@ mod tests {
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert!(response["result"]["capabilities"]["tools"].is_object());
         let instructions = response["result"]["instructions"].as_str().unwrap();
-        assert!(instructions.contains("update_task_status"));
+        assert!(instructions.contains("start_work"));
+        assert!(instructions.contains("ready_for_review"));
+        assert!(instructions.contains("submit_review"));
         assert!(instructions.contains("in_review"));
-        assert!(instructions.contains("before completion"));
+        assert!(instructions.contains("complete_task"));
     }
 
     #[test]
@@ -307,9 +322,26 @@ mod tests {
             "update_task_status",
             "complete_task",
             "add_task_note",
+            "add_task_knowledge",
+            "start_work",
+            "heartbeat_task",
+            "pause_work",
+            "release_task",
+            "reassign_task",
+            "block_task",
+            "unblock_task",
+            "ready_for_review",
+            "submit_review",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
+        let start_work = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "start_work")
+            .unwrap();
+        assert!(start_work["outputSchema"].is_object());
     }
 
     #[test]
@@ -363,7 +395,105 @@ mod tests {
             Some(crate::model::agent_run::AgentKind::Claude)
         );
         assert!(root.join(".mcp.json").exists());
-        crate::services::review_dispatch::set_test_disable_headless_review_spawn(false);
+    }
+
+    #[test]
+    fn lifecycle_tools_return_structured_content_and_conflicts() {
+        let root = temp_root();
+        call_tool(
+            &root,
+            "create_task",
+            json!({ "title": "Lifecycle via MCP" }),
+        );
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+
+        let started = call_tool(
+            &root,
+            "start_work",
+            json!({ "id": task_id, "assignee": "alice", "stale_after_secs": 60 }),
+        );
+        assert_eq!(started["isError"], false);
+        assert_eq!(started["structuredContent"]["ok"], true);
+        assert_eq!(started["structuredContent"]["task_id"], task_id);
+        assert_eq!(
+            started["structuredContent"]["lifecycle"]["assignee"],
+            "alice"
+        );
+
+        let conflict = call_tool(
+            &root,
+            "start_work",
+            json!({ "id": task_id, "assignee": "bob" }),
+        );
+        assert_eq!(conflict["isError"], true);
+        assert_eq!(conflict["structuredContent"]["ok"], false);
+        assert_eq!(
+            conflict["structuredContent"]["conflict"]["current_assignee"],
+            "alice"
+        );
+
+        let heartbeat = call_tool(
+            &root,
+            "heartbeat_task",
+            json!({ "id": task_id, "assignee": "alice", "note": "progress" }),
+        );
+        assert_eq!(heartbeat["isError"], false);
+        assert_eq!(heartbeat["structuredContent"]["action"], "heartbeat_task");
+    }
+
+    #[test]
+    fn ready_for_review_triggers_one_review_and_submit_review_stays_in_review() {
+        crate::services::review_dispatch::set_test_disable_headless_review_spawn(true);
+        let root = temp_root();
+        call_tool(&root, "create_task", json!({ "title": "Ready helper" }));
+        let task_id = crate::storage::board_store::load(&root).tasks[0].id.clone();
+        call_tool(
+            &root,
+            "start_work",
+            json!({ "id": task_id, "assignee": "codex" }),
+        );
+
+        let ready = call_tool(
+            &root,
+            "ready_for_review",
+            json!({ "id": task_id, "summary": "Implemented", "author": "codex" }),
+        );
+        assert_eq!(ready["isError"], false);
+        assert_eq!(ready["structuredContent"]["action"], "ready_for_review");
+        assert_eq!(
+            ready["structuredContent"]["task"]["status"],
+            crate::model::board::TaskStatus::InReview.wire_id()
+        );
+        assert_eq!(
+            ready["structuredContent"]["task"]["claimed_at"],
+            Value::Null
+        );
+        assert!(ready["structuredContent"]["review_started"].is_object());
+
+        let second = call_tool(
+            &root,
+            "ready_for_review",
+            json!({ "id": task_id, "summary": "Still ready", "author": "codex" }),
+        );
+        assert_eq!(second["isError"], false);
+        assert_eq!(second["structuredContent"]["review_started"], Value::Null);
+
+        let reviewed = call_tool(
+            &root,
+            "submit_review",
+            json!({ "id": task_id, "verdict": "changes_requested", "summary": "Fix edge case", "author": "codex-reviewer" }),
+        );
+        assert_eq!(reviewed["isError"], false);
+        assert_eq!(
+            reviewed["structuredContent"]["task"]["status"],
+            crate::model::board::TaskStatus::InReview.wire_id()
+        );
+
+        let board = crate::storage::board_store::load(&root);
+        let task = &board.tasks[0];
+        assert_eq!(task.status, crate::model::board::TaskStatus::InReview);
+        assert_eq!(task.review.attempts, 1);
+        assert!(task.latest_note().unwrap().contains("changes_requested"));
     }
 
     #[test]
@@ -392,7 +522,7 @@ mod tests {
                         &root,
                     )
                     .unwrap();
-                    assert!(result.contains("Added note"));
+                    assert!(result.text.contains("Added note"));
                 })
             })
             .collect::<Vec<_>>();

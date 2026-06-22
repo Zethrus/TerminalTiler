@@ -171,7 +171,7 @@ fn build_agent_command(
     options: AgentRunOptions,
 ) -> String {
     let prompt = match options.kind {
-        AgentRunKind::Implementation => build_implementation_prompt(project_root, task),
+        AgentRunKind::Implementation => build_implementation_prompt(project_root, agent, task),
         AgentRunKind::Review => build_review_prompt(project_root, agent, task),
     };
 
@@ -183,7 +183,7 @@ fn build_agent_command(
     parts.join(" ")
 }
 
-fn build_implementation_prompt(project_root: &Path, task: &Task) -> String {
+fn build_implementation_prompt(project_root: &Path, agent: AgentKind, task: &Task) -> String {
     let mut prompt = format!(
         "You are working on TerminalTiler Kanban task {id} titled \"{title}\".",
         id = task.id,
@@ -200,12 +200,15 @@ fn build_implementation_prompt(project_root: &Path, task: &Task) -> String {
          for this task and record each useful finding by calling add_task_knowledge (a short \
          title plus the detail).",
     );
-    prompt.push_str(
-        " Use the terminaltiler MCP tools: call claim_task to mark it In Progress, \
-         add_task_note to report progress, and when implementation is ready for review call \
-         update_task_status with status \"in_review\". Do not mark the task Complete; \
-         completion remains a manual board decision after review.",
-    );
+    prompt.push_str(&format!(
+        " Use the terminaltiler MCP lifecycle tools with launched-agent assignee \"{assignee}\": \
+         call start_work with assignee \"{assignee}\" to claim or resume it, call \
+         heartbeat_task with assignee \"{assignee}\" and add_task_note to report progress, \
+         and when implementation is ready for review call ready_for_review with author \"{assignee}\" \
+         and a handoff summary. Do not mark the task Complete; completion remains a manual \
+         board decision after review.",
+        assignee = agent.assignee_id()
+    ));
     prompt
 }
 
@@ -222,7 +225,7 @@ fn build_review_prompt(project_root: &Path, agent: AgentKind, task: &Task) -> St
     }
     append_task_context(&mut prompt, project_root, task);
     prompt.push_str(&format!(
-        " Inspect the current worktree/branch for issues related to this task. Use the terminaltiler MCP tools to call add_task_note with author \"{}-reviewer\" and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
+        " Inspect the current worktree/branch for issues related to this task. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
         agent.assignee_id()
     ));
     prompt
@@ -280,11 +283,31 @@ mod tests {
         );
         assert!(command.starts_with("claude '"));
         assert!(command.contains("Fix it'\\''s bug"));
-        assert!(command.contains("update_task_status"));
-        assert!(command.contains("in_review"));
+        assert!(command.contains("start_work"));
+        assert!(command.contains("start_work with assignee \"claude\""));
+        assert!(command.contains("heartbeat_task with assignee \"claude\""));
+        assert!(command.contains("ready_for_review"));
+        assert!(command.contains("ready_for_review with author \"claude\""));
         assert!(command.contains("Do not mark the task Complete"));
         // Auto-gather directive is always present on implementation runs.
         assert!(command.contains("add_task_knowledge"));
+    }
+
+    #[test]
+    fn implementation_prompt_uses_launched_agent_assignee_for_lifecycle_tools() {
+        let mut board = crate::model::board::Board::default();
+        let task = create_task(&mut board, "Lease-safe work", "", TaskStatus::Todo).clone();
+
+        let command = build_agent_command(
+            Path::new("/tmp/project"),
+            AgentKind::Codex,
+            &task,
+            AgentRunOptions::implementation(false),
+        );
+        assert!(command.contains("launched-agent assignee \"codex\""));
+        assert!(command.contains("start_work with assignee \"codex\""));
+        assert!(command.contains("heartbeat_task with assignee \"codex\""));
+        assert!(command.contains("ready_for_review with author \"codex\""));
     }
 
     #[test]
@@ -357,7 +380,7 @@ mod tests {
         );
         assert!(command.starts_with("codex '"));
         assert!(command.contains("Run a code review"));
-        assert!(command.contains("add_task_note"));
+        assert!(command.contains("submit_review"));
         assert!(command.contains("codex-reviewer"));
         assert!(command.contains("Leave the task in In Review"));
         assert!(command.contains("do not call complete_task"));

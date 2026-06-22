@@ -106,6 +106,7 @@ fn build_status_chip(task: &Task) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .halign(gtk::Align::Start)
+        .spacing(6)
         .build();
     row.append(
         &gtk::Label::builder()
@@ -113,7 +114,37 @@ fn build_status_chip(task: &Task) -> gtk::Box {
             .css_classes(["status-chip", "task-detail-status-chip"])
             .build(),
     );
+    if let Some(assignee) = task.assignee.as_deref() {
+        row.append(
+            &gtk::Label::builder()
+                .label(format!("@{assignee}"))
+                .css_classes(["status-chip", "task-detail-lifecycle-chip"])
+                .build(),
+        );
+    }
+    for indicator in board_service::lifecycle_indicators(task, now_epoch_secs()) {
+        row.append(
+            &gtk::Label::builder()
+                .label(indicator)
+                .css_classes([
+                    "status-chip",
+                    "task-detail-lifecycle-chip",
+                    lifecycle_chip_class(indicator),
+                ])
+                .build(),
+        );
+    }
     row
+}
+
+fn lifecycle_chip_class(indicator: &str) -> &'static str {
+    match indicator {
+        "blocked" => "kanban-lifecycle-blocked",
+        "paused" => "kanban-lifecycle-paused",
+        "stale" => "kanban-lifecycle-stale",
+        "active" => "kanban-lifecycle-active",
+        _ => "kanban-lifecycle-neutral",
+    }
 }
 
 fn build_tab_strip(stack: &gtk::Stack) -> gtk::Box {
@@ -222,6 +253,8 @@ fn build_instructions_tab(
         });
     }
 
+    append_lifecycle_metadata(&tab, task);
+
     // Collapsible raw description, matching the mockup's "Raw content".
     let raw = task.description.trim();
     if !raw.is_empty() {
@@ -249,6 +282,71 @@ fn build_instructions_tab(
     }
 
     tab
+}
+
+fn append_lifecycle_metadata(tab: &gtk::Box, task: &Task) {
+    let has_lifecycle = task.claimed_at.is_some()
+        || task.heartbeat_at.is_some()
+        || task.stale_after_secs.is_some()
+        || task.paused.is_some()
+        || task.blocked.is_some();
+    if !has_lifecycle {
+        return;
+    }
+
+    tab.append(&dialog_form::field_label("Lifecycle"));
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(4)
+        .css_classes(["task-detail-lifecycle-panel"])
+        .build();
+    if let Some(claimed_at) = task.claimed_at {
+        card.append(&lifecycle_meta_line(
+            "Claimed",
+            format_timestamp(claimed_at),
+        ));
+    }
+    if let Some(heartbeat_at) = task.heartbeat_at {
+        card.append(&lifecycle_meta_line(
+            "Heartbeat",
+            format_timestamp(heartbeat_at),
+        ));
+    }
+    if let Some(stale_after_secs) = task.stale_after_secs {
+        card.append(&lifecycle_meta_line(
+            "Stale after",
+            format!("{stale_after_secs}s"),
+        ));
+    }
+    if let Some(paused) = task.paused.as_ref() {
+        let reason = paused.reason.as_deref().unwrap_or("No reason provided");
+        card.append(&lifecycle_meta_line(
+            "Paused",
+            format!("{} · {reason}", format_timestamp(paused.paused_at)),
+        ));
+    }
+    if let Some(blocked) = task.blocked.as_ref() {
+        let category = blocked.category.as_deref().unwrap_or("uncategorized");
+        card.append(&lifecycle_meta_line(
+            "Blocked",
+            format!(
+                "{} · {category} · {}",
+                format_timestamp(blocked.blocked_at),
+                blocked.reason
+            ),
+        ));
+    }
+    tab.append(&card);
+}
+
+fn lifecycle_meta_line(label: &str, value: String) -> gtk::Label {
+    gtk::Label::builder()
+        .label(format!("{label}: {value}"))
+        .halign(gtk::Align::Start)
+        .wrap(true)
+        .selectable(true)
+        .css_classes(["field-hint", "task-detail-lifecycle-line"])
+        .build()
 }
 
 fn build_knowledge_tab(task: &Task) -> gtk::Box {

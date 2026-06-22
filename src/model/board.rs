@@ -119,6 +119,29 @@ fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
+/// Paused ownership metadata. Paused tasks keep their column and assignee, but no longer
+/// advertise an active soft lease.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPausedMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    pub paused_at: u64,
+}
+
+/// Machine-readable blocker metadata. Blocked state is intentionally metadata-only so the
+/// five board columns remain stable and legacy boards continue to load unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskBlockedMetadata {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    pub blocked_at: u64,
+}
+
 /// A single progress note appended to a task (typically by an agent via MCP).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskNote {
@@ -172,6 +195,21 @@ pub struct Task {
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
+    /// When the current assignee first claimed or resumed active work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_at: Option<u64>,
+    /// Last active-work heartbeat from the assignee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_at: Option<u64>,
+    /// Per-task soft-lease threshold. Missing values use the service default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_after_secs: Option<u64>,
+    /// Paused ownership metadata. A paused task can still have an assignee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<TaskPausedMetadata>,
+    /// Blocker metadata. This does not affect the task's column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<TaskBlockedMetadata>,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -310,6 +348,11 @@ mod tests {
         assert_eq!(task.additional_instructions, None);
         assert!(task.knowledge.is_empty());
         assert!(task.attachments.is_empty());
+        assert_eq!(task.claimed_at, None);
+        assert_eq!(task.heartbeat_at, None);
+        assert_eq!(task.stale_after_secs, None);
+        assert_eq!(task.paused, None);
+        assert_eq!(task.blocked, None);
         assert!(!task.has_instructions());
     }
 }
