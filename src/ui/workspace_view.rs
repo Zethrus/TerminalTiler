@@ -1123,6 +1123,7 @@ pub fn build_with_layout_change_handler(
     restore_startup_overrides: RestoreStartupOverrideMap,
     stats: StatsRecorder,
     on_layout_changed: Rc<dyn Fn(LayoutNode)>,
+    on_open_board: Rc<dyn Fn()>,
 ) -> WorkspaceView {
     let layout_state = Rc::new(RefCell::new(preset.layout.clone()));
 
@@ -1133,6 +1134,7 @@ pub fn build_with_layout_change_handler(
         path: workspace_root.display().to_string(),
         pane_groups: saved_groups_for_tiles(&preset.layout.tile_specs()),
         controls_sensitive: true,
+        board_available: crate::storage::board_store::board_exists(workspace_root),
     });
     let url_entry = summary.url_entry.clone();
     let url_reload_button = summary.url_reload_button.clone();
@@ -1140,6 +1142,7 @@ pub fn build_with_layout_change_handler(
     let runbook_button = summary.runbook_button.clone();
     let add_terminal_tile_button = summary.add_terminal_tile_button.clone();
     let add_web_tile_button = summary.add_web_tile_button.clone();
+    let open_board_button = summary.open_board_button.clone();
     let broadcast_state = summary.broadcast_state.clone();
     let broadcast_selector = summary.broadcast_selector.clone();
     let broadcast_entry = summary.broadcast_entry.clone();
@@ -1224,6 +1227,11 @@ pub fn build_with_layout_change_handler(
         add_web_tile_button.connect_clicked(move |_| {
             let _ = runtime.add_web_tile();
         });
+    }
+
+    {
+        let on_open_board = on_open_board.clone();
+        open_board_button.connect_clicked(move |_| (on_open_board)());
     }
 
     let broadcast_target = Rc::new(RefCell::new(BroadcastTarget::Off));

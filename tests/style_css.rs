@@ -1372,8 +1372,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         source_contains(
             WORKSPACE_CHROME_RS,
-            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&toolbar_divider());\n    summary.append(&broadcast_group);\n    summary.append(&toolbar_divider());\n    summary.append(&tiles_group);\n    summary.append(&toolbar_divider());\n    summary.append(&runbook_group);\n    summary.append(&path_label);"
+            "summary.append(&name_label);\n    summary.append(&alert_button);\n    summary.append(&toolbar_divider());\n    summary.append(&broadcast_group);\n    summary.append(&toolbar_divider());\n    summary.append(&tiles_group);\n    summary.append(&toolbar_divider());\n    summary.append(&runbook_group);\n    summary.append(&board_divider);\n    summary.append(&board_group);\n    summary.append(&path_label);"
         ) && WORKSPACE_PREVIEW_RS.contains("controls_sensitive: true")
+            && WORKSPACE_PREVIEW_RS.contains("board_available: false")
             && WORKSPACE_VIEW_RS.contains("controls_sensitive: true"),
         "Windows GTK workspace preview summary should keep the same grouped toolbar ordering as Linux GTK workspaces via shared chrome"
     );

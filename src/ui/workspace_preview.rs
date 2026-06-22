@@ -1361,6 +1361,9 @@ fn build_workspace_summary(
         path: tab.workspace_root.display().to_string(),
         pane_groups: saved_groups(tab),
         controls_sensitive: true,
+        // Session previews do not own the app-level board-tab opener, so keep the
+        // shared chrome from exposing a clickable "Open Board" no-op here.
+        board_available: false,
     });
 
     let current_url = first_web_tile_url(tab);

@@ -32,6 +32,11 @@ pub fn board_path(project_root: &Path) -> PathBuf {
     board_dir(project_root).join(BOARD_FILE_NAME)
 }
 
+/// Whether a board was previously set up for this project (its `board.json` exists on disk).
+pub fn board_exists(project_root: &Path) -> bool {
+    board_path(project_root).exists()
+}
+
 /// Load the board for a project. A missing file yields an empty board; a corrupt file is
 /// preserved aside and replaced with a fresh empty board (mirroring `SessionStore`).
 pub fn load(project_root: &Path) -> Board {

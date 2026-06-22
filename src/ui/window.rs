@@ -743,6 +743,7 @@ struct RestoreSessionContext {
     asset_store: Rc<AssetStore>,
     preference_store: Rc<PreferenceStore>,
     session_persistence: SessionPersistence,
+    open_board_tab: VoidHandle,
 }
 
 impl Clone for RestoreSessionContext {
@@ -758,6 +759,7 @@ impl Clone for RestoreSessionContext {
             asset_store: self.asset_store.clone(),
             preference_store: self.preference_store.clone(),
             session_persistence: self.session_persistence.clone(),
+            open_board_tab: self.open_board_tab.clone(),
         }
     }
 }
@@ -1666,6 +1668,7 @@ fn present_with_initial_workspace(
         let asset_store = asset_store.clone();
         let preference_store_for_workspace = preference_store.clone();
         let session_persistence_for_workspace = session_persistence.clone();
+        let open_board_tab_for_workspace = open_board_tab.clone();
 
         *show_workspace_in_tab.borrow_mut() =
             Some(Box::new(move |tab_id, preset, workspace_root| {
@@ -1692,6 +1695,14 @@ fn present_with_initial_workspace(
                         Rc::new(move |next_layout| {
                             apply_workspace_layout_change(&layout_target, next_layout);
                             session_persistence.save_soon("workspace layout changed");
+                        })
+                    },
+                    {
+                        let open_board_tab = open_board_tab_for_workspace.clone();
+                        Rc::new(move || {
+                            if let Some(open) = open_board_tab.borrow().as_ref() {
+                                open();
+                            }
                         })
                     },
                 );
@@ -3256,6 +3267,7 @@ fn present_with_initial_workspace(
         let open_assets_manager = open_assets_manager.clone();
         let open_companion_dialog = open_companion_dialog.clone();
         let preference_store = preference_store.clone();
+        let open_board_tab = open_board_tab.clone();
         let open_about_dialog: Rc<dyn Fn()> = {
             let window = window.clone();
             Rc::new({
@@ -3748,6 +3760,7 @@ fn present_with_initial_workspace(
         let restore_mode = preference_store.load().default_restore_mode;
         let session_persistence_for_restore = session_persistence.clone();
         let startup_restore_suppression_for_restore = startup_restore_suppression.clone();
+        let open_board_tab_for_restore = open_board_tab.clone();
 
         glib::idle_add_local_once(move || {
             let restore_context = RestoreSessionContext {
@@ -3761,6 +3774,7 @@ fn present_with_initial_workspace(
                 asset_store: asset_store.clone(),
                 preference_store: preference_store.clone(),
                 session_persistence: session_persistence_for_restore.clone(),
+                open_board_tab: open_board_tab_for_restore.clone(),
             };
             match restore_mode {
                 RestoreLaunchMode::Prompt => prompt_session_resume(
@@ -4702,6 +4716,14 @@ fn restore_saved_session(
                 Rc::new(move |next_layout| {
                     apply_workspace_layout_change(&layout_target, next_layout);
                     session_persistence.save_soon("workspace layout changed");
+                })
+            },
+            {
+                let open_board_tab = context.open_board_tab.clone();
+                Rc::new(move || {
+                    if let Some(open) = open_board_tab.borrow().as_ref() {
+                        open();
+                    }
                 })
             },
         );

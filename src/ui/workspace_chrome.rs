@@ -8,6 +8,9 @@ pub(crate) struct WorkspaceSummaryInput<'a> {
     pub(crate) path: String,
     pub(crate) pane_groups: Vec<String>,
     pub(crate) controls_sensitive: bool,
+    /// Whether this project already has a Kanban board on disk. Gates the "Open Board"
+    /// header button so it only appears for projects with a previously set-up board.
+    pub(crate) board_available: bool,
 }
 
 pub(crate) struct WorkspaceSummaryChrome {
@@ -23,6 +26,7 @@ pub(crate) struct WorkspaceSummaryChrome {
     pub(crate) url_reload_button: gtk::Button,
     pub(crate) runbook_selector: gtk::ComboBoxText,
     pub(crate) runbook_button: gtk::Button,
+    pub(crate) open_board_button: gtk::Button,
     pub(crate) path_label: gtk::Label,
 }
 
@@ -254,6 +258,12 @@ pub(crate) fn build_workspace_summary_chrome(
     let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
     runbook_button.set_sensitive(input.controls_sensitive);
 
+    // Jumps to this project's Kanban board. Only shown when a board was previously set
+    // up (its `.terminaltiler/board.json` exists), so terminal-only projects stay clean.
+    let open_board_button =
+        icons::labeled_button("Open Board", icon_name::LAYOUT, &["flat", "surface-button"]);
+    open_board_button.set_sensitive(input.controls_sensitive);
+
     let path_label = gtk::Label::builder()
         .label(input.path)
         .halign(gtk::Align::End)
@@ -280,6 +290,14 @@ pub(crate) fn build_workspace_summary_chrome(
     runbook_group.append(&runbook_selector);
     runbook_group.append(&runbook_button);
 
+    // Own group + leading divider, both gated on board availability so a hidden button
+    // never leaves a dangling separator in the bar.
+    let board_divider = toolbar_divider();
+    board_divider.set_visible(input.board_available);
+    let board_group = toolbar_group();
+    board_group.append(&open_board_button);
+    board_group.set_visible(input.board_available);
+
     summary.append(&name_label);
     summary.append(&alert_button);
     summary.append(&toolbar_divider());
@@ -288,6 +306,8 @@ pub(crate) fn build_workspace_summary_chrome(
     summary.append(&tiles_group);
     summary.append(&toolbar_divider());
     summary.append(&runbook_group);
+    summary.append(&board_divider);
+    summary.append(&board_group);
     summary.append(&path_label);
 
     WorkspaceSummaryChrome {
@@ -303,6 +323,7 @@ pub(crate) fn build_workspace_summary_chrome(
         url_reload_button,
         runbook_selector,
         runbook_button,
+        open_board_button,
         path_label,
     }
 }
