@@ -1,4 +1,7 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod agent_config;
 #[cfg(target_os = "linux")]
 pub mod agent_orchestrator;
