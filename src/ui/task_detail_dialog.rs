@@ -52,6 +52,7 @@ pub(crate) fn present(
     let dialog = adw::Dialog::new();
     dialog.set_title("Task");
     dialog.set_content_width(520);
+    dialog.set_content_height(640);
     dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "task-detail-dialog-window");
 
     let content = gtk::Box::builder()
@@ -81,7 +82,14 @@ pub(crate) fn present(
         Some("attachments"),
     );
     content.append(&build_tab_strip(&stack));
-    content.append(&stack);
+    let stack_scroller = gtk::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .child(&stack)
+        .build();
+    content.append(&stack_scroller);
 
     content.append(&build_footer(
         window, &dialog, &task, &task_id, &on_run, &on_delete,
