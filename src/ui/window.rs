@@ -76,6 +76,7 @@ const DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT: &str =
     crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL;
 const DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT: &str =
     crate::ui::shortcuts_dialog::DEFAULT_ADD_TERMINAL_TILE_ACCEL;
+const DEFAULT_WORKSPACE_OPEN_BOARD_SHORTCUT: &str = "<Ctrl><Shift>K";
 const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 const VOICE_CAPTURE_SAFETY_CAP: Duration = Duration::from_secs(120);
 
@@ -129,6 +130,16 @@ struct WorkspaceTab {
 enum TabContent {
     LaunchDeck,
     Workspace(Box<WorkspaceState>),
+    // Retained for the tab's lifetime so the board's widgets and poller stay owned by the
+    // tab; the payload is not read back out (the widget already lives in the page shell).
+    #[allow(dead_code)]
+    Board(Box<BoardState>),
+}
+
+#[derive(Clone)]
+struct BoardState {
+    #[allow(dead_code)]
+    view: crate::ui::board_view::BoardView,
 }
 
 #[derive(Clone)]
@@ -945,6 +956,7 @@ fn present_with_initial_workspace(
     let show_workspace_in_tab: ShowWorkspaceHandle = Rc::new(RefCell::new(None));
     let refresh_launch_tabs: VoidHandle = Rc::new(RefCell::new(None));
     let add_workspace_tab: VoidHandle = Rc::new(RefCell::new(None));
+    let open_board_tab: VoidHandle = Rc::new(RefCell::new(None));
     let forced_tab_closes = Rc::new(RefCell::new(HashSet::<usize>::new()));
     let suppress_empty_replacement = Rc::new(Cell::new(false));
     let current_shortcuts = preference_store.load();
@@ -1018,6 +1030,7 @@ fn present_with_initial_workspace(
     let maximize_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let add_terminal_tile_shortcut_controller: ShortcutControllerHandle =
         Rc::new(RefCell::new(None));
+    let open_board_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let sync_close_to_background_notice: Rc<dyn Fn()> = {
         let close_to_background_notice = close_to_background_notice.clone();
         let current_close_to_background = current_close_to_background.clone();
@@ -1393,6 +1406,7 @@ fn present_with_initial_workspace(
                     .cloned()
                     .expect("active workspace tab should exist");
                 match active.content {
+                    TabContent::Board(_) => (false, None),
                     TabContent::LaunchDeck => (false, None),
                     TabContent::Workspace(workspace) => (
                         true,
@@ -1647,15 +1661,16 @@ fn present_with_initial_workspace(
                         })
                     },
                 );
-                let (page_shell, previous_runtime) = {
+                let (page_shell, previous_runtime, previous_board_view) = {
                     let mut tabs = tabs_for_workspace.borrow_mut();
                     let tab = tabs
                         .iter_mut()
                         .find(|tab| tab.id == tab_id)
                         .expect("workspace tab should exist");
-                    let previous_runtime = match &tab.content {
-                        TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-                        TabContent::LaunchDeck => None,
+                    let (previous_runtime, previous_board_view) = match &tab.content {
+                        TabContent::Workspace(workspace) => (Some(workspace.runtime.clone()), None),
+                        TabContent::Board(board) => (None, Some(board.view.clone())),
+                        TabContent::LaunchDeck => (None, None),
                     };
                     tab.subtitle = workspace_root.display().to_string();
                     tab.content = TabContent::Workspace(Box::new(WorkspaceState {
@@ -1667,11 +1682,18 @@ fn present_with_initial_workspace(
                         layout_target: layout_target.clone(),
                     }));
                     tab.workspace_root = Some(workspace_root.clone());
-                    (tab.page_shell.clone(), previous_runtime)
+                    (
+                        tab.page_shell.clone(),
+                        previous_runtime,
+                        previous_board_view,
+                    )
                 };
 
                 if let Some(runtime) = previous_runtime {
                     runtime.terminate_all("replacing workspace view");
+                }
+                if let Some(board_view) = previous_board_view {
+                    board_view.terminate_agents("replacing board view");
                 }
 
                 replace_tab_page_content(&page_shell, &built_workspace.widget);
@@ -1761,16 +1783,15 @@ fn present_with_initial_workspace(
                 return glib::Propagation::Stop;
             };
 
-            let is_workspace = {
+            let close_warning = {
                 let tabs = tabs_for_close.borrow();
                 tabs.iter()
                     .find(|tab| tab.id == tab_id)
-                    .map(|tab| matches!(tab.content, TabContent::Workspace(_)))
-                    .unwrap_or(false)
+                    .and_then(tab_close_warning)
             };
             let force_close = forced_tab_closes_for_signal.borrow_mut().remove(&tab_id);
 
-            if is_workspace && !force_close {
+            if let Some((heading, body, confirm_label)) = close_warning.filter(|_| !force_close) {
                 let view = view.clone();
                 let page = page.clone();
                 let tabs = tabs_for_close.clone();
@@ -1781,9 +1802,9 @@ fn present_with_initial_workspace(
                 let session_persistence = session_persistence_for_close.clone();
                 confirm_tab_close(
                     &window_for_close,
-                    "Close Workspace?",
-                    "Running terminal sessions in this workspace will be terminated.",
-                    "Close",
+                    heading,
+                    body,
+                    confirm_label,
                     move |confirmed| {
                         if confirmed {
                             finish_tab_close(
@@ -1949,6 +1970,24 @@ fn present_with_initial_workspace(
     );
 
     {
+        let open_board_for_shortcut = open_board_tab.clone();
+        install_shortcut_controller(
+            &window,
+            &open_board_shortcut_controller,
+            "workspace_open_board",
+            &[DEFAULT_WORKSPACE_OPEN_BOARD_SHORTCUT.to_string()],
+            move || {
+                if let Some(open) = open_board_for_shortcut.borrow().as_ref() {
+                    open();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            },
+        );
+    }
+
+    {
         let window_for_notify = window.clone();
         let title_root_for_notify = title.root.clone();
         let fullscreen_for_notify = fullscreen_button.clone();
@@ -2039,6 +2078,76 @@ fn present_with_initial_workspace(
                 add_tab();
             }
         });
+    }
+
+    {
+        let tabs_for_board = tabs.clone();
+        let active_for_board = active_tab_id.clone();
+        let next_tab_id_for_board = next_tab_id.clone();
+        let tab_view_for_board = tab_view.clone();
+        let window_for_board = window.clone();
+        let select_for_board = select_tab.clone();
+        let refresh_tab_strip_for_board = refresh_tab_strip.clone();
+
+        *open_board_tab.borrow_mut() = Some(Box::new(move || {
+            // The board is per-project, so it opens for the active workspace's root.
+            let Some((root, name, density)) = ({
+                let tabs = tabs_for_board.borrow();
+                tabs.iter()
+                    .find(|tab| tab.id == active_for_board.get())
+                    .and_then(|tab| match &tab.content {
+                        TabContent::Workspace(workspace) => {
+                            tab.workspace_root.clone().map(|root| {
+                                (
+                                    root,
+                                    workspace.preset.name.clone(),
+                                    workspace.preset.density,
+                                )
+                            })
+                        }
+                        _ => None,
+                    })
+            }) else {
+                return;
+            };
+
+            let dark = window_uses_dark_theme(&window_for_board);
+            let view = crate::ui::board_view::BoardView::new(
+                &window_for_board,
+                root.clone(),
+                &name,
+                dark,
+                density,
+            );
+
+            let tab_id = next_tab_id_for_board.get();
+            next_tab_id_for_board.set(tab_id + 1);
+            let page_shell = build_tab_page_shell();
+            replace_tab_page_content(&page_shell, &view.widget());
+            tabs_for_board.borrow_mut().push(WorkspaceTab {
+                id: tab_id,
+                default_title: format!("{name} Kanban"),
+                custom_title: None,
+                subtitle: root.display().to_string(),
+                page_shell: page_shell.clone(),
+                content: TabContent::Board(Box::new(BoardState { view })),
+                workspace_root: Some(root),
+            });
+            let tab = {
+                let tabs = tabs_for_board.borrow();
+                tabs.iter()
+                    .find(|tab| tab.id == tab_id)
+                    .cloned()
+                    .expect("new board tab should exist")
+            };
+            tab_view_for_board.append(&page_shell);
+            sync_tab_page_metadata(&tab_view_for_board, &tab);
+            refresh_tab_strip_for_board();
+            if let Some(select) = select_for_board.borrow().as_ref() {
+                select(tab_id);
+            }
+            logging::info(format!("opened kanban board tab {}", tab_id));
+        }));
     }
 
     let open_settings_dialog: Rc<dyn Fn()> = {
@@ -3314,12 +3423,11 @@ fn present_with_initial_workspace(
             return;
         }
 
-        let is_workspace = {
+        let return_warning = {
             let tabs = tabs_for_back.borrow();
             tabs.iter()
                 .find(|tab| tab.id == tab_id)
-                .map(|tab| matches!(tab.content, TabContent::Workspace(_)))
-                .unwrap_or(false)
+                .and_then(tab_return_warning)
         };
 
         let do_return = {
@@ -3335,25 +3443,29 @@ fn present_with_initial_workspace(
             let session_persistence_for_back = session_persistence_for_back.clone();
 
             move || {
-                let runtime = {
+                let (runtime, board_view) = {
                     let mut tabs = tabs_for_back.borrow_mut();
                     let Some(tab) = tabs.iter_mut().find(|tab| tab.id == tab_id) else {
                         return;
                     };
-                    let runtime = match &tab.content {
-                        TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-                        TabContent::LaunchDeck => None,
+                    let resources = match &tab.content {
+                        TabContent::Workspace(workspace) => (Some(workspace.runtime.clone()), None),
+                        TabContent::Board(board) => (None, Some(board.view.clone())),
+                        TabContent::LaunchDeck => (None, None),
                     };
                     tab.subtitle = "Launch deck".into();
                     tab.content = TabContent::LaunchDeck;
                     tab.workspace_root = None;
-                    runtime
+                    resources
                 };
 
-                logging::info(format!("returning workspace tab {} to launch deck", tab_id));
+                logging::info(format!("returning tab {} to launch deck", tab_id));
 
                 if let Some(runtime) = runtime {
                     runtime.terminate_all("returning workspace tab to templates");
+                }
+                if let Some(board_view) = board_view {
+                    board_view.terminate_agents("returning board tab to templates");
                 }
                 rebuild_launch_tab(
                     tab_id,
@@ -3376,12 +3488,12 @@ fn present_with_initial_workspace(
             }
         };
 
-        if is_workspace {
+        if let Some((heading, body, confirm_label)) = return_warning {
             dialog_chrome::confirm_destructive_action(
                 &window_for_back,
-                "Return to Templates?",
-                "Running terminal sessions in this workspace will be terminated.",
-                "Return",
+                heading,
+                body,
+                confirm_label,
                 do_return,
             );
         } else {
@@ -3449,6 +3561,7 @@ fn present_with_initial_workspace(
             tray_controller.set_window_hidden(false);
             voice_transcriber.shutdown();
             let runtimes = workspace_runtimes(&tabs_for_save);
+            let board_views = board_views(&tabs_for_save);
             session_persistence_for_window_close.save_now_capturing_history(
                 "closing application window",
                 preference_store_for_window_close.load().terminal_history_lines,
@@ -3457,6 +3570,9 @@ fn present_with_initial_workspace(
 
             for runtime in runtimes {
                 runtime.terminate_all("closing application window");
+            }
+            for board_view in board_views {
+                board_view.terminate_agents("closing application window");
             }
             glib::Propagation::Proceed
         });
@@ -3580,7 +3696,7 @@ fn tab_display_title(tab: &WorkspaceTab) -> String {
     tab.custom_title
         .clone()
         .unwrap_or_else(|| match &tab.content {
-            TabContent::LaunchDeck => tab.default_title.clone(),
+            TabContent::LaunchDeck | TabContent::Board(_) => tab.default_title.clone(),
             TabContent::Workspace(workspace) => workspace.preset.name.clone(),
         })
 }
@@ -4224,7 +4340,7 @@ fn attach_workspace_tab_to_main_window(
     let page_shell = tab.page_shell.clone();
     let runtime = match &tab.content {
         TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-        TabContent::LaunchDeck => None,
+        TabContent::LaunchDeck | TabContent::Board(_) => None,
     };
     if let Some(parent) = page_shell.parent()
         && let Ok(parent_box) = parent.downcast::<gtk::Box>()
@@ -4549,7 +4665,7 @@ fn cycle_active_workspace_density(
         let tab = tabs.iter_mut().find(|tab| tab.id == active_tab_id)?;
         let workspace = match &mut tab.content {
             TabContent::Workspace(workspace) => workspace,
-            TabContent::LaunchDeck => return None,
+            TabContent::LaunchDeck | TabContent::Board(_) => return None,
         };
         let next_density = workspace.preset.density.next();
         workspace.terminal_zoom_steps =
@@ -4588,7 +4704,7 @@ fn adjust_active_workspace_zoom(
         let tab = tabs.iter_mut().find(|tab| tab.id == active_tab_id)?;
         let workspace = match &mut tab.content {
             TabContent::Workspace(workspace) => workspace,
-            TabContent::LaunchDeck => return None,
+            TabContent::LaunchDeck | TabContent::Board(_) => return None,
         };
         let next_zoom_steps = clamp_terminal_zoom_steps(
             workspace.preset.density,
@@ -4623,7 +4739,7 @@ fn active_workspace_runtime(
         .find(|tab| tab.id == active_tab_id)
         .and_then(|tab| match &tab.content {
             TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-            TabContent::LaunchDeck => None,
+            TabContent::LaunchDeck | TabContent::Board(_) => None,
         })
 }
 
@@ -5525,6 +5641,7 @@ fn collect_session(
                     terminal_history: workspace.terminal_history.clone(),
                 }
             }),
+            TabContent::Board(_) => None,
             TabContent::LaunchDeck => None,
         })
         .collect();
@@ -5552,7 +5669,17 @@ fn workspace_runtimes(
         .iter()
         .filter_map(|tab| match &tab.content {
             TabContent::Workspace(workspace) => Some(workspace.runtime.clone()),
-            TabContent::LaunchDeck => None,
+            TabContent::LaunchDeck | TabContent::Board(_) => None,
+        })
+        .collect()
+}
+
+fn board_views(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> Vec<crate::ui::board_view::BoardView> {
+    tabs.borrow()
+        .iter()
+        .filter_map(|tab| match &tab.content {
+            TabContent::Board(board) => Some(board.view.clone()),
+            TabContent::LaunchDeck | TabContent::Workspace(_) => None,
         })
         .collect()
 }
@@ -5662,7 +5789,7 @@ fn present_detached_workspace_window(
     let title = tab_display_title(&payload.tab);
     let runtime = match &payload.tab.content {
         TabContent::Workspace(workspace) => workspace.runtime.clone(),
-        TabContent::LaunchDeck => return,
+        TabContent::LaunchDeck | TabContent::Board(_) => return,
     };
     let preset = payload.saved_tab.preset.clone();
 
@@ -5928,7 +6055,7 @@ fn finish_tab_close(
     suppress_empty_replacement: &Cell<bool>,
     session_persistence: &SessionPersistence,
 ) {
-    let (runtime, next_active_id, should_create_replacement) = {
+    let (runtime, board_view, next_active_id, should_create_replacement) = {
         let mut tabs = tabs.borrow_mut();
         let Some(index) = tabs.iter().position(|tab| tab.id == tab_id) else {
             view.close_page_finish(page, false);
@@ -5936,9 +6063,10 @@ fn finish_tab_close(
         };
 
         let removed = tabs.remove(index);
-        let runtime = match removed.content {
-            TabContent::Workspace(workspace) => Some(workspace.runtime),
-            TabContent::LaunchDeck => None,
+        let (runtime, board_view) = match removed.content {
+            TabContent::Workspace(workspace) => (Some(workspace.runtime), None),
+            TabContent::Board(board) => (None, Some(board.view)),
+            TabContent::LaunchDeck => (None, None),
         };
         let next_active_id = if tabs.is_empty() {
             None
@@ -5948,11 +6076,14 @@ fn finish_tab_close(
             Some(active_tab_id.get())
         };
 
-        (runtime, next_active_id, tabs.is_empty())
+        (runtime, board_view, next_active_id, tabs.is_empty())
     };
 
     if let Some(runtime) = runtime {
         runtime.terminate_all("closing workspace tab");
+    }
+    if let Some(board_view) = board_view {
+        board_view.terminate_agents("closing board tab");
     }
     view.close_page_finish(page, true);
     logging::info(format!("closed workspace tab {}", tab_id));
@@ -5977,10 +6108,47 @@ fn finish_tab_close(
 }
 
 fn has_active_workspace_processes(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> bool {
-    tabs.borrow().iter().any(|tab| match &tab.content {
+    tabs.borrow().iter().any(tab_has_active_processes)
+}
+
+fn tab_has_active_processes(tab: &WorkspaceTab) -> bool {
+    match &tab.content {
         TabContent::Workspace(workspace) => workspace.runtime.has_active_processes(),
+        TabContent::Board(board) => board.view.has_active_agent_processes(),
         TabContent::LaunchDeck => false,
-    })
+    }
+}
+
+fn tab_close_warning(tab: &WorkspaceTab) -> Option<(&'static str, &'static str, &'static str)> {
+    match &tab.content {
+        TabContent::Workspace(_) => Some((
+            "Close Workspace?",
+            "Running terminal sessions in this workspace will be terminated.",
+            "Close",
+        )),
+        TabContent::Board(board) if board.view.has_active_agent_processes() => Some((
+            "Close Board?",
+            "Running agent sessions in this board will be terminated.",
+            "Close",
+        )),
+        TabContent::LaunchDeck | TabContent::Board(_) => None,
+    }
+}
+
+fn tab_return_warning(tab: &WorkspaceTab) -> Option<(&'static str, &'static str, &'static str)> {
+    match &tab.content {
+        TabContent::Workspace(_) => Some((
+            "Return to Templates?",
+            "Running terminal sessions in this workspace will be terminated.",
+            "Return",
+        )),
+        TabContent::Board(board) if board.view.has_active_agent_processes() => Some((
+            "Return to Templates?",
+            "Running agent sessions in this board will be terminated.",
+            "Return",
+        )),
+        TabContent::LaunchDeck | TabContent::Board(_) => None,
+    }
 }
 
 fn linux_session_registry() -> &'static Mutex<LinuxSessionRegistry> {
@@ -6071,6 +6239,9 @@ fn force_quit_application(
     );
     for runtime in workspace_runtimes(tabs) {
         runtime.terminate_all("force quitting application window");
+    }
+    for board_view in board_views(tabs) {
+        board_view.terminate_agents("force quitting application window");
     }
 
     window.set_visible(false);

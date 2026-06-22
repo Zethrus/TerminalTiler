@@ -3,6 +3,8 @@
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod about_dialog;
+#[cfg(target_os = "linux")]
+pub(crate) mod agent_setup_dialog;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
@@ -18,6 +20,10 @@ pub(crate) mod appearance;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod assets_manager;
+#[cfg(target_os = "linux")]
+pub(crate) mod board_chrome;
+#[cfg(target_os = "linux")]
+pub mod board_view;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
@@ -50,6 +56,8 @@ pub mod launch_screen;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub mod layout_tree;
+#[cfg(target_os = "linux")]
+pub(crate) mod new_task_dialog;
 #[cfg(any(
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")

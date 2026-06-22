@@ -5,6 +5,7 @@ mod dropped_paths;
 pub mod extension;
 pub mod gtk_shell;
 mod logging;
+pub mod mcp;
 mod model;
 pub mod open_core;
 mod platform;

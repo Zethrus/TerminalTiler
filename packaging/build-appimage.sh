@@ -43,6 +43,8 @@ rm -rf "$APPDIR"
 mkdir -p "$APP_PREFIX/bin" "$APP_PREFIX/share/hover-icons" "$APP_PREFIX/share/applications" "$APP_PREFIX/share/icons/hicolor/scalable/apps" "$APP_PREFIX/share/metainfo"
 
 cp "$TARGET_BIN" "$APP_PREFIX/bin/terminaltiler-bin"
+# Bundle the Kanban MCP server next to the app binary so agents need no extra install.
+cp "$TARGET_DIR/release/terminaltiler-mcp" "$APP_PREFIX/bin/terminaltiler-mcp"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_PREFIX/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_PREFIX/bin/terminaltiler"
 DESKTOP_FILE="$APP_PREFIX/share/applications/app.terminaltiler.desktop"

@@ -4480,3 +4480,138 @@ window.theme-light .voice-hud-status {
 window.theme-light .voice-hud-transcript {
   color: rgba(17, 94, 89, 0.86);
 }
+
+/* Kanban board — per-project task board (shares config-panel + card chrome) */
+.kanban-board {
+  background: transparent;
+}
+
+.kanban-board-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: @tt_text;
+}
+
+.kanban-columns {
+  min-height: 0;
+}
+
+.kanban-column {
+  border-radius: 0;
+  padding: 12px;
+  min-width: 0;
+}
+
+.kanban-column-header {
+  padding-bottom: 8px;
+  border-bottom: 1px solid alpha(@tt_white, 0.08);
+}
+
+.kanban-column-title {
+  color: @tt_text;
+}
+
+.kanban-count-badge {
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: @tt_text;
+  background: alpha(@tt_white, 0.10);
+  border: 1px solid alpha(@tt_white, 0.08);
+  border-radius: 0;
+}
+
+.kanban-status-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 0;
+  background: alpha(@tt_white, 0.45);
+}
+
+.kanban-status-dot.kanban-status-in-progress {
+  background: @tt_amber;
+}
+
+.kanban-status-dot.kanban-status-in-review {
+  background: @tt_copper_hi;
+}
+
+.kanban-status-dot.kanban-status-complete {
+  background: rgb(122, 198, 122);
+}
+
+.kanban-status-dot.kanban-status-cancelled {
+  background: @tt_danger;
+}
+
+.kanban-card {
+  padding: 10px;
+  border-radius: 0;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+  border-left: 3px solid alpha(@tt_white, 0.28);
+}
+
+.kanban-card.kanban-status-in-progress {
+  border-left-color: @tt_amber;
+}
+
+.kanban-card.kanban-status-in-review {
+  border-left-color: @tt_copper_hi;
+}
+
+.kanban-card.kanban-status-complete {
+  border-left-color: rgb(122, 198, 122);
+}
+
+.kanban-card.kanban-status-cancelled {
+  border-left-color: @tt_danger;
+}
+
+.kanban-card-title {
+  font-size: 13px;
+}
+
+.kanban-card-body {
+  color: alpha(@tt_white, 0.62);
+}
+
+.kanban-assignee-chip {
+  color: @tt_ink;
+  background: @tt_amber;
+}
+
+.kanban-empty-state {
+  padding: 24px 12px;
+}
+
+.kanban-empty-title {
+  font-size: 12px;
+  color: alpha(@tt_white, 0.42);
+}
+
+.kanban-agents-panel {
+  border-radius: 0;
+  padding: 12px;
+}
+
+.kanban-agents-title {
+  color: @tt_text;
+}
+
+.agent-run-row {
+  padding: 10px;
+  border-radius: 0;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+  border-left: 3px solid @tt_amber;
+}
+
+.agent-kind-chip {
+  color: @tt_ink;
+  background: @tt_amber;
+}
+
+.kanban-agent-terminals {
+  border: 1px solid alpha(@tt_white, 0.08);
+}

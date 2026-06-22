@@ -1,6 +1,11 @@
+#[cfg(target_os = "linux")]
+pub mod agent_config;
+#[cfg(target_os = "linux")]
+pub mod agent_orchestrator;
 pub mod agent_resume;
 pub mod alerts;
 pub mod assets_editor;
+pub mod board;
 pub mod broadcast;
 pub mod launch_resolution;
 pub mod layout_editor;

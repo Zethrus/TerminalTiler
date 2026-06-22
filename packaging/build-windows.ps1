@@ -317,6 +317,9 @@ New-Item -ItemType Directory -Force -Path $PortableRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Copy-Item -Path $BinaryPath -Destination (Join-Path $PortableRoot "TerminalTiler.exe")
+# Bundle the Kanban MCP server next to the app so agents need no extra install.
+$McpBinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler-mcp.exe"
+Copy-Item -Path $McpBinaryPath -Destination (Join-Path $PortableRoot "terminaltiler-mcp.exe")
 Copy-WindowsGtkResources -RootDir $RootDir -PortableRoot $PortableRoot
 if ($BuildGtkShell) {
     Copy-WindowsGtkRuntime -RuntimeRoot $GtkRuntimeRoot -PortableRoot $PortableRoot

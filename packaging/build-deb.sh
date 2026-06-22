@@ -47,6 +47,8 @@ render_app_icons "$ROOT_DIR/resources/terminaltiler.svg" "$STAGE_ROOT/usr/share/
 set_control_version "$STAGE_ROOT/DEBIAN/control"
 set_appdata_release "$METAINFO_FILE"
 cp "$TARGET_BIN" "$APP_ROOT/bin/terminaltiler-bin"
+# Bundle the Kanban MCP server next to the app binary so agents need no extra install.
+cp "$TARGET_DIR/release/terminaltiler-mcp" "$APP_ROOT/bin/terminaltiler-mcp"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_ROOT/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_ROOT/bin/terminaltiler"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$STAGE_ROOT/usr/bin/terminaltiler"

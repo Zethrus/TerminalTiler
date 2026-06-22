@@ -68,6 +68,10 @@ const WINDOWS_RC: &str = include_str!("../resources/windows/terminaltiler.rc");
 const WINDOWS_SETUP_GTK_PS1: &str = include_str!("../packaging/setup-windows-gtk.ps1");
 const WINDOWS_SMOKE_PS1: &str = include_str!("../packaging/windows-smoke-test.ps1");
 const WORKSPACE_CHROME_RS: &str = include_str!("../src/ui/workspace_chrome.rs");
+const BOARD_VIEW_RS: &str = include_str!("../src/ui/board_view.rs");
+const BOARD_CHROME_RS: &str = include_str!("../src/ui/board_chrome.rs");
+const NEW_TASK_DIALOG_RS: &str = include_str!("../src/ui/new_task_dialog.rs");
+const AGENT_SETUP_DIALOG_RS: &str = include_str!("../src/ui/agent_setup_dialog.rs");
 const WORKSPACE_NAVIGATION_RS: &str = include_str!("../src/ui/workspace_navigation.rs");
 const WORKSPACE_TILE_STATE_RS: &str = include_str!("../src/ui/workspace_tile_state.rs");
 const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
@@ -3164,4 +3168,84 @@ fn declaration_property_names(body: &str) -> impl Iterator<Item = &str> {
             .split_once(':')
             .map(|(property, _)| property.trim())
     })
+}
+
+#[test]
+fn kanban_board_styling_extends_existing_design_system() {
+    for class in [
+        ".kanban-board",
+        ".kanban-column",
+        ".kanban-column-header",
+        ".kanban-count-badge",
+        ".kanban-card",
+        ".kanban-empty-title",
+        ".kanban-agents-panel",
+        ".agent-run-row",
+    ] {
+        assert!(
+            STYLE_CSS.contains(class),
+            "Kanban board must style {class} so it reads as native chrome"
+        );
+    }
+    // Reuse palette tokens rather than inventing colors.
+    assert!(
+        STYLE_CSS.contains(".kanban-card.kanban-status-in-progress {")
+            && STYLE_CSS.contains("border-left-color: @tt_amber;"),
+        "Kanban cards should accent with the shared amber token"
+    );
+    // The count badge mirrors the alert badge's squared look.
+    assert!(
+        STYLE_CSS.contains(".kanban-count-badge {") && STYLE_CSS.contains("border-radius: 0;"),
+        "Kanban count badge should use the app's squared badge style"
+    );
+}
+
+#[test]
+fn kanban_board_uses_shared_icon_and_dialog_chrome() {
+    for (surface, source) in [
+        ("board view", BOARD_VIEW_RS),
+        ("new task dialog", NEW_TASK_DIALOG_RS),
+        ("agent setup dialog", AGENT_SETUP_DIALOG_RS),
+    ] {
+        assert!(
+            source.contains("icons::labeled_button") || source.contains("icons::icon_button"),
+            "{surface} should build buttons with the shared symbolic icon helpers"
+        );
+    }
+    // The card/column chrome reuses the app's shared text classes rather than new styles.
+    assert!(
+        BOARD_CHROME_RS.contains("card-title")
+            && BOARD_CHROME_RS.contains("field-hint")
+            && BOARD_CHROME_RS.contains("status-chip"),
+        "board chrome should reuse the shared card/text classes for parity"
+    );
+    for (surface, source) in [
+        ("new task dialog", NEW_TASK_DIALOG_RS),
+        ("agent setup dialog", AGENT_SETUP_DIALOG_RS),
+    ] {
+        assert!(
+            source.contains("dialog_chrome::sync_dialog_chrome_classes"),
+            "{surface} should inherit theme/density chrome like other dialogs"
+        );
+    }
+}
+
+#[test]
+fn kanban_board_modules_and_mcp_binary_are_wired() {
+    assert!(
+        UI_MOD_RS.contains("pub mod board_view;")
+            && UI_MOD_RS.contains("pub(crate) mod board_chrome;")
+            && UI_MOD_RS.contains("pub(crate) mod new_task_dialog;")
+            && UI_MOD_RS.contains("pub(crate) mod agent_setup_dialog;"),
+        "board UI modules must be declared in ui/mod.rs"
+    );
+    // The MCP server ships as a bundled binary and the version reflects this large feature.
+    assert!(
+        CARGO_TOML.contains("name = \"terminaltiler-mcp\""),
+        "the bundled MCP binary target must be declared in Cargo.toml"
+    );
+    assert!(
+        CARGO_TOML.contains("version = \"0.3.0\""),
+        "the app version should be bumped to 0.3.0 for the Kanban + MCP feature"
+    );
 }
