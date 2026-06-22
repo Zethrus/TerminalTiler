@@ -158,6 +158,82 @@ pub fn start_work<'a>(
     })
 }
 
+/// Tasks already owned by an assignee, grouped by lifecycle state so agents can resume
+/// existing work before claiming something new.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyWork<'a> {
+    pub assignee: String,
+    pub active: Vec<&'a Task>,
+    pub stale: Vec<&'a Task>,
+    pub paused: Vec<&'a Task>,
+    pub in_review: Vec<&'a Task>,
+}
+
+/// Group board-order tasks owned by `assignee` into resume-focused buckets.
+pub fn get_my_work<'a>(board: &'a Board, assignee: impl Into<String>, now: u64) -> MyWork<'a> {
+    let assignee = assignee.into();
+    let mut active = Vec::new();
+    let mut stale = Vec::new();
+    let mut paused = Vec::new();
+    let mut in_review = Vec::new();
+
+    for task in board
+        .tasks
+        .iter()
+        .filter(|task| task.assignee.as_deref() == Some(assignee.as_str()))
+    {
+        if task.status == TaskStatus::InReview {
+            in_review.push(task);
+        }
+        if task.paused.is_some() {
+            paused.push(task);
+        } else if task.assignee.is_some() && task_is_stale(task, now) {
+            stale.push(task);
+        } else if task.status == TaskStatus::InProgress && has_fresh_active_lease(task, now) {
+            active.push(task);
+        }
+    }
+
+    MyWork {
+        assignee,
+        active,
+        stale,
+        paused,
+        in_review,
+    }
+}
+
+/// Select the first board-order To Do task that can be claimed automatically.
+///
+/// Blocked tasks and tasks with a fresh active lease are skipped. Stale or paused leases
+/// are intentionally eligible so [`start_work`] can emit takeover warnings while applying
+/// the normal lifecycle metadata.
+pub fn next_available_work(board: &Board, now: u64) -> Option<&Task> {
+    board.tasks.iter().find(|task| {
+        task.status == TaskStatus::Todo
+            && task.blocked.is_none()
+            && !has_fresh_active_lease(task, now)
+    })
+}
+
+/// Atomically claim the next available task in board order within an already-loaded board.
+pub fn start_next_work(
+    board: &mut Board,
+    assignee: impl Into<String>,
+    stale_after_secs: Option<u64>,
+) -> Result<Option<LifecycleTransition<Task>>, BoardError> {
+    let assignee = assignee.into();
+    let now = now_epoch_secs();
+    let Some(task_id) = next_available_work(board, now).map(|task| task.id.clone()) else {
+        return Ok(None);
+    };
+    let transition = start_work(board, &task_id, assignee, stale_after_secs, false)?;
+    Ok(Some(LifecycleTransition {
+        task: transition.task.clone(),
+        warnings: transition.warnings,
+    }))
+}
+
 /// Refresh active-work heartbeat, optionally appending a progress note.
 pub fn heartbeat_task<'a>(
     board: &'a mut Board,
@@ -652,6 +728,11 @@ pub fn lifecycle_indicators(task: &Task, now: u64) -> Vec<&'static str> {
     indicators
 }
 
+/// Whether a task carries a fresh active lease at `now`.
+pub fn has_fresh_active_lease(task: &Task, now: u64) -> bool {
+    has_active_lease(task) && task.paused.is_none() && !task_is_stale(task, now)
+}
+
 fn guard_active_owner(
     task: &Task,
     requested_assignee: &str,
@@ -990,6 +1071,159 @@ mod tests {
         assert_eq!(
             forced.warnings,
             vec!["force took over fresh active task from 'bob'"]
+        );
+    }
+
+    #[test]
+    fn my_work_groups_owned_active_stale_paused_and_review_tasks() {
+        let mut board = Board::default();
+        let active_id = create_task(&mut board, "Active", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let stale_id = create_task(&mut board, "Stale", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let paused_id = create_task(&mut board, "Paused", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let review_id = create_task(&mut board, "Review", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let other_id = create_task(&mut board, "Other", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        start_work(&mut board, &active_id, "agent", Some(60), false).unwrap();
+        start_work(&mut board, &stale_id, "agent", Some(60), false).unwrap();
+        start_work(&mut board, &paused_id, "agent", Some(60), false).unwrap();
+        pause_work(&mut board, &paused_id, "agent", Some("waiting".into())).unwrap();
+        start_work(&mut board, &review_id, "agent", Some(60), false).unwrap();
+        ready_for_review(&mut board, &review_id, "done", Some("agent".into())).unwrap();
+        start_work(&mut board, &other_id, "someone-else", Some(60), false).unwrap();
+
+        let now = now_epoch_secs();
+        board
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == stale_id)
+            .unwrap()
+            .heartbeat_at = Some(now.saturating_sub(120));
+
+        let work = get_my_work(&board, "agent", now);
+        assert_eq!(work.assignee, "agent");
+        assert_eq!(
+            work.active
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![active_id.as_str()]
+        );
+        assert_eq!(
+            work.stale
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![stale_id.as_str()]
+        );
+        assert_eq!(
+            work.paused
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![paused_id.as_str()]
+        );
+        assert_eq!(
+            work.in_review
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![review_id.as_str()]
+        );
+    }
+
+    #[test]
+    fn next_available_work_skips_blocked_and_fresh_leases_in_board_order() {
+        let mut board = Board::default();
+        let blocked_id = create_task(&mut board, "Blocked", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let leased_id = create_task(&mut board, "Leased", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let available_id = create_task(&mut board, "Available", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        block_task(&mut board, &blocked_id, "blocked", None, None).unwrap();
+        start_work(&mut board, &leased_id, "alice", Some(60), false).unwrap();
+        board
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == leased_id)
+            .unwrap()
+            .status = TaskStatus::Todo;
+
+        let selected = next_available_work(&board, now_epoch_secs()).unwrap();
+        assert_eq!(selected.id, available_id);
+    }
+
+    #[test]
+    fn start_next_work_claims_first_available_and_warns_on_stale_or_paused_takeover() {
+        let mut board = Board::default();
+        let stale_id = create_task(&mut board, "Stale takeover", "", TaskStatus::Todo)
+            .id
+            .clone();
+        let paused_id = create_task(&mut board, "Paused takeover", "", TaskStatus::Todo)
+            .id
+            .clone();
+
+        start_work(&mut board, &stale_id, "alice", Some(60), false).unwrap();
+        board
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == stale_id)
+            .unwrap()
+            .status = TaskStatus::Todo;
+        board
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == stale_id)
+            .unwrap()
+            .heartbeat_at = Some(now_epoch_secs().saturating_sub(120));
+
+        start_work(&mut board, &paused_id, "carol", Some(60), false).unwrap();
+        pause_work(&mut board, &paused_id, "carol", Some("paused".into())).unwrap();
+        board
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == paused_id)
+            .unwrap()
+            .status = TaskStatus::Todo;
+
+        let stale_claim = start_next_work(&mut board, "bob", Some(30))
+            .unwrap()
+            .expect("stale task claim");
+        assert_eq!(stale_claim.task.id, stale_id);
+        assert_eq!(stale_claim.task.assignee.as_deref(), Some("bob"));
+        assert_eq!(stale_claim.task.stale_after_secs, Some(30));
+        assert_eq!(
+            stale_claim.warnings,
+            vec!["took over stale task from 'alice'"]
+        );
+
+        let paused_claim = start_next_work(&mut board, "dana", None)
+            .unwrap()
+            .expect("paused task claim");
+        assert_eq!(paused_claim.task.id, paused_id);
+        assert_eq!(
+            paused_claim.warnings,
+            vec!["took over paused task from 'carol'"]
+        );
+
+        assert!(
+            start_next_work(&mut board, "agent", None)
+                .unwrap()
+                .is_none()
         );
     }
 

@@ -20,8 +20,10 @@ pub const SERVER_NAME: &str = "terminaltiler";
 /// Guidance returned to the agent so it knows how to work the board.
 const INSTRUCTIONS: &str = "\
 This server exposes a TerminalTiler Kanban board for the current project. Workflow: call \
-`list_tasks` with status \"todo\" to find work; `start_work` to claim or resume a task \
-with lifecycle-aware soft leases; use `heartbeat_task` plus `add_task_note` and \
+`get_my_work` first to resume owned active, stale, paused, or in-review work; if you have \
+no owned work to continue, call `start_next_work` to atomically claim the first available \
+unblocked To Do task, or call `start_work` for an explicit task id with lifecycle-aware \
+soft leases; use `heartbeat_task` plus `add_task_note` and \
 `add_task_knowledge` to report progress and durable findings as you work; when \
 implementation is ready, call `ready_for_review` with a handoff summary so the task moves \
 to \"in_review\" and the duplicate-gated review path can run; reviewers should call \
@@ -312,6 +314,11 @@ fn prompts_list_result() -> Value {
                 "arguments": [{ "name": "task_id", "description": "Task id to implement.", "required": true }]
             },
             {
+                "name": "work_next_task",
+                "description": "Resume owned work if present, otherwise atomically claim the next available task.",
+                "arguments": [{ "name": "assignee", "description": "Assignee id to use; defaults to agent.", "required": false }]
+            },
+            {
                 "name": "review_task",
                 "description": "Review a TerminalTiler Kanban task and submit a verdict.",
                 "arguments": [{ "name": "task_id", "description": "Task id to review.", "required": true }]
@@ -335,9 +342,18 @@ fn prompts_get_result(params: &Value, project_root: &Path) -> Value {
         .get("task_id")
         .and_then(Value::as_str)
         .unwrap_or("<task-id>");
+    let assignee = arguments
+        .get("assignee")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("agent");
     let text = match name {
         "implement_task" => format!(
-            "{}\n\nImplement task `{task_id}`: read `terminaltiler://task/{task_id}.md`, call `start_work` with your assignee, update notes/knowledge as you work, then call `ready_for_review` with your author id and a concise handoff summary.",
+            "{}\n\nImplement task `{task_id}`: first call `get_my_work` for resume context, read `terminaltiler://task/{task_id}.md`, call `start_work` with your assignee, update notes/knowledge as you work, then call `ready_for_review` with your author id and a concise handoff summary.",
+            tools::workflow_guide_markdown()
+        ),
+        "work_next_task" => format!(
+            "{}\n\nWork the next task as `{assignee}`: call `get_my_work` with assignee `{assignee}` and resume any active/stale/paused work before starting new work. If there is nothing to resume, call `start_next_work` with assignee `{assignee}`. If it returns `reason: no_available_task`, report that no unblocked To Do task is currently claimable. Do not call `complete_task` unless the user explicitly asks.",
             tools::workflow_guide_markdown()
         ),
         "review_task" => format!(
@@ -345,7 +361,7 @@ fn prompts_get_result(params: &Value, project_root: &Path) -> Value {
             project_root.display()
         ),
         "triage_board" => {
-            "Call `get_board_summary`, inspect blocked/stale/in_review counts, then recommend the next available tasks and any ownership conflicts to resolve.".to_string()
+            "Call `get_board_summary` and `get_my_work`, inspect blocked/stale/in_review counts, then recommend the next available tasks and any ownership conflicts to resolve.".to_string()
         }
         _ => format!("Unknown TerminalTiler prompt `{name}`."),
     };
@@ -449,6 +465,8 @@ mod tests {
         assert!(response["result"]["capabilities"]["resources"].is_object());
         assert!(response["result"]["capabilities"]["prompts"].is_object());
         let instructions = response["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("get_my_work"));
+        assert!(instructions.contains("start_next_work"));
         assert!(instructions.contains("start_work"));
         assert!(instructions.contains("ready_for_review"));
         assert!(instructions.contains("submit_review"));
@@ -479,6 +497,7 @@ mod tests {
         for expected in [
             "list_tasks",
             "get_board_summary",
+            "get_my_work",
             "get_task",
             "get_task_brief",
             "diagnose_mcp",
@@ -489,6 +508,7 @@ mod tests {
             "add_task_note",
             "add_task_knowledge",
             "start_work",
+            "start_next_work",
             "heartbeat_task",
             "pause_work",
             "release_task",
@@ -565,6 +585,7 @@ mod tests {
             .map(|prompt| prompt["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"implement_task"));
+        assert!(names.contains(&"work_next_task"));
         assert!(names.contains(&"review_task"));
         assert!(names.contains(&"triage_board"));
 
@@ -583,6 +604,22 @@ mod tests {
                 .unwrap()
                 .contains("ready_for_review")
         );
+
+        let next_prompt_request = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "prompts/get",
+            "params": { "name": "work_next_task", "arguments": { "assignee": "codex" } }
+        })
+        .to_string();
+        let next_prompt: Value =
+            serde_json::from_str(&handle_request(&next_prompt_request, &root).unwrap()).unwrap();
+        let next_prompt_text = next_prompt["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(next_prompt_text.contains("get_my_work"));
+        assert!(next_prompt_text.contains("start_next_work"));
+        assert!(next_prompt_text.contains("codex"));
     }
 
     #[test]
@@ -680,6 +717,105 @@ mod tests {
         );
         assert_eq!(heartbeat["isError"], false);
         assert_eq!(heartbeat["structuredContent"]["action"], "heartbeat_task");
+    }
+
+    #[test]
+    fn start_next_work_claims_first_available_and_reports_no_task() {
+        let root = temp_root();
+        call_tool(&root, "create_task", json!({ "title": "Blocked first" }));
+        call_tool(
+            &root,
+            "create_task",
+            json!({ "title": "Fresh lease second" }),
+        );
+        call_tool(&root, "create_task", json!({ "title": "Available third" }));
+        let ids: Vec<String> = crate::storage::board_store::load(&root)
+            .tasks
+            .iter()
+            .map(|task| task.id.clone())
+            .collect();
+
+        let blocked = call_tool(
+            &root,
+            "block_task",
+            json!({ "id": ids[0].clone(), "reason": "blocked" }),
+        );
+        assert_eq!(blocked["isError"], false);
+        let leased = call_tool(
+            &root,
+            "start_work",
+            json!({ "id": ids[1].clone(), "assignee": "alice", "stale_after_secs": 60 }),
+        );
+        assert_eq!(leased["isError"], false);
+        crate::storage::board_store::update(&root, |board| {
+            board.tasks[1].status = crate::model::board::TaskStatus::Todo;
+        })
+        .unwrap();
+
+        let claimed = call_tool(&root, "start_next_work", json!({ "assignee": "bob" }));
+        assert_eq!(claimed["isError"], false);
+        assert_eq!(claimed["structuredContent"]["action"], "start_next_work");
+        assert_eq!(claimed["structuredContent"]["task_id"], ids[2]);
+        assert_eq!(claimed["structuredContent"]["task"]["assignee"], "bob");
+
+        let my_work = call_tool(&root, "get_my_work", json!({ "assignee": "bob" }));
+        assert_eq!(my_work["isError"], false);
+        assert_eq!(my_work["structuredContent"]["counts"]["active"], 1);
+        assert_eq!(
+            my_work["structuredContent"]["groups"]["active"][0]["id"],
+            ids[2]
+        );
+
+        let none = call_tool(&root, "start_next_work", json!({ "assignee": "carol" }));
+        assert_eq!(none["isError"], false);
+        assert_eq!(none["structuredContent"]["task"], Value::Null);
+        assert_eq!(none["structuredContent"]["reason"], "no_available_task");
+    }
+
+    #[test]
+    fn concurrent_start_next_work_claims_distinct_tasks() {
+        let root = std::sync::Arc::new(temp_root());
+        for title in ["One", "Two", "Three"] {
+            call_tool(&root, "create_task", json!({ "title": title }));
+        }
+
+        let workers = 2;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(workers));
+        let handles = (0..workers)
+            .map(|index| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let output = tools::call(
+                        "start_next_work",
+                        &json!({ "assignee": format!("agent-{index}") }),
+                        &root,
+                    )
+                    .unwrap();
+                    output.structured.unwrap()["task_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let claimed_ids = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(claimed_ids.len(), workers);
+        let board = crate::storage::board_store::load(&root);
+        assert_eq!(
+            board
+                .tasks
+                .iter()
+                .filter(|task| task.status == crate::model::board::TaskStatus::InProgress)
+                .count(),
+            workers
+        );
     }
 
     #[test]

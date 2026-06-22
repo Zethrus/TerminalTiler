@@ -202,6 +202,7 @@ fn build_implementation_prompt(project_root: &Path, agent: AgentKind, task: &Tas
     );
     prompt.push_str(&format!(
         " Use the terminaltiler MCP lifecycle tools with launched-agent assignee \"{assignee}\": \
+         call get_my_work with assignee \"{assignee}\" first for resume context, \
          call start_work with assignee \"{assignee}\" to claim or resume it, call \
          heartbeat_task with assignee \"{assignee}\" and add_task_note to report progress, \
          and when implementation is ready for review call ready_for_review with author \"{assignee}\" \
@@ -225,7 +226,7 @@ fn build_review_prompt(project_root: &Path, agent: AgentKind, task: &Task) -> St
     }
     append_task_context(&mut prompt, project_root, task);
     prompt.push_str(&format!(
-        " Inspect the current worktree/branch for issues related to this task. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
+        " Inspect the current worktree/branch for issues related to this task. You may call get_my_work for resume context, but review this explicit task id. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
         agent.assignee_id()
     ));
     prompt
@@ -283,6 +284,7 @@ mod tests {
         );
         assert!(command.starts_with("claude '"));
         assert!(command.contains("Fix it'\\''s bug"));
+        assert!(command.contains("get_my_work with assignee \"claude\""));
         assert!(command.contains("start_work"));
         assert!(command.contains("start_work with assignee \"claude\""));
         assert!(command.contains("heartbeat_task with assignee \"claude\""));
@@ -305,6 +307,7 @@ mod tests {
             AgentRunOptions::implementation(false),
         );
         assert!(command.contains("launched-agent assignee \"codex\""));
+        assert!(command.contains("get_my_work with assignee \"codex\""));
         assert!(command.contains("start_work with assignee \"codex\""));
         assert!(command.contains("heartbeat_task with assignee \"codex\""));
         assert!(command.contains("ready_for_review with author \"codex\""));
@@ -380,6 +383,7 @@ mod tests {
         );
         assert!(command.starts_with("codex '"));
         assert!(command.contains("Run a code review"));
+        assert!(command.contains("get_my_work"));
         assert!(command.contains("submit_review"));
         assert!(command.contains("codex-reviewer"));
         assert!(command.contains("Leave the task in In Review"));

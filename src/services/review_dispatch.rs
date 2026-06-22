@@ -255,7 +255,7 @@ fn build_headless_review_prompt(agent: AgentKind, task: &Task) -> String {
         prompt.push_str(description);
     }
     prompt.push_str(&format!(
-        " Your current working directory is the configured project root for this board. Inspect only this project/worktree for issues related to the task. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
+        " Your current working directory is the configured project root for this board. Inspect only this project/worktree for issues related to the task. You may call get_my_work for resume context, but review this explicit task id. Use the terminaltiler MCP tools to call submit_review with author \"{}-reviewer\", a verdict, and a concise severity-rated review summary. Leave the task in In Review; do not call complete_task.",
         agent.assignee_id()
     ));
     prompt
@@ -377,6 +377,7 @@ mod tests {
         );
         assert_eq!(claude[0], "--print");
         assert!(claude[1].contains("claude-reviewer"));
+        assert!(claude[1].contains("get_my_work"));
 
         let codex = build_headless_review_args(
             AgentKind::Codex,
@@ -385,5 +386,6 @@ mod tests {
         );
         assert_eq!(codex[0], "exec");
         assert!(codex[1].contains("codex-reviewer"));
+        assert!(codex[1].contains("get_my_work"));
     }
 }

@@ -54,6 +54,17 @@ pub fn list_json() -> Vec<Value> {
             json!({ "type": "object", "properties": {} }),
             board_summary_output_schema(),
         ),
+        tool_with_output(
+            "get_my_work",
+            "Return tasks already owned by this assignee, grouped as active, stale, paused, and in_review so agents can resume safely.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "assignee": { "type": "string", "description": "Owner id to inspect; defaults to 'agent'." }
+                }
+            }),
+            my_work_output_schema(),
+        ),
         tool(
             "get_task",
             "Get the full details of one task by id.",
@@ -175,6 +186,18 @@ pub fn list_json() -> Vec<Value> {
                     "force": { "type": "boolean", "description": "Take over a fresh active lease intentionally." }
                 },
                 "required": ["id"]
+            }),
+            lifecycle_output_schema(),
+        ),
+        tool_with_output(
+            "start_next_work",
+            "Atomically claim the first available unblocked To Do task in board order, skipping fresh active leases.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "assignee": { "type": "string", "description": "Defaults to 'agent'." },
+                    "stale_after_secs": { "type": "integer", "minimum": 1, "description": "Override soft-lease stale threshold for the claimed task; default is 21600 (6 hours)." }
+                }
             }),
             lifecycle_output_schema(),
         ),
@@ -308,6 +331,7 @@ pub fn call(
     match name {
         "list_tasks" => list_tasks(arguments, project_root),
         "get_board_summary" => get_board_summary(arguments, project_root),
+        "get_my_work" => get_my_work(arguments, project_root),
         "get_task" => get_task(arguments, project_root),
         "get_task_brief" => get_task_brief(arguments, project_root),
         "diagnose_mcp" => diagnose_mcp(arguments, project_root),
@@ -318,6 +342,7 @@ pub fn call(
         "add_task_note" => add_task_note(arguments, project_root),
         "add_task_knowledge" => add_task_knowledge(arguments, project_root),
         "start_work" => start_work(arguments, project_root),
+        "start_next_work" => start_next_work(arguments, project_root),
         "heartbeat_task" => heartbeat_task(arguments, project_root),
         "pause_work" => pause_work(arguments, project_root),
         "release_task" => release_task(arguments, project_root),
@@ -349,7 +374,7 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
             !available_only
                 || (task.status == TaskStatus::Todo
                     && task.blocked.is_none()
-                    && (!has_fresh_active_lease(task, now)))
+                    && (!board_service::has_fresh_active_lease(task, now)))
         })
         .collect();
     let text = serde_json::to_string_pretty(&tasks).map_err(json_error)?;
@@ -378,6 +403,41 @@ fn get_board_summary(
     let structured = board_summary_value(&board);
     let text = board_summary_text(&board);
     Ok(output(text, Some(structured)))
+}
+
+fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
+    let assignee = optional_str(arguments, "assignee").unwrap_or("agent");
+    let board = board_store::load(project_root);
+    let now = now_epoch_secs();
+    let work = board_service::get_my_work(&board, assignee, now);
+    let active_count = work.active.len();
+    let stale_count = work.stale.len();
+    let paused_count = work.paused.len();
+    let in_review_count = work.in_review.len();
+    let text = format!(
+        "Owned work for '{assignee}': {} active, {} stale, {} paused, {} in review.",
+        active_count, stale_count, paused_count, in_review_count
+    );
+    Ok(output(
+        text,
+        Some(json!({
+            "ok": true,
+            "action": "get_my_work",
+            "assignee": work.assignee,
+            "groups": {
+                "active": work.active,
+                "stale": work.stale,
+                "paused": work.paused,
+                "in_review": work.in_review,
+            },
+            "counts": {
+                "active": active_count,
+                "stale": stale_count,
+                "paused": paused_count,
+                "in_review": in_review_count,
+            },
+        })),
+    ))
 }
 
 fn get_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
@@ -627,6 +687,46 @@ fn start_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
     ))
 }
 
+fn start_next_work(
+    arguments: &Value,
+    project_root: &Path,
+) -> Result<ToolCallOutput, ToolCallError> {
+    let assignee = optional_str(arguments, "assignee").unwrap_or("agent");
+    let stale_after_secs = optional_u64(arguments, "stale_after_secs")?;
+    let transition = board_store::update(project_root, |board| {
+        board_service::start_next_work(board, assignee, stale_after_secs)
+    })
+    .map_err(io_error)?
+    .map_err(board_error)?;
+
+    match transition {
+        Some(transition) => Ok(output(
+            format!(
+                "Started next available work on task {} as '{assignee}'.",
+                transition.task.id
+            ),
+            Some(task_structured(
+                "start_next_work",
+                &transition.task,
+                transition.warnings,
+            )),
+        )),
+        None => Ok(output(
+            "No available unblocked To Do task without a fresh active lease.".to_string(),
+            Some(json!({
+                "ok": true,
+                "action": "start_next_work",
+                "task_id": Value::Null,
+                "task": Value::Null,
+                "lifecycle": Value::Null,
+                "warnings": [],
+                "conflict": Value::Null,
+                "reason": "no_available_task",
+            })),
+        )),
+    }
+}
+
 fn heartbeat_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let assignee = optional_str(arguments, "assignee").unwrap_or("agent");
@@ -844,14 +944,47 @@ fn lifecycle_output_schema() -> Value {
         "properties": {
             "ok": { "type": "boolean" },
             "action": { "type": "string" },
-            "task_id": { "type": "string" },
+            "task_id": { "type": ["string", "null"] },
             "task": { "type": ["object", "null"] },
             "lifecycle": { "type": ["object", "null"] },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "conflict": { "type": ["object", "null"] },
-            "review_started": { "type": ["object", "null"] }
+            "review_started": { "type": ["object", "null"] },
+            "reason": { "type": ["string", "null"] }
         },
         "required": ["ok", "action", "task_id", "warnings"]
+    })
+}
+
+fn my_work_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "action": { "type": "string" },
+            "assignee": { "type": "string" },
+            "groups": {
+                "type": "object",
+                "properties": {
+                    "active": { "type": "array", "items": { "type": "object" } },
+                    "stale": { "type": "array", "items": { "type": "object" } },
+                    "paused": { "type": "array", "items": { "type": "object" } },
+                    "in_review": { "type": "array", "items": { "type": "object" } }
+                },
+                "required": ["active", "stale", "paused", "in_review"]
+            },
+            "counts": {
+                "type": "object",
+                "properties": {
+                    "active": { "type": "integer", "minimum": 0 },
+                    "stale": { "type": "integer", "minimum": 0 },
+                    "paused": { "type": "integer", "minimum": 0 },
+                    "in_review": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["active", "stale", "paused", "in_review"]
+            }
+        },
+        "required": ["ok", "action", "assignee", "groups", "counts"]
     })
 }
 
@@ -948,7 +1081,7 @@ pub fn board_summary_value(board: &Board) -> Value {
     let active = board
         .tasks
         .iter()
-        .filter(|task| has_fresh_active_lease(task, now))
+        .filter(|task| board_service::has_fresh_active_lease(task, now))
         .count();
     let stale = board
         .tasks
@@ -971,7 +1104,7 @@ pub fn board_summary_value(board: &Board) -> Value {
         .filter(|task| {
             task.status == TaskStatus::Todo
                 && task.blocked.is_none()
-                && !has_fresh_active_lease(task, now)
+                && !board_service::has_fresh_active_lease(task, now)
         })
         .take(5)
         .collect();
@@ -996,7 +1129,7 @@ pub fn board_summary_text(board: &Board) -> String {
     let active = board
         .tasks
         .iter()
-        .filter(|task| has_fresh_active_lease(task, now))
+        .filter(|task| board_service::has_fresh_active_lease(task, now))
         .count();
     let stale = board
         .tasks
@@ -1092,11 +1225,12 @@ pub fn workflow_guide_markdown() -> String {
     [
         "# TerminalTiler Kanban MCP workflow",
         "",
-        "1. Call `get_board_summary` or `list_tasks` to find work.",
-        "2. Call `start_work` or legacy `claim_task` with your `assignee` before editing.",
-        "3. Send `heartbeat_task`, `add_task_note`, and `add_task_knowledge` while working.",
-        "4. Call `ready_for_review` with `author` and a handoff summary when implementation is ready.",
-        "5. Reviewers call `submit_review`; only call `complete_task` when explicitly closing the task.",
+        "1. Call `get_my_work` with your `assignee` before claiming anything new; resume owned active, stale, paused, or in-review tasks first.",
+        "2. If there is nothing to resume, call `start_next_work` to atomically claim the first available unblocked To Do task. It returns `reason: no_available_task` and `task: null` when nothing is claimable.",
+        "3. For a specific user-provided task id, call `start_work` (or legacy `claim_task`) with your `assignee` before editing.",
+        "4. Send `heartbeat_task`, `add_task_note`, and `add_task_knowledge` while working.",
+        "5. Call `ready_for_review` with `author` and a handoff summary when implementation is ready.",
+        "6. Reviewers call `submit_review`; only call `complete_task` when explicitly closing the task.",
         "",
         "Fresh active leases owned by another assignee return an `ownership_conflict` tool error unless `force` is set.",
     ]
@@ -1108,12 +1242,6 @@ fn actor_argument(arguments: &Value) -> String {
         .or_else(|| optional_str(arguments, "assignee"))
         .unwrap_or("agent")
         .to_string()
-}
-
-fn has_fresh_active_lease(task: &Task, now: u64) -> bool {
-    task.heartbeat_at.or(task.claimed_at).is_some()
-        && task.paused.is_none()
-        && !board_service::task_is_stale(task, now)
 }
 
 fn claim_auto_review(
@@ -1285,6 +1413,12 @@ mod tests {
         assert!(!summary_required.contains(&"task_id"));
         assert!(!summary_required.contains(&"warnings"));
 
+        let my_work_schema = &tool_definition(&tools, "get_my_work")["outputSchema"];
+        let my_work_required = required_fields(my_work_schema);
+        assert!(my_work_required.contains(&"assignee"));
+        assert!(my_work_required.contains(&"groups"));
+        assert!(my_work_required.contains(&"counts"));
+
         let diagnostics_schema = &tool_definition(&tools, "diagnose_mcp")["outputSchema"];
         let diagnostics_required = required_fields(diagnostics_schema);
         assert!(diagnostics_required.contains(&"diagnostics"));
@@ -1295,5 +1429,10 @@ mod tests {
         let lifecycle_required = required_fields(lifecycle_schema);
         assert!(lifecycle_required.contains(&"task_id"));
         assert!(lifecycle_required.contains(&"warnings"));
+
+        let next_schema = &tool_definition(&tools, "start_next_work")["outputSchema"];
+        let next_required = required_fields(next_schema);
+        assert!(next_required.contains(&"task_id"));
+        assert!(next_schema["properties"]["reason"].is_object());
     }
 }
