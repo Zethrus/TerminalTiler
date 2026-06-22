@@ -3451,6 +3451,13 @@ fn kanban_board_modules_and_mcp_binary_are_wired() {
             && UI_MOD_RS.contains("pub(crate) mod dialog_form;"),
         "board UI modules must be declared in ui/mod.rs"
     );
+    assert!(
+        source_contains(
+            UI_MOD_RS,
+            "all(target_os = \"windows\", feature = \"windows-gtk-shell\")\n))]\npub(crate) mod mcp_health_panel;",
+        ) && LAUNCH_SCREEN_RS.contains("use crate::ui::mcp_health_panel::McpHealthPanel;"),
+        "the launch deck imports the MCP health panel, so the panel module must compile for both Linux and Windows GTK shells"
+    );
     // The MCP server ships as a bundled binary and the version reflects this large feature.
     assert!(
         CARGO_TOML.contains("name = \"terminaltiler-mcp\""),
