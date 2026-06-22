@@ -1311,7 +1311,14 @@ pub fn build_with_layout_change_handler(
             alert_store.mark_all_read();
         });
     }
-    bind_alert_ui(&runtime, &alert_store, &alert_button, &alert_list);
+    let unread_badge = alert_sidebar.unread_badge.clone();
+    bind_alert_ui(
+        &runtime,
+        &alert_store,
+        &alert_button,
+        &alert_list,
+        &unread_badge,
+    );
 
     shell.append(&summary.widget);
     shell.append(&build_workspace_content_chrome(
@@ -1330,12 +1337,14 @@ fn bind_alert_ui(
     alert_store: &AlertStore,
     alert_button: &gtk::Button,
     alert_list: &gtk::Box,
+    unread_badge: &gtk::Label,
 ) {
     let runtime = runtime.clone();
     workspace_alerts::bind_alert_list(WorkspaceAlertListInput {
         alert_store: alert_store.clone(),
         alert_button: alert_button.clone(),
         alert_list: alert_list.clone(),
+        unread_badge: unread_badge.clone(),
         action_provider: Some(Rc::new(move |alert, alert_store| {
             let Some(pane_id) = alert.pane_id.clone() else {
                 return Vec::new();

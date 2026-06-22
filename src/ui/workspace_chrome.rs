@@ -38,6 +38,11 @@ pub(crate) struct WorkspaceAlertSidebarChrome {
         all(target_os = "windows", feature = "windows-gtk-shell")
     ))]
     pub(crate) alert_list: gtk::Box,
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", feature = "windows-gtk-shell")
+    ))]
+    pub(crate) unread_badge: gtk::Label,
 }
 
 pub(crate) fn build_workspace_shell_chrome() -> gtk::Box {
@@ -68,28 +73,55 @@ pub(crate) fn build_workspace_alert_sidebar_chrome(
     let alert_list = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
+        .valign(gtk::Align::Start)
         .build();
+    // Fill the sidebar's height so alert rows render in full instead of being
+    // clipped to the scroller's short natural height (which hid row detail and
+    // the per-row Jump/Mark Read actions).
     let alert_scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
         .min_content_width(320)
+        .vexpand(true)
         .build();
     alert_scroller.set_child(Some(&alert_list));
 
     let alert_sidebar = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
+        .spacing(10)
         .margin_start(12)
-        .css_classes(["config-panel"])
+        .css_classes(["config-panel", "alert-center-panel"])
         .build();
-    alert_sidebar.append(
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["alert-center-header"])
+        .build();
+    let title = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .build();
+    title.append(
         &gtk::Label::builder()
             .label("Alert Center")
             .halign(gtk::Align::Start)
+            .valign(gtk::Align::Center)
             .css_classes(["card-title"])
             .build(),
     );
-    alert_sidebar.append(&mark_all_read_button);
+    let unread_badge = gtk::Label::builder()
+        .valign(gtk::Align::Center)
+        .css_classes(["alert-count-badge"])
+        .visible(false)
+        .build();
+    title.append(&unread_badge);
+    header.append(&title);
+    header.append(&mark_all_read_button);
+
+    alert_sidebar.append(&header);
     alert_sidebar.append(&alert_scroller);
 
     WorkspaceAlertSidebarChrome {
@@ -104,6 +136,11 @@ pub(crate) fn build_workspace_alert_sidebar_chrome(
             all(target_os = "windows", feature = "windows-gtk-shell")
         ))]
         alert_list,
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", feature = "windows-gtk-shell")
+        ))]
+        unread_badge,
     }
 }
 

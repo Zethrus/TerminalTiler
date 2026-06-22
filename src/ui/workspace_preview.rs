@@ -1647,6 +1647,7 @@ fn bind_preview_alert_controls(
         alert_store: alert_store.clone(),
         alert_button: summary.alert_button.clone(),
         alert_list: alert_sidebar.alert_list.clone(),
+        unread_badge: alert_sidebar.unread_badge.clone(),
         action_provider: None,
     });
 }

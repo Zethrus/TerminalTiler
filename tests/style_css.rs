@@ -1921,6 +1921,23 @@ fn windows_gtk_workspace_toolbar_controls_are_wired_to_runtime_state() {
             && !WORKSPACE_PREVIEW_RS.contains("No detail available."),
         "Linux and Windows GTK workspace alert lists should share row rendering while Linux supplies runtime-only jump/reconnect actions"
     );
+
+    for selector in [
+        "window.window-shell.theme-light .alert-count-badge",
+        "window.window-shell.theme-light .alert-empty-body",
+    ] {
+        assert_css_block_contains(
+            selector,
+            "rgba(25, 35, 50",
+            "Alert Center-specific labels must override the dark palette in light theme",
+        );
+    }
+    assert_css_block_contains(
+        "window.window-shell.theme-light .alert-empty-title",
+        "#192332",
+        "Alert Center empty-state title must override the dark palette in light theme",
+    );
+
     assert!(
         SNIPPET_POPOVER_RS.contains(".label(\"CLI Snippets\")")
             && SNIPPET_POPOVER_RS.contains("No snippets configured yet. Add them in Assets.")
