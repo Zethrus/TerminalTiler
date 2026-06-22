@@ -212,8 +212,15 @@ function Assert-NonEmptyFile {
 function Save-WebView2Bootstrapper {
     param(
         [string]$OutputPath,
-        [string]$Uri
+        [string]$Uri,
+        [int]$MaxAttempts = 5,
+        [int]$InitialRetryDelaySeconds = 5,
+        [int]$TimeoutSeconds = 120
     )
+
+    if ($MaxAttempts -lt 1) {
+        throw "MaxAttempts must be at least 1"
+    }
 
     if ((Test-Path $OutputPath) -and ((Get-Item -Path $OutputPath).Length -gt 0)) {
         Write-Host "==> using cached Microsoft Edge WebView2 Evergreen Bootstrapper at $OutputPath"
@@ -222,9 +229,31 @@ function Save-WebView2Bootstrapper {
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutputPath) | Out-Null
     Remove-Item -Force $OutputPath -ErrorAction SilentlyContinue
-    Write-Host "==> downloading Microsoft Edge WebView2 Evergreen Bootstrapper"
-    Invoke-WebRequest -Uri $Uri -OutFile $OutputPath -UseBasicParsing -TimeoutSec 120
-    Assert-NonEmptyFile -Path $OutputPath -Description "Microsoft Edge WebView2 Evergreen Bootstrapper"
+
+    $LastErrorMessage = $null
+    for ($Attempt = 1; $Attempt -le $MaxAttempts; $Attempt++) {
+        try {
+            Write-Host "==> downloading Microsoft Edge WebView2 Evergreen Bootstrapper (attempt $Attempt of $MaxAttempts)"
+            Invoke-WebRequest -Uri $Uri -OutFile $OutputPath -UseBasicParsing -TimeoutSec $TimeoutSeconds
+            Assert-NonEmptyFile -Path $OutputPath -Description "Microsoft Edge WebView2 Evergreen Bootstrapper"
+            return
+        }
+        catch {
+            $LastErrorMessage = $_.Exception.Message
+            Remove-Item -Force $OutputPath -ErrorAction SilentlyContinue
+
+            if ($Attempt -ge $MaxAttempts) {
+                break
+            }
+
+            $RetryDelaySeconds = [int][Math]::Min($InitialRetryDelaySeconds * [Math]::Pow(2, $Attempt - 1), 60)
+            Write-Warning "Microsoft Edge WebView2 Evergreen Bootstrapper download attempt $Attempt of $MaxAttempts failed: $LastErrorMessage"
+            Write-Warning "Retrying WebView2 bootstrapper download in $RetryDelaySeconds seconds..."
+            Start-Sleep -Seconds $RetryDelaySeconds
+        }
+    }
+
+    throw "Failed to download Microsoft Edge WebView2 Evergreen Bootstrapper from $Uri after $MaxAttempts attempts. Last error: $LastErrorMessage"
 }
 
 function Assert-WindowsStagedPayload {

@@ -2539,6 +2539,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
     assert!(
         WINDOWS_BUILD_PS1.contains("function Save-WebView2Bootstrapper")
             && WINDOWS_BUILD_PS1.contains("Invoke-WebRequest -Uri $Uri")
+            && WINDOWS_BUILD_PS1.contains("[int]$MaxAttempts = 5")
+            && WINDOWS_BUILD_PS1.contains("Retrying WebView2 bootstrapper download")
+            && WINDOWS_BUILD_PS1.contains("Start-Sleep -Seconds $RetryDelaySeconds")
             && WINDOWS_BUILD_PS1.contains("Assert-NonEmptyFile")
             && WINDOWS_BUILD_PS1.contains("MicrosoftEdgeWebview2Setup.exe")
             && WINDOWS_BUILD_PS1.contains("https://go.microsoft.com/fwlink/p/?LinkId=2124703")
