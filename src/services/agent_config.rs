@@ -7,6 +7,7 @@
 //! - Claude Code: project-scoped `<project_root>/.mcp.json`.
 //! - Codex: `~/.codex/config.toml`.
 
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -28,8 +29,20 @@ fn mcp_binary_file_name() -> &'static str {
 /// Resolve the bundled MCP binary: prefer the sibling of the running executable (the
 /// packaged layout and the cargo target dir both satisfy this), else fall back to a bare
 /// name resolved via `PATH`.
+///
+/// Under an AppImage the executable lives on an ephemeral mount that vanishes when the app
+/// exits, so writing that path into an agent config would dangle. The MCP binary is
+/// GTK-free and self-contained, so in that case we copy it to a stable per-user location
+/// and hand that path out instead.
 pub fn mcp_binary_path() -> PathBuf {
     let file = mcp_binary_file_name();
+
+    if is_appimage_runtime()
+        && let Some(stable) = ensure_stable_mcp_binary()
+    {
+        return stable;
+    }
+
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -39,6 +52,99 @@ pub fn mcp_binary_path() -> PathBuf {
         }
     }
     PathBuf::from(file)
+}
+
+/// Whether the app is running from an AppImage (its runtime sets `APPIMAGE`).
+fn is_appimage_runtime() -> bool {
+    std::env::var_os("APPIMAGE").is_some()
+}
+
+/// Copy the bundled MCP binary (sibling of the running executable) into a stable per-user
+/// directory so the path survives app restarts and AppImage remounts. Returns the stable
+/// path, or `None` if the source or destination can't be resolved.
+fn ensure_stable_mcp_binary() -> Option<PathBuf> {
+    let file = mcp_binary_file_name();
+    let source = std::env::current_exe().ok()?.parent()?.join(file);
+    if !source.exists() {
+        return None;
+    }
+    let dest_dir = crate::app_paths::data_dir()?.join("bin");
+    install_stable_binary(&source, &dest_dir).ok()
+}
+
+/// Install `source` into `dest_dir` (keeping its file name), copying only when the
+/// destination is missing or stale. The copy is atomic (temp file + rename) and the result
+/// is marked executable. Idempotent.
+fn install_stable_binary(source: &Path, dest_dir: &Path) -> io::Result<PathBuf> {
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| io::Error::other("source binary has no file name"))?;
+    let dest = dest_dir.join(file_name);
+
+    if needs_refresh(source, &dest) {
+        std::fs::create_dir_all(dest_dir)?;
+        let temp = dest_dir.join(format!(
+            ".{}.tmp-{}",
+            file_name.to_string_lossy(),
+            std::process::id()
+        ));
+        std::fs::copy(source, &temp)?;
+        set_executable(&temp)?;
+        std::fs::rename(&temp, &dest)?;
+    }
+    Ok(dest)
+}
+
+/// Whether `dest` must be (re)written from `source`: missing or different contents.
+fn needs_refresh(source: &Path, dest: &Path) -> bool {
+    let Ok(source_meta) = std::fs::metadata(source) else {
+        return true; // Let the copy attempt surface the real source error.
+    };
+    let Ok(dest_meta) = std::fs::metadata(dest) else {
+        return true; // Destination missing.
+    };
+    if source_meta.len() != dest_meta.len() {
+        return true;
+    }
+    match files_equal(source, dest) {
+        Ok(equal) => !equal,
+        Err(_) => true,
+    }
+}
+
+/// Compare two same-sized binaries without relying on mtimes.
+fn files_equal(left: &Path, right: &Path) -> io::Result<bool> {
+    const BUFFER_SIZE: usize = 8 * 1024;
+
+    let mut left = std::fs::File::open(left)?;
+    let mut right = std::fs::File::open(right)?;
+    let mut left_buf = [0_u8; BUFFER_SIZE];
+    let mut right_buf = [0_u8; BUFFER_SIZE];
+
+    loop {
+        let left_len = left.read(&mut left_buf)?;
+        let right_len = right.read(&mut right_buf)?;
+        if left_len != right_len {
+            return Ok(false);
+        }
+        if left_len == 0 {
+            return Ok(true);
+        }
+        if left_buf[..left_len] != right_buf[..right_len] {
+            return Ok(false);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// Register the MCP server with Claude Code for a project. Returns the written path.
@@ -130,6 +236,31 @@ mod tests {
         path
     }
 
+    #[cfg(target_os = "linux")]
+    fn set_file_mtime(path: &Path, seconds: libc::time_t) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let times = [
+            libc::timespec {
+                tv_sec: seconds,
+                tv_nsec: 0,
+            },
+            libc::timespec {
+                tv_sec: seconds,
+                tv_nsec: 0,
+            },
+        ];
+        let result = unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(
+            result,
+            0,
+            "failed to set mtime on {}",
+            path.to_string_lossy()
+        );
+    }
+
     #[test]
     fn claude_config_is_created_and_idempotent() {
         let dir = temp_dir();
@@ -187,5 +318,68 @@ mod tests {
         let args = servers["terminaltiler"]["args"].as_array().unwrap();
         assert_eq!(args[0].as_str(), Some("--project-root"));
         assert_eq!(args[1].as_str(), Some(dir.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn install_stable_binary_copies_and_is_idempotent() {
+        let dir = temp_dir();
+        let source = dir.join("terminaltiler-mcp");
+        fs::write(&source, b"binary-v1").unwrap();
+        let dest_dir = dir.join("stable");
+
+        let installed = install_stable_binary(&source, &dest_dir).unwrap();
+        assert_eq!(installed, dest_dir.join("terminaltiler-mcp"));
+        assert_eq!(fs::read(&installed).unwrap(), b"binary-v1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&installed).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "installed binary must be executable");
+        }
+
+        // Unchanged source ⇒ no refresh, content preserved.
+        assert!(!needs_refresh(&source, &installed));
+        install_stable_binary(&source, &dest_dir).unwrap();
+        assert_eq!(fs::read(&installed).unwrap(), b"binary-v1");
+    }
+
+    #[test]
+    fn install_stable_binary_refreshes_when_source_changes() {
+        let dir = temp_dir();
+        let source = dir.join("terminaltiler-mcp");
+        fs::write(&source, b"binary-v1").unwrap();
+        let dest_dir = dir.join("stable");
+        let installed = install_stable_binary(&source, &dest_dir).unwrap();
+
+        // Different length ⇒ refresh regardless of mtime resolution.
+        fs::write(&source, b"binary-v2-larger").unwrap();
+        assert!(needs_refresh(&source, &installed));
+        install_stable_binary(&source, &dest_dir).unwrap();
+        assert_eq!(fs::read(&installed).unwrap(), b"binary-v2-larger");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn install_stable_binary_refreshes_same_size_content_with_older_source_mtime() {
+        let dir = temp_dir();
+        let source = dir.join("terminaltiler-mcp");
+        fs::write(&source, b"binary-v1").unwrap();
+        let dest_dir = dir.join("stable");
+        let installed = install_stable_binary(&source, &dest_dir).unwrap();
+
+        fs::write(&source, b"binary-v2").unwrap();
+        assert_eq!(
+            fs::metadata(&source).unwrap().len(),
+            fs::metadata(&installed).unwrap().len()
+        );
+        set_file_mtime(&source, 1_700_000_000);
+        set_file_mtime(&installed, 1_800_000_000);
+
+        assert!(
+            needs_refresh(&source, &installed),
+            "same-size changed source must refresh even when its mtime is not newer"
+        );
+        install_stable_binary(&source, &dest_dir).unwrap();
+        assert_eq!(fs::read(&installed).unwrap(), b"binary-v2");
     }
 }

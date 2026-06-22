@@ -356,6 +356,18 @@ test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libvte-2.91-gtk4.so.0"
 assert_packaged_runtime_assets "$BUILD_DIR/deb/opt/terminaltiler"
 
+echo "==> verifying bundled MCP server is present and GTK-free"
+# The same release binary ships in the AppImage, where agent configs point at a copy
+# extracted to a stable per-user path. That copy is standalone, so it must not depend on
+# the bundled GTK/WebKit/VTE libraries — assert it links none of them.
+MCP_BIN="$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-mcp"
+test -f "$MCP_BIN"
+if ldd "$MCP_BIN" 2>/dev/null | grep -qiE 'libgtk|libwebkit|libvte|libadwaita'; then
+  echo "ERROR: terminaltiler-mcp links GTK/WebKit/VTE; the AppImage stable-copy path assumes it is self-contained" >&2
+  ldd "$MCP_BIN" | grep -iE 'libgtk|libwebkit|libvte|libadwaita' >&2
+  exit 1
+fi
+
 if command -v xvfb-run >/dev/null 2>&1; then
   echo "==> smoke-testing extracted Debian runtime"
   run_restore_smoke \
