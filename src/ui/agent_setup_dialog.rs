@@ -1,5 +1,6 @@
 //! One-click "Connect Agent" modal. Registers the bundled `terminaltiler-mcp` server with
-//! Claude Code (project `.mcp.json`) or Codex (`~/.codex/config.toml`).
+//! Claude Code (project `.mcp.json`) or Codex (`~/.codex/config.toml`) for manual
+//! sessions. Board-launched Codex runs use per-invocation project MCP binding.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -187,7 +188,7 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
         &["pill-button", "suggested-action"],
     );
     let codex_button = icons::labeled_button(
-        "Install to Codex",
+        "Install/Repair Codex (manual)",
         icon_name::TERMINAL,
         &["pill-button", "surface-button"],
     );

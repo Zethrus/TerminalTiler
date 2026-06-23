@@ -30,7 +30,8 @@ to \"in_review\" and the duplicate-gated review path can run; reviewers should c
 `submit_review` with a verdict and leave completion manual. Existing tools such as \
 `claim_task` and `update_task_status` remain available for compatibility, but lifecycle \
 helpers are preferred. Use `complete_task` only when the user explicitly asks you to mark \
-the task Complete.";
+the task Complete. Before mutating tasks, inspect the structured `context.project_root` \
+or `diagnose_mcp` output and verify it matches the project/worktree you intend to change.";
 
 /// Run the stdio server loop until stdin closes. This is the binary's entire job.
 pub fn run_stdio() {
@@ -217,9 +218,21 @@ fn resources_list_result(project_root: &Path) -> Value {
     let board = crate::storage::board_store::load(project_root);
     let mut resources = vec![
         json!({
+            "uri": "terminaltiler://project/context",
+            "name": "Project context",
+            "description": "Bound TerminalTiler project root, board path, and MCP process context.",
+            "mimeType": "application/json"
+        }),
+        json!({
             "uri": "terminaltiler://board/summary",
             "name": "Board summary",
             "description": "Compact task and lifecycle counts for this TerminalTiler board.",
+            "mimeType": "application/json"
+        }),
+        json!({
+            "uri": "terminaltiler://board/activity",
+            "name": "Board activity",
+            "description": "Recent task notes, knowledge captures, blockers, reviews, and lifecycle updates derived from the board.",
             "mimeType": "application/json"
         }),
         json!({
@@ -248,6 +261,12 @@ fn resources_list_result(project_root: &Path) -> Value {
             "description": "Markdown task brief.",
             "mimeType": "text/markdown"
         }));
+        resources.push(json!({
+            "uri": format!("terminaltiler://task/{}/handoff.md", task.id),
+            "name": format!("Task handoff: {}", task.title),
+            "description": "Markdown implementation/review handoff with notes and risks.",
+            "mimeType": "text/markdown"
+        }));
     }
     json!({ "resources": resources })
 }
@@ -268,14 +287,39 @@ fn resources_read_result(params: &Value, project_root: &Path) -> Result<Value, S
 fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String), String> {
     let board = crate::storage::board_store::load(project_root);
     match uri {
+        "terminaltiler://project/context" => {
+            serde_json::to_string_pretty(&tools::mcp_context_value(project_root))
+                .map(|text| ("application/json", text))
+                .map_err(|error| error.to_string())
+        }
         "terminaltiler://board/summary" => {
-            serde_json::to_string_pretty(&tools::board_summary_value(&board))
+            let mut summary = tools::board_summary_value(&board);
+            if let Some(object) = summary.as_object_mut() {
+                object.insert(
+                    "context".to_string(),
+                    tools::mcp_context_value(project_root),
+                );
+            }
+            serde_json::to_string_pretty(&summary)
+                .map(|text| ("application/json", text))
+                .map_err(|error| error.to_string())
+        }
+        "terminaltiler://board/activity" => {
+            serde_json::to_string_pretty(&tools::board_activity_value(&board))
                 .map(|text| ("application/json", text))
                 .map_err(|error| error.to_string())
         }
         "terminaltiler://board/tasks" => serde_json::to_string_pretty(&board.tasks)
             .map(|text| ("application/json", text))
             .map_err(|error| error.to_string()),
+        _ if uri.starts_with("terminaltiler://task/") && uri.ends_with("/handoff.md") => {
+            let id = uri
+                .trim_start_matches("terminaltiler://task/")
+                .trim_end_matches("/handoff.md");
+            let task = crate::services::board::get_task(&board, id)
+                .ok_or_else(|| format!("no task with id '{id}'"))?;
+            Ok(("text/markdown", tools::task_handoff_markdown(task)))
+        }
         "terminaltiler://workflow/guide" => Ok(("text/markdown", tools::workflow_guide_markdown())),
         _ if uri.starts_with("terminaltiler://task/") && uri.ends_with(".json") => {
             let id = uri
@@ -402,6 +446,31 @@ mod tests {
         let response = handle_request(&request, root).expect("tools/call returns a response");
         let parsed: Value = serde_json::from_str(&response).unwrap();
         parsed["result"].clone()
+    }
+
+    fn output_schema_required_fields(tool_name: &str) -> Vec<String> {
+        tools::list_json()
+            .into_iter()
+            .find(|tool| tool["name"] == tool_name)
+            .unwrap_or_else(|| panic!("missing tool definition for {tool_name}"))["outputSchema"]
+            ["required"]
+            .as_array()
+            .unwrap_or_else(|| panic!("missing outputSchema.required for {tool_name}"))
+            .iter()
+            .map(|field| field.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn assert_structured_has_required_fields(tool_name: &str, structured: &Value) {
+        let object = structured
+            .as_object()
+            .unwrap_or_else(|| panic!("{tool_name} structured content must be an object"));
+        for field in output_schema_required_fields(tool_name) {
+            assert!(
+                object.contains_key(&field),
+                "{tool_name} structured content is missing required field {field}"
+            );
+        }
     }
 
     #[test]
@@ -551,8 +620,21 @@ mod tests {
         assert!(
             resources
                 .iter()
+                .any(|resource| resource["uri"] == "terminaltiler://project/context")
+        );
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource["uri"] == "terminaltiler://board/activity")
+        );
+        assert!(
+            resources
+                .iter()
                 .any(|resource| resource["uri"] == format!("terminaltiler://task/{task_id}.md"))
         );
+        assert!(resources.iter().any(
+            |resource| resource["uri"] == format!("terminaltiler://task/{task_id}/handoff.md")
+        ));
 
         let read_request = json!({
             "jsonrpc": "2.0",
@@ -655,6 +737,10 @@ mod tests {
         assert!(crate::storage::board_store::board_path(&root).exists());
 
         let listed = call_tool(&root, "list_tasks", json!({ "status": "todo" }));
+        assert_eq!(
+            listed["structuredContent"]["context"]["project_root"],
+            root.display().to_string()
+        );
         let text = listed["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("Wire MCP"));
     }
@@ -727,6 +813,13 @@ mod tests {
         );
         assert_eq!(conflict["isError"], true);
         assert_eq!(conflict["structuredContent"]["ok"], false);
+        assert_structured_has_required_fields("start_work", &conflict["structuredContent"]);
+        assert_eq!(
+            conflict["structuredContent"]["context"]["project_root"]
+                .as_str()
+                .unwrap(),
+            root.canonicalize().unwrap().to_string_lossy().as_ref()
+        );
         assert_eq!(
             conflict["structuredContent"]["conflict"]["current_assignee"],
             "alice"
@@ -873,6 +966,16 @@ mod tests {
             competing_review["structuredContent"]["conflict"]["current_assignee"],
             "alice"
         );
+        assert_structured_has_required_fields(
+            "ready_for_review",
+            &competing_review["structuredContent"],
+        );
+        assert_eq!(
+            competing_review["structuredContent"]["context"]["project_root"]
+                .as_str()
+                .unwrap(),
+            root.canonicalize().unwrap().to_string_lossy().as_ref()
+        );
 
         let forced = call_tool(
             &root,
@@ -908,6 +1011,16 @@ mod tests {
         assert_eq!(ready["isError"], false);
         assert_eq!(ready["structuredContent"]["action"], "ready_for_review");
         assert_eq!(
+            ready["structuredContent"]["handoff"]["summary"],
+            "Implemented"
+        );
+        assert_eq!(
+            ready["structuredContent"]["context"]["board_path"],
+            crate::storage::board_store::board_path(&root)
+                .display()
+                .to_string()
+        );
+        assert_eq!(
             ready["structuredContent"]["task"]["status"],
             crate::model::board::TaskStatus::InReview.wire_id()
         );
@@ -928,9 +1041,21 @@ mod tests {
         let reviewed = call_tool(
             &root,
             "submit_review",
-            json!({ "id": task_id, "verdict": "changes_requested", "summary": "Fix edge case", "author": "codex-reviewer" }),
+            json!({
+                "id": task_id,
+                "verdict": "changes_requested",
+                "summary": "Fix edge case",
+                "severity": "medium",
+                "findings": ["Missing edge case"],
+                "recommendation": "Patch before completion",
+                "author": "codex-reviewer"
+            }),
         );
         assert_eq!(reviewed["isError"], false);
+        assert_eq!(
+            reviewed["structuredContent"]["review"]["severity"],
+            "medium"
+        );
         assert_eq!(
             reviewed["structuredContent"]["task"]["status"],
             crate::model::board::TaskStatus::InReview.wire_id()

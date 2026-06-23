@@ -5,7 +5,8 @@
 //! servers are preserved.
 //!
 //! - Claude Code: project-scoped `<project_root>/.mcp.json`.
-//! - Codex: `~/.codex/config.toml`.
+//! - Codex: `~/.codex/config.toml` (manual sessions only; board-launched Codex
+//!   invocations receive project-bound MCP overrides per process).
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read};
@@ -17,6 +18,62 @@ use crate::storage::fs_utils::atomic_write_private;
 
 /// Key used for our server in both agent configs.
 const SERVER_KEY: &str = "terminaltiler";
+
+/// Stable health labels used by MCP diagnostics and UI panels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpConfigStatus {
+    Ready,
+    WrongProjectRoot,
+    MissingConfig,
+    MissingBinary,
+    NeedsRepair,
+}
+
+impl McpConfigStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpConfigStatus::Ready => "ready",
+            McpConfigStatus::WrongProjectRoot => "wrong_project_root",
+            McpConfigStatus::MissingConfig => "missing_config",
+            McpConfigStatus::MissingBinary => "missing_binary",
+            McpConfigStatus::NeedsRepair => "needs_repair",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ServerInspection {
+    configured: bool,
+    status: McpConfigStatus,
+    detail: String,
+    command: Option<String>,
+    args: Vec<String>,
+    bound_project_root: Option<PathBuf>,
+}
+
+impl ServerInspection {
+    fn missing_config(detail: impl Into<String>) -> Self {
+        Self {
+            configured: false,
+            status: McpConfigStatus::MissingConfig,
+            detail: detail.into(),
+            command: None,
+            args: Vec::new(),
+            bound_project_root: None,
+        }
+    }
+
+    fn needs_repair(detail: impl Into<String>) -> Self {
+        Self {
+            configured: false,
+            status: McpConfigStatus::NeedsRepair,
+            detail: detail.into(),
+            command: None,
+            args: Vec::new(),
+            bound_project_root: None,
+        }
+    }
+}
 
 /// File name of the bundled MCP server binary.
 fn mcp_binary_file_name() -> &'static str {
@@ -158,49 +215,110 @@ pub fn connect_claude(project_root: &Path) -> Result<PathBuf, String> {
 
 /// Register the MCP server with Codex (`~/.codex/config.toml`). Returns the written path.
 pub fn connect_codex(project_root: &Path) -> Result<PathBuf, String> {
-    let home = directories::BaseDirs::new()
-        .ok_or_else(|| "could not resolve your home directory".to_string())?
-        .home_dir()
-        .to_path_buf();
-    let path = home.join(".codex").join("config.toml");
+    let root = codex_config_root()
+        .ok_or_else(|| "could not resolve your Codex config root".to_string())?;
+    let path = root.join("config.toml");
     let binary = mcp_binary_path().to_string_lossy().into_owned();
     upsert_codex(&path, &binary, project_root)?;
     Ok(path)
 }
 
+/// Resolve the Codex config root TerminalTiler should inspect/write for manual sessions.
+///
+/// Codex defaults to `$HOME/.codex`; `CODEX_HOME` is honored when present so diagnostics
+/// match the config root used by the current environment.
+pub fn codex_config_root() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex")))
+}
+
+/// CLI overrides that bind one Codex invocation to this project's bundled MCP server.
+///
+/// These are intentionally passed per board-launched Codex process so a single global
+/// `~/.codex/config.toml` entry cannot accidentally point the run at another project's
+/// board.
+pub fn codex_project_mcp_overrides(project_root: &Path) -> Vec<String> {
+    let binary = mcp_binary_path().to_string_lossy().into_owned();
+    codex_project_mcp_overrides_with_binary(project_root, &binary)
+}
+
+fn codex_project_mcp_overrides_with_binary(project_root: &Path, binary: &str) -> Vec<String> {
+    let project_root = project_root.to_string_lossy();
+    vec![
+        "-C".to_string(),
+        project_root.to_string(),
+        "-c".to_string(),
+        format!("mcp_servers.{SERVER_KEY}.command={}", toml_string(binary)),
+        "-c".to_string(),
+        format!(
+            "mcp_servers.{SERVER_KEY}.args=[{},{}]",
+            toml_string("--project-root"),
+            toml_string(&project_root)
+        ),
+    ]
+}
+
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
+}
+
 /// Snapshot of MCP setup health for UI panels and the `diagnose_mcp` tool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpDiagnostics {
+    pub status: McpConfigStatus,
     pub project_root: PathBuf,
     pub board_path: PathBuf,
     pub board_exists: bool,
+    pub process_cwd: Option<PathBuf>,
     pub mcp_binary_path: PathBuf,
     pub mcp_binary_exists: bool,
     pub claude_config_path: PathBuf,
     pub claude_configured: bool,
     pub claude_detail: String,
+    pub claude_status: McpConfigStatus,
+    pub claude_bound_project_root: Option<PathBuf>,
+    pub claude_command: Option<String>,
+    pub claude_args: Vec<String>,
     pub codex_config_path: Option<PathBuf>,
+    pub codex_config_root: Option<PathBuf>,
     pub codex_configured: bool,
     pub codex_detail: String,
+    pub codex_status: McpConfigStatus,
+    pub codex_bound_project_root: Option<PathBuf>,
+    pub codex_command: Option<String>,
+    pub codex_args: Vec<String>,
 }
 
 impl McpDiagnostics {
     pub fn to_json(&self) -> Value {
         json!({
+            "status": self.status.as_str(),
             "project_root": self.project_root.display().to_string(),
             "board_path": self.board_path.display().to_string(),
             "board_exists": self.board_exists,
+            "process_cwd": self.process_cwd.as_ref().map(|path| path.display().to_string()),
             "mcp_binary_path": self.mcp_binary_path.display().to_string(),
             "mcp_binary_exists": self.mcp_binary_exists,
             "claude": {
                 "config_path": self.claude_config_path.display().to_string(),
                 "configured": self.claude_configured,
+                "status": self.claude_status.as_str(),
                 "detail": self.claude_detail,
+                "bound_project_root": self.claude_bound_project_root.as_ref().map(|path| path.display().to_string()),
+                "command": self.claude_command.as_ref(),
+                "args": &self.claude_args,
             },
             "codex": {
+                "config_root": self.codex_config_root.as_ref().map(|path| path.display().to_string()),
                 "config_path": self.codex_config_path.as_ref().map(|path| path.display().to_string()),
                 "configured": self.codex_configured,
+                "status": self.codex_status.as_str(),
                 "detail": self.codex_detail,
+                "bound_project_root": self.codex_bound_project_root.as_ref().map(|path| path.display().to_string()),
+                "command": self.codex_command.as_ref(),
+                "args": &self.codex_args,
             }
         })
     }
@@ -212,28 +330,65 @@ pub fn diagnose_mcp(project_root: &Path) -> McpDiagnostics {
     let mcp_binary_path = mcp_binary_path();
     let mcp_binary_exists = mcp_binary_available(&mcp_binary_path);
     let claude_config_path = project_root.join(".mcp.json");
-    let (claude_configured, claude_detail) =
-        inspect_claude_config(&claude_config_path, project_root);
-    let codex_config_path =
-        directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex").join("config.toml"));
-    let (codex_configured, codex_detail) = codex_config_path
+    let claude = inspect_claude_config(&claude_config_path, project_root);
+    let codex_config_root = codex_config_root();
+    let codex_config_path = codex_config_root
+        .as_ref()
+        .map(|root| root.join("config.toml"));
+    let codex = codex_config_path
         .as_ref()
         .map(|path| inspect_codex_config(path, project_root))
-        .unwrap_or_else(|| (false, "could not resolve home directory".to_string()));
+        .unwrap_or_else(|| ServerInspection::needs_repair("could not resolve Codex config root"));
+    let status = overall_status(mcp_binary_exists, claude.status, codex.status);
 
     McpDiagnostics {
+        status,
         project_root: project_root.to_path_buf(),
         board_path: crate::storage::board_store::board_path(project_root),
         board_exists: crate::storage::board_store::board_exists(project_root),
+        process_cwd: std::env::current_dir().ok(),
         mcp_binary_path,
         mcp_binary_exists,
         claude_config_path,
-        claude_configured,
-        claude_detail,
+        claude_configured: claude.configured,
+        claude_detail: claude.detail,
+        claude_status: claude.status,
+        claude_bound_project_root: claude.bound_project_root,
+        claude_command: claude.command,
+        claude_args: claude.args,
         codex_config_path,
-        codex_configured,
-        codex_detail,
+        codex_config_root,
+        codex_configured: codex.configured,
+        codex_detail: codex.detail,
+        codex_status: codex.status,
+        codex_bound_project_root: codex.bound_project_root,
+        codex_command: codex.command,
+        codex_args: codex.args,
     }
+}
+
+fn overall_status(
+    mcp_binary_exists: bool,
+    claude_status: McpConfigStatus,
+    codex_status: McpConfigStatus,
+) -> McpConfigStatus {
+    if !mcp_binary_exists {
+        return McpConfigStatus::MissingBinary;
+    }
+    if claude_status == McpConfigStatus::Ready || codex_status == McpConfigStatus::Ready {
+        return McpConfigStatus::Ready;
+    }
+    if claude_status == McpConfigStatus::WrongProjectRoot
+        || codex_status == McpConfigStatus::WrongProjectRoot
+    {
+        return McpConfigStatus::WrongProjectRoot;
+    }
+    if claude_status == McpConfigStatus::MissingConfig
+        && codex_status == McpConfigStatus::MissingConfig
+    {
+        return McpConfigStatus::MissingConfig;
+    }
+    McpConfigStatus::NeedsRepair
 }
 
 fn mcp_binary_available(path: &Path) -> bool {
@@ -269,24 +424,26 @@ fn command_candidate_available(path: &Path) -> bool {
     path.is_file()
 }
 
-fn inspect_claude_config(path: &Path, project_root: &Path) -> (bool, String) {
+fn inspect_claude_config(path: &Path, project_root: &Path) -> ServerInspection {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (false, "not installed for this project".to_string());
+            return ServerInspection::missing_config("not installed for this project");
         }
-        Err(error) => return (false, format!("could not read config: {error}")),
+        Err(error) => {
+            return ServerInspection::needs_repair(format!("could not read config: {error}"));
+        }
     };
     let value: Value = match serde_json::from_str(&raw) {
         Ok(value) => value,
-        Err(error) => return (false, format!("invalid JSON: {error}")),
+        Err(error) => return ServerInspection::needs_repair(format!("invalid JSON: {error}")),
     };
     let Some(server) = value
         .get("mcpServers")
         .and_then(Value::as_object)
         .and_then(|servers| servers.get(SERVER_KEY))
     else {
-        return (false, "terminaltiler server entry missing".to_string());
+        return ServerInspection::missing_config("terminaltiler server entry missing");
     };
     inspect_server_entry(
         server.get("command").and_then(Value::as_str),
@@ -300,17 +457,19 @@ fn inspect_claude_config(path: &Path, project_root: &Path) -> (bool, String) {
     )
 }
 
-fn inspect_codex_config(path: &Path, project_root: &Path) -> (bool, String) {
+fn inspect_codex_config(path: &Path, project_root: &Path) -> ServerInspection {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return (false, "not installed in Codex config".to_string());
+            return ServerInspection::missing_config("not installed in Codex config");
         }
-        Err(error) => return (false, format!("could not read config: {error}")),
+        Err(error) => {
+            return ServerInspection::needs_repair(format!("could not read config: {error}"));
+        }
     };
     let document: toml::Table = match toml::from_str(&raw) {
         Ok(document) => document,
-        Err(error) => return (false, format!("invalid TOML: {error}")),
+        Err(error) => return ServerInspection::needs_repair(format!("invalid TOML: {error}")),
     };
     let Some(server) = document
         .get("mcp_servers")
@@ -318,7 +477,7 @@ fn inspect_codex_config(path: &Path, project_root: &Path) -> (bool, String) {
         .and_then(|servers| servers.get(SERVER_KEY))
         .and_then(toml::Value::as_table)
     else {
-        return (false, "terminaltiler server entry missing".to_string());
+        return ServerInspection::missing_config("terminaltiler server entry missing");
     };
     let command = server.get("command").and_then(toml::Value::as_str);
     let args = server
@@ -337,25 +496,61 @@ fn inspect_server_entry(
     command: Option<&str>,
     args: Option<Vec<String>>,
     project_root: &Path,
-) -> (bool, String) {
+) -> ServerInspection {
     let Some(command) = command.filter(|value| !value.trim().is_empty()) else {
-        return (false, "server command missing".to_string());
+        return ServerInspection::needs_repair("server command missing");
     };
     let args = args.unwrap_or_default();
-    let expected_root = project_root.to_string_lossy();
-    let has_project_root = args
-        .windows(2)
-        .any(|pair| pair[0] == "--project-root" && pair[1] == expected_root);
-    if !has_project_root {
-        return (
-            false,
-            "server entry exists but does not target this project root".to_string(),
-        );
+    let command_path = Path::new(command);
+    if !mcp_binary_available(command_path) {
+        return ServerInspection {
+            configured: false,
+            status: McpConfigStatus::MissingBinary,
+            detail: format!("server command '{}' is not available", command),
+            command: Some(command.to_string()),
+            args,
+            bound_project_root: None,
+        };
     }
-    (
-        true,
-        format!("configured: {command} --project-root {expected_root}"),
-    )
+    let expected_root = project_root.to_string_lossy();
+    let bound_project_root = project_root_arg(&args).map(PathBuf::from);
+    if bound_project_root
+        .as_ref()
+        .is_none_or(|root| root.to_string_lossy() != expected_root)
+    {
+        let detail = match bound_project_root.as_ref() {
+            Some(bound) => format!(
+                "server entry targets {}, not this project root {}",
+                bound.display(),
+                expected_root
+            ),
+            None => {
+                format!("server entry exists but has no --project-root {expected_root} binding")
+            }
+        };
+        return ServerInspection {
+            configured: false,
+            status: McpConfigStatus::WrongProjectRoot,
+            detail,
+            command: Some(command.to_string()),
+            args,
+            bound_project_root,
+        };
+    }
+    ServerInspection {
+        configured: true,
+        status: McpConfigStatus::Ready,
+        detail: format!("configured: {command} --project-root {expected_root}"),
+        command: Some(command.to_string()),
+        args,
+        bound_project_root,
+    }
+}
+
+fn project_root_arg(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--project-root")
+        .map(|pair| pair[1].clone())
 }
 
 fn upsert_claude(path: &Path, binary: &str, project_root: &Path) -> Result<(), String> {
@@ -509,6 +704,46 @@ mod tests {
         let args = servers["terminaltiler"]["args"].as_array().unwrap();
         assert_eq!(args[0].as_str(), Some("--project-root"));
         assert_eq!(args[1].as_str(), Some(dir.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn codex_project_overrides_bind_one_invocation_to_project_root() {
+        let overrides =
+            codex_project_mcp_overrides_with_binary(Path::new("/tmp/project"), "/opt/tt/mcp");
+
+        assert_eq!(overrides[0], "-C");
+        assert_eq!(overrides[1], "/tmp/project");
+        assert_eq!(overrides[2], "-c");
+        assert_eq!(
+            overrides[3],
+            r#"mcp_servers.terminaltiler.command="/opt/tt/mcp""#
+        );
+        assert_eq!(overrides[4], "-c");
+        assert_eq!(
+            overrides[5],
+            r#"mcp_servers.terminaltiler.args=["--project-root","/tmp/project"]"#
+        );
+    }
+
+    #[test]
+    fn codex_wrong_project_root_config_is_detected() {
+        let dir = temp_dir();
+        let current = dir.join("current");
+        let other = dir.join("other");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let binary = dir.join(mcp_binary_file_name());
+        fs::write(&binary, b"fake-binary").unwrap();
+        set_executable(&binary).unwrap();
+        let config = dir.join("config.toml");
+        upsert_codex(&config, &binary.to_string_lossy(), &other).unwrap();
+
+        let inspection = inspect_codex_config(&config, &current);
+
+        assert!(!inspection.configured);
+        assert_eq!(inspection.status, McpConfigStatus::WrongProjectRoot);
+        assert_eq!(inspection.bound_project_root, Some(other));
+        assert!(inspection.detail.contains("not this project root"));
     }
 
     #[test]

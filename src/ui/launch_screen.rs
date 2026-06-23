@@ -326,7 +326,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
     board_agent_panel.append(&build_section_header(
         "Step 2",
         "MCP / agent setup",
-        "Connect Claude Code or Codex so agents can update this project's board through the bundled MCP server.",
+        "Connect Claude Code or install/repair Codex for manual sessions. Board-launched Codex runs use project-bound MCP overrides automatically.",
     ));
     let initial_mcp_root = board_health_project_root(&board_path_entry);
     let board_mcp_health = Rc::new(McpHealthPanel::new(&initial_mcp_root));
@@ -358,7 +358,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         ],
     );
     let board_codex_button = icons::labeled_button(
-        "Connect Codex",
+        "Repair Codex (manual)",
         icon_name::TERMINAL,
         &[
             "pill-button",
@@ -410,8 +410,10 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 }) {
                 Ok(path) => {
                     board_agent_status.remove_css_class("error-text");
-                    board_agent_status
-                        .set_text(&format!("Connected Codex. Wrote {}", path.display()));
+                    board_agent_status.set_text(&format!(
+                        "Updated manual Codex config. Wrote {}",
+                        path.display()
+                    ));
                 }
                 Err(message) => {
                     board_agent_status.add_css_class("error-text");

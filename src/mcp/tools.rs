@@ -295,6 +295,10 @@ pub fn list_json() -> Vec<Value> {
                 "properties": {
                     "id": { "type": "string" },
                     "summary": { "type": "string" },
+                    "changed_files": string_or_string_array_schema("Optional handoff file list."),
+                    "tests": string_or_string_array_schema("Optional tests run."),
+                    "risks": string_or_string_array_schema("Optional remaining risks."),
+                    "next_steps": string_or_string_array_schema("Optional follow-up steps."),
                     "author": { "type": "string" },
                     "assignee": { "type": "string", "description": "Alias for author." },
                     "force": { "type": "boolean", "description": "Override a fresh active lease owned by someone else." }
@@ -312,6 +316,9 @@ pub fn list_json() -> Vec<Value> {
                     "id": { "type": "string" },
                     "verdict": { "type": "string", "description": "e.g. approved, changes_requested, blocked" },
                     "summary": { "type": "string" },
+                    "severity": { "type": "string", "description": "Optional severity label, e.g. info, low, medium, high, critical." },
+                    "findings": string_or_string_array_schema("Optional finding list."),
+                    "recommendation": { "type": "string", "description": "Optional final reviewer recommendation." },
                     "author": { "type": "string", "description": "Defaults to 'reviewer'." }
                 },
                 "required": ["id", "verdict"]
@@ -380,18 +387,21 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
     let text = serde_json::to_string_pretty(&tasks).map_err(json_error)?;
     Ok(output(
         text,
-        Some(json!({
-            "ok": true,
-            "action": "list_tasks",
-            "tasks": tasks,
-            "count": tasks.len(),
-            "filters": {
-                "status": status.map(|status| status.wire_id()),
-                "available_only": available_only,
-                "assignee": assignee,
-                "blocked": blocked,
-            }
-        })),
+        Some(with_context(
+            json!({
+                "ok": true,
+                "action": "list_tasks",
+                "tasks": tasks,
+                "count": tasks.len(),
+                "filters": {
+                    "status": status.map(|status| status.wire_id()),
+                    "available_only": available_only,
+                    "assignee": assignee,
+                    "blocked": blocked,
+                }
+            }),
+            project_root,
+        )),
     ))
 }
 
@@ -400,7 +410,7 @@ fn get_board_summary(
     project_root: &Path,
 ) -> Result<ToolCallOutput, ToolCallError> {
     let board = board_store::load(project_root);
-    let structured = board_summary_value(&board);
+    let structured = with_context(board_summary_value(&board), project_root);
     let text = board_summary_text(&board);
     Ok(output(text, Some(structured)))
 }
@@ -420,23 +430,26 @@ fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
     );
     Ok(output(
         text,
-        Some(json!({
-            "ok": true,
-            "action": "get_my_work",
-            "assignee": work.assignee,
-            "groups": {
-                "active": work.active,
-                "stale": work.stale,
-                "paused": work.paused,
-                "in_review": work.in_review,
-            },
-            "counts": {
-                "active": active_count,
-                "stale": stale_count,
-                "paused": paused_count,
-                "in_review": in_review_count,
-            },
-        })),
+        Some(with_context(
+            json!({
+                "ok": true,
+                "action": "get_my_work",
+                "assignee": work.assignee,
+                "groups": {
+                    "active": work.active,
+                    "stale": work.stale,
+                    "paused": work.paused,
+                    "in_review": work.in_review,
+                },
+                "counts": {
+                    "active": active_count,
+                    "stale": stale_count,
+                    "paused": paused_count,
+                    "in_review": in_review_count,
+                },
+            }),
+            project_root,
+        )),
     ))
 }
 
@@ -469,7 +482,8 @@ fn get_task_brief(arguments: &Value, project_root: &Path) -> Result<ToolCallOutp
 fn diagnose_mcp(_arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let diagnostics = agent_config::diagnose_mcp(project_root);
     let text = format!(
-        "Project: {}\nBoard: {} ({})\nMCP binary: {} ({})\nClaude: {} ({})\nCodex: {} ({})",
+        "Status: {}\nProject: {}\nBoard: {} ({})\nProcess cwd: {}\nMCP binary: {} ({})\nClaude [{}]: {} ({})\nCodex [{}]: {} ({})\nCodex config root: {}",
+        diagnostics.status.as_str(),
         diagnostics.project_root.display(),
         diagnostics.board_path.display(),
         if diagnostics.board_exists {
@@ -477,24 +491,39 @@ fn diagnose_mcp(_arguments: &Value, project_root: &Path) -> Result<ToolCallOutpu
         } else {
             "missing"
         },
+        diagnostics
+            .process_cwd
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unresolved>".to_string()),
         diagnostics.mcp_binary_path.display(),
         if diagnostics.mcp_binary_exists {
             "present"
         } else {
             "PATH lookup or missing"
         },
+        diagnostics.claude_status.as_str(),
         diagnostics.claude_config_path.display(),
         diagnostics.claude_detail,
+        diagnostics.codex_status.as_str(),
         diagnostics
             .codex_config_path
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<unresolved>".to_string()),
         diagnostics.codex_detail,
+        diagnostics
+            .codex_config_root
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unresolved>".to_string()),
     );
     Ok(output(
         text,
-        Some(json!({ "ok": true, "action": "diagnose_mcp", "diagnostics": diagnostics.to_json() })),
+        Some(with_context(
+            json!({ "ok": true, "action": "diagnose_mcp", "diagnostics": diagnostics.to_json() }),
+            project_root,
+        )),
     ))
 }
 
@@ -511,7 +540,10 @@ fn create_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
     .map_err(io_error)?;
     Ok(output(
         format!("Created task {} in {}.", task.id, status.column_title()),
-        Some(json!({ "ok": true, "action": "create_task", "task_id": task.id, "task": task })),
+        Some(with_context(
+            json!({ "ok": true, "action": "create_task", "task_id": task.id, "task": task }),
+            project_root,
+        )),
     ))
 }
 
@@ -531,7 +563,12 @@ fn claim_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
     .map_err(board_error)?;
     Ok(output(
         format!("Claimed task {id} as '{assignee}' (In Progress)."),
-        Some(task_structured("claim_task", &task.task, task.warnings)),
+        Some(task_structured(
+            "claim_task",
+            &task.task,
+            task.warnings,
+            project_root,
+        )),
     ))
 }
 
@@ -560,16 +597,19 @@ fn update_task_status(
         .unwrap_or(transition.task);
     Ok(output(
         message,
-        Some(json!({
-            "ok": true,
-            "action": "update_task_status",
-            "task_id": id,
-            "status": status.wire_id(),
-            "task": task,
-            "warnings": transition.warnings,
-            "review_started": review_started,
-            "review_error": review_error,
-        })),
+        Some(with_context(
+            json!({
+                "ok": true,
+                "action": "update_task_status",
+                "task_id": id,
+                "status": status.wire_id(),
+                "task": task,
+                "warnings": transition.warnings,
+                "review_started": review_started,
+                "review_error": review_error,
+            }),
+            project_root,
+        )),
     ))
 }
 
@@ -590,7 +630,12 @@ fn complete_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutpu
     .map_err(board_error)?;
     Ok(output(
         format!("Completed task {id}."),
-        Some(task_structured("complete_task", &task.task, task.warnings)),
+        Some(task_structured(
+            "complete_task",
+            &task.task,
+            task.warnings,
+            project_root,
+        )),
     ))
 }
 
@@ -605,7 +650,12 @@ fn add_task_note(arguments: &Value, project_root: &Path) -> Result<ToolCallOutpu
     .map_err(board_error)?;
     Ok(output(
         format!("Added note to task {id}."),
-        Some(task_structured("add_task_note", &task, Vec::new())),
+        Some(task_structured(
+            "add_task_note",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -630,7 +680,12 @@ fn add_task_knowledge(
     .map_err(board_error)?;
     Ok(output(
         format!("Recorded knowledge on task {id}."),
-        Some(task_structured("add_task_knowledge", &task, Vec::new())),
+        Some(task_structured(
+            "add_task_knowledge",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -648,13 +703,14 @@ fn start_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
         })
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Started work on task {id} as '{assignee}'."),
         Some(task_structured(
             "start_work",
             &transition.task,
             transition.warnings,
+            project_root,
         )),
     ))
 }
@@ -669,7 +725,7 @@ fn start_next_work(
         board_service::start_next_work(board, assignee, stale_after_secs)
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
 
     match transition {
         Some(transition) => Ok(output(
@@ -681,20 +737,24 @@ fn start_next_work(
                 "start_next_work",
                 &transition.task,
                 transition.warnings,
+                project_root,
             )),
         )),
         None => Ok(output(
             "No available unblocked To Do task without a fresh active lease.".to_string(),
-            Some(json!({
-                "ok": true,
-                "action": "start_next_work",
-                "task_id": Value::Null,
-                "task": Value::Null,
-                "lifecycle": Value::Null,
-                "warnings": [],
-                "conflict": Value::Null,
-                "reason": "no_available_task",
-            })),
+            Some(with_context(
+                json!({
+                    "ok": true,
+                    "action": "start_next_work",
+                    "task_id": Value::Null,
+                    "task": Value::Null,
+                    "lifecycle": Value::Null,
+                    "warnings": [],
+                    "conflict": Value::Null,
+                    "reason": "no_available_task",
+                }),
+                project_root,
+            )),
         )),
     }
 }
@@ -707,10 +767,15 @@ fn heartbeat_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutp
         board_service::heartbeat_task(board, id, assignee, note).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Heartbeat recorded for task {id} as '{assignee}'."),
-        Some(task_structured("heartbeat_task", &task, Vec::new())),
+        Some(task_structured(
+            "heartbeat_task",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -722,10 +787,15 @@ fn pause_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
         board_service::pause_work(board, id, assignee, reason).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Paused work on task {id} as '{assignee}'."),
-        Some(task_structured("pause_work", &task, Vec::new())),
+        Some(task_structured(
+            "pause_work",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -738,10 +808,15 @@ fn release_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput
         board_service::release_task(board, id, assignee, reason, force).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Released task {id}."),
-        Some(task_structured("release_task", &task, Vec::new())),
+        Some(task_structured(
+            "release_task",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -758,13 +833,14 @@ fn reassign_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutpu
         })
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Reassigned task {id} to '{assignee}'."),
         Some(task_structured(
             "reassign_task",
             &transition.task,
             transition.warnings,
+            project_root,
         )),
     ))
 }
@@ -778,10 +854,15 @@ fn block_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
         board_service::block_task(board, id, reason, category, author).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Blocked task {id}."),
-        Some(task_structured("block_task", &task, Vec::new())),
+        Some(task_structured(
+            "block_task",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -793,10 +874,15 @@ fn unblock_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput
         board_service::unblock_task(board, id, note, author).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Unblocked task {id}."),
-        Some(task_structured("unblock_task", &task, Vec::new())),
+        Some(task_structured(
+            "unblock_task",
+            &task,
+            Vec::new(),
+            project_root,
+        )),
     ))
 }
 
@@ -806,16 +892,21 @@ fn ready_for_review(
 ) -> Result<ToolCallOutput, ToolCallError> {
     let id = require_str(arguments, "id")?;
     let summary = require_str(arguments, "summary")?.to_string();
+    let changed_files = optional_string_list(arguments, "changed_files")?;
+    let tests = optional_string_list(arguments, "tests")?;
+    let risks = optional_string_list(arguments, "risks")?;
+    let next_steps = optional_string_list(arguments, "next_steps")?;
+    let handoff_note = format_handoff_note(&summary, &changed_files, &tests, &risks, &next_steps);
     let author = Some(actor_argument(arguments));
     let force = optional_bool(arguments, "force").unwrap_or(false);
     let transition = review_dispatch::ready_for_review_as_and_claim_auto_review(
         project_root,
         id,
-        summary,
+        handoff_note,
         author,
         force,
     )
-    .map_err(review_dispatch_error)?;
+    .map_err(|error| review_dispatch_error_with_context(error, project_root))?;
     let mut message = format!("Moved task {id} to In Review with handoff summary.");
     let (review_started, review_error) =
         spawn_claimed_review(project_root, transition.selection.as_ref(), &mut message);
@@ -823,9 +914,17 @@ fn ready_for_review(
     let task = board_service::get_task(&board, id)
         .cloned()
         .unwrap_or(transition.task);
-    let mut structured = task_structured("ready_for_review", &task, transition.warnings);
+    let mut structured =
+        task_structured("ready_for_review", &task, transition.warnings, project_root);
     structured["review_started"] = review_started.unwrap_or(Value::Null);
     structured["review_error"] = review_error.unwrap_or(Value::Null);
+    structured["handoff"] = json!({
+        "summary": summary,
+        "changed_files": changed_files,
+        "tests": tests,
+        "risks": risks,
+        "next_steps": next_steps,
+    });
     Ok(output(message, Some(structured)))
 }
 
@@ -833,17 +932,36 @@ fn submit_review(arguments: &Value, project_root: &Path) -> Result<ToolCallOutpu
     let id = require_str(arguments, "id")?;
     let verdict = require_str(arguments, "verdict")?;
     let summary = optional_str(arguments, "summary").unwrap_or_default();
+    let severity = optional_str(arguments, "severity").map(str::to_string);
+    let findings = optional_string_list(arguments, "findings")?;
+    let recommendation = optional_str(arguments, "recommendation").map(str::to_string);
+    let review_summary = format_review_summary(
+        summary,
+        severity.as_deref(),
+        &findings,
+        recommendation.as_deref(),
+    );
     let author = optional_str(arguments, "author")
         .unwrap_or("reviewer")
         .to_string();
     let task = board_store::update(project_root, |board| {
-        board_service::submit_review(board, id, verdict, summary, Some(author)).cloned()
+        board_service::submit_review(board, id, verdict, review_summary, Some(author)).cloned()
     })
     .map_err(io_error)?
-    .map_err(board_error)?;
+    .map_err(|error| board_error_with_context(error, project_root))?;
     Ok(output(
         format!("Submitted review for task {id}; task remains In Review."),
-        Some(task_structured("submit_review", &task, Vec::new())),
+        {
+            let mut structured = task_structured("submit_review", &task, Vec::new(), project_root);
+            structured["review"] = json!({
+                "verdict": verdict,
+                "summary": summary,
+                "severity": severity,
+                "findings": findings,
+                "recommendation": recommendation,
+            });
+            Some(structured)
+        },
     ))
 }
 
@@ -883,6 +1001,16 @@ fn tool_title(name: &str) -> String {
         .join(" ")
 }
 
+fn string_or_string_array_schema(description: &str) -> Value {
+    json!({
+        "description": description,
+        "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+        ]
+    })
+}
+
 fn basic_output_schema() -> Value {
     json!({
         "type": "object",
@@ -894,12 +1022,25 @@ fn basic_output_schema() -> Value {
     })
 }
 
+fn context_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "project_root": { "type": "string" },
+            "board_path": { "type": "string" },
+            "process_cwd": { "type": ["string", "null"] }
+        },
+        "required": ["project_root", "board_path", "process_cwd"]
+    })
+}
+
 fn lifecycle_output_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "ok": { "type": "boolean" },
             "action": { "type": "string" },
+            "context": context_output_schema(),
             "task_id": { "type": ["string", "null"] },
             "task": { "type": ["object", "null"] },
             "lifecycle": { "type": ["object", "null"] },
@@ -909,7 +1050,7 @@ fn lifecycle_output_schema() -> Value {
             "review_error": { "type": ["object", "null"] },
             "reason": { "type": ["string", "null"] }
         },
-        "required": ["ok", "action", "task_id", "warnings"]
+        "required": ["ok", "action", "context", "task_id", "warnings"]
     })
 }
 
@@ -919,6 +1060,7 @@ fn my_work_output_schema() -> Value {
         "properties": {
             "ok": { "type": "boolean" },
             "action": { "type": "string" },
+            "context": context_output_schema(),
             "assignee": { "type": "string" },
             "groups": {
                 "type": "object",
@@ -941,7 +1083,7 @@ fn my_work_output_schema() -> Value {
                 "required": ["active", "stale", "paused", "in_review"]
             }
         },
-        "required": ["ok", "action", "assignee", "groups", "counts"]
+        "required": ["ok", "action", "context", "assignee", "groups", "counts"]
     })
 }
 
@@ -951,6 +1093,7 @@ fn board_summary_output_schema() -> Value {
         "properties": {
             "ok": { "type": "boolean" },
             "action": { "type": "string" },
+            "context": context_output_schema(),
             "total": { "type": "integer", "minimum": 0 },
             "by_status": {
                 "type": "object",
@@ -978,7 +1121,7 @@ fn board_summary_output_schema() -> Value {
                 "required": ["available", "stale", "blocked", "in_review"]
             }
         },
-        "required": ["ok", "action", "total", "by_status", "lifecycle", "available", "queues"]
+        "required": ["ok", "action", "context", "total", "by_status", "lifecycle", "available", "queues"]
     })
 }
 
@@ -988,12 +1131,15 @@ fn mcp_diagnostics_output_schema() -> Value {
         "properties": {
             "ok": { "type": "boolean" },
             "action": { "type": "string" },
+            "context": context_output_schema(),
             "diagnostics": {
                 "type": "object",
                 "properties": {
+                    "status": { "type": "string" },
                     "project_root": { "type": "string" },
                     "board_path": { "type": "string" },
                     "board_exists": { "type": "boolean" },
+                    "process_cwd": { "type": ["string", "null"] },
                     "mcp_binary_path": { "type": "string" },
                     "mcp_binary_exists": { "type": "boolean" },
                     "claude": {
@@ -1001,24 +1147,35 @@ fn mcp_diagnostics_output_schema() -> Value {
                         "properties": {
                             "config_path": { "type": "string" },
                             "configured": { "type": "boolean" },
-                            "detail": { "type": "string" }
+                            "status": { "type": "string" },
+                            "detail": { "type": "string" },
+                            "bound_project_root": { "type": ["string", "null"] },
+                            "command": { "type": ["string", "null"] },
+                            "args": { "type": "array", "items": { "type": "string" } }
                         },
-                        "required": ["config_path", "configured", "detail"]
+                        "required": ["config_path", "configured", "status", "detail", "bound_project_root", "command", "args"]
                     },
                     "codex": {
                         "type": "object",
                         "properties": {
+                            "config_root": { "type": ["string", "null"] },
                             "config_path": { "type": ["string", "null"] },
                             "configured": { "type": "boolean" },
-                            "detail": { "type": "string" }
+                            "status": { "type": "string" },
+                            "detail": { "type": "string" },
+                            "bound_project_root": { "type": ["string", "null"] },
+                            "command": { "type": ["string", "null"] },
+                            "args": { "type": "array", "items": { "type": "string" } }
                         },
-                        "required": ["config_path", "configured", "detail"]
+                        "required": ["config_root", "config_path", "configured", "status", "detail", "bound_project_root", "command", "args"]
                     }
                 },
                 "required": [
+                    "status",
                     "project_root",
                     "board_path",
                     "board_exists",
+                    "process_cwd",
                     "mcp_binary_path",
                     "mcp_binary_exists",
                     "claude",
@@ -1026,7 +1183,7 @@ fn mcp_diagnostics_output_schema() -> Value {
                 ]
             }
         },
-        "required": ["ok", "action", "diagnostics"]
+        "required": ["ok", "action", "context", "diagnostics"]
     })
 }
 
@@ -1152,6 +1309,100 @@ pub fn board_summary_text(board: &Board) -> String {
     lines.join("\n")
 }
 
+pub fn board_activity_value(board: &Board) -> Value {
+    let mut events = Vec::new();
+    for task in &board.tasks {
+        events.push(json!({
+            "kind": "task_status",
+            "task_id": task.id,
+            "task_title": task.title,
+            "status": task.status.wire_id(),
+            "at": task.updated_at,
+            "assignee": task.assignee,
+        }));
+        if let Some(blocked) = task.blocked.as_ref() {
+            events.push(json!({
+                "kind": "blocked",
+                "task_id": task.id,
+                "task_title": task.title,
+                "reason": blocked.reason,
+                "category": blocked.category,
+                "author": blocked.author,
+                "at": blocked.blocked_at,
+            }));
+        }
+        if let Some(paused) = task.paused.as_ref() {
+            events.push(json!({
+                "kind": "paused",
+                "task_id": task.id,
+                "task_title": task.title,
+                "reason": paused.reason,
+                "author": paused.author,
+                "at": paused.paused_at,
+            }));
+        }
+        for note in &task.notes {
+            events.push(json!({
+                "kind": "note",
+                "task_id": task.id,
+                "task_title": task.title,
+                "author": note.author,
+                "text": note.text,
+                "at": note.created_at,
+            }));
+        }
+        for entry in &task.knowledge {
+            events.push(json!({
+                "kind": "knowledge",
+                "task_id": task.id,
+                "task_title": task.title,
+                "title": entry.title,
+                "source": entry.source,
+                "category": entry.category,
+                "author": entry.author,
+                "at": entry.created_at,
+            }));
+        }
+        if let Some(started_at) = task.review.last_started_at {
+            events.push(json!({
+                "kind": "review_started",
+                "task_id": task.id,
+                "task_title": task.title,
+                "reviewer": task.review.last_reviewer,
+                "attempts": task.review.attempts,
+                "error": task.review.last_error,
+                "at": started_at,
+            }));
+        }
+    }
+    events.sort_by(|left, right| {
+        right["at"]
+            .as_u64()
+            .unwrap_or_default()
+            .cmp(&left["at"].as_u64().unwrap_or_default())
+    });
+    json!({
+        "ok": true,
+        "action": "board_activity",
+        "events": events,
+    })
+}
+
+pub fn mcp_context_value(project_root: &Path) -> Value {
+    json!({
+        "project_root": project_root.display().to_string(),
+        "board_path": board_store::board_path(project_root).display().to_string(),
+        "process_cwd": std::env::current_dir().ok().map(|path| path.display().to_string()),
+    })
+}
+
+fn with_context(mut value: Value, project_root: &Path) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("context".to_string(), mcp_context_value(project_root));
+    }
+    value
+}
+
 pub fn task_brief_markdown(task: &Task) -> String {
     let mut text = format!(
         "# {} ({})\n\n- id: `{}`\n- status: `{}`\n",
@@ -1212,16 +1463,77 @@ pub fn task_brief_markdown(task: &Task) -> String {
     text
 }
 
+pub fn task_handoff_markdown(task: &Task) -> String {
+    let mut text = format!(
+        "# Handoff: {}\n\n- id: `{}`\n- status: `{}`\n",
+        task.title,
+        task.id,
+        task.status.wire_id()
+    );
+    if let Some(assignee) = task.assignee.as_deref() {
+        text.push_str(&format!("- assignee: `{assignee}`\n"));
+    }
+    if !task.description.trim().is_empty() {
+        text.push_str("\n## Scope\n\n");
+        text.push_str(task.description.trim());
+        text.push('\n');
+    }
+    let handoff_notes: Vec<_> = task
+        .notes
+        .iter()
+        .filter(|note| {
+            let text = note.text.to_ascii_lowercase();
+            text.contains("handoff")
+                || text.contains("changed files")
+                || text.contains("review verdict")
+                || text.contains("risks")
+                || text.contains("tests")
+        })
+        .collect();
+    if !handoff_notes.is_empty() {
+        text.push_str("\n## Handoff and review notes\n\n");
+        for note in handoff_notes {
+            let author = note.author.as_deref().unwrap_or("unknown");
+            text.push_str(&format!(
+                "### {} by {}\n\n{}\n\n",
+                note.created_at, author, note.text
+            ));
+        }
+    } else if !task.notes.is_empty() {
+        text.push_str("\n## Latest notes\n\n");
+        for note in task.notes.iter().rev().take(3) {
+            let author = note.author.as_deref().unwrap_or("unknown");
+            text.push_str(&format!(
+                "- [{}] {}: {}\n",
+                note.created_at, author, note.text
+            ));
+        }
+    }
+    if !task.knowledge.is_empty() {
+        text.push_str("\n## Knowledge to preserve\n\n");
+        for entry in &task.knowledge {
+            text.push_str(&format!("- **{}**: {}\n", entry.title, entry.content));
+        }
+    }
+    if let Some(blocked) = task.blocked.as_ref() {
+        text.push_str("\n## Current blocker\n\n");
+        text.push_str(&blocked.reason);
+        text.push('\n');
+    }
+    text
+}
+
 pub fn workflow_guide_markdown() -> String {
     [
         "# TerminalTiler Kanban MCP workflow",
         "",
+        "0. Verify the `context.project_root` (or call `diagnose_mcp`) before mutating tasks; stop if it is not the project/worktree you intend to edit.",
         "1. Call `get_my_work` with your `assignee` before claiming anything new; resume owned active, stale, paused, or in-review tasks first.",
         "2. If there is nothing to resume, call `start_next_work` to atomically claim the first available unblocked To Do task. It returns `reason: no_available_task` and `task: null` when nothing is claimable.",
         "3. For a specific user-provided task id, call `start_work` (or legacy `claim_task`) with your `assignee` before editing.",
         "4. Send `heartbeat_task`, `add_task_note`, and `add_task_knowledge` while working.",
-        "5. Call `ready_for_review` with `author` and a handoff summary when implementation is ready.",
-        "6. Reviewers call `submit_review`; only call `complete_task` when explicitly closing the task.",
+        "5. Call `ready_for_review` with `author`, `summary`, and optional `changed_files`, `tests`, `risks`, and `next_steps` when implementation is ready.",
+        "6. Reviewers call `submit_review` with `verdict` and optional `severity`, `findings`, and `recommendation`; only call `complete_task` when explicitly closing the task.",
         "",
         "Fresh active leases owned by another assignee return an `ownership_conflict` tool error unless `force` is set.",
     ]
@@ -1301,6 +1613,44 @@ fn optional_bool(arguments: &Value, key: &str) -> Option<bool> {
     arguments.get(key).and_then(Value::as_bool)
 }
 
+fn optional_string_list(arguments: &Value, key: &str) -> Result<Vec<String>, ToolCallError> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    if let Some(text) = value.as_str() {
+        return Ok(split_text_list(text));
+    }
+    if let Some(values) = value.as_array() {
+        let mut items = Vec::new();
+        for value in values {
+            let Some(text) = value.as_str() else {
+                return Err(text_error(format!(
+                    "parameter '{key}' must be a string or an array of strings"
+                )));
+            };
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                items.push(trimmed.to_string());
+            }
+        }
+        return Ok(items);
+    }
+    Err(text_error(format!(
+        "parameter '{key}' must be a string or an array of strings"
+    )))
+}
+
+fn split_text_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| line.trim().trim_start_matches("- ").trim())
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn optional_u64(arguments: &Value, key: &str) -> Result<Option<u64>, ToolCallError> {
     let Some(value) = arguments.get(key) else {
         return Ok(None);
@@ -1316,6 +1666,56 @@ fn optional_u64(arguments: &Value, key: &str) -> Result<Option<u64>, ToolCallErr
         )));
     }
     Ok(Some(raw))
+}
+
+fn format_handoff_note(
+    summary: &str,
+    changed_files: &[String],
+    tests: &[String],
+    risks: &[String],
+    next_steps: &[String],
+) -> String {
+    let has_extra = !changed_files.is_empty()
+        || !tests.is_empty()
+        || !risks.is_empty()
+        || !next_steps.is_empty();
+    if !has_extra {
+        return summary.to_string();
+    }
+    let mut lines = vec!["Handoff summary:".to_string(), summary.trim().to_string()];
+    append_markdown_list(&mut lines, "Changed files", changed_files);
+    append_markdown_list(&mut lines, "Tests", tests);
+    append_markdown_list(&mut lines, "Risks", risks);
+    append_markdown_list(&mut lines, "Next steps", next_steps);
+    lines.join("\n")
+}
+
+fn format_review_summary(
+    summary: &str,
+    severity: Option<&str>,
+    findings: &[String],
+    recommendation: Option<&str>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(severity) = severity.filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("Severity: {}", severity.trim()));
+    }
+    if !summary.trim().is_empty() {
+        lines.push(summary.trim().to_string());
+    }
+    append_markdown_list(&mut lines, "Findings", findings);
+    if let Some(recommendation) = recommendation.filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("Recommendation: {}", recommendation.trim()));
+    }
+    lines.join("\n")
+}
+
+fn append_markdown_list(lines: &mut Vec<String>, title: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    lines.push(format!("{title}:"));
+    lines.extend(items.iter().map(|item| format!("- {item}")));
 }
 
 fn output(text: impl Into<String>, structured: Option<Value>) -> ToolCallOutput {
@@ -1370,6 +1770,22 @@ fn board_error(error: board_service::BoardError) -> ToolCallError {
     }
 }
 
+fn board_error_with_context(
+    error: board_service::BoardError,
+    project_root: &Path,
+) -> ToolCallError {
+    structured_error_with_context(board_error(error), project_root)
+}
+
+fn structured_error_with_context(mut error: ToolCallError, project_root: &Path) -> ToolCallError {
+    if let Some(Value::Object(object)) = &mut error.structured {
+        object
+            .entry("context".to_string())
+            .or_insert_with(|| mcp_context_value(project_root));
+    }
+    error
+}
+
 fn review_dispatch_error(error: review_dispatch::ReviewDispatchError) -> ToolCallError {
     match error {
         review_dispatch::ReviewDispatchError::Board(error) => board_error(error),
@@ -1377,26 +1793,41 @@ fn review_dispatch_error(error: review_dispatch::ReviewDispatchError) -> ToolCal
     }
 }
 
-fn task_structured(action: &str, task: &Task, warnings: Vec<String>) -> Value {
+fn review_dispatch_error_with_context(
+    error: review_dispatch::ReviewDispatchError,
+    project_root: &Path,
+) -> ToolCallError {
+    match error {
+        review_dispatch::ReviewDispatchError::Board(error) => {
+            board_error_with_context(error, project_root)
+        }
+        review_dispatch::ReviewDispatchError::Storage(error) => text_error(error),
+    }
+}
+
+fn task_structured(action: &str, task: &Task, warnings: Vec<String>, project_root: &Path) -> Value {
     let now = now_epoch_secs();
-    json!({
-        "ok": true,
-        "action": action,
-        "task_id": task.id,
-        "task": task,
-        "lifecycle": {
-            "assignee": task.assignee,
-            "claimed_at": task.claimed_at,
-            "heartbeat_at": task.heartbeat_at,
-            "stale_after_secs": task.stale_after_secs,
-            "paused": task.paused,
-            "blocked": task.blocked,
-            "stale": board_service::task_is_stale(task, now),
-            "indicators": board_service::lifecycle_indicators(task, now),
-        },
-        "warnings": warnings,
-        "conflict": null,
-    })
+    with_context(
+        json!({
+            "ok": true,
+            "action": action,
+            "task_id": task.id,
+            "task": task,
+            "lifecycle": {
+                "assignee": task.assignee,
+                "claimed_at": task.claimed_at,
+                "heartbeat_at": task.heartbeat_at,
+                "stale_after_secs": task.stale_after_secs,
+                "paused": task.paused,
+                "blocked": task.blocked,
+                "stale": board_service::task_is_stale(task, now),
+                "indicators": board_service::lifecycle_indicators(task, now),
+            },
+            "warnings": warnings,
+            "conflict": null,
+        }),
+        project_root,
+    )
 }
 #[cfg(test)]
 mod tests {

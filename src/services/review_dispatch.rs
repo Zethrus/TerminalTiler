@@ -244,16 +244,25 @@ pub fn build_headless_review_spec(
 
     HeadlessReviewProcessSpec {
         program: selection.reviewer.binary().to_string(),
-        args: build_headless_review_args(selection.reviewer, selection.yolo, prompt),
+        args: build_headless_review_args(project_root, selection.reviewer, selection.yolo, prompt),
         current_dir: project_root.to_path_buf(),
         log_path,
     }
 }
 
-fn build_headless_review_args(agent: AgentKind, yolo: bool, prompt: String) -> Vec<String> {
+fn build_headless_review_args(
+    project_root: &Path,
+    agent: AgentKind,
+    yolo: bool,
+    prompt: String,
+) -> Vec<String> {
     let mut args = match agent {
         AgentKind::Claude => vec!["--print".to_string()],
-        AgentKind::Codex => vec!["exec".to_string()],
+        AgentKind::Codex => {
+            let mut args = agent_config::codex_project_mcp_overrides(project_root);
+            args.push("exec".to_string());
+            args
+        }
     };
     if yolo {
         args.push(agent.yolo_flag().to_string());
@@ -274,10 +283,9 @@ pub fn spawn_headless_review(
         return Err(error);
     }
 
-    match selection.reviewer {
-        AgentKind::Claude => agent_config::connect_claude(project_root)?,
-        AgentKind::Codex => agent_config::connect_codex(project_root)?,
-    };
+    if selection.reviewer == AgentKind::Claude {
+        agent_config::connect_claude(project_root)?;
+    }
 
     let spec = build_headless_review_spec(project_root, selection);
 
@@ -473,9 +481,25 @@ mod tests {
         let spec = build_headless_review_spec(&root, &selection);
         assert_eq!(spec.program, "codex");
         assert_eq!(spec.current_dir, root);
-        assert_eq!(spec.args[0], "exec");
-        assert!(spec.args[1].contains("dangerously-bypass"));
-        assert!(spec.args[2].contains("configured project root"));
+        assert_eq!(spec.args[0], "-C");
+        assert_eq!(spec.args[1], spec.current_dir.to_string_lossy());
+        assert!(
+            spec.args
+                .iter()
+                .any(|arg| arg.starts_with("mcp_servers.terminaltiler.args="))
+        );
+        assert!(spec.args.iter().any(|arg| arg == "exec"));
+        assert!(
+            spec.args
+                .iter()
+                .any(|arg| arg.contains("dangerously-bypass"))
+        );
+        assert!(
+            spec.args
+                .last()
+                .unwrap()
+                .contains("configured project root")
+        );
         assert_eq!(
             spec.log_path.parent().unwrap(),
             board_store::board_dir(&spec.current_dir).join("reviews")
@@ -489,6 +513,7 @@ mod tests {
             create_task(&mut board, "Review target", "details", TaskStatus::InReview).clone();
 
         let claude = build_headless_review_args(
+            Path::new("/tmp/project"),
             AgentKind::Claude,
             false,
             build_headless_review_prompt(AgentKind::Claude, &task),
@@ -498,12 +523,15 @@ mod tests {
         assert!(claude[1].contains("get_my_work"));
 
         let codex = build_headless_review_args(
+            Path::new("/tmp/project"),
             AgentKind::Codex,
             false,
             build_headless_review_prompt(AgentKind::Codex, &task),
         );
-        assert_eq!(codex[0], "exec");
-        assert!(codex[1].contains("codex-reviewer"));
-        assert!(codex[1].contains("get_my_work"));
+        assert_eq!(codex[0], "-C");
+        assert!(codex.iter().any(|arg| arg == "exec"));
+        let prompt = codex.last().unwrap();
+        assert!(prompt.contains("codex-reviewer"));
+        assert!(prompt.contains("get_my_work"));
     }
 }

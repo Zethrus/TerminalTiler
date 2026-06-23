@@ -3363,16 +3363,16 @@ fn kanban_mission_control_run_next_banner_and_health_states_are_visible() {
         "board mission control should expose Run next, claim-before-launch, explicit takeover, and a visible status banner"
     );
     assert!(
-        BOARD_VIEW_RS.contains("connect_agent_for_board")
+        AGENT_ORCHESTRATOR_RS.contains("codex_project_mcp_overrides")
             && BOARD_VIEW_RS.contains("Could not prepare")
-            && BOARD_VIEW_RS.contains("MCP ready"),
-        "agent dispatch should surface MCP setup repair success/failure before spawning terminals"
+            && BOARD_VIEW_RS.contains("connect_claude"),
+        "agent dispatch should prepare Claude config and use per-invocation Codex binding before spawning terminals"
     );
     assert!(
-        MCP_HEALTH_PANEL_RS.contains("missing binary")
-            && MCP_HEALTH_PANEL_RS.contains("wrong project root")
-            && MCP_HEALTH_PANEL_RS.contains("missing config")
-            && MCP_HEALTH_PANEL_RS.contains("needs repair"),
+        MCP_HEALTH_PANEL_RS.contains("missing_binary")
+            && MCP_HEALTH_PANEL_RS.contains("wrong_project_root")
+            && MCP_HEALTH_PANEL_RS.contains("missing_config")
+            && MCP_HEALTH_PANEL_RS.contains("needs_repair"),
         "MCP health panel should name actionable setup states clearly"
     );
     assert!(
@@ -3520,7 +3520,7 @@ fn launch_deck_can_create_and_reopen_kanban_boards() {
             && LAUNCH_SCREEN_RS.contains("saved-board-card")
             && LAUNCH_SCREEN_RS.contains("BoardLaunchRequest")
             && LAUNCH_SCREEN_RS.contains("Connect Claude")
-            && LAUNCH_SCREEN_RS.contains("Connect Codex"),
+            && LAUNCH_SCREEN_RS.contains("Repair Codex (manual)"),
         "launch deck should expose the board CTA, board wizard, saved board cards, and explicit agent setup actions"
     );
     assert!(

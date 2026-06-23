@@ -17,6 +17,7 @@ use crate::model::assets::WorkspaceAssets;
 use crate::model::board::Task;
 use crate::model::layout::{WorkingDirectory, default_tile_spec};
 use crate::model::preset::ApplicationDensity;
+use crate::services::agent_config;
 use crate::services::stats::StatsRecorder;
 use crate::terminal::session::TerminalSession;
 
@@ -176,6 +177,13 @@ fn build_agent_command(
     };
 
     let mut parts = vec![agent.binary().to_string()];
+    if agent == AgentKind::Codex {
+        parts.extend(
+            agent_config::codex_project_mcp_overrides(project_root)
+                .into_iter()
+                .map(|arg| shell_quote(&arg)),
+        );
+    }
     if options.yolo {
         parts.push(agent.yolo_flag().to_string());
     }
@@ -359,7 +367,10 @@ mod tests {
             &task,
             AgentRunOptions::implementation(true),
         );
-        assert!(codex.starts_with("codex --dangerously-bypass-approvals-and-sandbox "));
+        assert!(codex.starts_with("codex '-C' '/tmp/project' '-c' "));
+        assert!(codex.contains("mcp_servers.terminaltiler.command"));
+        assert!(codex.contains("mcp_servers.terminaltiler.args"));
+        assert!(codex.contains("--dangerously-bypass-approvals-and-sandbox"));
 
         let claude = build_agent_command(
             Path::new("/tmp/project"),
@@ -381,7 +392,7 @@ mod tests {
             &task,
             AgentRunOptions::review(false),
         );
-        assert!(command.starts_with("codex '"));
+        assert!(command.starts_with("codex '-C' '/tmp/project' '-c' "));
         assert!(command.contains("Run a code review"));
         assert!(command.contains("get_my_work"));
         assert!(command.contains("submit_review"));

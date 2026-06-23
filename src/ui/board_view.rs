@@ -795,23 +795,6 @@ fn persist_dropped_status(inner: &Rc<Inner>, task_id: &str, status: TaskStatus) 
     }
 }
 
-fn connect_agent_for_board(inner: &Rc<Inner>, agent: AgentKind) -> Result<(), String> {
-    match agent {
-        AgentKind::Claude => agent_config::connect_claude(&inner.project_root),
-        AgentKind::Codex => agent_config::connect_codex(&inner.project_root),
-    }?;
-    show_status_banner(
-        inner,
-        "MCP ready",
-        &format!(
-            "{} can reach this board through TerminalTiler MCP.",
-            agent.label()
-        ),
-        None,
-    );
-    Ok(())
-}
-
 fn show_status_banner(inner: &Rc<Inner>, title: &str, message: &str, action: Option<BannerAction>) {
     clear_box(&inner.status_banner);
     inner.status_banner.set_visible(true);
@@ -849,7 +832,9 @@ fn dispatch_agent(
     force: bool,
     allow_takeover_prompt: bool,
 ) {
-    if let Err(error) = connect_agent_for_board(inner, agent) {
+    if agent == AgentKind::Claude
+        && let Err(error) = agent_config::connect_claude(&inner.project_root)
+    {
         show_status_banner(
             inner,
             "MCP setup failed",
@@ -944,10 +929,9 @@ fn dispatch_review(
     let task = selection.task;
     let reviewer = selection.reviewer;
     let yolo = selection.yolo;
-    let _ = match reviewer {
-        AgentKind::Claude => agent_config::connect_claude(&inner.project_root),
-        AgentKind::Codex => agent_config::connect_codex(&inner.project_root),
-    };
+    if reviewer == AgentKind::Claude {
+        let _ = agent_config::connect_claude(&inner.project_root);
+    }
     inner
         .last_mtime
         .set(board_store::mtime(&inner.project_root));
