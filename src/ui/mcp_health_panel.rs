@@ -1,22 +1,33 @@
 //! Reusable TerminalTiler MCP health panel for board setup, Connect Agent flows, and
 //! the main-window MCP Health modal.
+//!
+//! The shared [`McpHealthPanel`] is display-only so the board and Connect-Agent embeds
+//! stay in sync. The standalone modal ([`present_modal`]) layers one-click repair on top:
+//! a project's **Fix** button writes its config through [`agent_config`] and then
+//! re-diagnoses. Claude config is project-scoped, so every row can repair it safely; Codex
+//! is a single global entry, so only the active project's Fix touches it.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
 
-use crate::services::agent_config::{self, McpDiagnostics};
+use crate::services::agent_config::{self, McpConfigStatus, McpDiagnostics};
 use crate::storage::board_workspace_store::BoardWorkspaceStore;
 use crate::ui::dialog_chrome;
 use crate::ui::icons::{self, name as icon_name};
+
+/// A late-bound, shareable refresh callback. The render closure stores itself here so the
+/// Fix buttons it builds can re-run diagnostics after writing config.
+type SharedRefresh = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
 // Status labels come from diagnostics as ready, wrong_project_root, missing_config,
 // missing_binary, or needs_repair so agents and users see the same actionable state.
 pub(crate) struct McpHealthPanel {
     pub(crate) widget: gtk::Box,
-    overall_status: gtk::Label,
+    overall_badge: StatusBadge,
     project_root: gtk::Label,
     board_path: gtk::Label,
     process_cwd: gtk::Label,
@@ -29,18 +40,27 @@ impl McpHealthPanel {
     pub(crate) fn new(project_root: &Path) -> Self {
         let widget = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
+            .spacing(8)
             .css_classes(["config-panel", "mcp-health-panel"])
             .build();
-        widget.append(
+
+        let header = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(8)
+            .css_classes(["mcp-health-panel-header"])
+            .build();
+        header.append(
             &gtk::Label::builder()
                 .label("MCP health")
                 .halign(gtk::Align::Start)
+                .hexpand(true)
                 .css_classes(["eyebrow", "mcp-health-title"])
                 .build(),
         );
+        let overall_badge = StatusBadge::new();
+        header.append(&overall_badge.root);
+        widget.append(&header);
 
-        let overall_status = health_label("mcp-health-overall-status");
         let project_root_label = health_label("mcp-health-project-root");
         let board_path = health_label("mcp-health-board-path");
         let process_cwd = health_label("mcp-health-process-cwd");
@@ -48,21 +68,20 @@ impl McpHealthPanel {
         let claude_state = health_label("mcp-health-claude-state");
         let codex_state = health_label("mcp-health-codex-state");
 
-        for label in [
-            &overall_status,
-            &project_root_label,
-            &board_path,
-            &process_cwd,
-            &mcp_binary,
-            &claude_state,
-            &codex_state,
+        for (caption, value) in [
+            ("Project", &project_root_label),
+            ("Board", &board_path),
+            ("Process", &process_cwd),
+            ("Binary", &mcp_binary),
+            ("Claude", &claude_state),
+            ("Codex", &codex_state),
         ] {
-            widget.append(label);
+            widget.append(&detail_row(caption, value));
         }
 
         let panel = Self {
             widget,
-            overall_status,
+            overall_badge,
             project_root: project_root_label,
             board_path,
             process_cwd,
@@ -82,6 +101,9 @@ impl McpHealthPanel {
 
 /// Present a compact diagnostics modal for the active project and every project
 /// TerminalTiler currently knows about from open tabs plus saved Kanban shortcuts.
+///
+/// Each project exposes a one-click **Fix** that registers the bundled MCP server and then
+/// re-diagnoses, so users never have to leave the window to repair setup.
 pub(crate) fn present_modal(
     window: &adw::ApplicationWindow,
     active_project_root: PathBuf,
@@ -94,6 +116,8 @@ pub(crate) fn present_modal(
     dialog.set_content_width(620);
     dialog.set_content_height(560);
     dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "mcp-health-dialog-window");
+
+    let toast_overlay = adw::ToastOverlay::new();
 
     let root = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -114,8 +138,40 @@ pub(crate) fn present_modal(
             .build(),
     );
 
+    // Late-bound refresh: Fix buttons created inside the render closure re-run diagnostics
+    // by calling back into the render that built them. The callback only keeps a weak
+    // pointer to this cell, and the dialog clears the cell when it closes, so the refresh
+    // wiring cannot keep the dialog tree alive.
+    let refresh_cell: SharedRefresh = Rc::new(RefCell::new(None));
+    let trigger_refresh: Rc<dyn Fn()> = {
+        let refresh_cell = Rc::downgrade(&refresh_cell);
+        Rc::new(move || {
+            let Some(refresh_cell) = refresh_cell.upgrade() else {
+                return;
+            };
+            let refresh = refresh_cell.borrow().clone();
+            if let Some(refresh) = refresh {
+                refresh();
+            }
+        })
+    };
+
     let active_panel = Rc::new(McpHealthPanel::new(&active_project_root));
-    root.append(&active_panel.widget);
+    let active_fix = icons::labeled_button(
+        "Fix",
+        icon_name::APPLY,
+        &["pill-button", "suggested-action", "mcp-health-fix-button"],
+    );
+    {
+        let trigger_refresh = trigger_refresh.clone();
+        let toast_overlay = toast_overlay.clone();
+        let project_root = active_project_root.clone();
+        active_fix.connect_clicked(move |_| {
+            repair_active_project(&toast_overlay, &project_root);
+            trigger_refresh();
+        });
+    }
+    root.append(&active_project_card(&active_panel.widget, &active_fix));
 
     root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     root.append(
@@ -153,7 +209,8 @@ pub(crate) fn present_modal(
     actions.append(&close_button);
     root.append(&actions);
 
-    dialog.set_child(Some(&root));
+    toast_overlay.set_child(Some(&root));
+    dialog.set_child(Some(&toast_overlay));
     dialog.set_default_widget(Some(&refresh_button));
 
     let render = Rc::new({
@@ -161,56 +218,203 @@ pub(crate) fn present_modal(
         let open_project_roots = open_project_roots.clone();
         let board_workspace_store = board_workspace_store.clone();
         let active_panel = active_panel.clone();
+        let active_fix = active_fix.clone();
         let project_list = project_list.clone();
+        let toast_overlay = toast_overlay.clone();
+        let trigger_refresh = trigger_refresh.clone();
         move || {
             active_panel.refresh(&active_project_root);
+            let active_diagnostics = agent_config::diagnose_mcp(&active_project_root);
+            apply_fix_affordance(&active_fix, active_fix_affordance(&active_diagnostics));
+            let roots = other_known_project_roots(
+                &active_project_root,
+                &open_project_roots,
+                &board_workspace_store,
+            );
             render_project_rows(
                 &project_list,
-                known_project_roots(
-                    &active_project_root,
-                    &open_project_roots,
-                    &board_workspace_store,
-                ),
+                roots,
                 &active_project_root,
+                &toast_overlay,
+                &trigger_refresh,
             );
         }
     });
+    *refresh_cell.borrow_mut() = Some(render.clone());
 
     render();
+
+    {
+        let refresh_cell = refresh_cell.clone();
+        dialog.connect_closed(move |_| {
+            refresh_cell.borrow_mut().take();
+        });
+    }
 
     {
         let render = render.clone();
         refresh_button.connect_clicked(move |_| render());
     }
     {
-        let dialog = dialog.clone();
+        let dialog = dialog.downgrade();
         close_button.connect_clicked(move |_| {
-            dialog.close();
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.close();
+            }
         });
     }
 
     dialog.present(Some(window));
 }
 
+/// Wrap the active project's panel and its Fix action in an elevated hero card.
+fn active_project_card(panel: &gtk::Box, fix_button: &gtk::Button) -> gtk::Box {
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["card", "mcp-health-active-card"])
+        .build();
+
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["mcp-health-active-header"])
+        .build();
+    header.append(
+        &gtk::Label::builder()
+            .label("Active project")
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .css_classes(["eyebrow", "mcp-health-active-eyebrow"])
+            .build(),
+    );
+    header.append(fix_button);
+    card.append(&header);
+    card.append(panel);
+    card
+}
+
+/// What the Fix affordance should look like for a repair target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixAffordance {
+    /// Already configured — nothing to repair.
+    Hidden,
+    /// A config write cannot help (the bundled binary is missing).
+    Disabled(&'static str),
+    /// Repairable from this window.
+    Enabled,
+}
+
+const MISSING_BUNDLED_BINARY_FIX_REASON: &str = "The bundled terminaltiler-mcp binary was not found, so editing config can't help. \
+Reinstall TerminalTiler to restore it.";
+
+fn active_fix_affordance(diagnostics: &McpDiagnostics) -> FixAffordance {
+    if !diagnostics.mcp_binary_exists {
+        return FixAffordance::Disabled(MISSING_BUNDLED_BINARY_FIX_REASON);
+    }
+    if diagnostics.claude_status == McpConfigStatus::Ready
+        && diagnostics.codex_status == McpConfigStatus::Ready
+    {
+        return FixAffordance::Hidden;
+    }
+    FixAffordance::Enabled
+}
+
+fn repairable_agent_fix_affordance(
+    status: McpConfigStatus,
+    mcp_binary_exists: bool,
+) -> FixAffordance {
+    if !mcp_binary_exists {
+        return FixAffordance::Disabled(MISSING_BUNDLED_BINARY_FIX_REASON);
+    }
+    if status == McpConfigStatus::Ready {
+        return FixAffordance::Hidden;
+    }
+    FixAffordance::Enabled
+}
+
+/// Apply the [`FixAffordance`] to an already-built button (used for the persistent active
+/// project Fix, whose handler is wired once).
+fn apply_fix_affordance(button: &gtk::Button, affordance: FixAffordance) {
+    match affordance {
+        FixAffordance::Hidden => button.set_visible(false),
+        FixAffordance::Disabled(reason) => {
+            button.set_visible(true);
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(reason));
+        }
+        FixAffordance::Enabled => {
+            button.set_visible(true);
+            button.set_sensitive(true);
+            button.set_tooltip_text(None);
+        }
+    }
+}
+
+/// Register the bundled MCP server for the active project with both Claude (project-scoped)
+/// and Codex (global), reporting the outcome through the modal's toast overlay.
+fn repair_active_project(overlay: &adw::ToastOverlay, project_root: &Path) {
+    let claude = agent_config::connect_claude(project_root);
+    let codex = agent_config::connect_codex(project_root);
+    let message = match (&claude, &codex) {
+        (Ok(_), Ok(_)) => "Repaired Claude and Codex for the active project.".to_string(),
+        (Err(error), _) => format!("Claude repair failed: {error}"),
+        (Ok(_), Err(error)) => format!("Claude repaired; Codex repair failed: {error}"),
+    };
+    show_modal_toast(overlay, &message);
+}
+
+/// Register the bundled MCP server with Claude only (project-scoped `.mcp.json`).
+fn repair_claude_only(overlay: &adw::ToastOverlay, project_root: &Path) {
+    let message = match agent_config::connect_claude(project_root) {
+        Ok(path) => format!("Repaired Claude config: {}", path.display()),
+        Err(error) => format!("Repair failed: {error}"),
+    };
+    show_modal_toast(overlay, &message);
+}
+
+fn show_modal_toast(overlay: &adw::ToastOverlay, message: &str) {
+    overlay.add_toast(adw::Toast::new(message));
+}
+
 fn health_label(css_class: &str) -> gtk::Label {
     gtk::Label::builder()
         .halign(gtk::Align::Start)
+        .hexpand(true)
         .wrap(true)
         .ellipsize(gtk::pango::EllipsizeMode::Middle)
         .css_classes(["field-hint", "mcp-health-row", css_class])
         .build()
 }
 
+/// A caption + value row used for the panel's key/value details.
+fn detail_row(caption: &str, value: &gtk::Label) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["mcp-health-detail"])
+        .build();
+    row.append(
+        &gtk::Label::builder()
+            .label(caption)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .width_chars(7)
+            .xalign(0.0)
+            .css_classes(["mcp-health-detail-caption"])
+            .build(),
+    );
+    row.append(value);
+    row
+}
+
 fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
+    panel.overall_badge.set(diagnostics.status);
     panel
-        .overall_status
-        .set_text(&format!("Overall status [{}]", diagnostics.status.as_str()));
-    panel.project_root.set_text(&format!(
-        "Active project root: {}",
-        diagnostics.project_root.display()
-    ));
+        .project_root
+        .set_text(&diagnostics.project_root.display().to_string());
     panel.board_path.set_text(&format!(
-        "Board: {} ({})",
+        "{} · {}",
         diagnostics.board_path.display(),
         if diagnostics.board_exists {
             "present"
@@ -218,42 +422,31 @@ fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
             "not created yet"
         }
     ));
-    panel.process_cwd.set_text(&format!(
-        "Process cwd: {}",
-        diagnostics
+    panel.process_cwd.set_text(
+        &diagnostics
             .process_cwd
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "<unresolved>".to_string())
-    ));
+            .unwrap_or_else(|| "<unresolved>".to_string()),
+    );
     panel.mcp_binary.set_text(&format!(
-        "MCP binary [{}]: {} ({})",
-        if diagnostics.mcp_binary_exists {
-            "ready"
-        } else {
-            "missing_binary"
-        },
+        "{} · {}",
         diagnostics.mcp_binary_path.display(),
         if diagnostics.mcp_binary_exists {
             "present"
         } else {
-            "PATH lookup or missing"
+            "not found"
         }
     ));
     panel.claude_state.set_text(&format!(
-        "Claude config [{}]: {} — {}",
-        diagnostics.claude_status.as_str(),
+        "{} · {} — {}",
+        humanize_status(diagnostics.claude_status),
         diagnostics.claude_config_path.display(),
         diagnostics.claude_detail
     ));
     panel.codex_state.set_text(&format!(
-        "Codex config/root [{}]: {} / {} — {} (manual sessions; board-launched Codex uses project-bound overrides)",
-        diagnostics.codex_status.as_str(),
-        diagnostics
-            .codex_config_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "<unresolved>".to_string()),
+        "{} · {} — {} (manual sessions; board-launched Codex uses project-bound overrides)",
+        humanize_status(diagnostics.codex_status),
         diagnostics
             .codex_config_root
             .as_ref()
@@ -261,6 +454,22 @@ fn update_labels(panel: &McpHealthPanel, diagnostics: &McpDiagnostics) {
             .unwrap_or_else(|| "<unresolved>".to_string()),
         diagnostics.codex_detail
     ));
+}
+
+/// Known project roots minus the active one (which has its own hero card above).
+fn other_known_project_roots(
+    active_project_root: &Path,
+    open_project_roots: &[PathBuf],
+    board_workspace_store: &BoardWorkspaceStore,
+) -> Vec<PathBuf> {
+    known_project_roots(
+        active_project_root,
+        open_project_roots,
+        board_workspace_store,
+    )
+    .into_iter()
+    .filter(|root| !same_project_path(root, active_project_root))
+    .collect()
 }
 
 fn known_project_roots(
@@ -296,13 +505,15 @@ fn render_project_rows(
     project_list: &gtk::Box,
     project_roots: Vec<PathBuf>,
     active_project_root: &Path,
+    toast_overlay: &adw::ToastOverlay,
+    trigger_refresh: &Rc<dyn Fn()>,
 ) {
     clear_box(project_list);
 
     if project_roots.is_empty() {
         project_list.append(
             &gtk::Label::builder()
-                .label("No saved or open projects found.")
+                .label("No other saved or open projects found.")
                 .halign(gtk::Align::Start)
                 .css_classes(["field-hint", "mcp-health-empty-projects"])
                 .build(),
@@ -312,32 +523,62 @@ fn render_project_rows(
 
     for project_root in project_roots {
         let diagnostics = agent_config::diagnose_mcp(&project_root);
-        project_list.append(&project_row(&diagnostics, active_project_root));
+        project_list.append(&project_row(
+            &diagnostics,
+            active_project_root,
+            toast_overlay,
+            trigger_refresh,
+        ));
     }
 }
 
-fn project_row(diagnostics: &McpDiagnostics, active_project_root: &Path) -> gtk::Box {
+fn project_row(
+    diagnostics: &McpDiagnostics,
+    active_project_root: &Path,
+    toast_overlay: &adw::ToastOverlay,
+    trigger_refresh: &Rc<dyn Fn()>,
+) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
+        .spacing(6)
         .css_classes(["card", "mcp-health-project-row"])
         .build();
 
+    let header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .css_classes(["mcp-health-project-header"])
+        .build();
     let is_active = same_project_path(&diagnostics.project_root, active_project_root);
     let title = if is_active {
         format!("{} — active", diagnostics.project_root.display())
     } else {
         diagnostics.project_root.display().to_string()
     };
-    row.append(
+    header.append(
         &gtk::Label::builder()
             .label(&title)
             .halign(gtk::Align::Start)
+            .hexpand(true)
             .wrap(true)
             .ellipsize(gtk::pango::EllipsizeMode::Middle)
             .css_classes(["mcp-health-project-title"])
             .build(),
     );
+    let badge = StatusBadge::new();
+    badge.set(diagnostics.status);
+    header.append(&badge.root);
+    if let Some(fix_button) = build_row_fix_button(
+        diagnostics.claude_status,
+        diagnostics.mcp_binary_exists,
+        &diagnostics.project_root,
+        toast_overlay,
+        trigger_refresh,
+    ) {
+        header.append(&fix_button);
+    }
+    row.append(&header);
+
     row.append(&project_detail_label(&format!(
         "Board: {} ({})",
         diagnostics.board_path.display(),
@@ -348,13 +589,50 @@ fn project_row(diagnostics: &McpDiagnostics, active_project_root: &Path) -> gtk:
         }
     )));
     row.append(&project_detail_label(&format!(
-        "Claude [{}] · Codex [{}] · Overall [{}]",
-        diagnostics.claude_status.as_str(),
-        diagnostics.codex_status.as_str(),
-        diagnostics.status.as_str()
+        "Claude: {} · Codex: {}",
+        humanize_status(diagnostics.claude_status),
+        humanize_status(diagnostics.codex_status)
     )));
+    if diagnostics.codex_status != McpConfigStatus::Ready {
+        row.append(&project_detail_label(
+            "Codex config is global — repair it from the active project.",
+        ));
+    }
     row.add_css_class(status_css_class(diagnostics.status.as_str()));
     row
+}
+
+/// Build a Claude-only Fix button for a known-project row, or `None` when Claude is
+/// already configured. A missing bundled binary yields a disabled, explanatory button.
+fn build_row_fix_button(
+    claude_status: McpConfigStatus,
+    mcp_binary_exists: bool,
+    project_root: &Path,
+    toast_overlay: &adw::ToastOverlay,
+    trigger_refresh: &Rc<dyn Fn()>,
+) -> Option<gtk::Button> {
+    let button = icons::labeled_button(
+        "Fix",
+        icon_name::APPLY,
+        &["pill-button", "mcp-health-fix-button"],
+    );
+    match repairable_agent_fix_affordance(claude_status, mcp_binary_exists) {
+        FixAffordance::Hidden => return None,
+        FixAffordance::Disabled(reason) => {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(reason));
+        }
+        FixAffordance::Enabled => {
+            let toast_overlay = toast_overlay.clone();
+            let trigger_refresh = trigger_refresh.clone();
+            let project_root = project_root.to_path_buf();
+            button.connect_clicked(move |_| {
+                repair_claude_only(&toast_overlay, &project_root);
+                trigger_refresh();
+            });
+        }
+    }
+    Some(button)
 }
 
 fn project_detail_label(text: &str) -> gtk::Label {
@@ -381,6 +659,68 @@ fn same_project_path(first: &Path, second: &Path) -> bool {
     first == second
 }
 
+/// A status pill (colored dot + humanized label) shared by the panel header and the
+/// known-project rows.
+struct StatusBadge {
+    root: gtk::Box,
+    label: gtk::Label,
+}
+
+const BADGE_MODIFIERS: [&str; 3] = ["is-ready", "is-warn", "is-error"];
+
+impl StatusBadge {
+    fn new() -> Self {
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Center)
+            .css_classes(["mcp-health-badge"])
+            .build();
+        root.append(
+            &gtk::Box::builder()
+                .css_classes(["mcp-health-badge-dot"])
+                .build(),
+        );
+        let label = gtk::Label::builder()
+            .css_classes(["mcp-health-badge-label"])
+            .build();
+        root.append(&label);
+        Self { root, label }
+    }
+
+    fn set(&self, status: McpConfigStatus) {
+        self.label.set_text(humanize_status(status));
+        for modifier in BADGE_MODIFIERS {
+            self.root.remove_css_class(modifier);
+        }
+        self.root.add_css_class(badge_modifier(status));
+    }
+}
+
+/// Short, human-readable status used by badges and per-config rows.
+fn humanize_status(status: McpConfigStatus) -> &'static str {
+    match status {
+        McpConfigStatus::Ready => "Ready",
+        McpConfigStatus::WrongProjectRoot => "Wrong project",
+        McpConfigStatus::MissingConfig => "Needs setup",
+        McpConfigStatus::MissingBinary => "Binary missing",
+        McpConfigStatus::NeedsRepair => "Needs repair",
+    }
+}
+
+/// Badge tint modifier mirroring [`status_css_class`]: ready is the calm accent, an
+/// unconfigured-but-expected state is a warning, everything else is an error.
+fn badge_modifier(status: McpConfigStatus) -> &'static str {
+    match status {
+        McpConfigStatus::Ready => "is-ready",
+        McpConfigStatus::MissingConfig => "is-warn",
+        McpConfigStatus::WrongProjectRoot
+        | McpConfigStatus::MissingBinary
+        | McpConfigStatus::NeedsRepair => "is-error",
+    }
+}
+
 fn status_css_class(status: &str) -> &'static str {
     match status {
         "ready" => "mcp-health-status-ready",
@@ -388,5 +728,109 @@ fn status_css_class(status: &str) -> &'static str {
         "missing_config" => "mcp-health-status-missing-config",
         "missing_binary" => "mcp-health-status-missing-binary",
         _ => "mcp-health-status-needs-repair",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostics(
+        status: McpConfigStatus,
+        claude_status: McpConfigStatus,
+        codex_status: McpConfigStatus,
+        mcp_binary_exists: bool,
+    ) -> McpDiagnostics {
+        let project_root = PathBuf::from("/tmp/terminaltiler-project");
+        McpDiagnostics {
+            status,
+            project_root: project_root.clone(),
+            board_path: project_root.join(".terminaltiler/board.json"),
+            board_exists: false,
+            process_cwd: Some(project_root.clone()),
+            mcp_binary_path: PathBuf::from("/opt/TerminalTiler/terminaltiler-mcp"),
+            mcp_binary_exists,
+            claude_config_path: project_root.join(".mcp.json"),
+            claude_configured: claude_status == McpConfigStatus::Ready,
+            claude_detail: String::new(),
+            claude_status,
+            claude_bound_project_root: None,
+            claude_command: None,
+            claude_args: Vec::new(),
+            codex_config_path: Some(PathBuf::from("/tmp/codex/config.toml")),
+            codex_config_root: Some(PathBuf::from("/tmp/codex")),
+            codex_configured: codex_status == McpConfigStatus::Ready,
+            codex_detail: String::new(),
+            codex_status,
+            codex_bound_project_root: None,
+            codex_command: None,
+            codex_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn active_fix_stays_enabled_when_aggregate_status_is_ready_but_one_agent_needs_repair() {
+        let claude_ready_codex_missing = diagnostics(
+            McpConfigStatus::Ready,
+            McpConfigStatus::Ready,
+            McpConfigStatus::MissingConfig,
+            true,
+        );
+        assert_eq!(
+            active_fix_affordance(&claude_ready_codex_missing),
+            FixAffordance::Enabled
+        );
+
+        let claude_missing_codex_ready = diagnostics(
+            McpConfigStatus::Ready,
+            McpConfigStatus::MissingConfig,
+            McpConfigStatus::Ready,
+            true,
+        );
+        assert_eq!(
+            active_fix_affordance(&claude_missing_codex_ready),
+            FixAffordance::Enabled
+        );
+    }
+
+    #[test]
+    fn active_fix_hides_only_after_both_agent_configs_are_ready() {
+        let all_ready = diagnostics(
+            McpConfigStatus::Ready,
+            McpConfigStatus::Ready,
+            McpConfigStatus::Ready,
+            true,
+        );
+        assert_eq!(active_fix_affordance(&all_ready), FixAffordance::Hidden);
+    }
+
+    #[test]
+    fn known_project_fix_uses_claude_status_not_aggregate_readiness() {
+        assert_eq!(
+            repairable_agent_fix_affordance(McpConfigStatus::MissingConfig, true),
+            FixAffordance::Enabled
+        );
+        assert_eq!(
+            repairable_agent_fix_affordance(McpConfigStatus::Ready, true),
+            FixAffordance::Hidden
+        );
+    }
+
+    #[test]
+    fn fix_is_disabled_when_bundled_mcp_binary_is_missing() {
+        let missing_binary = diagnostics(
+            McpConfigStatus::MissingBinary,
+            McpConfigStatus::MissingConfig,
+            McpConfigStatus::MissingConfig,
+            false,
+        );
+        assert_eq!(
+            active_fix_affordance(&missing_binary),
+            FixAffordance::Disabled(MISSING_BUNDLED_BINARY_FIX_REASON)
+        );
+        assert_eq!(
+            repairable_agent_fix_affordance(McpConfigStatus::MissingConfig, false),
+            FixAffordance::Disabled(MISSING_BUNDLED_BINARY_FIX_REASON)
+        );
     }
 }

@@ -3378,6 +3378,41 @@ fn mcp_health_modal_lists_saved_and_open_projects() {
 }
 
 #[test]
+fn mcp_health_modal_repairs_issues_in_place() {
+    assert!(
+        MCP_HEALTH_PANEL_RS.contains(r#""Fix""#)
+            && MCP_HEALTH_PANEL_RS.contains("agent_config::connect_claude")
+            && MCP_HEALTH_PANEL_RS.contains("agent_config::connect_codex")
+            && MCP_HEALTH_PANEL_RS.contains("adw::ToastOverlay")
+            && MCP_HEALTH_PANEL_RS.contains("fn repair_active_project")
+            && MCP_HEALTH_PANEL_RS.contains("fn repair_claude_only"),
+        "MCP Health modal should expose one-click Fix that writes Claude (per project) and Codex (active project) configs with toast feedback"
+    );
+    assert!(
+        MCP_HEALTH_PANEL_RS.contains("MISSING_BUNDLED_BINARY_FIX_REASON")
+            && MCP_HEALTH_PANEL_RS.contains("active_fix_affordance")
+            && MCP_HEALTH_PANEL_RS.contains("repairable_agent_fix_affordance"),
+        "a missing MCP binary must disable Fix instead of pretending a config write can repair it"
+    );
+    assert!(
+        MCP_HEALTH_PANEL_RS.contains("Rc::downgrade(&refresh_cell)")
+            && MCP_HEALTH_PANEL_RS.contains("dialog.connect_closed")
+            && MCP_HEALTH_PANEL_RS.contains("refresh_cell.borrow_mut().take()"),
+        "MCP Health refresh callbacks should not retain a strong post-close dialog cycle"
+    );
+    for class in [
+        ".mcp-health-badge",
+        ".mcp-health-badge.is-ready",
+        ".mcp-health-active-card",
+    ] {
+        assert!(
+            STYLE_CSS.contains(class),
+            "premium MCP Health CSS hook {class} should exist"
+        );
+    }
+}
+
+#[test]
 fn kanban_mcp_health_panel_is_reused_and_refreshes_after_connect() {
     assert!(
         UI_MOD_RS.contains("mod mcp_health_panel")
