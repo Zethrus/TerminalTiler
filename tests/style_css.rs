@@ -2751,6 +2751,19 @@ fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
 }
 
 #[test]
+fn windows_webview_com_initialization_is_thread_local() {
+    assert!(
+        WINDOWS_WORKSPACE_RS.contains("thread_local!")
+            && WINDOWS_WORKSPACE_RS
+                .contains("static WEBVIEW_COM_INIT: RefCell<Option<Result<(), String>>>")
+            && WINDOWS_WORKSPACE_RS.contains("CoInitializeEx(None, COINIT_APARTMENTTHREADED)")
+            && !WINDOWS_WORKSPACE_RS
+                .contains("static WEBVIEW_COM_INIT: OnceLock<Result<(), String>>"),
+        "Win32 WebView2 creation must initialize COM per thread because the startup runtime probe and restored workspace host run on different threads"
+    );
+}
+
+#[test]
 fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
     assert!(
         DOC_WINDOWS_GTK_VISUAL_QA

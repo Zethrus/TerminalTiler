@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::cell::RefCell;
     use std::collections::{BTreeMap, HashMap};
     use std::ffi::c_void;
     use std::mem;
@@ -774,15 +775,23 @@ mod imp {
     }
 
     fn ensure_webview_com_initialized() -> Result<(), String> {
-        static WEBVIEW_COM_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+        thread_local! {
+            static WEBVIEW_COM_INIT: RefCell<Option<Result<(), String>>> = const { RefCell::new(None) };
+        }
 
-        WEBVIEW_COM_INIT
-            .get_or_init(|| unsafe {
+        WEBVIEW_COM_INIT.with(|slot| {
+            if let Some(result) = slot.borrow().as_ref() {
+                return result.clone();
+            }
+
+            let result = unsafe {
                 CoInitializeEx(None, COINIT_APARTMENTTHREADED)
                     .ok()
                     .map_err(|error| format!("CoInitializeEx failed for WebView2: {error}"))
-            })
-            .clone()
+            };
+            *slot.borrow_mut() = Some(result.clone());
+            result
+        })
     }
 
     fn create_webview_environment() -> Result<ICoreWebView2Environment, String> {
