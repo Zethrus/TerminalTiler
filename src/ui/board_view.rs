@@ -67,7 +67,7 @@ impl BoardView {
     ) -> Self {
         let root = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
+            .spacing(8)
             .hexpand(true)
             .vexpand(true)
             .css_classes(["kanban-board"])
@@ -84,7 +84,7 @@ impl BoardView {
 
         let columns_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(10)
+            .spacing(8)
             .hexpand(true)
             .vexpand(true)
             .homogeneous(true)
@@ -167,7 +167,7 @@ fn make_shrinkable(widget: &impl IsA<gtk::Widget>) {
 fn build_header(project_name: &str) -> gtk::Box {
     let header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
+        .spacing(8)
         .css_classes(["kanban-header"])
         .build();
     header.append(

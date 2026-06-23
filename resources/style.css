@@ -1,18 +1,32 @@
 /* ============================================================
    TerminalTiler design tokens  (GTK 4.8 — @define-color + alpha())
    ------------------------------------------------------------
-   The palette is intentionally unchanged: every token maps 1:1 to
-   the literal it replaced. For translucent variants use
-   alpha(@token, f) — e.g. alpha(@tt_amber, 0.18) == the former
-   alpha(@tt_amber, 0.18). Centralizing these makes future accent
-   or surface tweaks a one-line change instead of a find-and-replace.
+   Identity unchanged: dark command-center + amber/copper accent.
+   The palette tokens below map 1:1 to their literals; for translucent
+   variants use alpha(@token, f). Centralizing colors keeps accent or
+   surface tweaks a one-line change instead of a find-and-replace.
 
-   Elevation tiers (box-shadow conventions, applied consistently):
-     e1  resting card     0 10px 22px alpha(@tt_shadow, 0.18)
-     e2  raised / hover    0 16px 34px alpha(@tt_shadow, 0.24)
-     e3  overlay / popover  0 20px 40px alpha(@tt_shadow, 0.30)
-   Radius scale:  chip 999px · control 12px · card 16–18px · panel 22px
-   Motion:  140ms ease.  Interactive cards lift translateY(-1px) on hover.
+   GTK4 CSS has no length/number variables — only @define-color. So the
+   spacing/radius/type "scale" below is a documented convention applied
+   as literals throughout this file. Keep new rules on these steps; the
+   single source of truth for the numbers is this comment + DESIGN.md.
+
+   Premium refinement scale (2026-06 refresh — tighter, lighter, calmer):
+     Spacing (4px base):  4 · 6 · 8 · 12 · 16 · 20
+     Radius:  control 8px · chip 999px · card 12px · panel 14px
+              (profile-compact stays 0; workspace-summary stays squared)
+     Type:    display 22 · section 14–15 · card/tile-title 12–13 ·
+              body 13 · meta 10–11 · micro 9.  Max weight 700.
+              Eyebrows: 9–10px / 600 / uppercase / letter-spacing 0.14em.
+     Elevation (soft; hairlines do primary separation, shadow secondary):
+       e1  resting card     0 8px 18px  alpha(@tt_shadow, 0.12)
+       e2  raised / hover    0 14px 28px  alpha(@tt_shadow, 0.16)
+       e3  overlay / popover  0 18px 36px  alpha(@tt_shadow, 0.22)
+       hairline  1px solid alpha(@tt_white, 0.06–0.08)
+     Accent (calm):  reserve full-strength amber for one primary action
+       per region; active tab is muted copper + a thin amber underline;
+       secondary controls avoid amber rim-glow.
+     Motion:  140ms ease.  Interactive cards lift translateY(-1px) on hover.
    ============================================================ */
 
 /* Neutrals (theme-agnostic structural colors) */
@@ -61,7 +75,7 @@ window.window-shell headerbar.app-headerbar {
   border-bottom: 1px solid alpha(@tt_white, 0.08);
   box-shadow:
     inset 0 -1px alpha(@tt_white, 0.03),
-    0 8px 20px alpha(@tt_shadow, 0.12);
+    0 6px 16px alpha(@tt_shadow, 0.1);
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button,
@@ -130,8 +144,8 @@ button.destructive-button .button-leading-icon {
 }
 
 window.profile-comfortable headerbar.app-headerbar {
-  min-height: 48px;
-  padding: 5px 12px;
+  min-height: 44px;
+  padding: 4px 12px;
 }
 
 window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button,
@@ -186,16 +200,16 @@ window.profile-comfortable .launch-stage {
 }
 
 window.profile-comfortable .hero-title {
-  font-size: 26px;
+  font-size: 24px;
 }
 
 window.profile-comfortable .config-panel,
 window.profile-comfortable .preview-card {
-  padding: 18px;
+  padding: 14px;
 }
 
 window.profile-comfortable .directory-panel {
-  padding: 16px;
+  padding: 12px;
 }
 
 window.profile-comfortable .workspace-path entry,
@@ -242,12 +256,12 @@ window.profile-comfortable .workspace-summary-path {
 }
 
 window.profile-comfortable .workspace-summary {
-  padding: 12px 16px;
+  padding: 10px 14px;
   margin-bottom: 4px;
 }
 
 window.profile-comfortable .terminal-header {
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 window.profile-comfortable .tile-title {
@@ -256,7 +270,7 @@ window.profile-comfortable .tile-title {
 
 window.profile-comfortable .status-chip,
 window.profile-comfortable .agent-badge {
-  padding: 5px 10px;
+  padding: 4px 9px;
 }
 
 window.profile-comfortable .preset-card-compact {
@@ -337,7 +351,7 @@ window.profile-compact .launch-header {
 }
 
 window.profile-compact .hero-title {
-  font-size: 23px;
+  font-size: 20px;
 }
 
 window.profile-compact .launch-stage {
@@ -423,7 +437,7 @@ window.profile-compact .workspace-summary-path {
 
 window.profile-compact .status-chip,
 window.profile-compact .agent-badge {
-  padding: 2px 7px;
+  padding: 2px 6px;
   font-size: 7px;
 }
 
@@ -542,14 +556,15 @@ tabbar.app-tab-strip tabbox tab {
 
 tabbar.app-tab-strip tabbox tab:selected,
 tabbar.app-tab-strip tabbox tab:checked {
+  /* calmed active tab: muted copper surface + thin amber underline mark */
   background:
-    linear-gradient(180deg, alpha(@tt_copper_hi, 0.98), alpha(@tt_copper_lo, 0.96)),
-    radial-gradient(circle at top, rgba(255, 223, 166, 0.14), transparent 46%);
-  border: 1px solid rgba(220, 130, 70, 0.42);
-  border-bottom-color: rgba(180, 80, 30, 0.96);
+    linear-gradient(180deg, rgba(34, 26, 22, 0.98), rgba(21, 16, 13, 0.98)),
+    radial-gradient(circle at top, alpha(@tt_copper_hi, 0.14), transparent 58%);
+  border: 1px solid alpha(@tt_copper_hi, 0.28);
+  border-bottom: 2px solid alpha(@tt_amber, 0.9);
   box-shadow:
-    inset 0 1px alpha(@tt_white, 0.14),
-    0 8px 18px alpha(@tt_shadow, 0.18);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 14px alpha(@tt_shadow, 0.14);
 }
 
 tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) {
@@ -639,14 +654,15 @@ window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
 }
 
 .app-tab-shell.is-active {
+  /* calmed active tab: muted copper surface + thin amber underline mark */
   background:
-    linear-gradient(180deg, alpha(@tt_copper_hi, 0.98), alpha(@tt_copper_lo, 0.96)),
-    radial-gradient(circle at top, rgba(255, 223, 166, 0.14), transparent 46%);
-  border: 1px solid rgba(220, 130, 70, 0.42);
-  border-bottom-color: rgba(180, 80, 30, 0.96);
+    linear-gradient(180deg, rgba(34, 26, 22, 0.98), rgba(21, 16, 13, 0.98)),
+    radial-gradient(circle at top, alpha(@tt_copper_hi, 0.14), transparent 58%);
+  border: 1px solid alpha(@tt_copper_hi, 0.28);
+  border-bottom: 2px solid alpha(@tt_amber, 0.9);
   box-shadow:
-    inset 0 1px alpha(@tt_white, 0.14),
-    0 8px 18px alpha(@tt_shadow, 0.18);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 14px alpha(@tt_shadow, 0.14);
 }
 
 .app-tab-shell.is-inactive {
@@ -809,11 +825,11 @@ button.app-tab-add:hover {
 .preview-card,
 .workspace-summary {
   border: 1px solid alpha(@tt_white, 0.07);
-  border-radius: 18px;
+  border-radius: 14px;
   background: linear-gradient(180deg, rgba(11, 11, 13, 0.98), rgba(7, 7, 9, 0.98));
-  /* e1 resting elevation + 1px lit top edge */
+  /* e1 resting elevation + 1px lit top edge (hairline does primary separation) */
   box-shadow:
-    0 10px 22px alpha(@tt_shadow, 0.18),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.04);
 }
 
@@ -841,15 +857,15 @@ button.app-tab-add:hover {
 
 .config-panel,
 .preview-card {
-  padding: 16px;
+  padding: 12px;
 }
 
 .directory-panel {
-  padding: 14px;
+  padding: 12px;
 }
 
 .hero-title {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 700;
   color: #f8f7f2;
 }
@@ -878,10 +894,10 @@ entry.path-valid {
 }
 
 .eyebrow {
-  color: rgba(255, 224, 163, 0.76);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
+  color: rgba(255, 224, 163, 0.7);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
@@ -904,13 +920,13 @@ entry.path-valid {
 }
 
 .section-title {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .workspace-path entry,
 entry.workspace-path {
-  min-height: 42px;
-  border-radius: 12px;
+  min-height: 40px;
+  border-radius: 8px;
   background: alpha(@tt_white, 0.02);
   border: 1px solid alpha(@tt_white, 0.04);
   color: #f5f5f1;
@@ -922,13 +938,13 @@ entry.workspace-path {
 
 button.workspace-browse-button {
   min-width: 0;
-  min-height: 42px;
-  padding: 9px 16px;
+  min-height: 40px;
+  padding: 8px 16px;
 }
 
 .path-bar {
   padding: 10px;
-  border-radius: 14px;
+  border-radius: 12px;
   background: alpha(@tt_white, 0.02);
   border: 1px solid alpha(@tt_white, 0.05);
 }
@@ -950,10 +966,10 @@ button.pill-button {
   background:
     linear-gradient(180deg, rgba(26, 27, 32, 0.96), rgba(12, 13, 17, 0.96)),
     radial-gradient(circle at top, alpha(@tt_white, 0.055), transparent 48%);
-  border: 1px solid alpha(@tt_white, 0.10);
+  border: 1px solid alpha(@tt_white, 0.1);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.06),
-    0 7px 16px alpha(@tt_shadow, 0.16);
+    0 5px 12px alpha(@tt_shadow, 0.12);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -1068,14 +1084,14 @@ button.template-button {
 .status-chip,
 .agent-badge {
   border-radius: 999px;
-  padding: 4px 10px;
-  /* subtle dimensional glass; flat .accent-* badge variants still override */
-  background: linear-gradient(180deg, alpha(@tt_white, 0.085), alpha(@tt_white, 0.045));
-  border: 1px solid alpha(@tt_white, 0.08);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
-  color: #f2f2ee;
+  padding: 3px 8px;
+  /* flat hairline chip — lighter weight than the former dimensional glass;
+     .accent-* badge variants still override the fill */
+  background: alpha(@tt_white, 0.04);
+  border: 1px solid alpha(@tt_white, 0.1);
+  color: alpha(@tt_white, 0.82);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .muted-chip {
@@ -1084,7 +1100,7 @@ button.template-button {
 
 .control-strip {
   padding: 7px 9px;
-  border-radius: 14px;
+  border-radius: 12px;
   background: alpha(@tt_white, 0.03);
   border: 1px solid alpha(@tt_white, 0.06);
 }
@@ -1092,13 +1108,13 @@ button.template-button {
 .preset-card-compact {
   padding: 10px 12px;
   min-width: 168px;
-  min-height: 56px;
+  min-height: 52px;
   border: 1px solid alpha(@tt_white, 0.08);
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(13, 13, 16, 0.98), rgba(8, 8, 11, 0.98));
   /* e1 resting elevation */
   box-shadow:
-    0 10px 22px alpha(@tt_shadow, 0.18),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.04);
   transition:
     background 140ms ease,
@@ -1108,12 +1124,12 @@ button.template-button {
 }
 
 .preset-card-compact:hover {
-  border-color: alpha(@tt_amber, 0.2);
+  border-color: alpha(@tt_amber, 0.18);
   background: linear-gradient(180deg, rgba(18, 18, 22, 1), rgba(11, 11, 14, 1));
   /* e2 raised on hover */
   transform: translateY(-1px);
   box-shadow:
-    0 16px 34px alpha(@tt_shadow, 0.24),
+    0 14px 28px alpha(@tt_shadow, 0.16),
     inset 0 1px alpha(@tt_white, 0.05);
 }
 
@@ -1317,23 +1333,23 @@ button.surface-button:focus {
 button.secondary-button {
   background:
     linear-gradient(180deg, rgba(37, 38, 45, 0.96), rgba(13, 14, 18, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.075), transparent 52%);
-  border: 1px solid alpha(@tt_amber, 0.18);
-  color: rgba(255, 251, 242, 0.90);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.04), transparent 52%);
+  border: 1px solid alpha(@tt_amber, 0.12);
+  color: rgba(255, 251, 242, 0.9);
   box-shadow:
-    inset 0 1px alpha(@tt_white, 0.07),
-    0 8px 18px alpha(@tt_shadow, 0.20);
+    inset 0 1px alpha(@tt_white, 0.06),
+    0 6px 14px alpha(@tt_shadow, 0.14);
 }
 
 button.secondary-button:hover {
   background:
     linear-gradient(180deg, rgba(40, 40, 47, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.10), transparent 52%);
-  border-color: alpha(@tt_amber, 0.28);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.07), transparent 52%);
+  border-color: alpha(@tt_amber, 0.2);
   color: rgba(255, 250, 238, 0.96);
   box-shadow:
-    inset 0 1px alpha(@tt_white, 0.08),
-    0 10px 22px alpha(@tt_shadow, 0.22);
+    inset 0 1px alpha(@tt_white, 0.07),
+    0 8px 18px alpha(@tt_shadow, 0.16);
 }
 
 button.secondary-button:active {
@@ -1385,7 +1401,7 @@ button.suggested-action {
   color: #111216;
   border: 1px solid rgba(255, 246, 221, 0.98);
   box-shadow:
-    0 12px 26px alpha(@tt_shadow, 0.28),
+    0 8px 18px alpha(@tt_shadow, 0.2),
     0 0 0 1px alpha(@tt_amber, 0.18),
     inset 0 1px alpha(@tt_white, 0.86),
     inset 0 -1px rgba(145, 94, 28, 0.12);
@@ -1410,9 +1426,9 @@ button.suggested-action:hover {
     radial-gradient(circle at top, alpha(@tt_white, 0.82), transparent 56%);
   border-color: rgba(255, 250, 236, 1);
   box-shadow:
-    0 15px 30px alpha(@tt_shadow, 0.32),
-    0 0 0 1px alpha(@tt_amber, 0.26),
-    inset 0 1px alpha(@tt_white, 0.90),
+    0 12px 24px alpha(@tt_shadow, 0.24),
+    0 0 0 1px alpha(@tt_amber, 0.24),
+    inset 0 1px alpha(@tt_white, 0.9),
     inset 0 -1px rgba(145, 94, 28, 0.15);
 }
 
@@ -1494,15 +1510,15 @@ button.suggested-action:disabled {
 button.surface-button {
   min-height: 30px;
   padding: 0 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(31, 32, 38, 0.94), rgba(13, 14, 18, 0.96)),
     radial-gradient(circle at top, alpha(@tt_white, 0.045), transparent 52%);
   border: 1px solid alpha(@tt_white, 0.09);
   color: rgba(255, 251, 242, 0.78);
   box-shadow:
-    inset 0 1px alpha(@tt_white, 0.055),
-    0 6px 14px alpha(@tt_shadow, 0.14);
+    inset 0 1px alpha(@tt_white, 0.05),
+    0 5px 12px alpha(@tt_shadow, 0.12);
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -1513,12 +1529,12 @@ button.surface-button {
 button.surface-button:hover {
   background:
     linear-gradient(180deg, rgba(38, 39, 46, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.075), transparent 52%);
-  border-color: alpha(@tt_amber, 0.20);
+    radial-gradient(circle at top, alpha(@tt_amber, 0.06), transparent 52%);
+  border-color: alpha(@tt_amber, 0.16);
   color: rgba(255, 250, 238, 0.94);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.07),
-    0 8px 18px alpha(@tt_shadow, 0.18);
+    0 7px 16px alpha(@tt_shadow, 0.16);
 }
 
 button.surface-button:active {
@@ -1545,13 +1561,13 @@ button.surface-button:disabled {
 
 
 .workspace-summary {
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: 0;
   border: 1px solid alpha(@tt_white, 0.07);
   background:
     linear-gradient(180deg, rgba(20, 20, 25, 0.96), rgba(10, 10, 14, 0.96)),
-    radial-gradient(circle at left, alpha(@tt_amber, 0.08), transparent 38%);
-  box-shadow: 0 14px 30px alpha(@tt_shadow, 0.20);
+    radial-gradient(circle at left, alpha(@tt_amber, 0.05), transparent 38%);
+  box-shadow: 0 8px 18px alpha(@tt_shadow, 0.12);
   margin-bottom: 6px;
 }
 .workspace-summary-name {
@@ -1568,14 +1584,14 @@ button.surface-button:disabled {
   opacity: 0.62;
 }
 
-/* Pill clusters that segment related controls (broadcast / tiles / runbook)
-   inside the summary bar, giving the toolbar an intentional hierarchy. */
+/* Clusters that segment related controls (broadcast / tiles / runbook) inside
+   the summary bar. Kept nearly flush so the bar reads as one calm strip rather
+   than nested pills; spacing + thin dividers carry the hierarchy. */
 .toolbar-group {
-  padding: 4px 6px;
-  border-radius: 12px;
-  background: alpha(@tt_white, 0.03);
-  border: 1px solid alpha(@tt_white, 0.05);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.03);
+  padding: 3px 5px;
+  border-radius: 10px;
+  background: alpha(@tt_white, 0.018);
+  border: 1px solid alpha(@tt_white, 0.04);
 }
 
 /* Thin vertical rule separating toolbar groups. */
@@ -1587,11 +1603,11 @@ button.surface-button:disabled {
 }
 
 .terminal-header {
-  padding: 10px 12px;
+  padding: 8px 12px;
   background:
-    linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.025)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.06), transparent 42%);
-  border-bottom: 1px solid alpha(@tt_white, 0.07);
+    linear-gradient(180deg, alpha(@tt_white, 0.06), alpha(@tt_white, 0.02)),
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.04), transparent 42%);
+  border-bottom: 1px solid alpha(@tt_white, 0.06);
   border-top-left-radius: 0;
   border-top-right-radius: 0;
   transition:
@@ -1681,7 +1697,7 @@ button.tile-header-action:disabled {
   background: linear-gradient(180deg, rgba(16, 18, 23, 0.98), rgba(9, 10, 14, 0.98));
   /* e1 resting + lit top edge (no hover transform: terminal cards host live VTE) */
   box-shadow:
-    0 10px 22px alpha(@tt_shadow, 0.18),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.04);
   transition:
     border-color 140ms ease,
@@ -2131,13 +2147,13 @@ button.tile-header-action:disabled {
 
 .launch-overview {
   padding: 10px 14px;
-  border-radius: 16px;
+  border-radius: 14px;
   border-color: alpha(@tt_white, 0.055);
   background:
     linear-gradient(180deg, rgba(15, 15, 19, 0.96), rgba(8, 8, 11, 0.96)),
     radial-gradient(circle at top left, alpha(@tt_white, 0.045), transparent 38%);
   box-shadow:
-    0 10px 24px alpha(@tt_shadow, 0.18),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.045);
 }
 
@@ -2151,7 +2167,7 @@ button.tile-header-action:disabled {
 
 .settings-summary-title,
 .launch-overview-title {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .settings-summary-copy,
@@ -2171,10 +2187,10 @@ button.tile-header-action:disabled {
 
 .settings-meta-chip,
 .launch-meta-chip {
-  min-height: 22px;
-  padding: 0 9px;
+  min-height: 20px;
+  padding: 0 8px;
   background: alpha(@tt_white, 0.04);
-  border: 1px solid alpha(@tt_white, 0.07);
+  border: 1px solid alpha(@tt_white, 0.1);
   color: alpha(@tt_white, 0.74);
   font-size: 9px;
   letter-spacing: 0.04em;
@@ -2622,9 +2638,9 @@ window.companion-dialog-window.theme-light .settings-dialog-content .companion-r
   border-color: alpha(@tt_white, 0.06);
   background:
     linear-gradient(180deg, rgba(13, 13, 16, 0.96), rgba(8, 8, 11, 0.96)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.05), transparent 38%);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.04), transparent 38%);
   box-shadow:
-    0 12px 28px alpha(@tt_shadow, 0.18),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.03);
 }
 
@@ -2660,35 +2676,35 @@ button.new-kanban-board-button {
 
 .saved-workspaces-panel {
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
   box-shadow:
-    0 14px 32px alpha(@tt_shadow, 0.20),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .saved-workspaces-panel .section-title {
-  font-size: 18px;
+  font-size: 15px;
 }
 
 .saved-workspaces-panel .section-header .field-hint {
-  font-size: 12px;
+  font-size: 11px;
   color: alpha(@tt_white, 0.68);
 }
 
 .saved-boards-panel {
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
   box-shadow:
-    0 14px 32px alpha(@tt_shadow, 0.20),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.03);
 }
 
 .saved-board-card {
-  border-color: alpha(@tt_amber, 0.10);
+  border-color: alpha(@tt_amber, 0.1);
 }
 
 .saved-board-kind-chip {
-  padding: 4px 9px;
+  padding: 3px 8px;
   font-size: 10px;
   color: alpha(@tt_amber, 0.78);
   background: alpha(@tt_amber, 0.08);
@@ -2730,14 +2746,14 @@ button.new-kanban-board-button {
 
 .saved-workspace-card {
   min-width: 340px;
-  min-height: 132px;
-  padding: 15px;
-  border-radius: 16px;
+  min-height: 120px;
+  padding: 12px;
+  border-radius: 12px;
   background:
     linear-gradient(180deg, rgba(15, 15, 18, 0.98), rgba(8, 8, 11, 0.98)),
     radial-gradient(circle at top left, alpha(@tt_white, 0.035), transparent 42%);
   box-shadow:
-    0 10px 22px alpha(@tt_shadow, 0.16),
+    0 8px 18px alpha(@tt_shadow, 0.12),
     inset 0 1px alpha(@tt_white, 0.025);
 }
 
@@ -2852,21 +2868,21 @@ window.window-shell:not(.theme-light) button.saved-workspace-delete-button:hover
 
 .wizard-stepper {
   padding: 8px;
-  border-radius: 22px;
+  border-radius: 14px;
   background:
     linear-gradient(180deg, rgba(18, 19, 24, 0.96), rgba(8, 9, 13, 0.96)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.065), transparent 42%),
-    radial-gradient(circle at bottom right, alpha(@tt_white, 0.035), transparent 44%);
+    radial-gradient(circle at top left, alpha(@tt_amber, 0.04), transparent 42%),
+    radial-gradient(circle at bottom right, alpha(@tt_white, 0.03), transparent 44%);
   border-color: alpha(@tt_white, 0.075);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.045),
-    0 14px 34px alpha(@tt_shadow, 0.20);
+    0 8px 18px alpha(@tt_shadow, 0.12);
 }
 
 .wizard-step-chip {
   min-width: 118px;
   min-height: 36px;
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 0 14px;
   background:
     linear-gradient(180deg, rgba(30, 31, 38, 0.78), rgba(13, 14, 19, 0.78)),
@@ -2889,8 +2905,8 @@ window.window-shell:not(.theme-light) button.saved-workspace-delete-button:hover
   min-height: 20px;
   border-radius: 999px;
   font-size: 10px;
-  font-weight: 800;
-  color: rgba(255, 250, 238, 0.70);
+  font-weight: 700;
+  color: rgba(255, 250, 238, 0.7);
   background: alpha(@tt_white, 0.065);
   border: 1px solid alpha(@tt_white, 0.075);
 }
@@ -2901,7 +2917,7 @@ window.window-shell:not(.theme-light) button.saved-workspace-delete-button:hover
 
 .wizard-step-label {
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: 0.045em;
   color: rgba(255, 250, 238, 0.66);
 }
@@ -2936,14 +2952,14 @@ button.wizard-step-chip:active {
 
 .wizard-step-chip.is-active {
   background:
-    linear-gradient(180deg, rgba(255, 236, 194, 0.34), rgba(211, 125, 57, 0.22)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.16), transparent 52%);
-  border-color: alpha(@tt_amber, 0.42);
+    linear-gradient(180deg, rgba(255, 236, 194, 0.3), rgba(211, 125, 57, 0.18)),
+    radial-gradient(circle at top, alpha(@tt_white, 0.14), transparent 52%);
+  border-color: alpha(@tt_amber, 0.36);
   color: #fff8e8;
   box-shadow:
-    0 0 0 1px alpha(@tt_amber, 0.14),
-    0 10px 20px alpha(@tt_shadow, 0.16),
-    inset 0 1px alpha(@tt_white, 0.10);
+    0 0 0 1px alpha(@tt_amber, 0.12),
+    0 6px 14px alpha(@tt_shadow, 0.12),
+    inset 0 1px alpha(@tt_white, 0.1);
 }
 
 .wizard-step-chip.is-active .wizard-step-index {
@@ -4543,7 +4559,7 @@ window.theme-light .voice-hud-transcript {
 }
 
 .kanban-board-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: @tt_text;
 }
@@ -4551,8 +4567,8 @@ window.theme-light .voice-hud-transcript {
 .kanban-status-banner {
   padding: 8px 10px;
   border-radius: 0;
-  background: alpha(@tt_amber, 0.10);
-  border: 1px solid alpha(@tt_amber, 0.35);
+  background: alpha(@tt_amber, 0.07);
+  border: 1px solid alpha(@tt_amber, 0.22);
 }
 
 .kanban-status-banner-label {
@@ -4570,32 +4586,32 @@ window.theme-light .voice-hud-transcript {
 
 .kanban-column {
   border-radius: 0;
-  padding: 12px;
+  padding: 10px;
   min-width: 0;
 }
 
 .kanban-column-header {
-  padding-bottom: 8px;
-  border-bottom: 1px solid alpha(@tt_white, 0.08);
+  padding-bottom: 7px;
+  border-bottom: 1px solid alpha(@tt_white, 0.07);
 }
 
 .kanban-column-title {
-  color: @tt_text;
+  color: alpha(@tt_white, 0.78);
 }
 
 .kanban-count-badge {
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  color: @tt_text;
-  background: alpha(@tt_white, 0.10);
-  border: 1px solid alpha(@tt_white, 0.08);
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: alpha(@tt_white, 0.7);
+  background: alpha(@tt_white, 0.06);
+  border: 1px solid alpha(@tt_white, 0.07);
   border-radius: 0;
 }
 
 .kanban-status-dot {
-  min-width: 8px;
-  min-height: 8px;
+  min-width: 7px;
+  min-height: 7px;
   border-radius: 0;
   background: alpha(@tt_white, 0.45);
 }
@@ -4668,17 +4684,17 @@ window.theme-light .voice-hud-transcript {
 }
 
 .kanban-empty-state {
-  padding: 24px 12px;
+  padding: 16px 12px;
 }
 
 .kanban-empty-title {
-  font-size: 12px;
-  color: alpha(@tt_white, 0.42);
+  font-size: 11px;
+  color: alpha(@tt_white, 0.4);
 }
 
 .kanban-agents-panel {
   border-radius: 0;
-  padding: 12px;
+  padding: 10px;
   min-width: 0;
 }
 

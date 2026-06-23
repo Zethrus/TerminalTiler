@@ -1878,7 +1878,7 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(16)
+        .spacing(12)
         .css_classes(["config-panel", "launch-dashboard-hero"])
         .build();
 

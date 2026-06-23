@@ -52,7 +52,7 @@ pub(crate) fn build_board_column(status: TaskStatus) -> BoardColumnChrome {
 
     let column = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
+        .spacing(8)
         .hexpand(true)
         .vexpand(true)
         .css_classes(["config-panel", "kanban-column", modifier])

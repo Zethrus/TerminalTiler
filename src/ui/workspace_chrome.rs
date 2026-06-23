@@ -179,7 +179,7 @@ pub(crate) fn build_workspace_summary_chrome(
 ) -> WorkspaceSummaryChrome {
     let summary = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(8)
         .css_classes(["workspace-summary"])
         .build();
 

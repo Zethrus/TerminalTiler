@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-06-22
+- Last refreshed: 2026-06-22 (premium refinement pass: tighter spacing, lighter elevation, calmed accent)
 - Primary product surfaces: workspace launch dashboard, workspace creation/edit wizard, saved preset/workspace cards, saved Kanban board cards, active Kanban board tabs, task detail dialogs, agent run panel, tile editor, active workspace tabs.
 - Evidence reviewed: `README.md`, `docs/core-boundary.md`, `docs/kanban-board.md`, `src/ui/launch_screen.rs`, `src/ui/window.rs`, `src/ui/workspace_view.rs`, `src/ui/board_view.rs`, `src/ui/task_detail_dialog.rs`, `src/ui/agent_setup_dialog.rs`, `src/model/preset.rs`, `src/model/layout.rs`, `src/model/board.rs`, `src/services/agent_orchestrator.rs`, `resources/style.css`.
 
@@ -33,11 +33,11 @@
 - Tradeoffs: the wizard adds clicks compared with a long form, but reduces scanning burden and makes saved workspaces easier to understand.
 
 ## Visual language
-- Color: preserve the existing dark command-center palette with amber accent highlights and light-mode overrides.
-- Typography: keep current GTK/libadwaita typography classes; use compact uppercase labels for step indicators and small meta copy.
-- Spacing/layout rhythm: card-based surfaces with 16–18px panel padding; wizard body limited to the active step.
-- Shape/radius/elevation: rounded cards, pill CTAs, selected-card borders, soft dark elevation as already encoded in `resources/style.css`.
-- Motion: native GTK stack transitions are acceptable; avoid long or distracting animations.
+- Color: preserve the existing dark command-center palette with amber accent highlights and light-mode overrides. Accent is used with restraint — reserve full-strength amber for one primary action per region; the active tab is muted copper plus a thin amber underline rather than a loud copper gradient; secondary controls avoid amber rim-glow.
+- Typography: keep current GTK/libadwaita typography classes on the existing font stack. Type scale: display 22 · section 14–15 · card/tile-title 12–13 · body 13 · meta 10–11 · micro 9; max weight 700. Eyebrows/step indicators are 9–10px / 600 / uppercase with 0.14em letter-spacing.
+- Spacing/layout rhythm: 4px-based scale (4 · 6 · 8 · 12 · 16 · 20) applied as literals (GTK4 CSS has no length variables). Card surfaces use ~12px panel padding (Standard); wizard body limited to the active step. GTK `Box` spacings follow the same steps.
+- Shape/radius/elevation: radius scale control 8 · chip 999 · card 12 · panel 14 (`profile-compact` stays squared; `workspace-summary` stays squared). Elevation is soft — 1px hairline borders (`alpha(@tt_white, 0.06–0.08)`) do primary separation, shadows are secondary (e1 0.12 · e2 0.16 · e3 0.22). Pill CTAs and selected-card borders retained. The numeric scale's single source of truth is the header comment in `resources/style.css` mirrored here.
+- Motion: native GTK stack transitions are acceptable; avoid long or distracting animations. Interactive cards lift `translateY(-1px)` on hover at 140ms ease.
 - Imagery/iconography: use symbolic GTK icons only; no new bitmap assets.
 
 ## Components
