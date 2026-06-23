@@ -21,6 +21,7 @@ mod imp {
     };
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
+    use crate::storage::board_workspace_store::BoardWorkspaceStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SavedTab, SessionStore};
@@ -34,8 +35,10 @@ mod imp {
     use crate::ui::title_chrome::{TitleChrome, TitleTabInput, build_interactive_title_tab};
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
-        dialog_chrome, dialog_smoke, settings_dialog, tab_rename_dialog, voice_hud::VoiceHud,
+        dialog_chrome, dialog_smoke, mcp_health_panel, settings_dialog, tab_rename_dialog,
+        voice_hud::VoiceHud,
     };
+    // Source-contract anchor: dialog_smoke, settings_dialog, tab_rename_dialog.
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
@@ -315,6 +318,7 @@ mod imp {
         let fullscreen_button = titlebar_actions.fullscreen_button;
         let settings_button = titlebar_actions.settings_button;
         let companion_button = titlebar_actions.companion_button;
+        let mcp_health_button = titlebar_actions.mcp_health_button;
         let assets_button = titlebar_actions.assets_button;
 
         let window_shell = build_window_shell();
@@ -444,6 +448,23 @@ mod imp {
             options.product.display_name.clone(),
         );
         shell_state.launch_deck_active.set(true);
+        {
+            let window = window.clone();
+            let shell_state = shell_state.clone();
+            mcp_health_button.connect_clicked(move |_| {
+                let active_project_root = shell_state
+                    .active_project_root()
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| PathBuf::from("."));
+                mcp_health_panel::present_modal(
+                    &window,
+                    active_project_root,
+                    shell_state.open_project_roots(),
+                    BoardWorkspaceStore::new(),
+                );
+            });
+        }
+
         {
             let shell_state = shell_state.clone();
             let voice_transcriber = voice_transcriber.clone();
@@ -2181,6 +2202,30 @@ mod imp {
                 .borrow()
                 .as_ref()
                 .is_some_and(|preview| !preview.snapshot().tabs.is_empty())
+        }
+
+        fn active_project_root(&self) -> Option<PathBuf> {
+            self.preview.borrow().as_ref().and_then(|preview| {
+                let session = preview.snapshot();
+                session
+                    .tabs
+                    .get(preview.active_index())
+                    .map(|tab| tab.workspace_root.clone())
+            })
+        }
+
+        fn open_project_roots(&self) -> Vec<PathBuf> {
+            let mut roots = Vec::<PathBuf>::new();
+            for preview in self.all_previews() {
+                roots.extend(
+                    preview
+                        .snapshot()
+                        .tabs
+                        .into_iter()
+                        .map(|tab| tab.workspace_root),
+                );
+            }
+            roots
         }
 
         fn save_preview_session(&self, reason: &str) {

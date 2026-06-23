@@ -14,6 +14,7 @@ pub(crate) struct MainTitlebarActions {
     pub(crate) fullscreen_button: gtk::Button,
     pub(crate) settings_button: gtk::Button,
     pub(crate) companion_button: Option<gtk::Button>,
+    pub(crate) mcp_health_button: gtk::Button,
     pub(crate) assets_button: gtk::Button,
 }
 
@@ -107,6 +108,14 @@ pub(crate) fn build_main_titlebar_actions(
         button
     });
 
+    let mcp_health_button = icons::labeled_button_fitted(
+        "MCP Health",
+        icon_name::TERMINAL,
+        &["flat", "titlebar-action-button"],
+    );
+    mcp_health_button.set_tooltip_text(Some("Show TerminalTiler MCP health"));
+    header.pack_end(&mcp_health_button);
+
     let assets_button = icons::icon_button(
         icon_name::ASSETS,
         "Open assets manager",
@@ -119,6 +128,7 @@ pub(crate) fn build_main_titlebar_actions(
         fullscreen_button,
         settings_button,
         companion_button,
+        mcp_health_button,
         assets_button,
     }
 }

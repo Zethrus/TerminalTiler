@@ -4909,3 +4909,40 @@ window.theme-light .task-detail-dropzone {
   border-color: rgba(17, 18, 22, 0.18);
   background: alpha(@tt_white, 0.4);
 }
+
+.mcp-health-dialog-window .mcp-health-modal {
+  min-width: 0;
+}
+
+.mcp-health-project-list,
+.mcp-health-project-scroller {
+  min-width: 0;
+}
+
+.mcp-health-project-row {
+  padding: 10px;
+  min-width: 0;
+}
+
+.mcp-health-project-title {
+  font-weight: 700;
+}
+
+.mcp-health-project-detail,
+.mcp-health-empty-projects {
+  min-width: 0;
+}
+
+.mcp-health-status-ready {
+  border-color: alpha(@tt_amber, 0.18);
+}
+
+.mcp-health-status-wrong-project-root,
+.mcp-health-status-needs-repair,
+.mcp-health-status-missing-binary {
+  border-color: alpha(@tt_danger, 0.2);
+}
+
+.mcp-health-status-missing-config {
+  border-color: alpha(@tt_amber, 0.18);
+}

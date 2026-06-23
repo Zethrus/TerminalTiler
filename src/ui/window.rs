@@ -45,7 +45,8 @@ use crate::ui::appearance::{
 use crate::ui::icons::{self, name as icon_name};
 use crate::ui::{
     about_dialog, assets_manager, command_palette, companion_dialog, context_menu, dialog_chrome,
-    dialog_smoke, launch_screen, settings_dialog, stats_dialog, tab_rename_dialog,
+    dialog_smoke, launch_screen, mcp_health_panel, settings_dialog, stats_dialog,
+    tab_rename_dialog,
     title_chrome::{
         TitleTabChrome, TitleTabInput, apply_title_tab_state, build_interactive_title_tab,
     },
@@ -159,6 +160,35 @@ struct WorkspaceState {
     terminal_zoom_steps: i32,
     terminal_history: Vec<SavedTerminalHistory>,
     layout_target: WorkspaceLayoutTargetHandle,
+}
+
+fn active_project_root_for_tabs(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+) -> PathBuf {
+    tabs.borrow()
+        .iter()
+        .find(|tab| tab.id == active_tab_id)
+        .and_then(|tab| tab.workspace_root.clone())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn open_project_roots_for_tabs(tabs: &Rc<RefCell<Vec<WorkspaceTab>>>) -> Vec<PathBuf> {
+    let mut roots = BTreeMap::<String, PathBuf>::new();
+    for root in tabs
+        .borrow()
+        .iter()
+        .filter_map(|tab| tab.workspace_root.clone())
+    {
+        let key = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.clone())
+            .to_string_lossy()
+            .to_string();
+        roots.entry(key).or_insert(root);
+    }
+    roots.into_values().collect()
 }
 
 #[derive(Clone)]
@@ -953,6 +983,7 @@ fn present_with_initial_workspace(
     let fullscreen_button = titlebar_actions.fullscreen_button;
     let settings_button = titlebar_actions.settings_button;
     let companion_button = titlebar_actions.companion_button;
+    let mcp_health_button = titlebar_actions.mcp_health_button;
     let assets_button = titlebar_actions.assets_button;
 
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
@@ -3191,6 +3222,27 @@ fn present_with_initial_workspace(
     {
         let open_settings_dialog = open_settings_dialog.clone();
         settings_button.connect_clicked(move |_| open_settings_dialog());
+    }
+
+    let open_mcp_health: Rc<dyn Fn()> = {
+        let window = window.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        Rc::new(move || {
+            let active_project_root = active_project_root_for_tabs(&tabs, active_tab_id.get());
+            let open_project_roots = open_project_roots_for_tabs(&tabs);
+            mcp_health_panel::present_modal(
+                &window,
+                active_project_root,
+                open_project_roots,
+                BoardWorkspaceStore::new(),
+            );
+        })
+    };
+
+    {
+        let open_mcp_health = open_mcp_health.clone();
+        mcp_health_button.connect_clicked(move |_| open_mcp_health());
     }
 
     let open_assets_manager: Rc<dyn Fn()> = {

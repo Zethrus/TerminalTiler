@@ -3324,6 +3324,60 @@ fn kanban_lifecycle_metadata_has_lightweight_ui_indicators() {
 }
 
 #[test]
+fn main_header_exposes_mcp_health_modal() {
+    assert!(
+        APP_CHROME_RS.contains("mcp_health_button: gtk::Button")
+            && APP_CHROME_RS.contains("let mcp_health_button = icons::labeled_button_fitted")
+            && APP_CHROME_RS.contains(r#""MCP Health""#)
+            && APP_CHROME_RS.contains(r#""Show TerminalTiler MCP health""#)
+            && APP_CHROME_RS.contains(r#""titlebar-action-button""#),
+        "shared header should expose a visible MCP Health titlebar action with a clear tooltip"
+    );
+    assert!(
+        WINDOW_RS.contains("let mcp_health_button = titlebar_actions.mcp_health_button")
+            && WINDOW_RS.contains("mcp_health_button.connect_clicked")
+            && WINDOW_RS.contains("mcp_health_panel::present_modal")
+            && WINDOW_RS.contains("active_project_root_for_tabs")
+            && WINDOW_RS.contains("open_project_roots_for_tabs")
+            && WINDOWS_GTK_APP_RS
+                .contains("let mcp_health_button = titlebar_actions.mcp_health_button")
+            && WINDOWS_GTK_APP_RS.contains("mcp_health_button.connect_clicked")
+            && WINDOWS_GTK_APP_RS.contains("mcp_health_panel::present_modal")
+            && WINDOWS_GTK_APP_RS.contains("active_project_root()")
+            && WINDOWS_GTK_APP_RS.contains("open_project_roots()"),
+        "Linux and Windows GTK shells should connect MCP Health to active/open project diagnostics"
+    );
+}
+
+#[test]
+fn mcp_health_modal_lists_saved_and_open_projects() {
+    assert!(
+        MCP_HEALTH_PANEL_RS.contains("pub(crate) fn present_modal")
+            && MCP_HEALTH_PANEL_RS.contains("McpHealthPanel::new")
+            && MCP_HEALTH_PANEL_RS.contains("BoardWorkspaceStore")
+            && MCP_HEALTH_PANEL_RS.contains("agent_config::diagnose_mcp")
+            && MCP_HEALTH_PANEL_RS.contains("known_project_roots")
+            && MCP_HEALTH_PANEL_RS.contains("dedupe_project_roots")
+            && MCP_HEALTH_PANEL_RS.contains("render_project_rows")
+            && MCP_HEALTH_PANEL_RS.contains(r#""Refresh""#)
+            && MCP_HEALTH_PANEL_RS.contains("process_cwd")
+            && MCP_HEALTH_PANEL_RS.contains("codex_config_root"),
+        "MCP Health modal should refresh diagnostics and dedupe open plus saved Kanban project roots"
+    );
+    for class in [
+        ".mcp-health-modal",
+        ".mcp-health-project-list",
+        ".mcp-health-project-row",
+        ".mcp-health-project-title",
+    ] {
+        assert!(
+            STYLE_CSS.contains(class),
+            "MCP Health modal CSS hook {class} should exist"
+        );
+    }
+}
+
+#[test]
 fn kanban_mcp_health_panel_is_reused_and_refreshes_after_connect() {
     assert!(
         UI_MOD_RS.contains("mod mcp_health_panel")
