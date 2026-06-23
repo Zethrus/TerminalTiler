@@ -434,7 +434,9 @@ mod tests {
     fn temp_root() -> PathBuf {
         let path = std::env::temp_dir().join(format!("terminaltiler-mcp-{}", Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
-        path
+        // The stdio entry point canonicalizes --project-root before serving requests.
+        // Mirror that here so Windows CI does not compare 8.3 Temp aliases with long paths.
+        path.canonicalize().unwrap()
     }
 
     fn call_tool(root: &Path, name: &str, arguments: Value) -> Value {
