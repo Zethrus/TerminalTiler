@@ -40,6 +40,8 @@ pub struct SavedTerminalHistory {
     pub tile_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -444,6 +446,7 @@ type = "workspace-root"
                     terminal_history: vec![SavedTerminalHistory {
                         tile_id: "tile-1".into(),
                         lines: vec!["line one".into(), "line two".into()],
+                        resume_command: None,
                     }],
                 },
                 SavedTab {

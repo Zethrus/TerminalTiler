@@ -12,7 +12,7 @@ use crate::logging;
 use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
-use crate::services::agent_resume::RestoreStartupOverrideMap;
+use crate::services::agent_resume::{RestoreStartupOverrideMap, saved_resume_command_for_tile};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
     BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
@@ -116,20 +116,23 @@ impl WorkspaceRuntime {
     }
 
     pub fn capture_terminal_histories(&self, max_lines: usize) -> Vec<SavedTerminalHistory> {
-        if max_lines == 0 {
-            return Vec::new();
-        }
-
         self.inner
             .tiles
             .borrow()
             .iter()
             .filter_map(|tile| {
                 let session = tile.session.as_ref()?;
-                let lines = session.capture_terminal_history(max_lines);
-                (!lines.is_empty()).then(|| SavedTerminalHistory {
+                let lines = if max_lines == 0 {
+                    Vec::new()
+                } else {
+                    session.capture_terminal_history(max_lines)
+                };
+                let resume_command =
+                    saved_resume_command_for_tile(&tile.tile, &self.inner.workspace_root, &lines);
+                (!lines.is_empty() || resume_command.is_some()).then(|| SavedTerminalHistory {
                     tile_id: tile.tile.id.clone(),
                     lines,
+                    resume_command,
                 })
             })
             .collect()

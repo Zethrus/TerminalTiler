@@ -20,7 +20,8 @@ use crate::model::board::Board;
 use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::services::agent_resume::{
-    RestoreStartupOverrideMap, restore_startup_overrides_for_tiles,
+    RestoreStartupOverrideMap, initial_startup_overrides_for_tiles,
+    restore_startup_overrides_for_saved_tab,
 };
 use crate::services::session_restore::{
     flatten_window_sessions, session_for_restore_mode, shell_only_session,
@@ -1718,7 +1719,10 @@ fn present_with_initial_workspace(
                     preferences.max_reconnect_attempts,
                     preferences.terminal_history_lines,
                     Vec::new(),
-                    RestoreStartupOverrideMap::new(),
+                    initial_startup_overrides_for_tiles(
+                        preset.layout.tile_specs().iter(),
+                        &workspace_root,
+                    ),
                     stats_hub::recorder(),
                     {
                         let layout_target = layout_target.clone();
@@ -4746,6 +4750,15 @@ fn restore_saved_session(
             .load_assets_for_workspace_root(&workspace_root)
             .assets;
         let preferences = context.preference_store.load();
+        let restore_startup_overrides = if apply_agent_resume_overrides {
+            restore_startup_overrides_for_saved_tab(
+                preset.layout.tile_specs().iter(),
+                &workspace_root,
+                &terminal_history,
+            )
+        } else {
+            RestoreStartupOverrideMap::new()
+        };
 
         let built_workspace = workspace_view::build_with_layout_change_handler(
             &preset,
@@ -4756,11 +4769,7 @@ fn restore_saved_session(
             preferences.max_reconnect_attempts,
             preferences.terminal_history_lines,
             terminal_history.clone(),
-            if apply_agent_resume_overrides {
-                restore_startup_overrides_for_tiles(preset.layout.tile_specs().iter())
-            } else {
-                RestoreStartupOverrideMap::new()
-            },
+            restore_startup_overrides,
             stats_hub::recorder(),
             {
                 let layout_target = layout_target.clone();

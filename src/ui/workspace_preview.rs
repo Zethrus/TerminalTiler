@@ -10,6 +10,7 @@ use gtk::prelude::*;
 use crate::model::assets::{CliSnippet, Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
 use crate::model::preset::ApplicationDensity;
+use crate::services::agent_resume::saved_resume_command_for_tile;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
     BroadcastTarget, quick_send_detail, quick_send_payload, saved_groups_for_tiles,
@@ -280,13 +281,6 @@ impl SessionPreview {
 
     pub fn snapshot_with_terminal_history(&self, line_limit: usize) -> SavedSession {
         let mut session = self.session.borrow().clone();
-        if line_limit == 0 {
-            for tab in &mut session.tabs {
-                tab.terminal_history.clear();
-            }
-            return session;
-        }
-
         let surfaces = self.runtime_surfaces.borrow();
         for (index, tab) in session.tabs.iter_mut().enumerate() {
             let histories = tab
@@ -299,11 +293,18 @@ impl SessionPreview {
                         .get(&runtime_surface_key(index, tab, &tile))?
                         .terminal_history_provider
                         .as_ref()?;
-                    let lines = provider(line_limit);
-                    (!lines.is_empty()).then(|| {
+                    let lines = if line_limit == 0 {
+                        Vec::new()
+                    } else {
+                        provider(line_limit)
+                    };
+                    let resume_command =
+                        saved_resume_command_for_tile(&tile, &tab.workspace_root, &lines);
+                    (!lines.is_empty() || resume_command.is_some()).then(|| {
                         crate::storage::session_store::SavedTerminalHistory {
                             tile_id: tile.id,
                             lines,
+                            resume_command,
                         }
                     })
                 })

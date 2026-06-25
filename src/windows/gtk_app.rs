@@ -17,7 +17,7 @@ mod imp {
     use crate::model::layout::DEFAULT_WEB_URL;
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_override_for_tab_tile,
-        restore_startup_overrides_for_tab_tile_sets,
+        restore_startup_overrides_for_saved_session,
     };
     use crate::services::session_restore::session_for_restore_mode;
     use crate::storage::asset_store::AssetStore;
@@ -3258,12 +3258,7 @@ mod imp {
         let session_store = shell_state.session_store.clone();
         let restore_startup_overrides: RestoreStartupOverridesByTab =
             if apply_agent_resume_overrides {
-                restore_startup_overrides_for_tab_tile_sets(
-                    session
-                        .tabs
-                        .iter()
-                        .map(|tab| tab.preset.layout.tile_specs()),
-                )
+                restore_startup_overrides_for_saved_session(&session)
             } else {
                 RestoreStartupOverridesByTab::new()
             };

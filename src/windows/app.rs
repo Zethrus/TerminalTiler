@@ -53,7 +53,7 @@ mod imp {
     use crate::platform::{home_dir, resolve_workspace_root};
     use crate::product;
     use crate::services::agent_resume::{
-        RestoreStartupOverridesByTab, restore_startup_overrides_for_tab_tile_sets,
+        RestoreStartupOverridesByTab, restore_startup_overrides_for_saved_session,
     };
     use crate::services::project_suggestions::detect_project_suggestions;
     use crate::services::session_restore::{
@@ -1978,12 +1978,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     fn restore_startup_overrides_for_session(
         session: &SavedSession,
     ) -> RestoreStartupOverridesByTab {
-        restore_startup_overrides_for_tab_tile_sets(
-            session
-                .tabs
-                .iter()
-                .map(|tab| tab.preset.layout.tile_specs()),
-        )
+        restore_startup_overrides_for_saved_session(session)
     }
 
     fn launch_saved_session(

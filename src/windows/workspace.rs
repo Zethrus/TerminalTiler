@@ -95,7 +95,7 @@ mod imp {
     use crate::product;
     use crate::services::agent_resume::{
         RestoreStartupOverrideMap, RestoreStartupOverridesByTab,
-        restore_startup_override_for_tab_tile,
+        restore_startup_override_for_tab_tile, saved_resume_command_for_tile,
     };
     use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
     use crate::services::broadcast::{BroadcastTarget, saved_groups_for_tiles};
@@ -3702,19 +3702,23 @@ mod imp {
 
     fn captured_active_terminal_history(state: &WorkspaceWindowState) -> Vec<SavedTerminalHistory> {
         let line_limit = state.preference_store.load().terminal_history_lines as usize;
-        if line_limit == 0 {
-            return Vec::new();
-        }
 
         state
             .panes
             .iter()
             .filter(|pane| pane.tile.tile_kind == TileKind::Terminal)
             .filter_map(|pane| {
-                let lines = pane.terminal.recent_plain_lines(line_limit);
-                (!lines.is_empty()).then(|| SavedTerminalHistory {
+                let lines = if line_limit == 0 {
+                    Vec::new()
+                } else {
+                    pane.terminal.recent_plain_lines(line_limit)
+                };
+                let resume_command =
+                    saved_resume_command_for_tile(&pane.tile, &state.workspace_root, &lines);
+                (!lines.is_empty() || resume_command.is_some()).then(|| SavedTerminalHistory {
                     tile_id: pane.tile.id.clone(),
                     lines,
+                    resume_command,
                 })
             })
             .collect()

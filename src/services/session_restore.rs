@@ -133,6 +133,7 @@ mod tests {
                 terminal_history: vec![crate::storage::session_store::SavedTerminalHistory {
                     tile_id: "tile-1".into(),
                     lines: vec!["previous output".into()],
+                    resume_command: None,
                 }],
             }],
             active_tab_index: 0,
