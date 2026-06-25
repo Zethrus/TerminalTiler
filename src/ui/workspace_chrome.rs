@@ -169,9 +169,36 @@ pub(crate) fn build_workspace_alert_revealer(
     let alert_revealer = gtk::Revealer::builder()
         .transition_type(gtk::RevealerTransitionType::SlideLeft)
         .reveal_child(false)
+        // Start hidden: a collapsed revealer must request 0 width so the
+        // hexpand layout host fills the whole content row. See the
+        // child-revealed handler below for why visibility is driven here.
+        .visible(false)
         .build();
     alert_revealer.set_child(Some(alert_sidebar));
+    // Once the slide-out animation finishes, fully hide the revealer. A
+    // `visible=false` widget is excluded from layout, which guarantees the
+    // layout host reclaims the space even if the closing animation's final
+    // 0-width frame is coalesced away while a busy terminal is repainting
+    // (otherwise the revealer can stick at an intermediate width, leaving a
+    // blank dead strip on the right until the window is resized).
+    alert_revealer.connect_child_revealed_notify(|revealer| {
+        if !revealer.is_child_revealed() {
+            revealer.set_visible(false);
+        }
+    });
     alert_revealer
+}
+
+/// Toggle the Alert Center revealer. Opening makes it visible before revealing
+/// so the slide-in animation runs; closing hides it once the slide-out
+/// animation completes (handled in `build_workspace_alert_revealer`).
+pub(crate) fn toggle_workspace_alert_revealer(revealer: &gtk::Revealer) {
+    if revealer.reveals_child() {
+        revealer.set_reveal_child(false);
+    } else {
+        revealer.set_visible(true);
+        revealer.set_reveal_child(true);
+    }
 }
 
 pub(crate) fn build_workspace_summary_chrome(

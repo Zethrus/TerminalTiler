@@ -33,6 +33,7 @@ use crate::ui::workspace_alerts::{self, AlertRowAction, WorkspaceAlertListInput}
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
+    toggle_workspace_alert_revealer,
 };
 use crate::ui::workspace_navigation;
 use crate::ui::workspace_tile_state;
@@ -1310,7 +1311,7 @@ pub fn build_with_layout_change_handler(
     {
         let alert_revealer = alert_revealer.clone();
         alert_button.connect_clicked(move |_| {
-            alert_revealer.set_reveal_child(!alert_revealer.reveals_child());
+            toggle_workspace_alert_revealer(&alert_revealer);
         });
     }
     {
