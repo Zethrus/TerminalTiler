@@ -3702,6 +3702,7 @@ mod imp {
 
     fn captured_active_terminal_history(state: &WorkspaceWindowState) -> Vec<SavedTerminalHistory> {
         let line_limit = state.preference_store.load().terminal_history_lines as usize;
+        let workspace_root = active_tab(state).workspace_root.clone();
 
         state
             .panes
@@ -3714,7 +3715,7 @@ mod imp {
                     pane.terminal.recent_plain_lines(line_limit)
                 };
                 let resume_command =
-                    saved_resume_command_for_tile(&pane.tile, &state.workspace_root, &lines);
+                    saved_resume_command_for_tile(&pane.tile, &workspace_root, &lines);
                 (!lines.is_empty() || resume_command.is_some()).then(|| SavedTerminalHistory {
                     tile_id: pane.tile.id.clone(),
                     lines,
