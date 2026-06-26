@@ -2734,8 +2734,10 @@ fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
             && WINDOWS_SMOKE_PS1.contains("-LaunchStartTime $launchStartTime")
             && WINDOWS_SMOKE_PS1.contains("StartTime = $LaunchStartTime")
             && WINDOWS_SMOKE_PS1.contains("*$resolvedExePath*")
-            && WINDOWS_SMOKE_PS1.contains("Stop-TerminalTilerSmokeProcesses -ThrowOnTimeout"),
-        "Windows smoke should isolate TEMP/TMP, retry only pre-log launch initialization failures, filter event logs by launch/exe, and stage diagnostics outside hidden build dirs"
+            && WINDOWS_SMOKE_PS1.contains("Stop-TerminalTilerSmokeProcesses -ThrowOnTimeout")
+            && WINDOWS_SMOKE_PS1.contains("$candidate.CloseMainWindow()")
+            && WINDOWS_SMOKE_PS1.contains("$global:LASTEXITCODE = 0"),
+        "Windows smoke should isolate TEMP/TMP, retry only pre-log launch initialization failures, shut down launched GUI process trees cleanly, filter event logs by launch/exe, and stage diagnostics outside hidden build dirs"
     );
 
     for job_name in ["verify-windows", "verify-windows-gtk"] {

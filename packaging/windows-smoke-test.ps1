@@ -575,15 +575,54 @@ function Test-ProcessTreeHasMainWindow {
 }
 
 function Stop-ProcessTree {
-    param([System.Diagnostics.Process]$Process)
+    param(
+        [System.Diagnostics.Process]$Process,
+        [int]$GracefulTimeoutSeconds = 5
+    )
 
     $processIds = @(Get-DescendantProcessIds -RootProcessId $Process.Id)
+    $allProcessIds = @($Process.Id) + $processIds
+
+    foreach ($processId in $allProcessIds) {
+        try {
+            $candidate = Get-Process -Id $processId -ErrorAction Stop
+            if ($candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                $candidate.CloseMainWindow() | Out-Null
+            }
+        }
+        catch {
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds($GracefulTimeoutSeconds)
+    do {
+        $remaining = @($allProcessIds | Where-Object {
+                try {
+                    Get-Process -Id $_ -ErrorAction Stop | Out-Null
+                    $true
+                }
+                catch {
+                    $false
+                }
+            })
+        if ($remaining.Count -eq 0) {
+            $global:LASTEXITCODE = 0
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
     [array]::Reverse($processIds)
     foreach ($processId in $processIds) {
         Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
     }
-    if (-not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+    try {
+        $Process.Refresh()
+        if (-not $Process.HasExited) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
     }
 
     foreach ($processId in @($Process.Id) + $processIds) {
@@ -594,6 +633,7 @@ function Stop-ProcessTree {
         catch {
         }
     }
+    $global:LASTEXITCODE = 0
 }
 
 function Stop-TerminalTilerSmokeProcesses {
