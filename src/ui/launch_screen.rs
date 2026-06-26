@@ -3856,7 +3856,7 @@ fn validate_workspace_path_text(text: &str) -> Result<PathBuf, String> {
     })
 }
 
-fn prompt_preset_name<F>(window: Option<&gtk::Window>, default_name: &str, on_submit: F)
+pub(crate) fn prompt_preset_name<F>(window: Option<&gtk::Window>, default_name: &str, on_submit: F)
 where
     F: Fn(String) + 'static,
 {
@@ -3909,7 +3909,7 @@ fn slugify(name: &str) -> String {
         .join("-")
 }
 
-fn unique_preset_id(name: &str) -> String {
+pub(crate) fn unique_preset_id(name: &str) -> String {
     let slug = slugify(name);
     let slug = if slug.is_empty() {
         "preset".to_string()

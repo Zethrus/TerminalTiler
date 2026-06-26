@@ -2976,7 +2976,8 @@ fn wizard_stepper_uses_dedicated_non_truncating_step_buttons() {
 #[test]
 fn workspace_tab_context_menu_reuses_terminal_context_styles() {
     assert!(
-        WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
+        WINDOW_RS.contains("context_menu::action_button(\"Save as new preset\", None)")
+            && WINDOW_RS.contains("context_menu::action_button(\"Detach\", None)")
             && WINDOW_RS.contains("context_menu::action_button(\"Reattach\", None)")
             && WINDOW_RS.contains("context_menu::popover(&shell)")
             && WINDOW_RS.contains("context_menu::popover(&title_shell)")
@@ -2986,7 +2987,25 @@ fn workspace_tab_context_menu_reuses_terminal_context_styles() {
             && CONTEXT_MENU_RS.contains("terminal-context-menu")
             && CONTEXT_MENU_RS.contains("terminal-context-action")
             && CONTEXT_MENU_RS.contains("terminal-context-label"),
-        "workspace tab Detach and detached header Reattach should use the shared terminal-context menu styling hooks"
+        "workspace tab Save/Detach and detached header Reattach should use the shared terminal-context menu styling hooks"
+    );
+}
+
+#[test]
+fn workspace_tab_save_as_preset_captures_live_layout_snapshot() {
+    assert!(
+        WINDOW_RS.contains("fn live_workspace_preset_snapshot(")
+            && WINDOW_RS.contains("workspace.runtime.tile_specs()")
+            && WINDOW_RS.contains("capture_terminal_histories(terminal_history_lines)")
+            && WINDOW_RS
+                .contains("preset.layout = workspace.preset.layout.with_tile_specs(&live_tiles)")
+            && WINDOW_RS.contains("preset.workspace_root = tab.workspace_root.clone()")
+            && WINDOW_RS.contains("launch_screen::prompt_preset_name(")
+            && WINDOW_RS.contains("launch_screen::unique_preset_id(&name)")
+            && WINDOW_RS.contains("preset_store.upsert_preset(preset)")
+            && LAUNCH_SCREEN_RS.contains("pub(crate) fn prompt_preset_name")
+            && LAUNCH_SCREEN_RS.contains("pub(crate) fn unique_preset_id"),
+        "workspace tab Save as new preset should prompt for a new preset name, persist through PresetStore, and snapshot live tile specs/root"
     );
 }
 

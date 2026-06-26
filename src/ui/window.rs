@@ -842,6 +842,7 @@ struct TabStripController {
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
     detach_tab: TabActionHandle,
+    save_workspace_as_preset: TabActionHandle,
     can_detach_tab: TabPredicateHandle,
 }
 
@@ -994,6 +995,7 @@ fn present_with_initial_workspace(
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
     let detach_tab: TabActionHandle = Rc::new(RefCell::new(None));
+    let save_workspace_as_preset: TabActionHandle = Rc::new(RefCell::new(None));
     let can_detach_tab: TabPredicateHandle = Rc::new(RefCell::new(None));
     let apply_tab_rename: RenameTabHandle = Rc::new(RefCell::new(None));
     let reorder_tab: ReorderTabHandle = Rc::new(RefCell::new(None));
@@ -1055,6 +1057,7 @@ fn present_with_initial_workspace(
         close_tab.clone(),
         request_tab_rename.clone(),
         detach_tab.clone(),
+        save_workspace_as_preset.clone(),
         can_detach_tab.clone(),
         reorder_tab.clone(),
     );
@@ -1689,6 +1692,59 @@ fn present_with_initial_workspace(
                 .find(|tab| tab.id == tab_id)
                 .map(|tab| matches!(tab.content, TabContent::Workspace(_)))
                 .unwrap_or(false)
+        }));
+    }
+
+    {
+        let window_for_save = window.clone();
+        let toast_overlay_for_save = toast_overlay.clone();
+        let tabs_for_save = tabs.clone();
+        let preset_store_for_save = preset_store.clone();
+        let preference_store_for_save = preference_store.clone();
+        let refresh_launch_tabs_for_save = refresh_launch_tabs.clone();
+
+        *save_workspace_as_preset.borrow_mut() = Some(Box::new(move |tab_id| {
+            let preferences = preference_store_for_save.load();
+            let terminal_history_lines = save_as_preset_terminal_history_limit(&preferences);
+            let Some((base_preset, default_name)) =
+                live_workspace_preset_snapshot(&tabs_for_save, tab_id, terminal_history_lines)
+            else {
+                logging::error(format!(
+                    "could not save workspace tab {tab_id} as preset: workspace snapshot unavailable"
+                ));
+                show_toast(&toast_overlay_for_save, "Could not save workspace preset");
+                return;
+            };
+
+            let preset_store = preset_store_for_save.clone();
+            let refresh_launch_tabs = refresh_launch_tabs_for_save.clone();
+            let toast_overlay = toast_overlay_for_save.clone();
+            launch_screen::prompt_preset_name(
+                Some(window_for_save.upcast_ref()),
+                &default_name,
+                move |name| {
+                    let mut preset = base_preset.clone();
+                    preset.id = launch_screen::unique_preset_id(&name);
+                    preset.name = name.clone();
+
+                    match preset_store.upsert_preset(preset) {
+                        Ok(()) => {
+                            if let Some(refresh) = refresh_launch_tabs.borrow().as_ref() {
+                                refresh();
+                            }
+                            logging::info(format!("saved workspace tab as new preset '{}'", name));
+                            show_toast(&toast_overlay, &format!("Saved preset '{}'", name));
+                        }
+                        Err(error) => {
+                            logging::error(format!(
+                                "could not save workspace tab as preset '{}': {}",
+                                name, error
+                            ));
+                            show_toast(&toast_overlay, "Could not save workspace preset");
+                        }
+                    }
+                },
+            );
         }));
     }
 
@@ -3912,6 +3968,55 @@ fn tab_display_title(tab: &WorkspaceTab) -> String {
         })
 }
 
+fn save_as_preset_terminal_history_limit(preferences: &AppPreferences) -> usize {
+    preferences.terminal_history_lines as usize
+}
+
+fn live_workspace_preset_snapshot(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    tab_id: usize,
+    terminal_history_lines: usize,
+) -> Option<(WorkspacePreset, String)> {
+    let tabs = tabs.borrow();
+    let tab = tabs.iter().find(|tab| tab.id == tab_id)?;
+    let TabContent::Workspace(workspace) = &tab.content else {
+        return None;
+    };
+
+    let mut preset = workspace.preset.clone();
+    let mut live_tiles = workspace.runtime.tile_specs();
+    let resume_commands = workspace
+        .runtime
+        .capture_terminal_histories(terminal_history_lines)
+        .into_iter()
+        .filter_map(
+            |SavedTerminalHistory {
+                 tile_id,
+                 resume_command,
+                 ..
+             }| { resume_command.map(|command| (tile_id, command)) },
+        )
+        .collect::<HashMap<_, _>>();
+
+    for tile in &mut live_tiles {
+        if let Some(command) = resume_commands.get(&tile.id) {
+            tile.startup_command = Some(command.clone());
+        }
+    }
+
+    preset.layout = workspace.preset.layout.with_tile_specs(&live_tiles);
+    preset.workspace_root = tab.workspace_root.clone();
+
+    let default_name = tab_display_title(tab);
+    let default_name = if default_name.trim().is_empty() {
+        "Workspace Preset".into()
+    } else {
+        default_name
+    };
+
+    Some((preset, default_name))
+}
+
 fn make_workspace_layout_target(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     tab_id: usize,
@@ -4043,6 +4148,7 @@ impl TabStripController {
         close_tab: TabActionHandle,
         request_tab_rename: TabActionHandle,
         detach_tab: TabActionHandle,
+        save_workspace_as_preset: TabActionHandle,
         can_detach_tab: TabPredicateHandle,
     ) -> Self {
         Self {
@@ -4054,6 +4160,7 @@ impl TabStripController {
             close_tab,
             request_tab_rename,
             detach_tab,
+            save_workspace_as_preset,
             can_detach_tab,
         }
     }
@@ -4147,6 +4254,17 @@ impl TabStripController {
 
         let popover = context_menu::popover(&shell);
         let menu = context_menu::menu_box();
+        let save_button = context_menu::action_button("Save as new preset", None);
+        {
+            let save_handle = self.save_workspace_as_preset.clone();
+            let popover = popover.clone();
+            save_button.connect_clicked(move |_| {
+                popover.popdown();
+                if let Some(save) = save_handle.borrow().as_ref() {
+                    save(tab_id);
+                }
+            });
+        }
         let detach_button = context_menu::action_button("Detach", None);
         {
             let detach_handle = self.detach_tab.clone();
@@ -4158,6 +4276,7 @@ impl TabStripController {
                 }
             });
         }
+        menu.append(&save_button);
         menu.append(&detach_button);
         popover.set_child(Some(&menu));
 
@@ -4399,6 +4518,7 @@ fn create_tab_strip_controller(
     close_tab: TabActionHandle,
     request_tab_rename: TabActionHandle,
     detach_tab: TabActionHandle,
+    save_workspace_as_preset: TabActionHandle,
     can_detach_tab: TabPredicateHandle,
     reorder_tab: ReorderTabHandle,
 ) -> TabStripControllerHandle {
@@ -4408,6 +4528,7 @@ fn create_tab_strip_controller(
         close_tab,
         request_tab_rename,
         detach_tab,
+        save_workspace_as_preset,
         can_detach_tab,
     )));
 
@@ -6691,8 +6812,10 @@ mod tests {
         VOICE_AUDIO_FLUSH_INTERVAL, VOICE_CAPTURE_SAFETY_CAP, VoiceHotkeyWarmGate, VoiceWarmState,
         WorkspaceTab, apply_voice_listening_started, move_item_to_position, move_tab_to_position,
         next_active_index_after_detach, preview_index_for_pointer, reserve_voice_flush_if_idle,
-        voice_capture_exceeded_safety_cap, voice_event_is_current, voice_hotkey_warm_gate,
+        save_as_preset_terminal_history_limit, voice_capture_exceeded_safety_cap,
+        voice_event_is_current, voice_hotkey_warm_gate,
     };
+    use crate::storage::preference_store::AppPreferences;
     use crate::voice::{VoiceActivationMode, VoicePreferences};
     use std::cell::Cell;
 
@@ -6747,6 +6870,31 @@ mod tests {
         let moved = move_tab_to_position(&mut tabs, 99, 0);
 
         assert!(!moved);
+    }
+
+    #[test]
+    fn save_as_preset_history_limit_uses_configured_ceiling_without_floor() {
+        assert_eq!(
+            save_as_preset_terminal_history_limit(&AppPreferences {
+                terminal_history_lines: 0,
+                ..AppPreferences::default()
+            }),
+            0
+        );
+        assert_eq!(
+            save_as_preset_terminal_history_limit(&AppPreferences {
+                terminal_history_lines: 5,
+                ..AppPreferences::default()
+            }),
+            5
+        );
+        assert_eq!(
+            save_as_preset_terminal_history_limit(&AppPreferences {
+                terminal_history_lines: 2_000,
+                ..AppPreferences::default()
+            }),
+            2_000
+        );
     }
 
     #[test]
