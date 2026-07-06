@@ -24,6 +24,7 @@ use crate::services::layout_editor::{
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
 use crate::services::stats::StatsRecorder;
+use crate::services::tile_navigation::{TileDirection, neighbor_tile_id};
 use crate::storage::session_store::SavedTerminalHistory;
 use crate::terminal::session::TerminalSession;
 use crate::ui::icons::name as icon_name;
@@ -251,24 +252,54 @@ impl WorkspaceRuntime {
     }
 
     pub fn focus_tile(&self, tile_id: &str) -> bool {
-        if let Some(tile) = self
-            .inner
-            .tiles
-            .borrow()
-            .iter()
-            .find(|tile| tile.tile.id == tile_id)
-        {
-            if let Some(session) = &tile.session {
+        let tile_target = {
+            let tiles = self.inner.tiles.borrow();
+            tiles
+                .iter()
+                .find(|tile| tile.tile.id == tile_id)
+                .map(|tile| {
+                    (
+                        tile.tile.id.clone(),
+                        tile.tile.tile_kind == TileKind::WebView,
+                        tile.session.clone(),
+                        tile.web_view.clone(),
+                        tile.widget.clone(),
+                    )
+                })
+        };
+
+        if let Some((tile_id, is_web_tile, session, web_view, widget)) = tile_target {
+            self.restore_maximized_tile_if_different(&tile_id);
+            self.set_focused_tile(Some(tile_id.clone()), is_web_tile);
+            if let Some(session) = &session {
                 session.widget().grab_focus();
-            } else if let Some(web_view) = &tile.web_view {
+            } else if let Some(web_view) = &web_view {
                 web_view.grab_focus();
             } else {
-                tile.widget.grab_focus();
+                widget.grab_focus();
             }
             true
         } else {
             false
         }
+    }
+
+    pub fn focus_tile_in_direction(&self, direction: TileDirection) -> bool {
+        let target_tile_id = {
+            let layout = self.inner.layout.borrow();
+            let focused_tile_id = self.inner.focused_tile_id.borrow().clone();
+            if let Some(tile_id) = focused_tile_id.as_deref()
+                && layout.tile_specs().iter().any(|tile| tile.id == tile_id)
+            {
+                neighbor_tile_id(&layout, tile_id, direction)
+            } else {
+                layout.tile_specs().first().map(|tile| tile.id.clone())
+            }
+        };
+
+        target_tile_id
+            .as_deref()
+            .is_some_and(|tile_id| self.focus_tile(tile_id))
     }
 
     pub fn reconnect_tile(&self, tile_id: &str) -> Result<(), String> {
@@ -868,6 +899,20 @@ impl WorkspaceRuntime {
         *self.inner.focused_web_tile_id.borrow_mut() = if is_web { tile_id } else { None };
         self.sync_active_tile_styles();
         self.refresh_navigation_controls();
+    }
+
+    fn restore_maximized_tile_if_different(&self, tile_id: &str) {
+        let Some(current) = self.inner.maximized_tile.borrow().clone() else {
+            return;
+        };
+        if current == tile_id {
+            return;
+        }
+        self.inner.maximized_tile.borrow_mut().take();
+        let hidden: Vec<gtk::Widget> = self.inner.maximized_hidden.borrow_mut().drain(..).collect();
+        crate::ui::pane_zoom::restore(&hidden);
+        self.set_tile_maximized_class(&current, false);
+        self.sync_maximized_tile_styles();
     }
 
     fn sync_active_tile_styles(&self) {

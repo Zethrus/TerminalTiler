@@ -20,6 +20,7 @@ mod imp {
         restore_startup_overrides_for_saved_session,
     };
     use crate::services::session_restore::session_for_restore_mode;
+    use crate::services::tile_navigation::TileDirection;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::board_workspace_store::BoardWorkspaceStore;
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
@@ -524,6 +525,8 @@ mod imp {
             Rc::new(RefCell::new(None));
         let workspace_zoom_out_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
+        let workspace_tile_selection_shortcut_controller: TileSelectionKeyControllerHandle =
+            Rc::new(RefCell::new(None));
         let workspace_add_terminal_tile_shortcut_controller: ShortcutControllerHandle =
             Rc::new(RefCell::new(None));
         let command_palette_shortcut_controller: ShortcutControllerHandle =
@@ -566,6 +569,8 @@ mod imp {
             workspace_density_shortcut_controller: workspace_density_shortcut_controller.clone(),
             workspace_zoom_in_shortcut_controller: workspace_zoom_in_shortcut_controller.clone(),
             workspace_zoom_out_shortcut_controller: workspace_zoom_out_shortcut_controller.clone(),
+            workspace_tile_selection_shortcut_controller:
+                workspace_tile_selection_shortcut_controller.clone(),
             command_palette_shortcut_controller: command_palette_shortcut_controller.clone(),
             open_command_palette_handle: open_command_palette_handle.clone(),
             refresh_launch_deck_handle: refresh_launch_deck_weak.clone(),
@@ -688,6 +693,12 @@ mod imp {
                 &preferences.workspace_zoom_out_shortcut,
                 -1,
                 "workspace_zoom_out",
+            );
+            install_workspace_tile_selection_shortcut(
+                &window,
+                &workspace_tile_selection_shortcut_controller,
+                &shell_state,
+                &preferences.workspace_tile_selection_prefix_shortcut,
             );
             install_workspace_add_terminal_tile_shortcut(
                 &window,
@@ -947,6 +958,7 @@ mod imp {
             workspace_density_shortcut_controller,
             workspace_zoom_in_shortcut_controller,
             workspace_zoom_out_shortcut_controller,
+            workspace_tile_selection_shortcut_controller,
             command_palette_shortcut_controller,
             open_command_palette_handle,
             refresh_launch_deck_handle,
@@ -962,6 +974,8 @@ mod imp {
                 workspace_density_shortcut: preferences.workspace_density_shortcut,
                 workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut,
                 workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut,
+                workspace_tile_selection_prefix_shortcut: preferences
+                    .workspace_tile_selection_prefix_shortcut,
                 command_palette_shortcut: preferences.command_palette_shortcut,
                 settings_dialog_width: preferences.settings_dialog_width,
                 settings_dialog_height: preferences.settings_dialog_height,
@@ -1108,6 +1122,25 @@ mod imp {
                         )));
                     }
                 }),
+                on_tile_selection_prefix_shortcut_changed: Rc::new({
+                    let preference_store = preference_store.clone();
+                    let window = window.clone();
+                    let overlay = overlay.clone();
+                    let shell_state = shell_state.clone();
+                    let controller_handle = workspace_tile_selection_shortcut_controller.clone();
+                    move |shortcut| {
+                        preference_store.save_workspace_tile_selection_prefix_shortcut(&shortcut);
+                        install_workspace_tile_selection_shortcut(
+                            &window,
+                            &controller_handle,
+                            &shell_state,
+                            &shortcut,
+                        );
+                        overlay.add_toast(adw::Toast::new(&format!(
+                            "Tile selection shortcut set to {shortcut}"
+                        )));
+                    }
+                }),
                 on_command_palette_shortcut_changed: Rc::new({
                     let preference_store = preference_store.clone();
                     let window = window.clone();
@@ -1210,6 +1243,8 @@ mod imp {
                         workspace_zoom_in_shortcut_controller.clone();
                     let workspace_zoom_out_shortcut_controller =
                         workspace_zoom_out_shortcut_controller.clone();
+                    let workspace_tile_selection_shortcut_controller =
+                        workspace_tile_selection_shortcut_controller.clone();
                     let command_palette_shortcut_controller =
                         command_palette_shortcut_controller.clone();
                     let open_command_palette_handle = open_command_palette_handle.clone();
@@ -1248,6 +1283,12 @@ mod imp {
                             &defaults.workspace_zoom_out_shortcut,
                             -1,
                             "workspace_zoom_out",
+                        );
+                        install_workspace_tile_selection_shortcut(
+                            &window,
+                            &workspace_tile_selection_shortcut_controller,
+                            &shell_state,
+                            &defaults.workspace_tile_selection_prefix_shortcut,
                         );
                         sync_windows_fullscreen_chrome(
                             &window,
@@ -3500,6 +3541,7 @@ mod imp {
 
     type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
     type VoiceKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
+    type TileSelectionKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
     type LaunchWidgetHandle = Rc<RefCell<Option<gtk::Widget>>>;
     type VoidCallbackHandle = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
     type WeakVoidCallbackHandle = Weak<RefCell<Option<Rc<dyn Fn()>>>>;
@@ -3522,6 +3564,7 @@ mod imp {
         workspace_density_shortcut_controller: ShortcutControllerHandle,
         workspace_zoom_in_shortcut_controller: ShortcutControllerHandle,
         workspace_zoom_out_shortcut_controller: ShortcutControllerHandle,
+        workspace_tile_selection_shortcut_controller: TileSelectionKeyControllerHandle,
         command_palette_shortcut_controller: ShortcutControllerHandle,
         open_command_palette_handle: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
         refresh_launch_deck_handle: WeakVoidCallbackHandle,
@@ -3588,6 +3631,9 @@ mod imp {
                                 density: prefs.workspace_density_shortcut.clone(),
                                 zoom_in: prefs.workspace_zoom_in_shortcut.clone(),
                                 zoom_out: prefs.workspace_zoom_out_shortcut.clone(),
+                                tile_selection_prefix: prefs
+                                    .workspace_tile_selection_prefix_shortcut
+                                    .clone(),
                                 command_palette: prefs.command_palette_shortcut.clone(),
                                 maximize: crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL
                                     .to_string(),
@@ -3857,6 +3903,100 @@ mod imp {
                 glib::Propagation::Stop
             },
         );
+    }
+
+    fn tile_selection_prefix_matches(
+        shortcut: &str,
+        key: gdk::Key,
+        state: gdk::ModifierType,
+    ) -> bool {
+        let Some((expected_key, expected_modifiers)) = gtk::accelerator_parse(shortcut) else {
+            return false;
+        };
+        let event_modifiers = state & gtk::accelerator_get_default_mod_mask();
+        key == expected_key && event_modifiers == expected_modifiers
+    }
+
+    fn tile_selection_prefix_key_matches(shortcut: &str, key: gdk::Key) -> bool {
+        let Some((expected_key, _)) = gtk::accelerator_parse(shortcut) else {
+            return false;
+        };
+        key == expected_key
+    }
+
+    fn tile_direction_from_key(key: gdk::Key) -> Option<TileDirection> {
+        match key {
+            gdk::Key::Up => Some(TileDirection::Up),
+            gdk::Key::Down => Some(TileDirection::Down),
+            gdk::Key::Left => Some(TileDirection::Left),
+            gdk::Key::Right => Some(TileDirection::Right),
+            _ => None,
+        }
+    }
+
+    fn install_workspace_tile_selection_shortcut(
+        window: &adw::ApplicationWindow,
+        controller_handle: &TileSelectionKeyControllerHandle,
+        shell_state: &WindowsGtkShellState,
+        shortcut: &str,
+    ) {
+        if let Some(existing) = controller_handle.borrow_mut().take() {
+            window.remove_controller(&existing);
+        }
+
+        let shortcut = if gtk::accelerator_parse(shortcut).is_some() {
+            shortcut.trim().to_string()
+        } else {
+            logging::error(format!(
+                "failed to parse workspace_tile_selection shortcut accelerator='{}'; using default",
+                shortcut
+            ));
+            AppPreferences::default().workspace_tile_selection_prefix_shortcut
+        };
+
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let prefix_active = Rc::new(Cell::new(false));
+        {
+            let prefix_active = prefix_active.clone();
+            let shortcut = shortcut.clone();
+            let shell_state_for_shortcut = shell_state.clone();
+            key_controller.connect_key_pressed(move |_, key, _, state| {
+                if tile_selection_prefix_matches(&shortcut, key, state) {
+                    prefix_active.set(true);
+                    return glib::Propagation::Stop;
+                }
+
+                let Some(direction) = tile_direction_from_key(key) else {
+                    return glib::Propagation::Proceed;
+                };
+                if !prefix_active.get() || shell_state_for_shortcut.launch_deck_active.get() {
+                    return glib::Propagation::Proceed;
+                }
+
+                let preview = shell_state_for_shortcut.preview.borrow().clone();
+                let Some(preview) = preview else {
+                    return glib::Propagation::Proceed;
+                };
+                let _ = preview.focus_tile_in_direction(direction);
+                glib::Propagation::Stop
+            });
+        }
+        {
+            let prefix_active = prefix_active.clone();
+            let shortcut = shortcut.clone();
+            key_controller.connect_key_released(move |_, key, _, _| {
+                if tile_selection_prefix_key_matches(&shortcut, key) {
+                    prefix_active.set(false);
+                }
+            });
+        }
+
+        logging::info(format!(
+            "installed workspace_tile_selection shortcut prefix={shortcut:?}"
+        ));
+        window.add_controller(key_controller.clone());
+        *controller_handle.borrow_mut() = Some(key_controller);
     }
 
     fn install_workspace_add_terminal_tile_shortcut(

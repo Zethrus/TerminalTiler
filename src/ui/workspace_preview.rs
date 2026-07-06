@@ -8,7 +8,9 @@ use gtk::pango;
 use gtk::prelude::*;
 
 use crate::model::assets::{CliSnippet, Runbook, TemplateVariableValues, WorkspaceAssets};
-use crate::model::layout::{DEFAULT_WEB_URL, SplitAxis, TileKind, TileSpec, normalize_web_url};
+use crate::model::layout::{
+    DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec, normalize_web_url,
+};
 use crate::model::preset::ApplicationDensity;
 use crate::services::agent_resume::saved_resume_command_for_tile;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
@@ -21,6 +23,7 @@ use crate::services::layout_editor::{
 };
 use crate::services::runbooks::resolve_runbook;
 use crate::services::snippets::resolve_snippet;
+use crate::services::tile_navigation::{TileDirection, neighbor_tile_id};
 use crate::storage::session_store::{SavedSession, SavedTab};
 use crate::ui::appearance::resolved_theme_uses_dark_palette;
 use crate::ui::icons::{self, name as icon_name};
@@ -116,6 +119,7 @@ pub struct SessionPreview {
     session: Rc<RefCell<SavedSession>>,
     assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
+    focused_tile_id: Rc<RefCell<Option<String>>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
@@ -129,6 +133,7 @@ struct PreviewRenderContext {
     session: Rc<RefCell<SavedSession>>,
     assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
+    focused_tile_id: Rc<RefCell<Option<String>>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
@@ -143,6 +148,7 @@ impl PreviewRenderContext {
             &self.session,
             &self.assets,
             &self.active_index,
+            &self.focused_tile_id,
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
@@ -229,6 +235,7 @@ impl SessionPreview {
                 .min(session.tabs.len().saturating_sub(1))
         };
         let active_index = Rc::new(Cell::new(initial_active_index));
+        let focused_tile_id = Rc::new(RefCell::new(None));
 
         let shell = build_workspace_shell_chrome();
 
@@ -237,6 +244,7 @@ impl SessionPreview {
             session,
             assets,
             active_index,
+            focused_tile_id,
             show_inline_tab_strip,
             runtime_factory,
             runtime_surfaces,
@@ -663,30 +671,56 @@ impl SessionPreview {
             .any(|is_active| is_active())
     }
 
+    pub fn focus_tile_in_direction(&self, direction: TileDirection) -> bool {
+        let target_tile_id = {
+            let session_ref = self.session.borrow();
+            let Some(layout) = active_layout(&session_ref, self.active_index.get()) else {
+                return false;
+            };
+            let focused_tile_id = self.focused_tile_id.borrow().clone();
+            if let Some(tile_id) = focused_tile_id.as_deref()
+                && layout.tile_specs().iter().any(|tile| tile.id == tile_id)
+            {
+                neighbor_tile_id(layout, tile_id, direction)
+            } else {
+                layout.tile_specs().first().map(|tile| tile.id.clone())
+            }
+        };
+
+        target_tile_id
+            .as_deref()
+            .is_some_and(|tile_id| self.focus_tile(tile_id))
+    }
+
     fn focus_tile(&self, tile_id: &str) -> bool {
-        let session_ref = self.session.borrow();
-        let Some(tab_index) = active_tab_index(&session_ref, self.active_index.get()) else {
-            return false;
+        let (tile, key) = {
+            let session_ref = self.session.borrow();
+            let Some(tab_index) = active_tab_index(&session_ref, self.active_index.get()) else {
+                return false;
+            };
+            let Some(tab) = session_ref.tabs.get(tab_index) else {
+                return false;
+            };
+            let Some(tile) = tab
+                .preset
+                .layout
+                .tile_specs()
+                .into_iter()
+                .find(|tile| tile.id == tile_id)
+            else {
+                return false;
+            };
+            let key = runtime_surface_key(tab_index, tab, &tile);
+            (tile, key)
         };
-        let Some(tab) = session_ref.tabs.get(tab_index) else {
-            return false;
-        };
-        let Some(tile) = tab
-            .preset
-            .layout
-            .tile_specs()
-            .into_iter()
-            .find(|tile| tile.id == tile_id)
-        else {
-            return false;
-        };
-        let key = runtime_surface_key(tab_index, tab, &tile);
+
+        self.focused_tile_id.replace(Some(tile.id.clone()));
+        self.render();
+
         if let Some(surface) = self.runtime_surfaces.borrow().get(&key) {
             surface.widget.grab_focus();
-            true
-        } else {
-            false
         }
+        true
     }
 
     fn render(&self) {
@@ -695,6 +729,7 @@ impl SessionPreview {
             &self.session,
             &self.assets,
             &self.active_index,
+            &self.focused_tile_id,
             self.show_inline_tab_strip,
             self.runtime_factory.clone(),
             self.runtime_surfaces.clone(),
@@ -734,6 +769,11 @@ impl SessionPreview {
             Rc::new(RefCell::new(runtime_surfaces)),
         )
     }
+}
+
+fn active_layout(session: &SavedSession, active_index: usize) -> Option<&LayoutNode> {
+    let tab_index = active_tab_index(session, active_index)?;
+    session.tabs.get(tab_index).map(|tab| &tab.preset.layout)
 }
 
 fn clamp_terminal_zoom_steps(density: ApplicationDensity, zoom_steps: i32) -> i32 {
@@ -869,6 +909,7 @@ fn render_session_preview(
     session: &Rc<RefCell<SavedSession>>,
     assets: &Rc<WorkspaceAssets>,
     active_index: &Rc<Cell<usize>>,
+    focused_tile_id: &Rc<RefCell<Option<String>>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
@@ -891,6 +932,7 @@ fn render_session_preview(
             let session = session.clone();
             let assets = assets.clone();
             let active_index = active_index.clone();
+            let focused_tile_id = focused_tile_id.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
             let on_session_changed = on_session_changed.clone();
@@ -913,6 +955,7 @@ fn render_session_preview(
                         &session,
                         &assets,
                         &active_index,
+                        &focused_tile_id,
                         true,
                         runtime_factory.clone(),
                         runtime_surfaces.clone(),
@@ -927,6 +970,7 @@ fn render_session_preview(
             let session = session.clone();
             let assets = assets.clone();
             let active_index = active_index.clone();
+            let focused_tile_id = focused_tile_id.clone();
             let runtime_factory = runtime_factory.clone();
             let runtime_surfaces = runtime_surfaces.clone();
             let on_session_changed = on_session_changed.clone();
@@ -948,6 +992,7 @@ fn render_session_preview(
                     &session,
                     &assets,
                     &active_index,
+                    &focused_tile_id,
                     true,
                     runtime_factory.clone(),
                     runtime_surfaces.clone(),
@@ -970,6 +1015,7 @@ fn render_session_preview(
             session: session.clone(),
             assets: assets.clone(),
             active_index: active_index.clone(),
+            focused_tile_id: focused_tile_id.clone(),
             show_inline_tab_strip,
             runtime_factory: runtime_factory.clone(),
             runtime_surfaces: runtime_surfaces.clone(),
@@ -2354,6 +2400,7 @@ fn build_layout(
             }
         })
     };
+    let focused_tile_id = render_context.focused_tile_id.borrow().clone();
     for (index, tile) in layout.tile_specs().iter().enumerate() {
         let Some(slot) = shell.slots.get(index) else {
             continue;
@@ -2363,7 +2410,7 @@ fn build_layout(
             tile,
             tab,
             assets,
-            index == 0,
+            focused_tile_id.as_deref() == Some(tile.id.as_str()),
             runtime_factory,
             runtime_surfaces,
             on_close_tile.clone(),

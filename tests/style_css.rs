@@ -31,6 +31,7 @@ const RELEASE_SMOKE_TEST_SH: &str = include_str!("../packaging/release-smoke-tes
 const RUNBOOK_CONTROLS_RS: &str = include_str!("../src/ui/runbook_controls.rs");
 const RUNBOOK_DIALOG_RS: &str = include_str!("../src/ui/runbook_dialog.rs");
 const SETTINGS_DIALOG_RS: &str = include_str!("../src/ui/settings_dialog.rs");
+const SHORTCUTS_DIALOG_RS: &str = include_str!("../src/ui/shortcuts_dialog.rs");
 const SNIPPET_POPOVER_RS: &str = include_str!("../src/ui/snippet_popover.rs");
 const STATS_DIALOG_RS: &str = include_str!("../src/ui/stats_dialog.rs");
 const TAB_RENAME_DIALOG_RS: &str = include_str!("../src/ui/tab_rename_dialog.rs");
@@ -291,6 +292,49 @@ fn linux_and_windows_gtk_shells_share_main_window_chrome() {
             ),
         "Windows GTK should use the same shared workspace fullscreen chrome behavior as Linux for workspace previews and hide it on the launch deck"
     );
+}
+
+#[test]
+fn workspace_tile_selection_shortcut_is_configurable_and_cross_platform() {
+    assert!(
+        SETTINGS_DIALOG_RS.contains("workspace_tile_selection_prefix_shortcut")
+            && SETTINGS_DIALOG_RS.contains("on_tile_selection_prefix_shortcut_changed")
+            && SETTINGS_DIALOG_RS.contains("\"Select neighboring tile\"")
+            && SETTINGS_DIALOG_RS
+                .contains("\"Hold this shortcut, then press an arrow key to select a tile.\"")
+            && SETTINGS_DIALOG_RS.contains("\"<Alt>T\", \"<Ctrl><Alt>T\", \"<Super>T\""),
+        "settings dialog should expose a configurable tile-selection prefix shortcut"
+    );
+
+    assert!(
+        WINDOW_RS.contains("tile_selection_shortcut_controller")
+            && WINDOW_RS.contains("install_workspace_tile_selection_shortcut")
+            && WINDOW_RS.contains("workspace_tile_selection_prefix_shortcut")
+            && WINDOW_RS.contains("runtime.focus_tile_in_direction(direction)")
+            && WINDOWS_GTK_APP_RS.contains("workspace_tile_selection_shortcut_controller")
+            && WINDOWS_GTK_APP_RS.contains("install_workspace_tile_selection_shortcut")
+            && WINDOWS_GTK_APP_RS.contains("preview.focus_tile_in_direction(direction)")
+            && WORKSPACE_PREVIEW_RS.contains("pub fn focus_tile_in_direction(&self")
+            && WORKSPACE_PREVIEW_RS.contains("focused_tile_id")
+            && WORKSPACE_PREVIEW_RS.contains("neighbor_tile_id(layout"),
+        "Linux and Windows GTK workspace shells should install the shared directional tile-selection controller"
+    );
+
+    for token in [
+        "Select tile above",
+        "Select tile right",
+        "Select tile below",
+        "Select tile left",
+        "directional_tile_selection_label(&summary.tile_selection_prefix, \"↑\")",
+        "directional_tile_selection_label(&summary.tile_selection_prefix, \"→\")",
+        "directional_tile_selection_label(&summary.tile_selection_prefix, \"↓\")",
+        "directional_tile_selection_label(&summary.tile_selection_prefix, \"←\")",
+    ] {
+        assert!(
+            SHORTCUTS_DIALOG_RS.contains(token),
+            "shortcuts dialog should list directional tile selection row: {token}"
+        );
+    }
 }
 
 #[test]

@@ -177,6 +177,8 @@ struct PreferenceDocument {
     workspace_zoom_in_shortcut: String,
     #[serde(default = "default_zoom_out_shortcut")]
     workspace_zoom_out_shortcut: String,
+    #[serde(default = "default_tile_selection_prefix_shortcut")]
+    workspace_tile_selection_prefix_shortcut: String,
     #[serde(default = "default_command_palette_shortcut")]
     command_palette_shortcut: String,
     #[serde(default = "default_max_reconnect_attempts")]
@@ -237,6 +239,10 @@ fn default_zoom_in_shortcut() -> String {
 
 fn default_zoom_out_shortcut() -> String {
     "<Ctrl>minus".into()
+}
+
+fn default_tile_selection_prefix_shortcut() -> String {
+    "<Alt>T".into()
 }
 
 fn default_command_palette_shortcut() -> String {
@@ -594,6 +600,7 @@ fn apply_preference_projection(path: &Path, incoming_raw: &str) -> io::Result<()
                 "workspace_density_shortcut",
                 "workspace_zoom_in_shortcut",
                 "workspace_zoom_out_shortcut",
+                "workspace_tile_selection_prefix_shortcut",
                 "command_palette_shortcut",
                 "max_reconnect_attempts",
             ] {

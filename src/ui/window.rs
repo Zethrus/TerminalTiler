@@ -26,6 +26,7 @@ use crate::services::agent_resume::{
 use crate::services::session_restore::{
     flatten_window_sessions, session_for_restore_mode, shell_only_session,
 };
+use crate::services::tile_navigation::TileDirection;
 use crate::stats_hub;
 use crate::storage::asset_store::AssetStore;
 use crate::storage::board_store;
@@ -70,6 +71,7 @@ type ShowBoardHandle = Rc<RefCell<Option<Box<dyn Fn(usize, BoardLaunchRequest)>>
 type VoidHandle = Rc<RefCell<Option<Box<dyn Fn()>>>>;
 type ShortcutControllerHandle = Rc<RefCell<Option<gtk::ShortcutController>>>;
 type VoiceKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
+type TileSelectionKeyControllerHandle = Rc<RefCell<Option<gtk::EventControllerKey>>>;
 type TabStripControllerHandle = Rc<RefCell<TabStripController>>;
 type WorkspaceLayoutTargetHandle = Rc<RefCell<Option<WorkspaceLayoutTarget>>>;
 type AttachWorkspaceTabHandle = Rc<dyn Fn(WorkspaceTab)>;
@@ -78,6 +80,7 @@ const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
+const DEFAULT_WORKSPACE_TILE_SELECTION_PREFIX_SHORTCUT: &str = "<Alt>T";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT: &str =
     crate::ui::shortcuts_dialog::DEFAULT_MAXIMIZE_ACCEL;
@@ -1020,6 +1023,11 @@ fn present_with_initial_workspace(
     let current_zoom_out_shortcut = Rc::new(RefCell::new(
         current_shortcuts.workspace_zoom_out_shortcut.clone(),
     ));
+    let current_tile_selection_prefix_shortcut = Rc::new(RefCell::new(
+        current_shortcuts
+            .workspace_tile_selection_prefix_shortcut
+            .clone(),
+    ));
     let current_command_palette_shortcut = Rc::new(RefCell::new(
         current_shortcuts.command_palette_shortcut.clone(),
     ));
@@ -1074,6 +1082,8 @@ fn present_with_initial_workspace(
     let density_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_in_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let zoom_out_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
+    let tile_selection_shortcut_controller: TileSelectionKeyControllerHandle =
+        Rc::new(RefCell::new(None));
     let command_palette_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let maximize_shortcut_controller: ShortcutControllerHandle = Rc::new(RefCell::new(None));
     let add_terminal_tile_shortcut_controller: ShortcutControllerHandle =
@@ -2179,6 +2189,14 @@ fn present_with_initial_workspace(
         current_zoom_out_shortcut.borrow().as_str(),
     );
 
+    install_workspace_tile_selection_shortcut(
+        &window,
+        &tile_selection_shortcut_controller,
+        &tabs,
+        &active_tab_id,
+        current_tile_selection_prefix_shortcut.borrow().as_str(),
+    );
+
     install_workspace_maximize_shortcut(
         &window,
         &maximize_shortcut_controller,
@@ -2396,12 +2414,14 @@ fn present_with_initial_workspace(
         let density_shortcut_controller = density_shortcut_controller.clone();
         let zoom_in_shortcut_controller = zoom_in_shortcut_controller.clone();
         let zoom_out_shortcut_controller = zoom_out_shortcut_controller.clone();
+        let tile_selection_shortcut_controller = tile_selection_shortcut_controller.clone();
         let command_palette_shortcut_controller = command_palette_shortcut_controller.clone();
         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
         let current_density_shortcut = current_density_shortcut.clone();
         let current_close_to_background = current_close_to_background.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_tile_selection_prefix_shortcut = current_tile_selection_prefix_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let sync_close_to_background_notice = sync_close_to_background_notice.clone();
         let tray_controller = tray_controller.clone();
@@ -2425,6 +2445,8 @@ fn present_with_initial_workspace(
                     workspace_density_shortcut: preferences.workspace_density_shortcut,
                     workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut,
                     workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut,
+                    workspace_tile_selection_prefix_shortcut: preferences
+                        .workspace_tile_selection_prefix_shortcut,
                     command_palette_shortcut: preferences.command_palette_shortcut,
                     settings_dialog_width: preferences.settings_dialog_width,
                     settings_dialog_height: preferences.settings_dialog_height,
@@ -2654,6 +2676,42 @@ fn present_with_initial_workspace(
                                         &window,
                                         &shortcut,
                                         DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT,
+                                    )
+                                ),
+                            );
+                        }
+                    }),
+                    on_tile_selection_prefix_shortcut_changed: Rc::new({
+                        let preference_store = preference_store_for_settings.clone();
+                        let toast_overlay = toast_overlay_for_settings.clone();
+                        let tabs = tabs_for_settings.clone();
+                        let active_tab_id = active_for_settings.clone();
+                        let window = window_for_settings.clone();
+                        let controller_handle = tile_selection_shortcut_controller.clone();
+                        let current_shortcut = current_tile_selection_prefix_shortcut.clone();
+                        move |shortcut| {
+                            preference_store
+                                .save_workspace_tile_selection_prefix_shortcut(&shortcut);
+                            current_shortcut.replace(shortcut.clone());
+                            install_workspace_tile_selection_shortcut(
+                                &window,
+                                &controller_handle,
+                                &tabs,
+                                &active_tab_id,
+                                &shortcut,
+                            );
+                            logging::info(format!(
+                                "updated application settings workspace_tile_selection_prefix_shortcut={}",
+                                shortcut
+                            ));
+                            show_toast(
+                                &toast_overlay,
+                                &format!(
+                                    "Tile selection shortcut set to {}",
+                                    shortcut_display_label(
+                                        &window,
+                                        &shortcut,
+                                        DEFAULT_WORKSPACE_TILE_SELECTION_PREFIX_SHORTCUT,
                                     )
                                 ),
                             );
@@ -3157,6 +3215,7 @@ fn present_with_initial_workspace(
                         let density_controller = density_shortcut_controller.clone();
                         let zoom_in_controller = zoom_in_shortcut_controller.clone();
                         let zoom_out_controller = zoom_out_shortcut_controller.clone();
+                        let tile_selection_controller = tile_selection_shortcut_controller.clone();
                         let command_palette_controller =
                             command_palette_shortcut_controller.clone();
                         let current_fullscreen_shortcut = current_fullscreen_shortcut.clone();
@@ -3164,6 +3223,8 @@ fn present_with_initial_workspace(
                         let current_close_to_background = current_close_to_background.clone();
                         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
                         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+                        let current_tile_selection_prefix_shortcut =
+                            current_tile_selection_prefix_shortcut.clone();
                         let current_command_palette_shortcut =
                             current_command_palette_shortcut.clone();
                         let sync_close_to_background_notice =
@@ -3182,6 +3243,8 @@ fn present_with_initial_workspace(
                                 .replace(defaults.workspace_zoom_in_shortcut.clone());
                             current_zoom_out_shortcut
                                 .replace(defaults.workspace_zoom_out_shortcut.clone());
+                            current_tile_selection_prefix_shortcut
+                                .replace(defaults.workspace_tile_selection_prefix_shortcut.clone());
                             current_command_palette_shortcut
                                 .replace(defaults.command_palette_shortcut.clone());
                             install_workspace_fullscreen_shortcut(
@@ -3214,6 +3277,13 @@ fn present_with_initial_workspace(
                                 &active_tab_id,
                                 &session_persistence,
                                 &defaults.workspace_zoom_out_shortcut,
+                            );
+                            install_workspace_tile_selection_shortcut(
+                                &window,
+                                &tile_selection_controller,
+                                &tabs,
+                                &active_tab_id,
+                                &defaults.workspace_tile_selection_prefix_shortcut,
                             );
                             install_command_palette_shortcut(
                                 &window,
@@ -5876,6 +5946,100 @@ fn install_workspace_zoom_out_shortcut(
     );
 }
 
+fn tile_selection_prefix_matches(shortcut: &str, key: gdk::Key, state: gdk::ModifierType) -> bool {
+    let Some((expected_key, expected_modifiers)) = gtk::accelerator_parse(shortcut) else {
+        return false;
+    };
+    let event_modifiers = state & gtk::accelerator_get_default_mod_mask();
+    key == expected_key && event_modifiers == expected_modifiers
+}
+
+fn tile_selection_prefix_key_matches(shortcut: &str, key: gdk::Key) -> bool {
+    let Some((expected_key, _)) = gtk::accelerator_parse(shortcut) else {
+        return false;
+    };
+    key == expected_key
+}
+
+fn tile_direction_from_key(key: gdk::Key) -> Option<TileDirection> {
+    match key {
+        gdk::Key::Up => Some(TileDirection::Up),
+        gdk::Key::Down => Some(TileDirection::Down),
+        gdk::Key::Left => Some(TileDirection::Left),
+        gdk::Key::Right => Some(TileDirection::Right),
+        _ => None,
+    }
+}
+
+fn install_workspace_tile_selection_shortcut(
+    window: &adw::ApplicationWindow,
+    controller_handle: &TileSelectionKeyControllerHandle,
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: &Rc<Cell<usize>>,
+    shortcut: &str,
+) {
+    if let Some(existing) = controller_handle.borrow_mut().take() {
+        window.remove_controller(&existing);
+    }
+
+    let shortcut = if gtk::accelerator_parse(shortcut).is_some() {
+        shortcut.trim().to_string()
+    } else {
+        logging::error(format!(
+            "failed to parse workspace_tile_selection shortcut accelerator='{}'; using default",
+            shortcut
+        ));
+        DEFAULT_WORKSPACE_TILE_SELECTION_PREFIX_SHORTCUT.to_string()
+    };
+
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let prefix_active = Rc::new(Cell::new(false));
+    {
+        let prefix_active = prefix_active.clone();
+        let shortcut = shortcut.clone();
+        let tabs_for_shortcut = tabs.clone();
+        let active_for_shortcut = active_tab_id.clone();
+        key_controller.connect_key_pressed(move |_, key, _, state| {
+            if tile_selection_prefix_matches(&shortcut, key, state) {
+                prefix_active.set(true);
+                return glib::Propagation::Stop;
+            }
+
+            let Some(direction) = tile_direction_from_key(key) else {
+                return glib::Propagation::Proceed;
+            };
+            if !prefix_active.get() {
+                return glib::Propagation::Proceed;
+            }
+
+            if let Some(runtime) =
+                active_workspace_runtime(&tabs_for_shortcut, active_for_shortcut.get())
+            {
+                let _ = runtime.focus_tile_in_direction(direction);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+    }
+    {
+        let prefix_active = prefix_active.clone();
+        let shortcut = shortcut.clone();
+        key_controller.connect_key_released(move |_, key, _, _| {
+            if tile_selection_prefix_key_matches(&shortcut, key) {
+                prefix_active.set(false);
+            }
+        });
+    }
+
+    logging::info(format!(
+        "installed workspace_tile_selection shortcut prefix={shortcut:?}"
+    ));
+    window.add_controller(key_controller.clone());
+    *controller_handle.borrow_mut() = Some(key_controller);
+}
+
 fn install_workspace_maximize_shortcut(
     window: &adw::ApplicationWindow,
     controller_handle: &ShortcutControllerHandle,
@@ -5939,6 +6103,7 @@ fn build_shortcut_sections(
             density: prefs.workspace_density_shortcut.clone(),
             zoom_in: prefs.workspace_zoom_in_shortcut.clone(),
             zoom_out: prefs.workspace_zoom_out_shortcut.clone(),
+            tile_selection_prefix: prefs.workspace_tile_selection_prefix_shortcut.clone(),
             command_palette: prefs.command_palette_shortcut.clone(),
             maximize: DEFAULT_WORKSPACE_MAXIMIZE_SHORTCUT.to_string(),
             add_terminal_tile: DEFAULT_WORKSPACE_ADD_TERMINAL_TILE_SHORTCUT.to_string(),

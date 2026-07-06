@@ -22,6 +22,7 @@ struct SettingsState {
     density_shortcut: String,
     zoom_in_shortcut: String,
     zoom_out_shortcut: String,
+    tile_selection_prefix_shortcut: String,
     command_palette_shortcut: String,
     max_reconnect_attempts: u32,
     terminal_history_lines: u32,
@@ -39,6 +40,7 @@ impl SettingsState {
             density_shortcut: defaults.workspace_density_shortcut,
             zoom_in_shortcut: defaults.workspace_zoom_in_shortcut,
             zoom_out_shortcut: defaults.workspace_zoom_out_shortcut,
+            tile_selection_prefix_shortcut: defaults.workspace_tile_selection_prefix_shortcut,
             command_palette_shortcut: defaults.command_palette_shortcut,
             max_reconnect_attempts: defaults.max_reconnect_attempts,
             terminal_history_lines: defaults.terminal_history_lines,
@@ -55,6 +57,7 @@ pub struct SettingsDialogInput {
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
     pub workspace_zoom_out_shortcut: String,
+    pub workspace_tile_selection_prefix_shortcut: String,
     pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
@@ -76,6 +79,7 @@ pub struct SettingsDialogActions {
     pub on_density_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_in_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_zoom_out_shortcut_changed: Rc<dyn Fn(String)>,
+    pub on_tile_selection_prefix_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_command_palette_shortcut_changed: Rc<dyn Fn(String)>,
     pub on_max_reconnect_attempts_changed: Rc<dyn Fn(u32)>,
     pub on_terminal_history_lines_changed: Rc<dyn Fn(u32)>,
@@ -374,6 +378,7 @@ pub fn present(
         workspace_density_shortcut,
         workspace_zoom_in_shortcut,
         workspace_zoom_out_shortcut,
+        workspace_tile_selection_prefix_shortcut,
         command_palette_shortcut,
         settings_dialog_width,
         settings_dialog_height,
@@ -393,6 +398,7 @@ pub fn present(
         on_density_shortcut_changed,
         on_zoom_in_shortcut_changed,
         on_zoom_out_shortcut_changed,
+        on_tile_selection_prefix_shortcut_changed,
         on_command_palette_shortcut_changed,
         on_max_reconnect_attempts_changed,
         on_terminal_history_lines_changed,
@@ -488,6 +494,8 @@ pub fn present(
     let current_density_shortcut = Rc::new(RefCell::new(workspace_density_shortcut));
     let current_zoom_in_shortcut = Rc::new(RefCell::new(workspace_zoom_in_shortcut));
     let current_zoom_out_shortcut = Rc::new(RefCell::new(workspace_zoom_out_shortcut));
+    let current_tile_selection_prefix_shortcut =
+        Rc::new(RefCell::new(workspace_tile_selection_prefix_shortcut));
     let current_command_palette_shortcut = Rc::new(RefCell::new(command_palette_shortcut));
     let current_max_reconnect_attempts = Rc::new(Cell::new(max_reconnect_attempts));
     let current_terminal_history_lines = Rc::new(Cell::new(terminal_history_lines));
@@ -500,6 +508,7 @@ pub fn present(
         let current_density_shortcut = current_density_shortcut.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_tile_selection_prefix_shortcut = current_tile_selection_prefix_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
         let current_terminal_history_lines = current_terminal_history_lines.clone();
@@ -516,6 +525,9 @@ pub fn present(
                     density_shortcut: current_density_shortcut.borrow().clone(),
                     zoom_in_shortcut: current_zoom_in_shortcut.borrow().clone(),
                     zoom_out_shortcut: current_zoom_out_shortcut.borrow().clone(),
+                    tile_selection_prefix_shortcut: current_tile_selection_prefix_shortcut
+                        .borrow()
+                        .clone(),
                     command_palette_shortcut: current_command_palette_shortcut.borrow().clone(),
                     max_reconnect_attempts: current_max_reconnect_attempts.get(),
                     terminal_history_lines: current_terminal_history_lines.get(),
@@ -538,6 +550,7 @@ pub fn present(
     let density_shortcut_callback = on_density_shortcut_changed;
     let zoom_in_shortcut_callback = on_zoom_in_shortcut_changed;
     let zoom_out_shortcut_callback = on_zoom_out_shortcut_changed;
+    let tile_selection_prefix_shortcut_callback = on_tile_selection_prefix_shortcut_changed;
     let command_palette_shortcut_callback = on_command_palette_shortcut_changed;
     let reset_callback = on_reset_defaults;
     let size_changed_callback = on_size_changed;
@@ -1267,6 +1280,17 @@ pub fn present(
     );
     shortcuts_section.append(&zoom_out_recorder.row);
 
+    let tile_selection_prefix_recorder = build_shortcut_recorder_row(
+        &dialog,
+        "Select neighboring tile",
+        "Hold this shortcut, then press an arrow key to select a tile.",
+        &["<Alt>T", "<Ctrl><Alt>T", "<Super>T"],
+        current_tile_selection_prefix_shortcut.clone(),
+        tile_selection_prefix_shortcut_callback.clone(),
+        sync_reset_button.clone(),
+    );
+    shortcuts_section.append(&tile_selection_prefix_recorder.row);
+
     let command_palette_recorder = build_shortcut_recorder_row(
         &dialog,
         "Open command palette",
@@ -1286,6 +1310,7 @@ pub fn present(
         let current_density_shortcut = current_density_shortcut.clone();
         let current_zoom_in_shortcut = current_zoom_in_shortcut.clone();
         let current_zoom_out_shortcut = current_zoom_out_shortcut.clone();
+        let current_tile_selection_prefix_shortcut = current_tile_selection_prefix_shortcut.clone();
         let current_command_palette_shortcut = current_command_palette_shortcut.clone();
         let current_max_reconnect_attempts = current_max_reconnect_attempts.clone();
         let current_terminal_history_lines = current_terminal_history_lines.clone();
@@ -1298,6 +1323,7 @@ pub fn present(
         let density_recorder = density_recorder.clone();
         let zoom_in_recorder = zoom_in_recorder.clone();
         let zoom_out_recorder = zoom_out_recorder.clone();
+        let tile_selection_prefix_recorder = tile_selection_prefix_recorder.clone();
         let command_palette_recorder = command_palette_recorder.clone();
         let reconnect_spin = reconnect_spin.clone();
         let history_spin = history_spin.clone();
@@ -1326,6 +1352,8 @@ pub fn present(
                     != defaults.workspace_zoom_in_shortcut
                 || current_zoom_out_shortcut.borrow().as_str()
                     != defaults.workspace_zoom_out_shortcut
+                || current_tile_selection_prefix_shortcut.borrow().as_str()
+                    != defaults.workspace_tile_selection_prefix_shortcut
                 || current_command_palette_shortcut.borrow().as_str()
                     != defaults.command_palette_shortcut
                 || current_max_reconnect_attempts.get() != defaults.max_reconnect_attempts
@@ -1342,6 +1370,8 @@ pub fn present(
             current_density_shortcut.replace(defaults.workspace_density_shortcut.clone());
             current_zoom_in_shortcut.replace(defaults.workspace_zoom_in_shortcut.clone());
             current_zoom_out_shortcut.replace(defaults.workspace_zoom_out_shortcut.clone());
+            current_tile_selection_prefix_shortcut
+                .replace(defaults.workspace_tile_selection_prefix_shortcut.clone());
             current_command_palette_shortcut.replace(defaults.command_palette_shortcut.clone());
             current_max_reconnect_attempts.set(defaults.max_reconnect_attempts);
             current_terminal_history_lines.set(defaults.terminal_history_lines);
@@ -1355,6 +1385,8 @@ pub fn present(
             density_recorder.sync_label(&defaults.workspace_density_shortcut);
             zoom_in_recorder.sync_label(&defaults.workspace_zoom_in_shortcut);
             zoom_out_recorder.sync_label(&defaults.workspace_zoom_out_shortcut);
+            tile_selection_prefix_recorder
+                .sync_label(&defaults.workspace_tile_selection_prefix_shortcut);
             command_palette_recorder.sync_label(&defaults.command_palette_shortcut);
             reconnect_spin.set_value(defaults.max_reconnect_attempts as f64);
             history_spin.set_value(defaults.terminal_history_lines as f64);
@@ -1376,6 +1408,7 @@ pub fn present(
             density_recorder.cancel_recording();
             zoom_in_recorder.cancel_recording();
             zoom_out_recorder.cancel_recording();
+            tile_selection_prefix_recorder.cancel_recording();
             command_palette_recorder.cancel_recording();
             voice_hotkey_recorder.cancel_recording();
             sync_reset_button();

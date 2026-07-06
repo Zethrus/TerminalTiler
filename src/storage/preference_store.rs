@@ -18,6 +18,7 @@ const DEFAULT_WORKSPACE_FULLSCREEN_SHORTCUT: &str = "F11";
 const DEFAULT_WORKSPACE_DENSITY_SHORTCUT: &str = "<Ctrl><Shift>D";
 const DEFAULT_WORKSPACE_ZOOM_IN_SHORTCUT: &str = "<Ctrl>plus";
 const DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT: &str = "<Ctrl>minus";
+const DEFAULT_WORKSPACE_TILE_SELECTION_PREFIX_SHORTCUT: &str = "<Alt>T";
 const DEFAULT_COMMAND_PALETTE_SHORTCUT: &str = "<Ctrl><Shift>P";
 const DEFAULT_SETTINGS_DIALOG_WIDTH: i32 = 528;
 const DEFAULT_SETTINGS_DIALOG_HEIGHT: i32 = 760;
@@ -35,6 +36,7 @@ pub struct AppPreferences {
     pub workspace_density_shortcut: String,
     pub workspace_zoom_in_shortcut: String,
     pub workspace_zoom_out_shortcut: String,
+    pub workspace_tile_selection_prefix_shortcut: String,
     pub command_palette_shortcut: String,
     pub settings_dialog_width: i32,
     pub settings_dialog_height: i32,
@@ -69,6 +71,8 @@ struct PreferenceDocument {
     workspace_zoom_in_shortcut: String,
     #[serde(default = "default_zoom_out_shortcut")]
     workspace_zoom_out_shortcut: String,
+    #[serde(default = "default_tile_selection_prefix_shortcut")]
+    workspace_tile_selection_prefix_shortcut: String,
     #[serde(default = "default_command_palette_shortcut")]
     command_palette_shortcut: String,
     #[serde(default = "default_settings_dialog_width")]
@@ -109,6 +113,10 @@ fn default_zoom_in_shortcut() -> String {
 
 fn default_zoom_out_shortcut() -> String {
     DEFAULT_WORKSPACE_ZOOM_OUT_SHORTCUT.into()
+}
+
+fn default_tile_selection_prefix_shortcut() -> String {
+    DEFAULT_WORKSPACE_TILE_SELECTION_PREFIX_SHORTCUT.into()
 }
 
 fn default_command_palette_shortcut() -> String {
@@ -192,6 +200,15 @@ fn normalize_zoom_out_shortcut(shortcut: &str) -> String {
     }
 }
 
+fn normalize_tile_selection_prefix_shortcut(shortcut: &str) -> String {
+    match shortcut.trim() {
+        "alt-t" => "<Alt>T".into(),
+        "ctrl-alt-t" => "<Ctrl><Alt>T".into(),
+        "super-t" => "<Super>T".into(),
+        other => other.to_string(),
+    }
+}
+
 fn normalize_command_palette_shortcut(shortcut: &str) -> String {
     match shortcut.trim() {
         "ctrl-shift-p" => "<Ctrl><Shift>P".into(),
@@ -252,6 +269,9 @@ impl PreferenceStore {
                 ),
                 workspace_zoom_out_shortcut: normalize_zoom_out_shortcut(
                     &document.workspace_zoom_out_shortcut,
+                ),
+                workspace_tile_selection_prefix_shortcut: normalize_tile_selection_prefix_shortcut(
+                    &document.workspace_tile_selection_prefix_shortcut,
                 ),
                 command_palette_shortcut: normalize_command_palette_shortcut(
                     &document.command_palette_shortcut,
@@ -329,6 +349,13 @@ impl PreferenceStore {
     }
 
     #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn save_workspace_tile_selection_prefix_shortcut(&self, shortcut: &str) {
+        let mut preferences = self.load();
+        preferences.workspace_tile_selection_prefix_shortcut = shortcut.trim().to_string();
+        self.save(&preferences);
+    }
+
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn save_command_palette_shortcut(&self, shortcut: &str) {
         let mut preferences = self.load();
         preferences.command_palette_shortcut = shortcut.trim().to_string();
@@ -380,6 +407,9 @@ impl PreferenceStore {
             workspace_density_shortcut: preferences.workspace_density_shortcut.clone(),
             workspace_zoom_in_shortcut: preferences.workspace_zoom_in_shortcut.clone(),
             workspace_zoom_out_shortcut: preferences.workspace_zoom_out_shortcut.clone(),
+            workspace_tile_selection_prefix_shortcut: preferences
+                .workspace_tile_selection_prefix_shortcut
+                .clone(),
             command_palette_shortcut: preferences.command_palette_shortcut.clone(),
             settings_dialog_width: preferences.settings_dialog_width,
             settings_dialog_height: preferences.settings_dialog_height,
@@ -428,6 +458,7 @@ impl Default for AppPreferences {
             workspace_density_shortcut: default_density_shortcut(),
             workspace_zoom_in_shortcut: default_zoom_in_shortcut(),
             workspace_zoom_out_shortcut: default_zoom_out_shortcut(),
+            workspace_tile_selection_prefix_shortcut: default_tile_selection_prefix_shortcut(),
             command_palette_shortcut: default_command_palette_shortcut(),
             settings_dialog_width: default_settings_dialog_width(),
             settings_dialog_height: default_settings_dialog_height(),
@@ -474,6 +505,10 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Ctrl><Shift>D");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(
+            store.load().workspace_tile_selection_prefix_shortcut,
+            "<Alt>T"
+        );
         assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
@@ -500,6 +535,7 @@ mod tests {
             workspace_density_shortcut: "<Shift>F8".into(),
             workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
             workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+            workspace_tile_selection_prefix_shortcut: "<Ctrl><Alt>T".into(),
             command_palette_shortcut: "<Ctrl>P".into(),
             settings_dialog_width: 640,
             settings_dialog_height: 540,
@@ -523,6 +559,7 @@ mod tests {
                 workspace_density_shortcut: "<Shift>F8".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>equal".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>KP_Subtract".into(),
+                workspace_tile_selection_prefix_shortcut: "<Ctrl><Alt>T".into(),
                 command_palette_shortcut: "<Ctrl>P".into(),
                 settings_dialog_width: 640,
                 settings_dialog_height: 540,
@@ -556,6 +593,7 @@ mod tests {
                 workspace_density_shortcut: "<Ctrl><Shift>D".into(),
                 workspace_zoom_in_shortcut: "<Ctrl>plus".into(),
                 workspace_zoom_out_shortcut: "<Ctrl>minus".into(),
+                workspace_tile_selection_prefix_shortcut: "<Alt>T".into(),
                 command_palette_shortcut: "<Ctrl><Shift>P".into(),
                 settings_dialog_width: 528,
                 settings_dialog_height: 760,
@@ -597,6 +635,10 @@ mod tests {
         assert_eq!(store.load().workspace_density_shortcut, "<Shift>F8");
         assert_eq!(store.load().workspace_zoom_in_shortcut, "<Ctrl>plus");
         assert_eq!(store.load().workspace_zoom_out_shortcut, "<Ctrl>minus");
+        assert_eq!(
+            store.load().workspace_tile_selection_prefix_shortcut,
+            "<Alt>T"
+        );
         assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
@@ -657,6 +699,37 @@ mod tests {
         assert_eq!(store.load().command_palette_shortcut, "<Ctrl><Shift>P");
         assert_eq!(store.load().settings_dialog_width, 528);
         assert_eq!(store.load().settings_dialog_height, 760);
+    }
+
+    #[test]
+    fn normalizes_legacy_tile_selection_prefix_shortcut() {
+        let dir = temp_dir("pref-tile-selection-shortcut");
+        let path = dir.join("preferences.toml");
+        fs::write(
+            &path,
+            "version = 1\ndefault_theme = \"system\"\ndefault_density = \"compact\"\nworkspace_tile_selection_prefix_shortcut = \"alt-t\"\n",
+        )
+        .unwrap();
+
+        let store = PreferenceStore::from_path(path);
+
+        assert_eq!(
+            store.load().workspace_tile_selection_prefix_shortcut,
+            "<Alt>T"
+        );
+    }
+
+    #[test]
+    fn saves_tile_selection_prefix_shortcut_without_disturbing_other_settings() {
+        let dir = temp_dir("pref-save-tile-selection-shortcut");
+        let store = PreferenceStore::from_path(dir.join("preferences.toml"));
+
+        store.save_workspace_tile_selection_prefix_shortcut("<Super>T");
+
+        let loaded = store.load();
+        assert_eq!(loaded.workspace_tile_selection_prefix_shortcut, "<Super>T");
+        assert_eq!(loaded.workspace_fullscreen_shortcut, "F11");
+        assert_eq!(loaded.command_palette_shortcut, "<Ctrl><Shift>P");
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub struct ShortcutSummary {
     pub density: String,
     pub zoom_in: String,
     pub zoom_out: String,
+    pub tile_selection_prefix: String,
     pub command_palette: String,
     pub maximize: String,
     pub add_terminal_tile: String,
@@ -46,6 +47,22 @@ pub fn sections_from_summary(summary: &ShortcutSummary) -> Vec<ShortcutSection> 
                 ShortcutRow::new("Cycle density", summary.density.clone()),
                 ShortcutRow::new("Zoom in text", summary.zoom_in.clone()),
                 ShortcutRow::new("Zoom out text", summary.zoom_out.clone()),
+                ShortcutRow::new(
+                    "Select tile above",
+                    directional_tile_selection_label(&summary.tile_selection_prefix, "↑"),
+                ),
+                ShortcutRow::new(
+                    "Select tile right",
+                    directional_tile_selection_label(&summary.tile_selection_prefix, "→"),
+                ),
+                ShortcutRow::new(
+                    "Select tile below",
+                    directional_tile_selection_label(&summary.tile_selection_prefix, "↓"),
+                ),
+                ShortcutRow::new(
+                    "Select tile left",
+                    directional_tile_selection_label(&summary.tile_selection_prefix, "←"),
+                ),
                 ShortcutRow::new("Maximize / restore pane", summary.maximize.clone()),
                 ShortcutRow::new("Add terminal tile", summary.add_terminal_tile.clone()),
                 ShortcutRow::new("Open Kanban board", summary.open_board.clone()),
@@ -67,6 +84,16 @@ pub fn sections_from_summary(summary: &ShortcutSummary) -> Vec<ShortcutSection> 
             ],
         ),
     ]
+}
+
+fn directional_tile_selection_label(prefix: &str, arrow: &str) -> String {
+    format!("{} + {arrow}", accelerator_display_label(prefix))
+}
+
+fn accelerator_display_label(accel: &str) -> String {
+    gtk::accelerator_parse(accel)
+        .map(|(key, modifiers)| gtk::accelerator_get_label(key, modifiers).to_string())
+        .unwrap_or_else(|| accel.trim().to_string())
 }
 
 /// A single shortcut entry: a human label and its accelerator in GTK form
