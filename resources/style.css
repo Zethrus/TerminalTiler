@@ -1606,8 +1606,8 @@ button.surface-button:disabled {
 .workspace-summary.workspace-summary-dense {
   /* Dense runtime toolbar: scoped to the workspace summary so launch deck,
      dialogs, tile editors, and other surface buttons keep their existing sizing. */
-  padding: 4px 6px;
-  margin-bottom: 4px;
+  padding: 1px 6px;
+  margin-bottom: 2px;
   box-shadow:
     0 4px 10px alpha(@tt_shadow, 0.10),
     inset 0 1px alpha(@tt_white, 0.035);
@@ -1622,7 +1622,7 @@ button.surface-button:disabled {
 }
 
 .workspace-summary.workspace-summary-dense .toolbar-group {
-  padding: 1px 2px;
+  padding: 0 2px;
   border-radius: 2px;
   background: alpha(@tt_white, 0.010);
   border-color: alpha(@tt_white, 0.025);
@@ -1630,13 +1630,13 @@ button.surface-button:disabled {
 
 .workspace-summary.workspace-summary-dense separator.toolbar-divider {
   min-width: 1px;
-  margin-top: 2px;
-  margin-bottom: 2px;
+  margin-top: 1px;
+  margin-bottom: 1px;
   background: alpha(@tt_white, 0.055);
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button {
-  min-height: 24px;
+  min-height: 20px;
   padding: 0 7px;
   border-radius: 2px;
   font-size: 10px;
@@ -1663,7 +1663,7 @@ button.surface-button:disabled {
 .workspace-summary.workspace-summary-dense button.surface-button.workspace-toolbar-action,
 .workspace-summary.workspace-summary-dense button.surface-button.surface-button-icon.workspace-toolbar-action {
   min-width: 26px;
-  min-height: 24px;
+  min-height: 20px;
   padding: 0;
 }
 
@@ -1685,7 +1685,7 @@ button.surface-button:disabled {
 
 .workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry,
 .workspace-summary.workspace-summary-dense entry.workspace-url-entry {
-  min-height: 24px;
+  min-height: 20px;
   padding: 0 7px;
   border-radius: 2px;
   font-size: 10px;
@@ -1701,7 +1701,7 @@ button.surface-button:disabled {
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo {
-  min-height: 24px;
+  min-height: 20px;
   padding: 0 6px;
   border-radius: 2px;
   font-size: 10px;

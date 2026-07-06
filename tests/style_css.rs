@@ -447,7 +447,7 @@ fn workspace_summary_toolbar_uses_dense_squared_controls() {
     assert_css_declaration(
         ".workspace-summary.workspace-summary-dense",
         "padding",
-        "4px 6px",
+        "1px 6px",
         "dense workspace summary should reduce vertical and horizontal chrome",
     );
     assert_css_declaration(
@@ -459,7 +459,7 @@ fn workspace_summary_toolbar_uses_dense_squared_controls() {
     assert_css_declaration(
         ".workspace-summary.workspace-summary-dense button.surface-button",
         "min-height",
-        "24px",
+        "20px",
         "toolbar surface buttons should be smaller than global surface buttons",
     );
     assert_css_declaration(
@@ -477,13 +477,13 @@ fn workspace_summary_toolbar_uses_dense_squared_controls() {
     assert_css_declaration(
         ".workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry",
         "min-height",
-        "24px",
+        "20px",
         "quick command entry should align to compact toolbar height",
     );
     assert_css_declaration(
         ".workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo",
         "min-height",
-        "24px",
+        "20px",
         "toolbar selectors should override bulky global combobox sizing",
     );
     assert_css_declaration(
