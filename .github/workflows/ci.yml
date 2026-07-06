@@ -41,10 +41,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Run tests
-        run: cargo test --features voice-cpal
+        run: cargo test --locked --features voice-cpal
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Run cargo audit
         run: cargo audit
@@ -90,10 +90,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Run tests
-        run: cargo test --features voice-cpal
+        run: cargo test --locked --features voice-cpal
 
       - name: Check Windows target
-        run: cargo check --target x86_64-pc-windows-msvc --features voice-cpal
+        run: cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal
 
       - name: Build Windows release artifacts
         shell: pwsh
@@ -146,7 +146,7 @@ jobs:
 
       - name: Check Windows GTK target
         shell: pwsh
-        run: cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell
+        run: cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell
 
       - name: Build Windows GTK release artifacts
         shell: pwsh

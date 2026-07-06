@@ -331,7 +331,7 @@ if (-not $SkipCargoBuild) {
     if ($BuildGtkShell) {
         $BuildFeatures += "windows-gtk-shell"
     }
-    cargo build --release --features ($BuildFeatures -join ",") --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
+    cargo build --locked --release --features ($BuildFeatures -join ",") --target $TargetTriple --manifest-path (Join-Path $RootDir "Cargo.toml")
 } else {
     Write-Host "==> using existing Windows release binary"
 }

@@ -1,6 +1,6 @@
 # Rust build artifacts
 /target
-/Cargo.lock
+# Keep Cargo.lock tracked for reproducible app and CI builds.
 
 # Packaging and build artifacts
 /packaging/.build

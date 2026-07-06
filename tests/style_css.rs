@@ -10,6 +10,8 @@ const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const DIALOG_CHROME_RS: &str = include_str!("../src/ui/dialog_chrome.rs");
 const DIALOG_SMOKE_RS: &str = include_str!("../src/ui/dialog_smoke.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
+const CARGO_LOCK: &str = include_str!("../Cargo.lock");
+const GITIGNORE: &str = include_str!("../.gitignore");
 const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
 const BUILD_RS: &str = include_str!("../build.rs");
 const CI_YML: &str = include_str!("../.github/workflows/ci.yml");
@@ -25,6 +27,7 @@ const PACKAGE_CAPTURE_LINUX_GTK_VISUALS_SH: &str =
     include_str!("../packaging/capture-linux-gtk-visuals.sh");
 const PACKAGE_COMPARE_GTK_VISUALS_SH: &str = include_str!("../packaging/compare-gtk-visuals.sh");
 const PACKAGE_DEB_SH: &str = include_str!("../packaging/build-deb.sh");
+const PACKAGE_LINUX_RELEASE_SH: &str = include_str!("../packaging/build-linux-release.sh");
 const PANE_STATUS_RS: &str = include_str!("../src/ui/pane_status.rs");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const RELEASE_SMOKE_TEST_SH: &str = include_str!("../packaging/release-smoke-test.sh");
@@ -2447,7 +2450,7 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && CI_YML.contains("actions/cache@v5")
             && !CI_YML.contains("save-always:")
             && CI_YML.contains("actions/upload-artifact@v6")
-            && CI_YML.contains("cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
+            && CI_YML.contains("cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
         "CI should include native Windows GTK build, package, smoke coverage, and Node 24-ready artifact/cache actions"
@@ -2804,12 +2807,51 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
 }
 
 #[test]
+fn ci_and_release_builds_use_locked_dependency_resolution() {
+    assert!(
+        CARGO_LOCK.contains("name = \"terminaltiler\"")
+            && CARGO_LOCK.contains("name = \"gtk4\"")
+            && CARGO_LOCK.contains("version = \"0.11.1\"")
+            && CARGO_LOCK.contains("name = \"libadwaita\"")
+            && CARGO_LOCK.contains("version = \"0.9.1\"")
+            && !GITIGNORE.lines().any(|line| line.trim() == "/Cargo.lock"),
+        "Cargo.lock should stay checked in so Linux and Windows CI resolve the same GTK/libadwaita graph"
+    );
+
+    for expected in [
+        "cargo test --locked --features voice-cpal",
+        "cargo clippy --locked --all-targets --all-features -- -D warnings",
+        "cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal",
+        "cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell",
+    ] {
+        assert!(
+            CI_YML.contains(expected),
+            "CI workflow should use locked dependency resolution for {expected}"
+        );
+    }
+
+    for (name, script) in [
+        ("build-linux-release.sh", PACKAGE_LINUX_RELEASE_SH),
+        ("build-deb.sh", PACKAGE_DEB_SH),
+        ("build-appimage.sh", PACKAGE_APPIMAGE_SH),
+        ("release-smoke-test.sh", RELEASE_SMOKE_TEST_SH),
+        ("build-windows.ps1", WINDOWS_BUILD_PS1),
+    ] {
+        assert!(
+            script.contains("cargo build --locked --release"),
+            "{name} should build release artifacts from Cargo.lock rather than fresh dependency resolution"
+        );
+    }
+}
+
+#[test]
 fn ci_requires_linux_and_windows_verify_jobs_as_hard_gates() {
     let linux_verify = workflow_job_block(CI_YML, "verify");
     assert!(
         linux_verify.contains("runs-on: ubuntu-latest")
-            && linux_verify.contains("cargo test --features voice-cpal")
-            && linux_verify.contains("cargo clippy --all-targets --all-features -- -D warnings")
+            && linux_verify.contains("cargo test --locked --features voice-cpal")
+            && linux_verify
+                .contains("cargo clippy --locked --all-targets --all-features -- -D warnings")
             && !source_contains(
                 &linux_verify,
                 "runs-on: ubuntu-latest\n    continue-on-error: true"

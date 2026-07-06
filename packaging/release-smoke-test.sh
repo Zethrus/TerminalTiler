@@ -328,7 +328,7 @@ echo "==> release version $PACKAGE_VERSION"
 if [[ "$SKIP_PACKAGE_BUILD" != "1" ]]; then
   echo "==> building release binary"
   cd "$ROOT_DIR"
-  cargo build --release --features voice-cpal
+  cargo build --locked --release --features voice-cpal
 
   echo "==> building Debian package"
   SKIP_CARGO_BUILD=1 bash "$ROOT_DIR/packaging/build-deb.sh"
