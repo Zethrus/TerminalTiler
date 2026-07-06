@@ -147,8 +147,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-release
-          path: packaging/.build/windows-smoke
-          if-no-files-found: ignore
+          path: artifacts/windows-smoke-diagnostics
+          if-no-files-found: warn
 
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v6

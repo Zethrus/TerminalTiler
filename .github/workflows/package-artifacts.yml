@@ -126,8 +126,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-${{ needs.resolve-version.outputs.package_version }}
-          path: packaging/.build/windows-smoke
-          if-no-files-found: ignore
+          path: artifacts/windows-smoke-diagnostics
+          if-no-files-found: warn
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6

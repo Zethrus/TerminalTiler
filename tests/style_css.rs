@@ -2626,12 +2626,15 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && WINDOWS_SMOKE_PS1.contains("TerminalTiler*.exe")
             && WINDOWS_SMOKE_PS1.contains("function Wait-ProcessOrTimeout")
             && WINDOWS_SMOKE_PS1.contains("timed out after $TimeoutSeconds seconds")
-            && WINDOWS_SMOKE_PS1.contains("Wait-ProcessOrTimeout -Process $InstallerProcess")
+            && WINDOWS_SMOKE_PS1.contains("function Test-TransientWindowsProcessStartFailure")
+            && WINDOWS_SMOKE_PS1.contains("function Invoke-ProcessWithRetry")
+            && WINDOWS_SMOKE_PS1.contains("-ShouldRetry { param($ExitCode) Test-TransientWindowsProcessStartFailure -ExitCode $ExitCode }")
+            && WINDOWS_SMOKE_PS1.contains("Remove-Item -Recurse -Force $NsisInstallRoot")
             && WINDOWS_SMOKE_PS1.contains("function Invoke-MsiExecWithRetry")
             && WINDOWS_SMOKE_PS1.contains("Wait-ProcessOrTimeout -Process $process")
             && WINDOWS_SMOKE_PS1.contains("retrying after runner cleanup.")
             && WINDOWS_SMOKE_PS1.contains("Invoke-MsiExecWithRetry -ArgumentList"),
-        "Windows smoke test should bound installer waits, retry transient msiexec runner failures, and clean up TerminalTiler smoke processes so CI cannot hang indefinitely"
+        "Windows smoke test should bound installer waits, retry transient NSIS/msiexec runner failures, and clean up TerminalTiler smoke processes so CI cannot hang indefinitely"
     );
 
     for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {
@@ -2884,6 +2887,10 @@ fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
             && WINDOWS_SMOKE_PS1.contains("application-event-log.txt")
             && WINDOWS_SMOKE_PS1.contains("sandbox-tree.txt")
             && WINDOWS_SMOKE_PS1.contains("webview2-tree.txt")
+            && WINDOWS_SMOKE_PS1.contains("function Write-InstallerDiagnostics")
+            && WINDOWS_SMOKE_PS1.contains("install-tree.txt")
+            && WINDOWS_SMOKE_PS1
+                .contains("Staged Windows installer diagnostics at $diagnosticRoot")
             && WINDOWS_SMOKE_PS1.contains("TEMP = $env:TEMP")
             && WINDOWS_SMOKE_PS1.contains("TMP = $env:TMP")
             && WINDOWS_SMOKE_PS1.contains("$env:TEMP = $profile.Temp")
@@ -2908,6 +2915,14 @@ fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
                 && windows_verify.contains("if-no-files-found: warn")
                 && !windows_verify.contains("path: packaging/.build/windows-smoke"),
             "{job_name} should upload staged Windows smoke diagnostics from a non-hidden artifact directory"
+        );
+    }
+    for workflow in [RELEASE_YML, PACKAGE_ARTIFACTS_YML] {
+        assert!(
+            workflow.contains("path: artifacts/windows-smoke-diagnostics")
+                && workflow.contains("if-no-files-found: warn")
+                && !workflow.contains("path: packaging/.build/windows-smoke"),
+            "release/package workflows should upload staged Windows smoke diagnostics from a non-hidden artifact directory"
         );
     }
 }

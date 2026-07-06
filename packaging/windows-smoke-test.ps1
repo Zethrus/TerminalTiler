@@ -678,6 +678,50 @@ function Wait-ProcessOrTimeout {
     return $Process.ExitCode
 }
 
+function Test-TransientWindowsProcessStartFailure {
+    param([object]$ExitCode)
+
+    if ($null -eq $ExitCode) {
+        return $false
+    }
+
+    $unsignedExitCode = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$ExitCode), 0)
+    return $unsignedExitCode -eq 0xC0000142
+}
+
+function Invoke-ProcessWithRetry {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [string]$Label,
+        [int]$TimeoutSeconds = 180,
+        [int]$MaxAttempts = 3,
+        [scriptblock]$ShouldRetry = { param($ExitCode) $true },
+        [scriptblock]$BeforeRetry = { }
+    )
+
+    $lastExitCode = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+        $lastExitCode = Wait-ProcessOrTimeout -Process $process -Label $Label -TimeoutSeconds $TimeoutSeconds
+        if ($lastExitCode -eq 0) {
+            return
+        }
+
+        if ($attempt -lt $MaxAttempts -and (& $ShouldRetry $lastExitCode)) {
+            Write-Warning "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode) on attempt $attempt/$MaxAttempts; retrying after runner cleanup."
+            & $BeforeRetry
+            Stop-TerminalTilerSmokeProcesses
+            Start-Sleep -Seconds (5 * $attempt)
+            continue
+        }
+
+        break
+    }
+
+    throw "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode)"
+}
+
 function Invoke-MsiExecWithRetry {
     param(
         [string[]]$ArgumentList,
@@ -686,22 +730,65 @@ function Invoke-MsiExecWithRetry {
         [int]$MaxAttempts = 3
     )
 
-    $lastExitCode = $null
-    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $ArgumentList -PassThru
-        $lastExitCode = Wait-ProcessOrTimeout -Process $process -Label $Label -TimeoutSeconds $TimeoutSeconds
-        if ($lastExitCode -eq 0) {
-            return
-        }
+    Invoke-ProcessWithRetry `
+        -FilePath "msiexec.exe" `
+        -ArgumentList $ArgumentList `
+        -Label $Label `
+        -TimeoutSeconds $TimeoutSeconds `
+        -MaxAttempts $MaxAttempts
+}
 
-        if ($attempt -lt $MaxAttempts) {
-            Write-Warning "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode) on attempt $attempt/$MaxAttempts; retrying after runner cleanup."
-            Stop-TerminalTilerSmokeProcesses
-            Start-Sleep -Seconds (5 * $attempt)
+function Write-InstallerDiagnostics {
+    param(
+        [string]$Label,
+        [string]$InstallerPath,
+        [string]$InstallRoot,
+        [object]$ExitCode,
+        [datetime]$StartTime = (Get-Date).AddMinutes(-10)
+    )
+
+    Write-Host "==> diagnostics for $Label"
+    $safeLabel = Convert-ToSafeFileName -Value $Label
+    $diagnosticRoot = $null
+    if (-not [string]::IsNullOrWhiteSpace($script:DiagnosticsRoot)) {
+        $diagnosticRoot = Join-Path $script:DiagnosticsRoot $safeLabel
+        New-Item -ItemType Directory -Force -Path $diagnosticRoot | Out-Null
+    }
+
+    $summary = New-Object System.Collections.Generic.List[string]
+    $summary.Add("Label: $Label")
+    $summary.Add("InstallerPath: $InstallerPath")
+    $summary.Add("InstallRoot: $InstallRoot")
+    $summary.Add("StartTime: $($StartTime.ToString('o'))")
+    if ($null -ne $ExitCode) {
+        $formattedExitCode = Format-ExitCode -ExitCode $ExitCode
+        Write-Host "Installer exit code: $formattedExitCode"
+        $summary.Add("InstallerExitCode: $formattedExitCode")
+    }
+    else {
+        $summary.Add("InstallerExitCode: <not available>")
+    }
+
+    if ($diagnosticRoot) {
+        Set-Content -Path (Join-Path $diagnosticRoot "summary.txt") -Value $summary -Encoding UTF8
+    }
+
+    if (Test-Path $InstallRoot) {
+        $installTree = Get-ChildItem -Path $InstallRoot -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 500 FullName, Length, LastWriteTime |
+            Format-Table -AutoSize |
+            Out-String
+        if ($diagnosticRoot) {
+            Set-Content -Path (Join-Path $diagnosticRoot "install-tree.txt") -Value $installTree -Encoding UTF8
         }
     }
 
-    throw "$Label exited with code $(Format-ExitCode -ExitCode $lastExitCode)"
+    $eventLogPath = if ($diagnosticRoot) { Join-Path $diagnosticRoot "application-event-log.txt" } else { "" }
+    Write-ApplicationEventLogDiagnostics -Label $Label -ExePath $InstallerPath -LaunchStartTime $StartTime -OutputPath $eventLogPath
+
+    if ($diagnosticRoot) {
+        Write-Host "Staged Windows installer diagnostics at $diagnosticRoot"
+    }
 }
 
 function Wait-ForSessionLogPattern {
@@ -1025,10 +1112,31 @@ Invoke-OptionalLaunchSmoke `
 Write-Host "==> smoke-installing NSIS package"
 New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
 $InstallerArgs = @("/S", "/D=$NsisInstallRoot")
-$InstallerProcess = Start-Process -FilePath $InstallerPath -ArgumentList $InstallerArgs -PassThru
-$InstallerExitCode = Wait-ProcessOrTimeout -Process $InstallerProcess -Label "NSIS installer" -TimeoutSeconds 180
-if ($InstallerExitCode -ne 0) {
-    throw "Installer exited with code $InstallerExitCode"
+$InstallerStartTime = Get-Date
+try {
+    Invoke-ProcessWithRetry `
+        -FilePath $InstallerPath `
+        -ArgumentList $InstallerArgs `
+        -Label "NSIS installer" `
+        -MaxAttempts 3 `
+        -ShouldRetry { param($ExitCode) Test-TransientWindowsProcessStartFailure -ExitCode $ExitCode } `
+        -BeforeRetry {
+            Remove-Item -Recurse -Force $NsisInstallRoot -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $NsisInstallRoot | Out-Null
+        }
+}
+catch {
+    $exitCode = $null
+    if ($_ -match 'code (-?\d+)') {
+        $exitCode = [int]$Matches[1]
+    }
+    Write-InstallerDiagnostics `
+        -Label "NSIS installer" `
+        -InstallerPath $InstallerPath `
+        -InstallRoot $NsisInstallRoot `
+        -ExitCode $exitCode `
+        -StartTime $InstallerStartTime
+    throw
 }
 
 $InstalledExe = Join-Path $NsisInstallRoot "TerminalTiler.exe"
