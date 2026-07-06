@@ -206,8 +206,8 @@ pub(crate) fn build_workspace_summary_chrome(
 ) -> WorkspaceSummaryChrome {
     let summary = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .css_classes(["workspace-summary"])
+        .spacing(4)
+        .css_classes(["workspace-summary", "workspace-summary-dense"])
         .build();
 
     let name_label = gtk::Label::builder()
@@ -219,20 +219,26 @@ pub(crate) fn build_workspace_summary_chrome(
         .build();
     make_shrinkable(&name_label);
 
-    let alert_button =
-        icons::labeled_button("Alerts (0)", icon_name::ALERTS, &["flat", "surface-button"]);
+    let alert_button = icons::labeled_button(
+        "Alerts (0)",
+        icon_name::ALERTS,
+        &["flat", "surface-button", "workspace-toolbar-alert"],
+    );
     alert_button.set_sensitive(input.controls_sensitive);
 
     let broadcast_state = gtk::Label::builder()
         .label("Broadcast Off")
         .valign(gtk::Align::Center)
-        .css_classes(["status-chip", "muted-chip"])
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(22)
+        .css_classes(["status-chip", "muted-chip", "workspace-broadcast-status"])
         .build();
 
     let broadcast_selector = gtk::ComboBoxText::new();
     broadcast_selector.add_css_class("surface-select-control");
-    broadcast_selector.append(Some("off"), "Broadcast Off");
-    broadcast_selector.append(Some("all"), "Broadcast All");
+    broadcast_selector.add_css_class("workspace-toolbar-select");
+    broadcast_selector.append(Some("off"), "Off");
+    broadcast_selector.append(Some("all"), "All");
     for group in input.pane_groups {
         let id = format!("group:{group}");
         broadcast_selector.append(Some(&id), &format!("Group: {group}"));
@@ -241,35 +247,28 @@ pub(crate) fn build_workspace_summary_chrome(
     broadcast_selector.set_sensitive(input.controls_sensitive);
 
     let broadcast_entry = gtk::Entry::builder()
-        .placeholder_text("Quick send command")
-        .width_chars(18)
+        .placeholder_text("Command…")
+        .width_chars(14)
         .css_classes(["workspace-broadcast-entry"])
         .sensitive(input.controls_sensitive)
         .build();
-    let broadcast_button =
-        icons::labeled_button("Send", icon_name::BROADCAST, &["flat", "surface-button"]);
+    let broadcast_button = toolbar_icon_button(icon_name::BROADCAST, "Send quick command");
     broadcast_button.set_sensitive(input.controls_sensitive);
 
-    let add_terminal_tile_button = icons::labeled_button(
-        "Add Terminal Tile",
-        icon_name::TERMINAL,
-        &["flat", "surface-button"],
-    );
+    let add_terminal_tile_button = toolbar_icon_button(icon_name::TERMINAL, "Add Terminal Tile");
     add_terminal_tile_button.set_sensitive(input.controls_sensitive);
 
-    let add_web_tile_button =
-        icons::labeled_button("Add Web Tile", icon_name::WEB, &["flat", "surface-button"]);
+    let add_web_tile_button = toolbar_icon_button(icon_name::WEB, "Add Web Tile");
     add_web_tile_button.set_sensitive(input.controls_sensitive);
 
     let url_entry = gtk::Entry::builder()
         .placeholder_text("URL")
-        .width_chars(30)
+        .width_chars(24)
         .hexpand(false)
         .css_classes(["workspace-url-entry"])
         .sensitive(input.controls_sensitive)
         .build();
-    let url_reload_button =
-        icons::labeled_button("Reload", icon_name::REFRESH, &["flat", "surface-button"]);
+    let url_reload_button = toolbar_icon_button(icon_name::REFRESH, "Reload");
     url_reload_button.set_sensitive(input.controls_sensitive);
     // URL editing + reload only make sense once a web tile holds focus, so they
     // stay hidden until the runtime reveals them contextually. Keeps the bar
@@ -279,16 +278,16 @@ pub(crate) fn build_workspace_summary_chrome(
 
     let runbook_selector = gtk::ComboBoxText::new();
     runbook_selector.add_css_class("surface-select-control");
+    runbook_selector.add_css_class("workspace-toolbar-select");
     runbook_selector.append(Some(""), "Runbook");
     runbook_selector.set_active_id(Some(""));
     runbook_selector.set_sensitive(input.controls_sensitive);
-    let runbook_button = icons::labeled_button("Run", icon_name::RUN, &["flat", "surface-button"]);
+    let runbook_button = toolbar_icon_button(icon_name::RUN, "Run selected runbook");
     runbook_button.set_sensitive(input.controls_sensitive);
 
     // Jumps to this project's Kanban board. Only shown when a board was previously set
     // up (its `.terminaltiler/board.json` exists), so terminal-only projects stay clean.
-    let open_board_button =
-        icons::labeled_button("Open Board", icon_name::LAYOUT, &["flat", "surface-button"]);
+    let open_board_button = toolbar_icon_button(icon_name::LAYOUT, "Open Board");
     open_board_button.set_sensitive(input.controls_sensitive);
 
     let path_label = gtk::Label::builder()
@@ -355,13 +354,33 @@ pub(crate) fn build_workspace_summary_chrome(
     }
 }
 
-/// A pill-shaped cluster that visually groups related toolbar controls. The
-/// `toolbar-group` surface plus the dividers between groups give the workspace
-/// summary bar a segmented, intentional hierarchy instead of a flat row.
+fn toolbar_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
+    let button = icons::icon_button(
+        icon_name,
+        tooltip,
+        &[
+            "flat",
+            "surface-button",
+            "surface-button-icon",
+            "workspace-toolbar-action",
+        ],
+    );
+    if let Some(icon) = button
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::Image>().ok())
+    {
+        icon.set_pixel_size(13);
+    }
+    button
+}
+
+/// A compact cluster that visually groups related toolbar controls. The
+/// `toolbar-group` surface plus dividers keep hierarchy without reintroducing
+/// bulky nested pills inside the dense workspace summary bar.
 fn toolbar_group() -> gtk::Box {
     gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
+        .spacing(4)
         .valign(gtk::Align::Center)
         .css_classes(["toolbar-group"])
         .build()

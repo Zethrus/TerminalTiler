@@ -36,7 +36,7 @@
 - Color: preserve the existing dark command-center palette with amber accent highlights and light-mode overrides. Accent is used with restraint — reserve full-strength amber for one primary action per region; the active tab is muted copper plus a thin amber underline rather than a loud copper gradient; secondary controls avoid amber rim-glow.
 - Typography: keep current GTK/libadwaita typography classes on the existing font stack. Type scale: display 22 · section 14–15 · card/tile-title 12–13 · body 13 · meta 10–11 · micro 9; max weight 700. Eyebrows/step indicators are 9–10px / 600 / uppercase with 0.14em letter-spacing.
 - Spacing/layout rhythm: 4px-based scale (4 · 6 · 8 · 12 · 16 · 20) applied as literals (GTK4 CSS has no length variables). Card surfaces use ~12px panel padding (Standard); wizard body limited to the active step. GTK `Box` spacings follow the same steps.
-- Shape/radius/elevation: radius scale control 8 · chip 999 · card 12 · panel 14 (`profile-compact` stays squared; `workspace-summary` stays squared). Elevation is soft — 1px hairline borders (`alpha(@tt_white, 0.06–0.08)`) do primary separation, shadows are secondary (e1 0.12 · e2 0.16 · e3 0.22). Pill CTAs and selected-card borders retained. The numeric scale's single source of truth is the header comment in `resources/style.css` mirrored here.
+- Shape/radius/elevation: radius scale control 8 · chip 999 · card 12 · panel 14 (`profile-compact` stays squared; `workspace-summary` stays squared, with dense runtime-toolbar controls using crisp 2px corners). Elevation is soft — 1px hairline borders (`alpha(@tt_white, 0.06–0.08)`) do primary separation, shadows are secondary (e1 0.12 · e2 0.16 · e3 0.22). Pill CTAs and selected-card borders retained. The numeric scale's single source of truth is the header comment in `resources/style.css` mirrored here.
 - Motion: native GTK stack transitions are acceptable; avoid long or distracting animations. Interactive cards lift `translateY(-1px)` on hover at 140ms ease.
 - Imagery/iconography: use symbolic GTK icons only; no new bitmap assets.
 
@@ -51,7 +51,7 @@
 - `secondary-button`: dark glass support action for reversible navigation and editing (`Back`, `Update Preset`, `Edit`, `Workspaces`, `New Kanban Board`) with subtle amber border/highlight.
 - `ghost-link-button` / `pill-button.flat`: low-emphasis transparent/dark action for exits such as `Close Tab`; readable without competing with the primary CTA.
 - `destructive-button` / GTK `destructive-action`: compact dark red-accent risk action for delete/close icon buttons; destructive actions should remain explicit and tooltip-backed when icon-only.
-- `surface-button` / `surface-button-icon`: tile-editor and runtime surface controls; use the same dark glass token family at a smaller square/labeled size.
+- `surface-button` / `surface-button-icon`: tile-editor and runtime surface controls; use the same dark glass token family at a smaller square/labeled size. The workspace summary toolbar uses the densest scoped variant: 24–26px high, 10–11px text, icon-first utility actions, and visible labels only for dynamic/status context.
 - Focus and disabled states: keyboard focus uses a visible amber ring; disabled buttons are muted but intentional role states, never generic washed-out platform gray.
 - Windows parity: when the native Windows shell is styled, map controls to these same roles, approximate dimensions, radii, colors, focus affordance, and emphasis order rather than platform-default gray buttons.
 

@@ -387,6 +387,75 @@ fn workspace_summary_square_radius_survives_base_cascade() {
 }
 
 #[test]
+fn workspace_summary_toolbar_uses_dense_squared_controls() {
+    assert!(
+        WORKSPACE_CHROME_RS.contains("toolbar_icon_button(icon_name::BROADCAST")
+            && WORKSPACE_CHROME_RS.contains("toolbar_icon_button(icon_name::TERMINAL")
+            && WORKSPACE_CHROME_RS.contains("toolbar_icon_button(icon_name::WEB")
+            && WORKSPACE_CHROME_RS.contains("toolbar_icon_button(icon_name::RUN")
+            && WORKSPACE_CHROME_RS.contains("toolbar_icon_button(icon_name::LAYOUT")
+            && WORKSPACE_CHROME_RS.contains("icon.set_pixel_size(13)"),
+        "dense workspace toolbar should make utility actions icon-only with compact icons"
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense",
+        "padding",
+        "4px 6px",
+        "dense workspace summary should reduce vertical and horizontal chrome",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense .toolbar-group",
+        "border-radius",
+        "2px",
+        "toolbar groups should be crisp rather than pill-shaped",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense button.surface-button",
+        "min-height",
+        "24px",
+        "toolbar surface buttons should be smaller than global surface buttons",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense button.surface-button",
+        "border-radius",
+        "2px",
+        "toolbar surface buttons should use crisp squared corners",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense button.surface-button.workspace-toolbar-action",
+        "min-width",
+        "26px",
+        "icon-only toolbar actions should save horizontal space",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry",
+        "min-height",
+        "24px",
+        "quick command entry should align to compact toolbar height",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo",
+        "min-height",
+        "24px",
+        "toolbar selectors should override bulky global combobox sizing",
+    );
+    assert_css_declaration(
+        ".workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo",
+        "border-radius",
+        "2px",
+        "toolbar selectors should use the same crisp corners",
+    );
+    assert!(
+        STYLE_CSS.contains(
+            "window.window-shell.theme-light .workspace-summary.workspace-summary-dense button.surface-button"
+        ) && STYLE_CSS.contains(
+            "window.window-shell.theme-light .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo"
+        ),
+        "dense toolbar polish should keep light-theme-specific color overrides"
+    );
+}
+
+#[test]
 fn terminal_card_states_have_header_local_indicators() {
     for state in TERMINAL_CARD_STATES {
         assert!(
@@ -1360,15 +1429,20 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WORKSPACE_VIEW_RS.contains("build_workspace_summary_chrome")
             && WORKSPACE_CHROME_RS.contains("\"Alerts (0)\"")
             && WORKSPACE_CHROME_RS.contains("\"Broadcast Off\"")
-            && WORKSPACE_CHROME_RS.contains("\"Quick send command\"")
+            && WORKSPACE_CHROME_RS.contains("\"Command…\"")
             && WORKSPACE_CHROME_RS.contains("workspace-broadcast-entry")
+            && WORKSPACE_CHROME_RS.contains("workspace-summary-dense")
+            && WORKSPACE_CHROME_RS.contains("workspace-toolbar-select")
+            && WORKSPACE_CHROME_RS.contains("workspace-toolbar-action")
+            && WORKSPACE_CHROME_RS.contains("workspace-broadcast-status")
             && WORKSPACE_CHROME_RS.contains("\"Add Terminal Tile\"")
             && WORKSPACE_CHROME_RS.contains("\"Add Web Tile\"")
             && WORKSPACE_CHROME_RS.contains("workspace-url-entry")
             && WORKSPACE_CHROME_RS.contains("\"Reload\"")
             && WORKSPACE_CHROME_RS.contains("surface-select-control")
             && WORKSPACE_CHROME_RS.contains("\"Runbook\"")
-            && WORKSPACE_CHROME_RS.contains("\"Run\"")
+            && WORKSPACE_CHROME_RS.contains("\"Send quick command\"")
+            && WORKSPACE_CHROME_RS.contains("\"Run selected runbook\"")
             && WORKSPACE_PREVIEW_RS.contains("fn saved_groups(tab: &SavedTab) -> Vec<String>"),
         "Windows GTK workspace preview summary should mirror the Linux GTK workspace toolbar controls and classes through the shared workspace chrome helper"
     );
