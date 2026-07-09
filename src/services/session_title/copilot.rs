@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn prefers_latest_checkpoint_title() {
         let tmp = tempdir();
-        let cwd = tmp.join("TerminalTiler-Pro");
+        let cwd = tmp.join("generic-session-fixture");
         fs::create_dir_all(&cwd).unwrap();
         let db = tmp.join("session-store.db");
         seed_db(&db);
