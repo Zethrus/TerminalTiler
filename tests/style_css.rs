@@ -3274,11 +3274,19 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
             source.contains("build_tile_header_chrome(TileHeaderInput"),
             "{source_name} should build visible header labels through the shared tile header helper"
         );
-        assert!(
-            source.contains("set_tooltip_text(Some(&new_title))"),
-            "{source_name} should preserve updated title text in tooltips"
-        );
     }
+    assert!(
+        TILE_VIEW_RS.contains("title_label.set_text(&cleaned)")
+            && TILE_VIEW_RS.contains("title_label.set_tooltip_text(Some(&cleaned))")
+            && TILE_VIEW_RS.contains("title_label.set_tooltip_text(Some(&format!(")
+            && TILE_VIEW_RS.contains("resolved.title"),
+        "terminal title updates from both OSC and agent sessions should retain the full updated title in the tooltip"
+    );
+    assert!(
+        WEB_TILE_RS.contains("title_label.set_text(&new_title)")
+            && WEB_TILE_RS.contains("title_label.set_tooltip_text(Some(&new_title))"),
+        "web tile title updates should retain the full updated title in the tooltip"
+    );
 
     assert!(
         TILE_CHROME_RS.contains("build_pane_group_chip(&input.tile.pane_groups)")
