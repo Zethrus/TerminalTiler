@@ -1,10 +1,20 @@
 pub const PRODUCT_DISPLAY_NAME: &str = "TerminalTiler Core";
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PRODUCT_HOMEPAGE: &str = "https://terminaltiler.app";
+pub const PRODUCT_ACCOUNT_URL: &str = "https://terminaltiler.app/account/";
+pub const PRODUCT_SUPPORT_URL: &str = "https://terminaltiler.app/support/";
+pub const PRODUCT_PRIVACY_URL: &str = "https://terminaltiler.app/privacy/";
+pub const PRODUCT_TERMS_URL: &str = "https://terminaltiler.app/terms/";
 pub const PRODUCT_SOURCE_URL: &str = "https://github.com/Zethrus/TerminalTiler";
 pub const PRODUCT_ISSUES_URL: &str = "https://github.com/Zethrus/TerminalTiler/issues";
 pub const PRODUCT_LICENSE: &str = "MIT License";
+pub const PRODUCT_LICENSE_URL: &str = "https://github.com/Zethrus/TerminalTiler/blob/main/LICENSE";
 pub const PRODUCT_COPYRIGHT: &str = "Copyright (c) 2026 Victor (Zethrus)";
+pub const GTK_APPLICATION_ID: &str = "app.terminaltiler";
+pub const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
+pub const ICON_NAME: &str = "terminaltiler";
+pub const TRAY_ID: &str = GTK_APPLICATION_ID;
+pub const TRAY_TITLE: &str = "TerminalTiler Core";
 
 pub const OPEN_CORE_STATEMENT: &str = "TerminalTiler Core is the public, MIT-licensed foundation of TerminalTiler. TerminalTiler follows an open-core product model: the core app stays public and useful, while this repository stays focused on the public desktop application. The public repository remains the source of truth for the open-source core.";
 

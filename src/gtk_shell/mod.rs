@@ -87,6 +87,14 @@ pub const PLATFORM_RUNTIME_ADAPTERS: &[&str] = &[
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 pub fn configure_application_icons() {
+    configure_application_icons_for(APP_ICON_NAME);
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
+pub fn configure_application_icons_for(icon_name: &str) {
     if let Some(display) = gtk::gdk::Display::default() {
         let icon_theme = gtk::IconTheme::for_display(&display);
         for path in bundled_icon_search_paths() {
@@ -95,7 +103,7 @@ pub fn configure_application_icons() {
             }
         }
     }
-    gtk::Window::set_default_icon_name(APP_ICON_NAME);
+    gtk::Window::set_default_icon_name(icon_name);
 }
 
 #[cfg(any(

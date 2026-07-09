@@ -11,7 +11,7 @@ mod imp {
     use glib::value::ToValue;
     use gtk::{gdk, gio, glib};
 
-    use crate::extension::RuntimeOptions;
+    use crate::extension::{ProductIdentity, RuntimeOptions};
     use crate::logging;
     use crate::model::assets::RestoreLaunchMode;
     use crate::model::layout::DEFAULT_WEB_URL;
@@ -50,8 +50,6 @@ mod imp {
     use crate::windows::gtk_voice_hotkey::{WindowsGlobalHotkeyEvent, WindowsGlobalHotkeyHandle};
     use crate::windows::win32_helpers::open_path_with_shell;
 
-    const GTK_APP_ID: &str = "app.terminaltiler.windows.gtk";
-    const WINDOWS_APP_USER_MODEL_ID: &str = "Zethrus.TerminalTiler";
     const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
     pub fn run() -> ExitCode {
@@ -61,19 +59,16 @@ mod imp {
     pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
         logging::init();
         logging::info("windows GTK shell startup");
-        let taskbar_app_user_model_id = options
-            .product
-            .app_id
-            .as_deref()
-            .unwrap_or(WINDOWS_APP_USER_MODEL_ID);
+        let taskbar_app_user_model_id = options.product.effective_windows_app_user_model_id();
         configure_windows_taskbar_identity(taskbar_app_user_model_id);
 
-        let app_id = options.product.app_id.as_deref().unwrap_or(GTK_APP_ID);
+        let app_id = options.product.effective_gtk_application_id();
         let app = adw::Application::builder().application_id(app_id).build();
 
-        app.connect_startup(|_| {
+        let icon_name = options.product.icon_name.clone();
+        app.connect_startup(move |_| {
             crate::gtk_shell::load_css_for_default_display();
-            crate::gtk_shell::configure_application_icons();
+            crate::gtk_shell::configure_application_icons_for(&icon_name);
             logging::info("windows GTK shell loaded canonical GTK CSS and app icon contract");
         });
 
@@ -329,7 +324,7 @@ mod imp {
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(&options.product.app_title)
-            .icon_name(crate::gtk_shell::APP_ICON_NAME)
+            .icon_name(&options.product.icon_name)
             .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
             .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
             .content(&window_shell)
@@ -413,7 +408,7 @@ mod imp {
 
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
-        let shell_state = WindowsGtkShellState::new(session_store.clone());
+        let shell_state = WindowsGtkShellState::new(session_store.clone(), options.product.clone());
         {
             let shell_state = shell_state.clone();
             window.connect_is_active_notify(move |window| {
@@ -446,7 +441,7 @@ mod imp {
             &window,
             Rc::downgrade(&open_settings_dialog_handle),
             force_quit_requested.clone(),
-            options.product.display_name.clone(),
+            options.product.tray_title.clone(),
         );
         shell_state.launch_deck_active.set(true);
         {
@@ -2138,6 +2133,7 @@ mod imp {
         voice_runtime: Rc<RefCell<Option<WindowsVoiceRuntime>>>,
         launch_deck_active: Rc<Cell<bool>>,
         session_store: Rc<SessionStore>,
+        product: ProductIdentity,
     }
 
     #[derive(Clone)]
@@ -2150,7 +2146,7 @@ mod imp {
     }
 
     impl WindowsGtkShellState {
-        fn new(session_store: SessionStore) -> Self {
+        fn new(session_store: SessionStore, product: ProductIdentity) -> Self {
             Self {
                 preview: Rc::new(RefCell::new(None)),
                 detached_previews: Rc::new(RefCell::new(Vec::new())),
@@ -2158,6 +2154,7 @@ mod imp {
                 voice_runtime: Rc::new(RefCell::new(None)),
                 launch_deck_active: Rc::new(Cell::new(false)),
                 session_store: Rc::new(session_store),
+                product,
             }
         }
 
@@ -2861,7 +2858,7 @@ mod imp {
         let detached_window = adw::ApplicationWindow::builder()
             .application(app)
             .title(detached_title)
-            .icon_name(crate::gtk_shell::APP_ICON_NAME)
+            .icon_name(&shell_state.product.icon_name)
             .default_width(crate::gtk_shell::DEFAULT_WINDOW_WIDTH)
             .default_height(crate::gtk_shell::DEFAULT_WINDOW_HEIGHT)
             .resizable(true)

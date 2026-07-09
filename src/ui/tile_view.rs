@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
 use gdk::prelude::StaticType;
@@ -8,9 +9,10 @@ use gtk::glib;
 use vte4::prelude::*;
 
 use crate::model::assets::{CliSnippet, OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
-use crate::model::layout::TileSpec;
+use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::model::preset::ApplicationDensity;
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
+use crate::services::session_title::{clean_title, percent_decode, resolve_active_title};
 use crate::services::snippets::resolve_snippet;
 use crate::services::stats::StatsRecorder;
 use crate::terminal::session::TerminalSession;
@@ -185,14 +187,21 @@ pub fn build(
     {
         let title_label = title.clone();
         terminal.connect_window_title_changed(move |term| {
-            if let Some(new_title) = term.window_title()
-                && !new_title.is_empty()
-            {
-                title_label.set_text(&new_title);
-                title_label.set_tooltip_text(Some(&new_title));
+            if let Some(new_title) = term.window_title() {
+                let cleaned = clean_title(&new_title);
+                if !cleaned.is_empty() {
+                    title_label.set_text(&cleaned);
+                    title_label.set_tooltip_text(Some(&cleaned));
+                }
             }
         });
     }
+    install_agent_session_title_poller(
+        &terminal,
+        &title,
+        &tile.working_directory,
+        workspace_root,
+    );
     {
         let terminal_for_update = terminal.clone();
         let session_for_update = session.clone();
@@ -563,6 +572,67 @@ fn status_snapshot_for_terminal(
     snapshot.helper_label = helper_label;
     snapshot.helper_severity = helper_severity;
     snapshot
+}
+
+/// Poll interval for refreshing the tile title from the active agent session store.
+const SESSION_TITLE_POLL: Duration = Duration::from_secs(2);
+/// A session store must have been updated within this window to be considered "active".
+/// Slightly larger than the poll interval so a briefly idle agent does not flap the title.
+const SESSION_TITLE_MAX_AGE: Duration = Duration::from_secs(90);
+
+/// Live-update the tile title from whichever agent CLI (Claude/Codex/opencode/Copilot/Grok)
+/// is running in the tile, resolved from its on-disk session store keyed by the live cwd.
+/// This complements the OSC window-title handler (which only fires for agents that emit one).
+/// The timer stops itself once the tile is removed from the widget tree.
+fn install_agent_session_title_poller(
+    terminal: &vte4::Terminal,
+    title_label: &gtk::Label,
+    working_directory: &WorkingDirectory,
+    workspace_root: &Path,
+) {
+    let terminal = terminal.clone();
+    let title_label = title_label.clone();
+    let working_directory = working_directory.clone();
+    let workspace_root = workspace_root.to_path_buf();
+    let mut last_title: Option<String> = None;
+    glib::timeout_add_local(SESSION_TITLE_POLL, move || {
+        // The tile has been closed / detached from its window: stop polling and release refs.
+        if terminal.root().is_none() {
+            return glib::ControlFlow::Break;
+        }
+        let cwd = live_working_directory(&terminal, &working_directory, &workspace_root);
+        if let Some(resolved) = resolve_active_title(&cwd, SESSION_TITLE_MAX_AGE)
+            && last_title.as_deref() != Some(resolved.title.as_str())
+        {
+            title_label.set_text(&resolved.title);
+            title_label
+                .set_tooltip_text(Some(&format!("{} · {}", resolved.agent.label(), resolved.title)));
+            last_title = Some(resolved.title);
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
+/// The terminal's live working directory from OSC 7 (`current_directory_uri`), falling back
+/// to the tile's configured directory when the shell has not reported one.
+fn live_working_directory(
+    terminal: &vte4::Terminal,
+    configured: &WorkingDirectory,
+    workspace_root: &Path,
+) -> PathBuf {
+    if let Some(uri) = terminal.current_directory_uri() {
+        let rest = uri.as_str().trim_start_matches("file://");
+        // Drop an optional host component (`file://host/path`).
+        let path = if rest.starts_with('/') {
+            rest
+        } else {
+            rest.find('/').map(|i| &rest[i..]).unwrap_or("")
+        };
+        if !path.is_empty() {
+            return PathBuf::from(percent_decode(path));
+        }
+    }
+    configured.resolve(workspace_root)
 }
 
 fn short_location_from_uri(uri: &str) -> String {

@@ -18,7 +18,7 @@ mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-        Shell_NotifyIconW,
+        SetCurrentProcessExplicitAppUserModelID, Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
@@ -51,7 +51,6 @@ mod imp {
         ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
     };
     use crate::platform::{home_dir, resolve_workspace_root};
-    use crate::product;
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_overrides_for_saved_session,
     };
@@ -379,6 +378,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     unsafe fn run_gui(options: RuntimeOptions) -> Result<ExitCode, String> {
+        configure_windows_taskbar_identity(options.product.effective_windows_app_user_model_id());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle".into());
@@ -483,6 +483,16 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
 
         Ok(ExitCode::SUCCESS)
+    }
+
+    fn configure_windows_taskbar_identity(app_user_model_id: &str) {
+        let app_user_model_id = wide(app_user_model_id);
+        let status = unsafe { SetCurrentProcessExplicitAppUserModelID(app_user_model_id.as_ptr()) };
+        if status < 0 {
+            logging::error(format!(
+                "failed to configure Windows AppUserModelID (HRESULT {status})"
+            ));
+        }
     }
 
     fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
@@ -2075,8 +2085,12 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             "{} Windows shell",
             state.runtime_options.product.display_name
         ));
-        lines.push(format!("License: {}", product::PRODUCT_LICENSE));
-        lines.push(format!("Source: {}", product::PRODUCT_SOURCE_URL));
+        if let Some(license) = state.runtime_options.product.license_name.as_deref() {
+            lines.push(format!("License: {license}"));
+        }
+        if let Some(source) = state.runtime_options.product.source_url.as_deref() {
+            lines.push(format!("Source: {source}"));
+        }
         lines.push(theme::accessibility_summary());
         lines.push(String::new());
 
@@ -2333,7 +2347,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn install_tray_icon(hwnd: HWND, state: &mut AppWindowState) {
         let mut notify = tray_icon_data(hwnd);
-        fill_wide_buffer(&mut notify.szTip, "TerminalTiler");
+        fill_wide_buffer(&mut notify.szTip, &state.runtime_options.product.tray_title);
         let icon = unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         if icon.is_null() {
             state.tray_icon_added = false;
@@ -2392,11 +2406,14 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
         let mut notify = tray_icon_data(hwnd);
         let tooltip = if state.window_hidden_to_tray {
-            "TerminalTiler (hidden to background)"
+            format!(
+                "{} (hidden to background)",
+                state.runtime_options.product.tray_title
+            )
         } else {
-            "TerminalTiler"
+            state.runtime_options.product.tray_title.clone()
         };
-        fill_wide_buffer(&mut notify.szTip, tooltip);
+        fill_wide_buffer(&mut notify.szTip, &tooltip);
         let icon = unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         notify.hIcon = icon;
         unsafe {
@@ -4802,10 +4819,11 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
         let mut actions = Vec::new();
+        let product_info = state.runtime_options.product.clone();
         actions.push(command_palette::PaletteAction {
             title: format!("About {}", state.runtime_options.product.display_name),
             subtitle: "Version, license, source, and open-core model.".into(),
-            on_activate: Rc::new(move || show_about_dialog(hwnd)),
+            on_activate: Rc::new(move || show_about_dialog(hwnd, &product_info)),
         });
         actions.push(command_palette::PaletteAction {
             title: "Refresh Runtime".into(),
@@ -5296,9 +5314,36 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
     }
 
-    fn show_about_dialog(parent_hwnd: HWND) {
-        let body = product::about_body();
-        let title = product::about_title();
+    fn show_about_dialog(parent_hwnd: HWND, product: &ProductInfo) {
+        let mut lines = vec![format!("{} v{}", product.display_name, product.version)];
+        if let Some(copyright) = product.copyright.as_deref() {
+            lines.push(copyright.to_string());
+        }
+        if let Some(license) = product.license_name.as_deref() {
+            lines.push(license.to_string());
+        }
+        if let Some(copy) = product.about_copy.as_deref() {
+            lines.extend([String::new(), copy.to_string()]);
+        }
+        if let Some(copy) = product.about_extra_copy.as_deref() {
+            lines.extend([String::new(), copy.to_string()]);
+        }
+        lines.extend([
+            String::new(),
+            format!("Website: {}", product.homepage_url),
+            format!("Account: {}", product.account_url),
+            format!("Support: {}", product.support_url),
+            format!("Privacy: {}", product.privacy_url),
+            format!("Terms: {}", product.terms_url),
+        ]);
+        if let Some(source) = product.source_url.as_deref() {
+            lines.push(format!("Source: {source}"));
+        }
+        if let Some(issues) = product.issues_url.as_deref() {
+            lines.push(format!("Issues: {issues}"));
+        }
+        let body = lines.join("\r\n");
+        let title = format!("About {}", product.display_name);
         unsafe {
             MessageBoxW(
                 parent_hwnd,
