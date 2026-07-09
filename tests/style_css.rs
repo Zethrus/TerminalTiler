@@ -113,6 +113,22 @@ fn runtime_product_identity_reaches_tray_restore_detached_windows_and_about() {
         "the supplied identity must remain authoritative across initial launch, tray restore, detached windows, platform shell IDs, and About links"
     );
 }
+
+#[test]
+fn companion_actions_dispatch_off_ui_thread_with_busy_timeout_and_visible_completion() {
+    assert!(
+        COMPANION_DIALOG_RS.contains("std::thread::spawn")
+            && COMPANION_DIALOG_RS.contains("button.set_sensitive(false)")
+            && COMPANION_DIALOG_RS.contains("started.elapsed() >= timeout")
+            && COMPANION_DIALOG_RS.contains("present_with_notice")
+            && WINDOWS_APP_RS.contains("WM_COMPANION_ACTION_COMPLETE")
+            && WINDOWS_APP_RS.contains("thread::spawn(move ||")
+            && WINDOWS_APP_RS.contains("state.companion_action_running")
+            && WINDOWS_APP_RS.contains("thread::sleep(timeout)")
+            && WINDOWS_APP_RS.contains("post_companion_completion"),
+        "companion invocation must not block GTK or Win32 UI threads and must suppress duplicates, time out, and surface completion"
+    );
+}
 const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");

@@ -1,5 +1,8 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::model::assets::{AgentRoleTemplate, CliSnippet, Runbook};
+use crate::model::preset::WorkspacePreset;
 use crate::product;
 
 /// Version of the public extension contract consumed by companion applications.
@@ -14,6 +17,7 @@ pub const CORE_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct RuntimeOptions {
     pub product: ProductInfo,
     pub companion: Option<Arc<dyn CompanionIntegration>>,
+    pub catalog: Option<Arc<dyn CatalogContributionProvider>>,
 }
 
 /// Product-specific identity supplied by a Core host or companion build.
@@ -203,6 +207,7 @@ pub struct CompanionAction {
     pub input: Option<CompanionTextInput>,
     pub external_url: Option<String>,
     pub style: CompanionActionStyle,
+    pub timeout: Duration,
 }
 
 impl CompanionAction {
@@ -214,6 +219,7 @@ impl CompanionAction {
             input: None,
             external_url: None,
             style: CompanionActionStyle::Normal,
+            timeout: Duration::from_secs(30),
         }
     }
 }
@@ -241,19 +247,67 @@ pub struct CompanionActionInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompanionActionResult {
     pub message: String,
-    pub refresh: bool,
+    pub refresh_scope: CompanionRefreshScope,
 }
 
 impl CompanionActionResult {
     pub fn message(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            refresh: true,
+            refresh_scope: CompanionRefreshScope::Panel,
         }
+    }
+
+    pub fn with_refresh_scope(mut self, refresh_scope: CompanionRefreshScope) -> Self {
+        self.refresh_scope = refresh_scope;
+        self
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CompanionRefreshScope {
+    #[default]
+    Panel,
+    Preferences,
+    Presets,
+    Assets,
+    WorkspaceConfigs,
+    Catalog,
+    All,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompanionEvent {
+    pub refresh_scope: CompanionRefreshScope,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogTrustMetadata {
+    pub read_only: bool,
+    pub executable_content: bool,
+    pub trusted: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CatalogContributions {
+    pub namespace: String,
+    pub revision: String,
+    pub trust: CatalogTrustMetadata,
+    pub presets: Vec<WorkspacePreset>,
+    pub role_templates: Vec<AgentRoleTemplate>,
+    pub runbooks: Vec<Runbook>,
+    pub snippets: Vec<CliSnippet>,
+}
+
+pub trait CatalogContributionProvider: Send + Sync {
+    /// Returns cached, runtime-only contributions. Implementations must not
+    /// perform network or filesystem writes from this method.
+    fn contributions(&self) -> Option<CatalogContributions>;
+}
+
 pub trait CompanionIntegration: Send + Sync {
+    /// Returns cached state only. Network operations belong in `invoke`.
     fn snapshot(&self) -> CompanionPanelSnapshot;
 
     fn invoke(
@@ -261,4 +315,8 @@ pub trait CompanionIntegration: Send + Sync {
         action_id: &str,
         input: CompanionActionInput,
     ) -> Result<CompanionActionResult, String>;
+
+    fn drain_events(&self) -> Vec<CompanionEvent> {
+        Vec::new()
+    }
 }

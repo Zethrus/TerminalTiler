@@ -286,10 +286,10 @@ mod imp {
 
         let preference_store = PreferenceStore::new();
         let preferences = preference_store.load();
-        let preset_store = PresetStore::new();
+        let preset_store = PresetStore::new().with_catalog_provider(options.catalog.clone());
         preset_store.ensure_seeded();
         let preset_outcome = preset_store.load_presets_with_status();
-        let asset_store = AssetStore::new();
+        let asset_store = AssetStore::new().with_catalog_provider(options.catalog.clone());
         asset_store.ensure_seeded();
         let asset_outcome = asset_store.load_assets_with_status();
         let workspace_assets = asset_outcome.assets.clone();
