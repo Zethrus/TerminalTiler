@@ -92,9 +92,9 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   font-weight: 700;
   letter-spacing: 0.045em;
   text-transform: uppercase;
-  color: alpha(@tt_white, 0.74);
-  background: linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.03));
-  border: 1px solid alpha(@tt_white, 0.07);
+  color: alpha(@tt_white, 0.86);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.10), alpha(@tt_white, 0.05));
+  border: 1px solid alpha(@tt_white, 0.12);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.05),
     0 2px 6px alpha(@tt_shadow, 0.08);
@@ -115,9 +115,9 @@ window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:hover {
-  color: rgba(255, 251, 242, 0.92);
-  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.05));
-  border-color: alpha(@tt_amber, 0.26);
+  color: rgba(255, 251, 242, 0.96);
+  background: linear-gradient(180deg, alpha(@tt_white, 0.13), alpha(@tt_white, 0.06));
+  border-color: alpha(@tt_amber, 0.28);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.06),
     0 6px 14px alpha(@tt_shadow, 0.14);
@@ -1554,9 +1554,9 @@ button.surface-button.surface-button-icon {
 }
 
 button.surface-button:disabled {
-  background: alpha(@tt_white, 0.025);
-  border-color: alpha(@tt_white, 0.045);
-  color: alpha(@tt_white, 0.32);
+  background: alpha(@tt_white, 0.03);
+  border-color: alpha(@tt_white, 0.09);
+  color: alpha(@tt_white, 0.46);
   box-shadow: none;
 }
 
@@ -1625,7 +1625,7 @@ button.surface-button:disabled {
   padding: 0 2px;
   border-radius: 2px;
   background: alpha(@tt_white, 0.010);
-  border-color: alpha(@tt_white, 0.025);
+  border-color: alpha(@tt_white, 0.05);
 }
 
 .workspace-summary.workspace-summary-dense separator.toolbar-divider {
@@ -1641,17 +1641,17 @@ button.surface-button:disabled {
   border-radius: 2px;
   font-size: 10px;
   font-weight: 650;
-  background: linear-gradient(180deg, rgba(25, 26, 31, 0.88), rgba(11, 12, 16, 0.92));
-  border-color: alpha(@tt_white, 0.075);
-  color: rgba(255, 251, 242, 0.76);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.035);
+  background: linear-gradient(180deg, rgba(40, 42, 50, 0.92), rgba(20, 21, 27, 0.94));
+  border-color: alpha(@tt_white, 0.14);
+  color: rgba(255, 251, 242, 0.88);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button:hover {
-  background: linear-gradient(180deg, rgba(34, 35, 41, 0.94), rgba(14, 15, 20, 0.96));
-  border-color: alpha(@tt_amber, 0.18);
-  color: rgba(255, 250, 238, 0.94);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.055);
+  background: linear-gradient(180deg, rgba(50, 52, 61, 0.96), rgba(24, 25, 32, 0.97));
+  border-color: alpha(@tt_amber, 0.22);
+  color: rgba(255, 250, 238, 0.96);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.07);
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button:active {
@@ -1665,6 +1665,7 @@ button.surface-button:disabled {
   min-width: 26px;
   min-height: 20px;
   padding: 0;
+  color: rgba(255, 250, 238, 0.9);
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button.workspace-toolbar-alert {
@@ -1681,6 +1682,7 @@ button.surface-button:disabled {
   border-radius: 2px;
   font-size: 10px;
   font-weight: 600;
+  border-color: alpha(@tt_white, 0.14);
 }
 
 .workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry,
@@ -1689,8 +1691,8 @@ button.surface-button:disabled {
   padding: 0 7px;
   border-radius: 2px;
   font-size: 10px;
-  background: alpha(@tt_white, 0.018);
-  border: 1px solid alpha(@tt_white, 0.055);
+  background: alpha(@tt_white, 0.05);
+  border: 1px solid alpha(@tt_white, 0.12);
   color: alpha(@tt_white, 0.84);
   box-shadow: inset 0 1px alpha(@tt_shadow, 0.12);
 }
@@ -1705,15 +1707,15 @@ button.surface-button:disabled {
   padding: 0 6px;
   border-radius: 2px;
   font-size: 10px;
-  background: linear-gradient(180deg, rgba(25, 26, 31, 0.90), rgba(12, 13, 18, 0.94));
-  border-color: alpha(@tt_white, 0.075);
-  color: alpha(@tt_white, 0.84);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.035);
+  background: linear-gradient(180deg, rgba(40, 42, 50, 0.92), rgba(20, 21, 27, 0.94));
+  border-color: alpha(@tt_white, 0.14);
+  color: alpha(@tt_white, 0.9);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:hover {
-  background: linear-gradient(180deg, rgba(34, 35, 41, 0.94), rgba(15, 16, 22, 0.96));
-  border-color: alpha(@tt_amber, 0.18);
+  background: linear-gradient(180deg, rgba(50, 52, 61, 0.96), rgba(24, 25, 32, 0.97));
+  border-color: alpha(@tt_amber, 0.22);
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:active,
@@ -1724,7 +1726,7 @@ button.surface-button:disabled {
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo arrow {
   min-width: 10px;
-  color: alpha(@tt_amber, 0.74);
+  color: alpha(@tt_amber, 0.82);
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo cellview {
