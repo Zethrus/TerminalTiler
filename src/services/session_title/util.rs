@@ -21,9 +21,8 @@ pub fn is_recent(when: SystemTime, max_age: Duration) -> bool {
 /// Canonicalize a path for comparison, falling back to a trailing-slash-trimmed copy when
 /// the path cannot be resolved (e.g. it no longer exists).
 pub fn normalize(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| {
-        PathBuf::from(path.to_string_lossy().trim_end_matches('/').to_string())
-    })
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| PathBuf::from(path.to_string_lossy().trim_end_matches('/').to_string()))
 }
 
 /// Whether a filesystem `target` directory equals a `recorded` cwd string from a session store.
@@ -37,10 +36,16 @@ pub fn cwd_matches(target: &Path, recorded: &str) -> bool {
 pub fn clean_title(raw: &str) -> String {
     let trimmed = raw.trim();
     let stripped = trimmed.trim_start_matches(|c: char| {
-        matches!(c, '✳' | '✻' | '✶' | '✷' | '●' | '◐' | '◓' | '◑' | '◒' | '·' | '*')
-            || c.is_whitespace()
+        matches!(
+            c,
+            '✳' | '✻' | '✶' | '✷' | '●' | '◐' | '◓' | '◑' | '◒' | '·' | '*'
+        ) || c.is_whitespace()
     });
-    let stripped = if stripped.is_empty() { trimmed } else { stripped };
+    let stripped = if stripped.is_empty() {
+        trimmed
+    } else {
+        stripped
+    };
     // Session titles are single-line; guard against multi-line message fallbacks.
     stripped.lines().next().unwrap_or("").trim().to_string()
 }

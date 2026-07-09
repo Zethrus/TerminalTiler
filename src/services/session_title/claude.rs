@@ -45,9 +45,8 @@ impl SessionTitleSource for ClaudeSource {
         if !project_dir.is_dir() {
             return None;
         }
-        let (session_file, mtime) = util::newest_file_in(&project_dir, |name| {
-            name.ends_with(".jsonl")
-        })?;
+        let (session_file, mtime) =
+            util::newest_file_in(&project_dir, |name| name.ends_with(".jsonl"))?;
         if !util::is_recent(mtime, max_age) {
             return None;
         }
@@ -64,7 +63,13 @@ impl SessionTitleSource for ClaudeSource {
 fn escape_cwd(cwd: &Path) -> String {
     cwd.to_string_lossy()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -111,11 +116,10 @@ fn user_message_text(value: &Value) -> Option<String> {
     if let Some(text) = content.as_str() {
         return Some(text.to_string());
     }
-    content.as_array()?.iter().find_map(|part| {
-        part.get("text")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    })
+    content
+        .as_array()?
+        .iter()
+        .find_map(|part| part.get("text").and_then(Value::as_str).map(str::to_string))
 }
 
 #[cfg(test)]

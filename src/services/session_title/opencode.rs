@@ -21,8 +21,7 @@ pub struct OpencodeSource {
 impl Default for OpencodeSource {
     fn default() -> Self {
         Self {
-            storage: home_dir()
-                .map(|home| home.join(".local/share/opencode/storage")),
+            storage: home_dir().map(|home| home.join(".local/share/opencode/storage")),
         }
     }
 }
@@ -30,7 +29,9 @@ impl Default for OpencodeSource {
 impl OpencodeSource {
     #[cfg(test)]
     pub fn with_storage(storage: PathBuf) -> Self {
-        Self { storage: Some(storage) }
+        Self {
+            storage: Some(storage),
+        }
     }
 }
 
@@ -44,7 +45,8 @@ impl SessionTitleSource for OpencodeSource {
         if !util::is_recent(mtime, max_age) {
             return None;
         }
-        let value: Value = serde_json::from_str(&std::fs::read_to_string(&session_file).ok()?).ok()?;
+        let value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&session_file).ok()?).ok()?;
         let title = util::clean_title(value.get("title")?.as_str()?);
         if title.is_empty() {
             return None;
@@ -140,7 +142,10 @@ mod tests {
         let resolved = source
             .active_title(&cwd, Duration::from_secs(3600))
             .expect("title");
-        assert_eq!(resolved.title, "Remove SECURE GATEWAY banner from whitelabel pages");
+        assert_eq!(
+            resolved.title,
+            "Remove SECURE GATEWAY banner from whitelabel pages"
+        );
         assert_eq!(resolved.agent, AgentKind::Opencode);
     }
 

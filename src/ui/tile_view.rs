@@ -196,12 +196,7 @@ pub fn build(
             }
         });
     }
-    install_agent_session_title_poller(
-        &terminal,
-        &title,
-        &tile.working_directory,
-        workspace_root,
-    );
+    install_agent_session_title_poller(&terminal, &title, &tile.working_directory, workspace_root);
     {
         let terminal_for_update = terminal.clone();
         let session_for_update = session.clone();
@@ -605,8 +600,11 @@ fn install_agent_session_title_poller(
             && last_title.as_deref() != Some(resolved.title.as_str())
         {
             title_label.set_text(&resolved.title);
-            title_label
-                .set_tooltip_text(Some(&format!("{} · {}", resolved.agent.label(), resolved.title)));
+            title_label.set_tooltip_text(Some(&format!(
+                "{} · {}",
+                resolved.agent.label(),
+                resolved.title
+            )));
             last_title = Some(resolved.title);
         }
         glib::ControlFlow::Continue

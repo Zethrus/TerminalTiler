@@ -105,9 +105,7 @@ fn checkpoint_title(conn: &Connection, session_id: &str) -> Option<String> {
              AND title IS NOT NULL AND title <> '' ORDER BY created_at DESC LIMIT 1",
         )
         .ok()?;
-    let title: String = stmt
-        .query_row([session_id], |row| row.get(0))
-        .ok()?;
+    let title: String = stmt.query_row([session_id], |row| row.get(0)).ok()?;
     Some(util::clean_title(&title))
 }
 
@@ -136,7 +134,12 @@ mod tests {
         let conn = Connection::open(&db).unwrap();
         conn.execute(
             "INSERT INTO sessions VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["s1", cwd.to_string_lossy(), "old summary", "2026-07-09T18:08:35.681Z"],
+            rusqlite::params![
+                "s1",
+                cwd.to_string_lossy(),
+                "old summary",
+                "2026-07-09T18:08:35.681Z"
+            ],
         )
         .unwrap();
         conn.execute(
@@ -165,7 +168,12 @@ mod tests {
         let conn = Connection::open(&db).unwrap();
         conn.execute(
             "INSERT INTO sessions VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params!["s2", cwd.to_string_lossy(), "Investigate flaky deploy", "2026-07-09T18:08:35.681Z"],
+            rusqlite::params![
+                "s2",
+                cwd.to_string_lossy(),
+                "Investigate flaky deploy",
+                "2026-07-09T18:08:35.681Z"
+            ],
         )
         .unwrap();
         conn.close().unwrap();

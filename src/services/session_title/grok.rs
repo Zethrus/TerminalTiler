@@ -51,7 +51,8 @@ impl SessionTitleSource for GrokSource {
         if !util::is_recent(mtime, max_age) {
             return None;
         }
-        let value: Value = serde_json::from_str(&std::fs::read_to_string(&summary_file).ok()?).ok()?;
+        let value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary_file).ok()?).ok()?;
         let title = util::clean_title(value.get("session_summary")?.as_str()?);
         if title.is_empty() {
             return None;
@@ -124,7 +125,11 @@ mod tests {
         .unwrap();
 
         let source = GrokSource::with_root(root);
-        assert!(source.active_title(&cwd, Duration::from_secs(3600)).is_none());
+        assert!(
+            source
+                .active_title(&cwd, Duration::from_secs(3600))
+                .is_none()
+        );
     }
 
     fn tempdir() -> PathBuf {

@@ -82,7 +82,12 @@ fn numeric_subdirs(dir: &Path) -> Vec<PathBuf> {
         .flatten()
         .flatten()
         .filter(|e| e.path().is_dir())
-        .filter(|e| e.file_name().to_string_lossy().chars().all(|c| c.is_ascii_digit()))
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        })
         .map(|e| e.path())
         .collect();
     out.sort();
@@ -118,15 +123,22 @@ fn session_meta(file: &Path) -> Option<Value> {
 
 fn session_cwd_matches(file: &Path, cwd: &Path) -> bool {
     session_meta(file)
-        .and_then(|payload| payload.get("cwd").and_then(Value::as_str).map(str::to_string))
+        .and_then(|payload| {
+            payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .is_some_and(|recorded| util::cwd_matches(cwd, &recorded))
 }
 
 /// Title = agent nickname if present, else the first user message text.
 fn read_title(file: &Path) -> Option<String> {
-    if let Some(nickname) = session_meta(file)
-        .and_then(|p| p.get("agent_nickname").and_then(Value::as_str).map(str::to_string))
-    {
+    if let Some(nickname) = session_meta(file).and_then(|p| {
+        p.get("agent_nickname")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }) {
         let cleaned = util::clean_title(&nickname);
         if !cleaned.is_empty() {
             return Some(cleaned);
@@ -153,10 +165,15 @@ fn first_user_message(file: &Path) -> Option<String> {
                 }
             }
             Some("message") if payload.get("role").and_then(Value::as_str) == Some("user") => {
-                if let Some(text) = payload
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .and_then(|parts| parts.iter().find_map(|p| p.get("text").and_then(Value::as_str)))
+                if let Some(text) =
+                    payload
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .and_then(|parts| {
+                            parts
+                                .iter()
+                                .find_map(|p| p.get("text").and_then(Value::as_str))
+                        })
                 {
                     return Some(text.to_string());
                 }
@@ -215,7 +232,11 @@ mod tests {
         .unwrap();
 
         let source = CodexSource::with_root(tmp.join("sessions"));
-        assert!(source.active_title(&cwd, Duration::from_secs(3600)).is_none());
+        assert!(
+            source
+                .active_title(&cwd, Duration::from_secs(3600))
+                .is_none()
+        );
     }
 
     fn tempdir() -> PathBuf {
