@@ -93,9 +93,8 @@ mod imp {
     use std::path::PathBuf;
 
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
-    use crate::platform::terminal_agent_candidates;
-    use crate::services::session_title::{AgentKind, clean_title, resolve_title_for};
     use crate::model::preset::ApplicationDensity;
+    use crate::platform::terminal_agent_candidates;
     use crate::product;
     use crate::services::agent_resume::{
         RestoreStartupOverrideMap, RestoreStartupOverridesByTab,
@@ -108,6 +107,7 @@ mod imp {
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
     use crate::services::runbooks::resolve_runbook;
     use crate::services::session_restore::flatten_window_sessions;
+    use crate::services::session_title::{AgentKind, clean_title, resolve_title_for};
     use crate::services::terminal_history::restored_terminal_history_text;
     use crate::storage::asset_store::AssetStore;
     use crate::storage::preference_store::PreferenceStore;
@@ -5034,7 +5034,10 @@ mod imp {
     /// Identify the agent CLI running in a pane: first from the descendants of the pane's child
     /// process, then falling back to the tile's launch command.
     fn detect_pane_agent(pane: &PaneState) -> Option<AgentKind> {
-        let child_pid = pane.session.as_ref().map(|session| session.process_id as i32);
+        let child_pid = pane
+            .session
+            .as_ref()
+            .map(|session| session.process_id as i32);
         terminal_agent_candidates(None, child_pid)
             .iter()
             .find_map(|command| AgentKind::from_command(command))

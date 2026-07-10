@@ -12,8 +12,8 @@ use vte4::prelude::*;
 use crate::model::assets::{CliSnippet, OutputSeverity, PaneStatusSnapshot, WorkspaceAssets};
 use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::model::preset::ApplicationDensity;
-use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::platform::terminal_agent_candidates;
+use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::session_title::{AgentKind, clean_title, percent_decode, resolve_title_for};
 use crate::services::snippets::resolve_snippet;
 use crate::services::stats::StatsRecorder;
@@ -627,7 +627,10 @@ fn install_agent_session_title_poller(
 
 /// Identify the agent CLI running in the tile: first from the pty's foreground process group
 /// (precise), then falling back to the tile's launch command (covers launched-agent tiles).
-fn detect_tile_agent(terminal: &vte4::Terminal, startup_command: Option<&str>) -> Option<AgentKind> {
+fn detect_tile_agent(
+    terminal: &vte4::Terminal,
+    startup_command: Option<&str>,
+) -> Option<AgentKind> {
     let pty_fd = terminal.pty().map(|pty| pty.fd().as_raw_fd());
     terminal_agent_candidates(pty_fd, None)
         .iter()

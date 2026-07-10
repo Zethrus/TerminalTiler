@@ -1328,7 +1328,12 @@ mod imp {
             status.remove_css_class("recovery-chip");
             let terminal = chrome_context.terminal_buffer.borrow();
             let agent_title = agent_session_title_for(chrome_context, &terminal);
-            sync_terminal_runtime_title(title_label, &terminal, agent_title.as_deref(), default_title);
+            sync_terminal_runtime_title(
+                title_label,
+                &terminal,
+                agent_title.as_deref(),
+                default_title,
+            );
             let snapshot = status_snapshot_for_terminal_runtime(&terminal, chrome_context);
             let status_line = snapshot.to_line();
             status.set_text(&status_line);
@@ -1356,7 +1361,11 @@ mod imp {
         default_title: &str,
     ) {
         let title = agent_title
-            .or_else(|| terminal.window_title().filter(|title| !title.trim().is_empty()))
+            .or_else(|| {
+                terminal
+                    .window_title()
+                    .filter(|title| !title.trim().is_empty())
+            })
             .unwrap_or(default_title);
         title_label.set_text(title);
         title_label.set_tooltip_text(Some(title));
@@ -1394,7 +1403,10 @@ mod imp {
                     .current_working_directory()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| {
-                        context.tile.working_directory.resolve(&context.workspace_root)
+                        context
+                            .tile
+                            .working_directory
+                            .resolve(&context.workspace_root)
                     });
                 resolve_title_for(agent, &cwd, AGENT_TITLE_MAX_AGE)
             })
