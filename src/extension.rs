@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::BTreeSet, env};
 
+use serde::Serialize;
+
 use crate::model::assets::{AgentRoleTemplate, CliSnippet, Runbook};
 use crate::model::preset::WorkspacePreset;
 use crate::product;
@@ -15,7 +17,8 @@ pub const CORE_EXTENSION_API_VERSION: u32 = 1;
 pub const CORE_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Machine-readable Core capability probe used by packaged-runtime checks.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct RuntimeCapabilities {
     pub core_package_version: String,
     pub extension_api_version: u32,
@@ -38,6 +41,11 @@ pub fn runtime_capabilities() -> RuntimeCapabilities {
         windows_gtk_shell: cfg!(feature = "windows-gtk-shell"),
         windows_win32_shell: cfg!(feature = "windows-win32-shell"),
     }
+}
+
+pub fn runtime_capabilities_json() -> String {
+    serde_json::to_string(&runtime_capabilities())
+        .expect("runtime capabilities contain only serializable primitives")
 }
 
 #[derive(Clone, Default)]
@@ -466,6 +474,8 @@ mod additive_api_tests {
         assert_eq!(capabilities.core_package_version, env!("CARGO_PKG_VERSION"));
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
+        let json = runtime_capabilities_json();
+        assert!(json.contains("\"extension_api_version\":1"));
     }
 
     #[test]
