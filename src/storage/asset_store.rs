@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths;
+use crate::extension::CatalogContributionProvider;
 use crate::logging;
 use crate::model::assets::{WorkspaceAssets, builtin_role_templates};
 use crate::model::workspace_config::{ConfigScope, WorkspaceConfig};
@@ -15,10 +17,11 @@ use crate::storage::workspace_config_store::WorkspaceConfigStore;
 
 const STORE_VERSION: u32 = 1;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AssetStore {
     path: Option<PathBuf>,
     workspace_config_store: WorkspaceConfigStore,
+    catalog: Option<Arc<dyn CatalogContributionProvider>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,7 +59,16 @@ impl AssetStore {
         Self {
             path,
             workspace_config_store: WorkspaceConfigStore::new(),
+            catalog: None,
         }
+    }
+
+    pub fn with_catalog_provider(
+        mut self,
+        catalog: Option<Arc<dyn CatalogContributionProvider>>,
+    ) -> Self {
+        self.catalog = catalog;
+        self
     }
 
     #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -90,6 +102,32 @@ impl AssetStore {
     }
 
     pub fn load_assets_with_status(&self) -> AssetLoadOutcome {
+        let mut outcome = self.load_persisted_assets_with_status();
+        if let Some(contributions) = self
+            .catalog
+            .as_ref()
+            .and_then(|provider| provider.contributions())
+        {
+            extend_unique_by_id(
+                &mut outcome.assets.role_templates,
+                contributions.role_templates,
+                |item| item.id.as_str(),
+            );
+            extend_unique_by_id(
+                &mut outcome.assets.runbooks,
+                contributions.runbooks,
+                |item| item.id.as_str(),
+            );
+            extend_unique_by_id(
+                &mut outcome.assets.snippets,
+                contributions.snippets,
+                |item| item.id.as_str(),
+            );
+        }
+        outcome
+    }
+
+    fn load_persisted_assets_with_status(&self) -> AssetLoadOutcome {
         let Some(path) = self.path.as_ref() else {
             return AssetLoadOutcome {
                 assets: default_assets(),
@@ -227,8 +265,24 @@ impl AssetStore {
         Self {
             path: Some(path),
             workspace_config_store: WorkspaceConfigStore::new(),
+            catalog: None,
         }
     }
+}
+
+fn extend_unique_by_id<T, F>(current: &mut Vec<T>, additions: Vec<T>, id_of: F)
+where
+    F: Fn(&T) -> &str,
+{
+    let mut ids = current
+        .iter()
+        .map(|item| id_of(item).to_string())
+        .collect::<HashSet<_>>();
+    current.extend(
+        additions
+            .into_iter()
+            .filter(|item| ids.insert(id_of(item).to_string())),
+    );
 }
 
 fn default_assets() -> WorkspaceAssets {

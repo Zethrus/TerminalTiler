@@ -6,6 +6,7 @@ use std::sync::mpsc::Sender;
 
 use ksni::blocking::{Handle, TrayMethods};
 
+use crate::extension::ProductIdentity;
 use crate::logging;
 
 #[derive(Clone, Copy, Debug)]
@@ -24,7 +25,7 @@ pub struct TrayController {
 }
 
 impl TrayController {
-    pub fn start(command_tx: Sender<TrayCommand>) -> Self {
+    pub fn start(command_tx: Sender<TrayCommand>, product: ProductIdentity) -> Self {
         let available = Arc::new(AtomicBool::new(false));
         let window_hidden = Arc::new(AtomicBool::new(false));
 
@@ -32,6 +33,7 @@ impl TrayController {
             available: available.clone(),
             window_hidden: window_hidden.clone(),
             command_tx,
+            product,
         })
         .spawn()
         {
@@ -80,24 +82,25 @@ struct AppTray {
     available: Arc<AtomicBool>,
     window_hidden: Arc<AtomicBool>,
     command_tx: Sender<TrayCommand>,
+    product: ProductIdentity,
 }
 
 impl ksni::Tray for AppTray {
     fn id(&self) -> String {
-        crate::app::APP_ID.into()
+        self.product.tray_id.clone()
     }
 
     fn title(&self) -> String {
-        "TerminalTiler".into()
+        self.product.tray_title.clone()
     }
 
     fn icon_name(&self) -> String {
-        "terminaltiler".into()
+        self.product.icon_name.clone()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: "TerminalTiler".into(),
+            title: self.product.tray_title.clone(),
             description: if self.window_hidden.load(Ordering::Relaxed) {
                 "Running in the background".into()
             } else {

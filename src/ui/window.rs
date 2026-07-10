@@ -12,7 +12,7 @@ use adw::prelude::*;
 use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
-use crate::extension::RuntimeOptions;
+use crate::extension::{CompanionRefreshScope, RuntimeOptions};
 use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
@@ -909,8 +909,8 @@ fn present_with_initial_workspace(
     initial_workspace_tab: Option<WorkspaceTab>,
 ) {
     let preference_store = Rc::new(preference_store);
-    let preset_store = Rc::new(preset_store);
-    let asset_store = Rc::new(asset_store);
+    let preset_store = Rc::new(preset_store.with_catalog_provider(options.catalog.clone()));
+    let asset_store = Rc::new(asset_store.with_catalog_provider(options.catalog.clone()));
     let session_store = Rc::new(session_store);
 
     ensure_stats_flush_timer();
@@ -975,7 +975,7 @@ fn present_with_initial_workspace(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(&options.product.app_title)
-        .icon_name(gtk_shell::APP_ICON_NAME)
+        .icon_name(&options.product.icon_name)
         .default_width(gtk_shell::DEFAULT_WINDOW_WIDTH)
         .default_height(gtk_shell::DEFAULT_WINDOW_HEIGHT)
         .resizable(true)
@@ -1105,6 +1105,35 @@ fn present_with_initial_workspace(
         sync_close_to_background_notice();
         glib::timeout_add_seconds_local(1, move || {
             sync_close_to_background_notice();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    {
+        let refresh_launch_tabs = refresh_launch_tabs.clone();
+        let action = gio::SimpleAction::new("refresh-catalog", None);
+        action.connect_activate(move |_, _| {
+            if let Some(refresh) = refresh_launch_tabs.borrow().as_ref() {
+                refresh();
+            }
+        });
+        window.add_action(&action);
+    }
+
+    if let Some(companion) = options.companion.clone() {
+        let refresh_launch_tabs = refresh_launch_tabs.clone();
+        let toast_overlay = toast_overlay.clone();
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            for event in companion.drain_events() {
+                if !matches!(event.refresh_scope, CompanionRefreshScope::Panel)
+                    && let Some(refresh) = refresh_launch_tabs.borrow().as_ref()
+                {
+                    refresh();
+                }
+                if let Some(message) = event.message {
+                    show_toast(&toast_overlay, &message);
+                }
+            }
             glib::ControlFlow::Continue
         });
     }
@@ -6360,7 +6389,7 @@ fn present_detached_workspace_window(
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(&title)
-        .icon_name(gtk_shell::APP_ICON_NAME)
+        .icon_name(&options.product.icon_name)
         .default_width(gtk_shell::DEFAULT_WINDOW_WIDTH)
         .default_height(gtk_shell::DEFAULT_WINDOW_HEIGHT)
         .resizable(true)

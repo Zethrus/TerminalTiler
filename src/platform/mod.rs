@@ -1,6 +1,9 @@
 mod common;
+mod process;
 #[cfg(any(target_os = "windows", test))]
 mod wsl_paths;
+
+pub use process::terminal_agent_candidates;
 
 #[cfg(test)]
 pub use common::canonicalize_existing_dir;

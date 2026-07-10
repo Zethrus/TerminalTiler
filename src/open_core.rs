@@ -5,9 +5,9 @@
 //! configuration files without depending on Core internals.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs, io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,69 @@ pub struct SyncSnapshotOptions {
     pub workspace_roots: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncExportScope {
+    Personal,
+    Team,
+}
+
+/// Typed, caller-owned export selection. It intentionally has no `Default` so
+/// adding a new data class cannot silently expand a sync scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncExportSelection {
+    pub scope: SyncExportScope,
+    pub preferences: bool,
+    pub presets: bool,
+    pub portable_global_assets: bool,
+    pub workspace_roots: Vec<PathBuf>,
+}
+
+impl SyncExportSelection {
+    pub fn personal(
+        preferences: bool,
+        presets: bool,
+        portable_global_assets: bool,
+        workspace_roots: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            scope: SyncExportScope::Personal,
+            preferences,
+            presets,
+            portable_global_assets,
+            workspace_roots,
+        }
+    }
+
+    pub fn team_portable(workspace_roots: Vec<PathBuf>) -> Self {
+        Self {
+            scope: SyncExportScope::Team,
+            preferences: false,
+            presets: true,
+            portable_global_assets: false,
+            workspace_roots,
+        }
+    }
+}
+
+/// Caller-approved local destinations for applying a sync snapshot.
+///
+/// Workspace document ids are opaque remote identifiers. They are skipped unless
+/// the caller explicitly maps the id to an existing local workspace directory.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncApplyOptions {
+    pub conflict_policy: ConflictPolicy,
+    pub workspace_destinations: BTreeMap<String, PathBuf>,
+}
+
+impl Default for SyncApplyOptions {
+    fn default() -> Self {
+        Self {
+            conflict_policy: ConflictPolicy::PreferRemote,
+            workspace_destinations: BTreeMap::new(),
+        }
+    }
+}
+
 impl Default for SyncSnapshotOptions {
     fn default() -> Self {
         Self {
@@ -78,6 +141,17 @@ pub struct SyncDocument {
     /// Human-readable logical path for local routing only. Pro must not send this plaintext to v2 APIs.
     pub logical_path: String,
     pub contents: String,
+}
+
+/// A versioned remote deletion. The id has the same opaque, stable meaning as
+/// `SyncDocument::id`; callers must still provide an approved workspace map.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncTombstone {
+    pub kind: SyncDocumentKind,
+    pub id: String,
+    pub version: i32,
+    pub device_id: String,
+    pub deleted_at: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -107,6 +181,22 @@ pub enum ConflictPolicy {
 pub struct ApplyReport {
     pub applied: usize,
     pub skipped: usize,
+    pub errors: usize,
+    pub documents: Vec<SyncDocumentApplyResult>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SyncDocumentApplyOutcome {
+    Applied,
+    Skipped,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncDocumentApplyResult {
+    pub id: String,
+    pub outcome: SyncDocumentApplyOutcome,
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -283,46 +373,39 @@ pub fn load_config_snapshot(workspace_root: Option<&Path>) -> io::Result<ConfigS
 }
 
 pub fn load_sync_snapshot(options: SyncSnapshotOptions) -> io::Result<SyncSnapshot> {
+    load_sync_snapshot_selected(SyncExportSelection::personal(
+        options.include_preferences,
+        options.include_presets,
+        options.include_global_assets,
+        if options.include_workspace_configs {
+            sync_workspace_roots(&options)?
+        } else {
+            Vec::new()
+        },
+    ))
+}
+
+pub fn load_sync_snapshot_selected(selection: SyncExportSelection) -> io::Result<SyncSnapshot> {
     let mut documents = Vec::new();
-    if options.include_preferences
+    if selection.preferences
         && let Some(path) = preferences_path()
     {
         push_preference_document_if_exists(&mut documents, &path)?;
     }
-    if options.include_presets
+    if selection.presets
         && let Some(path) = presets_path()
     {
-        push_sync_document_if_exists(
-            &mut documents,
-            SyncDocumentKind::Presets,
-            "presets",
-            "presets.toml",
-            &path,
-        )?;
+        push_portable_preset_document_if_exists(&mut documents, &path)?;
     }
-    if options.include_global_assets
+    if selection.portable_global_assets
         && let Some(path) = assets_path()
     {
-        push_sync_document_if_exists(
-            &mut documents,
-            SyncDocumentKind::GlobalAssets,
-            "global-assets",
-            "workspace-assets.toml",
-            &path,
-        )?;
+        push_portable_asset_document_if_exists(&mut documents, &path)?;
     }
-    if options.include_workspace_configs {
-        for root in sync_workspace_roots(&options)? {
-            let path = workspace_config_path(&root);
-            let id = format!("workspace:{}", root.display());
-            push_sync_document_if_exists(
-                &mut documents,
-                SyncDocumentKind::WorkspaceConfig,
-                &id,
-                ".terminaltiler/workspace.toml",
-                &path,
-            )?;
-        }
+    for root in selection.workspace_roots {
+        let path = workspace_config_path(&root);
+        let id = format!("workspace:{}", root.display());
+        push_portable_workspace_document_if_exists(&mut documents, &id, &path)?;
     }
     Ok(SyncSnapshot { documents })
 }
@@ -331,24 +414,212 @@ pub fn apply_sync_snapshot(
     snapshot: &SyncSnapshot,
     conflict_policy: ConflictPolicy,
 ) -> io::Result<ApplyReport> {
+    apply_sync_snapshot_with_options(
+        snapshot,
+        &SyncApplyOptions {
+            conflict_policy,
+            ..SyncApplyOptions::default()
+        },
+    )
+}
+
+pub fn apply_sync_snapshot_with_options(
+    snapshot: &SyncSnapshot,
+    options: &SyncApplyOptions,
+) -> io::Result<ApplyReport> {
+    let mut prepared = Vec::with_capacity(snapshot.documents.len());
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_paths = BTreeSet::new();
     let mut report = ApplyReport::default();
+
+    // Validate the complete batch before the first write so malformed later
+    // documents cannot leave a partially applied snapshot.
     for document in &snapshot.documents {
-        let Some(path) = path_for_sync_document(document) else {
-            report.skipped += 1;
+        if !seen_ids.insert(document.id.clone()) {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: document.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some("duplicate sync document id".into()),
+            });
             continue;
+        }
+        if let Err(error) = validate_logical_path(document) {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: document.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some(error.to_string()),
+            });
+            continue;
+        }
+        let path = match path_for_sync_document(document, &options.workspace_destinations) {
+            Ok(path) => path,
+            Err(error) => {
+                report.errors += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: document.id.clone(),
+                    outcome: SyncDocumentApplyOutcome::Error,
+                    message: Some(error.to_string()),
+                });
+                continue;
+            }
         };
-        if path.exists() && conflict_policy == ConflictPolicy::PreferLocal {
-            report.skipped += 1;
+        if let Some(path) = &path
+            && !seen_paths.insert(path.clone())
+        {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: document.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some("multiple sync documents resolve to the same destination".into()),
+            });
             continue;
         }
-        validate_sync_document(document)?;
-        if document.kind == SyncDocumentKind::Preferences {
-            apply_preference_projection(&path, &document.contents)?;
-        } else {
-            write_private(&path, &document.contents)?;
+        if let Err(error) = validate_sync_document(document) {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: document.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some(error.to_string()),
+            });
+            continue;
         }
-        report.applied += 1;
+        prepared.push((document.clone(), path));
     }
+    if report.errors > 0 {
+        return Ok(report);
+    }
+
+    crate::storage::fs_utils::with_persistence_lock(|| {
+        let mut writes = Vec::new();
+        for (document, path) in prepared {
+            let Some(path) = path else {
+                report.skipped += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: document.id,
+                    outcome: SyncDocumentApplyOutcome::Skipped,
+                    message: Some("no approved local destination".into()),
+                });
+                continue;
+            };
+            if path.exists() && options.conflict_policy == ConflictPolicy::PreferLocal {
+                report.skipped += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: document.id,
+                    outcome: SyncDocumentApplyOutcome::Skipped,
+                    message: Some("local destination was preferred".into()),
+                });
+                continue;
+            }
+            let contents = if document.kind == SyncDocumentKind::Preferences {
+                preference_projection_contents(&path, &document.contents)?
+            } else {
+                document.contents
+            };
+            report.documents.push(SyncDocumentApplyResult {
+                id: document.id,
+                outcome: SyncDocumentApplyOutcome::Applied,
+                message: None,
+            });
+            writes.push((path, contents));
+        }
+        crate::storage::fs_utils::transactional_write_private_unlocked(&writes)?;
+        report.applied = writes.len();
+        Ok(())
+    })?;
+    Ok(report)
+}
+
+/// Applies remote deletions using the same destination authority and shared
+/// persistence lock as snapshot writes. The complete batch is routed before
+/// any file is removed.
+pub fn apply_sync_tombstones_with_options(
+    tombstones: &[SyncTombstone],
+    options: &SyncApplyOptions,
+) -> io::Result<ApplyReport> {
+    let mut report = ApplyReport::default();
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_paths = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(tombstones.len());
+
+    for tombstone in tombstones {
+        if !seen_ids.insert(tombstone.id.clone()) {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: tombstone.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some("duplicate sync tombstone id".into()),
+            });
+            continue;
+        }
+        let route = SyncDocument {
+            kind: tombstone.kind.clone(),
+            id: tombstone.id.clone(),
+            logical_path: String::new(),
+            contents: String::new(),
+        };
+        let path = match path_for_sync_document(&route, &options.workspace_destinations) {
+            Ok(path) => path,
+            Err(error) => {
+                report.errors += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: tombstone.id.clone(),
+                    outcome: SyncDocumentApplyOutcome::Error,
+                    message: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
+        if let Some(path) = &path
+            && !seen_paths.insert(path.clone())
+        {
+            report.errors += 1;
+            report.documents.push(SyncDocumentApplyResult {
+                id: tombstone.id.clone(),
+                outcome: SyncDocumentApplyOutcome::Error,
+                message: Some("multiple sync tombstones resolve to the same destination".into()),
+            });
+            continue;
+        }
+        prepared.push((tombstone.clone(), path));
+    }
+    if report.errors > 0 {
+        return Ok(report);
+    }
+
+    crate::storage::fs_utils::with_persistence_lock(|| {
+        let mut removals = Vec::new();
+        for (tombstone, path) in prepared {
+            let Some(path) = path else {
+                report.skipped += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: tombstone.id,
+                    outcome: SyncDocumentApplyOutcome::Skipped,
+                    message: Some("no approved local destination".into()),
+                });
+                continue;
+            };
+            if !path.exists() {
+                report.skipped += 1;
+                report.documents.push(SyncDocumentApplyResult {
+                    id: tombstone.id,
+                    outcome: SyncDocumentApplyOutcome::Skipped,
+                    message: Some("local destination is already absent".into()),
+                });
+                continue;
+            }
+            report.documents.push(SyncDocumentApplyResult {
+                id: tombstone.id,
+                outcome: SyncDocumentApplyOutcome::Applied,
+                message: None,
+            });
+            removals.push(path);
+        }
+        crate::storage::fs_utils::transactional_remove_private_unlocked(&removals)?;
+        report.applied = removals.len();
+        Ok(())
+    })?;
     Ok(report)
 }
 
@@ -490,6 +761,24 @@ fn validate_sync_document(document: &SyncDocument) -> io::Result<()> {
     }
 }
 
+fn validate_logical_path(document: &SyncDocument) -> io::Result<()> {
+    let path = Path::new(&document.logical_path);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "sync logical path must be relative and cannot traverse parents",
+        ));
+    }
+    Ok(())
+}
+
 fn push_blob_if_exists(
     blobs: &mut Vec<ConfigBlob>,
     kind: ConfigBlobKind,
@@ -500,26 +789,6 @@ fn push_blob_if_exists(
         Ok(contents) => blobs.push(ConfigBlob {
             kind,
             path: label.to_string(),
-            contents,
-        }),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    Ok(())
-}
-
-fn push_sync_document_if_exists(
-    documents: &mut Vec<SyncDocument>,
-    kind: SyncDocumentKind,
-    id: &str,
-    logical_path: &str,
-    path: &Path,
-) -> io::Result<()> {
-    match fs::read_to_string(path) {
-        Ok(contents) => documents.push(SyncDocument {
-            kind,
-            id: id.to_string(),
-            logical_path: logical_path.to_string(),
             contents,
         }),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -548,6 +817,83 @@ fn push_preference_document_if_exists(
     Ok(())
 }
 
+fn push_portable_preset_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    path: &Path,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let mut document: PresetDocument = toml::from_str(&raw).map_err(toml_error)?;
+            document.version = PRESET_STORE_VERSION;
+            for preset in &mut document.presets {
+                preset.workspace_root = None;
+            }
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::Presets,
+                id: "presets".into(),
+                logical_path: "presets.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn portable_assets(mut assets: WorkspaceAssets) -> WorkspaceAssets {
+    assets.connection_profiles.clear();
+    assets.inventory_hosts.clear();
+    for role in &mut assets.role_templates {
+        role.default_connection_profile_id = None;
+    }
+    assets
+}
+
+fn push_portable_asset_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    path: &Path,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let document: AssetDocument = toml::from_str(&raw).map_err(toml_error)?;
+            let document = AssetDocument::from_assets(portable_assets(document.into_assets()));
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::GlobalAssets,
+                id: "global-assets".into(),
+                logical_path: "workspace-assets.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn push_portable_workspace_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    id: &str,
+    path: &Path,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let mut document: WorkspaceConfigDocument = toml::from_str(&raw).map_err(toml_error)?;
+            document.version = ASSET_STORE_VERSION;
+            document.assets = portable_assets(document.assets);
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::WorkspaceConfig,
+                id: id.into(),
+                logical_path: ".terminaltiler/workspace.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
 fn sync_workspace_roots(options: &SyncSnapshotOptions) -> io::Result<Vec<PathBuf>> {
     let mut roots = BTreeSet::new();
     for root in &options.workspace_roots {
@@ -565,17 +911,45 @@ fn sync_workspace_roots(options: &SyncSnapshotOptions) -> io::Result<Vec<PathBuf
     Ok(roots.into_iter().collect())
 }
 
-fn path_for_sync_document(document: &SyncDocument) -> Option<PathBuf> {
+fn path_for_sync_document(
+    document: &SyncDocument,
+    workspace_destinations: &BTreeMap<String, PathBuf>,
+) -> io::Result<Option<PathBuf>> {
     match document.kind {
-        SyncDocumentKind::Preferences => preferences_path(),
-        SyncDocumentKind::Presets => presets_path(),
-        SyncDocumentKind::GlobalAssets => assets_path(),
-        SyncDocumentKind::WorkspaceConfig => document
-            .id
-            .strip_prefix("workspace:")
-            .map(PathBuf::from)
-            .map(|root| workspace_config_path(&root)),
+        SyncDocumentKind::Preferences => Ok(preferences_path()),
+        SyncDocumentKind::Presets => Ok(presets_path()),
+        SyncDocumentKind::GlobalAssets => Ok(assets_path()),
+        SyncDocumentKind::WorkspaceConfig => workspace_destinations
+            .get(&document.id)
+            .map(|root| approved_workspace_config_path(root))
+            .transpose(),
     }
+}
+
+fn approved_workspace_config_path(root: &Path) -> io::Result<PathBuf> {
+    let root = root.canonicalize()?;
+    if !root.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "approved workspace root '{}' is not a directory",
+                root.display()
+            ),
+        ));
+    }
+
+    let config_dir = root.join(".terminaltiler");
+    if config_dir.exists() {
+        let canonical_config_dir = config_dir.canonicalize()?;
+        if !canonical_config_dir.starts_with(&root) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "workspace config directory escapes the approved root",
+            ));
+        }
+        return Ok(canonical_config_dir.join("workspace.toml"));
+    }
+    Ok(config_dir.join("workspace.toml"))
 }
 
 fn sync_preference_projection(raw: &str) -> io::Result<PreferenceDocument> {
@@ -584,7 +958,7 @@ fn sync_preference_projection(raw: &str) -> io::Result<PreferenceDocument> {
     Ok(document)
 }
 
-fn apply_preference_projection(path: &Path, incoming_raw: &str) -> io::Result<()> {
+fn preference_projection_contents(path: &Path, incoming_raw: &str) -> io::Result<String> {
     let incoming: PreferenceDocument = toml::from_str(incoming_raw).map_err(toml_error)?;
     let merged = match fs::read_to_string(path) {
         Ok(local_raw) => {
@@ -629,7 +1003,7 @@ fn apply_preference_projection(path: &Path, incoming_raw: &str) -> io::Result<()
         }
         Err(error) => return Err(error),
     };
-    write_private(path, &merged)
+    Ok(merged)
 }
 
 fn read_preset_document(path: &Path) -> io::Result<PresetDocument> {
@@ -738,7 +1112,11 @@ mod tests {
         layout::{WorkingDirectory, tile},
         preset::{ApplicationDensity, ThemeMode},
     };
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        sync::{Mutex, OnceLock, mpsc},
+        thread,
+        time::Duration,
+    };
     use uuid::Uuid;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -834,6 +1212,83 @@ engine_mode = "cpu"
     }
 
     #[test]
+    fn typed_export_selection_strips_machine_and_secret_bearing_fields() {
+        with_config_home("portable-selection", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let machine_root = temp_config_home("machine-root");
+            let mut preset = sample_preset("portable-preset");
+            preset.workspace_root = Some(machine_root.clone());
+            fs::write(
+                config_dir.join("presets.toml"),
+                toml::to_string_pretty(&PresetDocument {
+                    version: 1,
+                    presets: vec![preset],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                config_dir.join("workspace-assets.toml"),
+                r#"
+version = 1
+
+[[connection_profiles]]
+id = "production"
+name = "Production"
+kind = "ssh"
+inventory_host_id = "prod-host"
+
+[[inventory_hosts]]
+id = "prod-host"
+name = "Production host"
+host = "10.20.30.40"
+user = "deploy"
+password_secret_ref = "keyring:production-password"
+ssh_key_path = "/home/alice/.ssh/id_ed25519"
+
+[[role_templates]]
+id = "operator"
+name = "Operator"
+default_connection_profile_id = "production"
+"#,
+            )
+            .unwrap();
+
+            let personal = load_sync_snapshot_selected(SyncExportSelection::personal(
+                false,
+                true,
+                true,
+                Vec::new(),
+            ))
+            .unwrap();
+            let serialized = personal
+                .documents
+                .iter()
+                .map(|document| document.contents.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!serialized.contains(machine_root.to_string_lossy().as_ref()));
+            assert!(!serialized.contains("10.20.30.40"));
+            assert!(!serialized.contains("keyring:production-password"));
+            assert!(!serialized.contains("/home/alice/.ssh/id_ed25519"));
+            assert!(!serialized.contains("production-password"));
+
+            let team = load_sync_snapshot_selected(SyncExportSelection::team_portable(Vec::new()))
+                .unwrap();
+            assert!(
+                team.documents
+                    .iter()
+                    .any(|document| document.kind == SyncDocumentKind::Presets)
+            );
+            assert!(!team.documents.iter().any(|document| matches!(
+                document.kind,
+                SyncDocumentKind::Preferences | SyncDocumentKind::GlobalAssets
+            )));
+        });
+    }
+
+    #[test]
     fn applying_preference_projection_preserves_local_only_fields() {
         with_config_home("apply-sync-prefs", || {
             let config_dir = app_paths::config_dir().unwrap();
@@ -881,6 +1336,273 @@ engine_mode = "cpu"
             assert!(merged.contains("settings_dialog_width = 777"));
             assert!(merged.contains("microphone_id = \"local-mic\""));
             assert!(merged.contains("pack_status"));
+        });
+    }
+
+    #[test]
+    fn workspace_sync_requires_an_explicit_destination_mapping() {
+        with_config_home("workspace-destination", || {
+            let workspace_root = temp_config_home("approved-workspace");
+            let document = SyncDocument {
+                kind: SyncDocumentKind::WorkspaceConfig,
+                id: "opaque-workspace-id".into(),
+                logical_path: ".terminaltiler/workspace.toml".into(),
+                contents: "version = 1\n".into(),
+            };
+            let snapshot = SyncSnapshot {
+                documents: vec![document.clone()],
+            };
+
+            let skipped = apply_sync_snapshot(&snapshot, ConflictPolicy::PreferRemote).unwrap();
+            assert_eq!(skipped.applied, 0);
+            assert_eq!(skipped.skipped, 1);
+            assert!(!workspace_config_path(&workspace_root).exists());
+
+            let applied = apply_sync_snapshot_with_options(
+                &snapshot,
+                &SyncApplyOptions {
+                    conflict_policy: ConflictPolicy::PreferRemote,
+                    workspace_destinations: BTreeMap::from([(document.id, workspace_root.clone())]),
+                },
+            )
+            .unwrap();
+            assert_eq!(applied.applied, 1);
+            assert_eq!(
+                fs::read_to_string(workspace_config_path(&workspace_root)).unwrap(),
+                "version = 1\n"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_sync_rejects_config_directory_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        with_config_home("workspace-symlink", || {
+            let workspace_root = temp_config_home("symlink-workspace");
+            let outside = temp_config_home("symlink-outside");
+            symlink(&outside, workspace_root.join(".terminaltiler")).unwrap();
+            let document = SyncDocument {
+                kind: SyncDocumentKind::WorkspaceConfig,
+                id: "opaque-workspace-id".into(),
+                logical_path: ".terminaltiler/workspace.toml".into(),
+                contents: "version = 1\n".into(),
+            };
+
+            let report = apply_sync_snapshot_with_options(
+                &SyncSnapshot {
+                    documents: vec![document.clone()],
+                },
+                &SyncApplyOptions {
+                    conflict_policy: ConflictPolicy::PreferRemote,
+                    workspace_destinations: BTreeMap::from([(document.id, workspace_root)]),
+                },
+            )
+            .unwrap();
+
+            assert_eq!(report.errors, 1);
+            assert_eq!(report.documents[0].outcome, SyncDocumentApplyOutcome::Error);
+            assert!(!outside.join("workspace.toml").exists());
+        });
+    }
+
+    #[test]
+    fn workspace_sync_rejects_traversal_even_with_an_approved_root() {
+        with_config_home("workspace-traversal", || {
+            let workspace_root = temp_config_home("traversal-workspace");
+            let outside = workspace_root.parent().unwrap().join("escaped.toml");
+            let document = SyncDocument {
+                kind: SyncDocumentKind::WorkspaceConfig,
+                id: "opaque-workspace-id".into(),
+                logical_path: "../../escaped.toml".into(),
+                contents: "version = 1\n".into(),
+            };
+            let report = apply_sync_snapshot_with_options(
+                &SyncSnapshot {
+                    documents: vec![document.clone()],
+                },
+                &SyncApplyOptions {
+                    conflict_policy: ConflictPolicy::PreferRemote,
+                    workspace_destinations: BTreeMap::from([(document.id, workspace_root)]),
+                },
+            )
+            .unwrap();
+
+            assert_eq!(report.errors, 1);
+            assert!(!outside.exists());
+        });
+    }
+
+    #[test]
+    fn sync_batch_is_validated_before_any_document_is_written() {
+        with_config_home("sync-preflight", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            let prefs_path = config_dir.join("preferences.toml");
+            let snapshot = SyncSnapshot {
+                documents: vec![
+                    SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "preferences".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: "version = 1\ndefault_density = \"compact\"\n".into(),
+                    },
+                    SyncDocument {
+                        kind: SyncDocumentKind::Presets,
+                        id: "presets".into(),
+                        logical_path: "presets.toml".into(),
+                        contents: "not valid toml = [".into(),
+                    },
+                ],
+            };
+
+            let report = apply_sync_snapshot(&snapshot, ConflictPolicy::PreferRemote).unwrap();
+            assert_eq!(report.errors, 1);
+            assert!(!prefs_path.exists());
+        });
+    }
+
+    #[test]
+    fn duplicate_document_ids_fail_preflight_without_writes() {
+        with_config_home("sync-duplicate", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            let snapshot = SyncSnapshot {
+                documents: vec![
+                    SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "same".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: "version = 1\n".into(),
+                    },
+                    SyncDocument {
+                        kind: SyncDocumentKind::Presets,
+                        id: "same".into(),
+                        logical_path: "presets.toml".into(),
+                        contents: "version = 1\npresets = []\n".into(),
+                    },
+                ],
+            };
+
+            let report = apply_sync_snapshot(&snapshot, ConflictPolicy::PreferRemote).unwrap();
+            assert_eq!(report.errors, 1);
+            assert!(!config_dir.join("preferences.toml").exists());
+            assert!(!config_dir.join("presets.toml").exists());
+        });
+    }
+
+    #[test]
+    fn failed_later_commit_rolls_back_earlier_document() {
+        with_config_home("sync-rollback", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let preferences = config_dir.join("preferences.toml");
+            let presets = config_dir.join("presets.toml");
+            let original = "version = 1\ndefault_density = \"compact\"\n";
+            fs::write(&preferences, original).unwrap();
+            fs::create_dir(&presets).unwrap();
+            let snapshot = SyncSnapshot {
+                documents: vec![
+                    SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "preferences".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: "version = 1\ndefault_density = \"comfortable\"\n".into(),
+                    },
+                    SyncDocument {
+                        kind: SyncDocumentKind::Presets,
+                        id: "presets".into(),
+                        logical_path: "presets.toml".into(),
+                        contents: "version = 1\npresets = []\n".into(),
+                    },
+                ],
+            };
+
+            assert!(apply_sync_snapshot(&snapshot, ConflictPolicy::PreferRemote).is_err());
+            assert_eq!(fs::read_to_string(preferences).unwrap(), original);
+            assert!(presets.is_dir());
+        });
+    }
+
+    #[test]
+    fn sync_apply_waits_for_the_shared_persistence_lock() {
+        with_config_home("sync-lock", || {
+            let (locked_tx, locked_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let holder = thread::spawn(move || {
+                crate::storage::fs_utils::with_persistence_lock(|| {
+                    locked_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+            });
+            locked_rx.recv().unwrap();
+
+            let (done_tx, done_rx) = mpsc::channel();
+            let applier = thread::spawn(move || {
+                let result = apply_sync_snapshot(
+                    &SyncSnapshot {
+                        documents: vec![SyncDocument {
+                            kind: SyncDocumentKind::Preferences,
+                            id: "preferences".into(),
+                            logical_path: "preferences.toml".into(),
+                            contents: "version = 1\n".into(),
+                        }],
+                    },
+                    ConflictPolicy::PreferRemote,
+                );
+                done_tx.send(result).unwrap();
+            });
+            assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+            release_tx.send(()).unwrap();
+            assert_eq!(
+                done_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap()
+                    .applied,
+                1
+            );
+            holder.join().unwrap();
+            applier.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn tombstone_delete_then_remote_restore_recreates_document() {
+        with_config_home("sync-tombstone", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let presets = config_dir.join("presets.toml");
+            fs::write(&presets, "version = 1\npresets = []\n").unwrap();
+            let tombstone = SyncTombstone {
+                kind: SyncDocumentKind::Presets,
+                id: "presets".into(),
+                version: 2,
+                device_id: "device".into(),
+                deleted_at: "2026-07-09T00:00:00Z".into(),
+            };
+
+            let deleted =
+                apply_sync_tombstones_with_options(&[tombstone], &SyncApplyOptions::default())
+                    .unwrap();
+            assert_eq!(deleted.applied, 1);
+            assert!(!presets.exists());
+
+            let restored = apply_sync_snapshot(
+                &SyncSnapshot {
+                    documents: vec![SyncDocument {
+                        kind: SyncDocumentKind::Presets,
+                        id: "presets".into(),
+                        logical_path: "presets.toml".into(),
+                        contents: "version = 1\npresets = []\n".into(),
+                    }],
+                },
+                ConflictPolicy::PreferRemote,
+            )
+            .unwrap();
+            assert_eq!(restored.applied, 1);
+            assert!(presets.exists());
         });
     }
 

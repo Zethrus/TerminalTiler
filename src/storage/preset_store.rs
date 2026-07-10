@@ -1,9 +1,11 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths;
+use crate::extension::CatalogContributionProvider;
 use crate::logging;
 use crate::model::preset::{WorkspacePreset, builtin_presets, is_builtin_preset_id};
 use crate::storage::document::{
@@ -12,9 +14,10 @@ use crate::storage::document::{
 
 const STORE_VERSION: u32 = 1;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PresetStore {
     path: Option<PathBuf>,
+    catalog: Option<Arc<dyn CatalogContributionProvider>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,7 +41,18 @@ impl Default for PresetStore {
 impl PresetStore {
     pub fn new() -> Self {
         let path = app_paths::config_dir().map(|dir| dir.join("presets.toml"));
-        Self { path }
+        Self {
+            path,
+            catalog: None,
+        }
+    }
+
+    pub fn with_catalog_provider(
+        mut self,
+        catalog: Option<Arc<dyn CatalogContributionProvider>>,
+    ) -> Self {
+        self.catalog = catalog;
+        self
     }
 
     pub fn ensure_seeded(&self) {
@@ -60,6 +74,28 @@ impl PresetStore {
     }
 
     pub fn load_presets_with_status(&self) -> PresetLoadOutcome {
+        let mut outcome = self.load_persisted_presets_with_status();
+        if let Some(contributions) = self
+            .catalog
+            .as_ref()
+            .and_then(|provider| provider.contributions())
+        {
+            let mut ids = outcome
+                .presets
+                .iter()
+                .map(|preset| preset.id.clone())
+                .collect::<std::collections::HashSet<_>>();
+            outcome.presets.extend(
+                contributions
+                    .presets
+                    .into_iter()
+                    .filter(|preset| ids.insert(preset.id.clone())),
+            );
+        }
+        outcome
+    }
+
+    fn load_persisted_presets_with_status(&self) -> PresetLoadOutcome {
         let Some(path) = &self.path else {
             return PresetLoadOutcome {
                 presets: builtin_presets(),
@@ -194,13 +230,21 @@ impl PresetStore {
 #[cfg(test)]
 impl PresetStore {
     fn from_path(path: PathBuf) -> Self {
-        Self { path: Some(path) }
+        Self {
+            path: Some(path),
+            catalog: None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{PresetDocument, PresetStore, STORE_VERSION};
+    use crate::extension::{
+        CatalogContributionProvider, CatalogContributions, CatalogTrustMetadata,
+    };
     use crate::model::layout::{WorkingDirectory, tile};
     use crate::model::preset::{
         ApplicationDensity, ThemeMode, WorkspacePreset, builtin_presets, is_builtin_preset_id,
@@ -208,6 +252,52 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
+
+    struct TestCatalog(CatalogContributions);
+
+    impl CatalogContributionProvider for TestCatalog {
+        fn contributions(&self) -> Option<CatalogContributions> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn runtime_catalog_adds_non_colliding_presets_without_persisting_them() {
+        let dir = temp_dir("runtime-catalog-presets");
+        let path = dir.join("presets.toml");
+        let mut collision = builtin_presets()[0].clone();
+        collision.name = "Must not replace user view".to_string();
+        let mut contributed = collision.clone();
+        contributed.id = "runtime-only-preset".to_string();
+        contributed.name = "Runtime only".to_string();
+        let provider = Arc::new(TestCatalog(CatalogContributions {
+            namespace: "test.catalog".to_string(),
+            revision: "1".to_string(),
+            trust: CatalogTrustMetadata {
+                read_only: true,
+                ..Default::default()
+            },
+            presets: vec![collision, contributed],
+            ..Default::default()
+        }));
+        let store = PresetStore::from_path(path.clone()).with_catalog_provider(Some(provider));
+
+        let loaded = store.load_presets();
+        assert!(
+            loaded
+                .iter()
+                .any(|preset| preset.id == "runtime-only-preset")
+        );
+        assert!(
+            !loaded
+                .iter()
+                .any(|preset| preset.name == "Must not replace user view")
+        );
+        assert!(
+            !path.exists(),
+            "runtime contributions must not seed user files"
+        );
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("terminaltiler-{prefix}-{}", Uuid::new_v4()));

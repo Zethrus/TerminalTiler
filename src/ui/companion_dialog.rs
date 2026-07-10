@@ -1,11 +1,16 @@
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
+use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 use adw::prelude::*;
 use gtk::gio;
 
 use crate::extension::{
     CompanionAction, CompanionActionInput, CompanionActionStyle, CompanionIntegration,
-    CompanionPanelSnapshot, CompanionRow, CompanionStatus, CompanionTextInput,
+    CompanionPanelSnapshot, CompanionRefreshScope, CompanionRow, CompanionStatus,
+    CompanionTextInput,
 };
 use crate::logging;
 use crate::ui::dialog_chrome;
@@ -13,6 +18,14 @@ use crate::ui::dialog_smoke;
 use crate::ui::icons::{self, name as icon_name};
 
 pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionIntegration>) {
+    present_with_notice(window, companion, None);
+}
+
+fn present_with_notice(
+    window: &adw::ApplicationWindow,
+    companion: Arc<dyn CompanionIntegration>,
+    notice: Option<String>,
+) {
     let snapshot = companion.snapshot();
     let dialog = adw::Dialog::new();
     dialog.set_title(&snapshot.title);
@@ -62,7 +75,8 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
         .margin_end(16)
         .css_classes(["companion-footer"])
         .build();
-    let action_bar = build_action_bar(window, &dialog, companion, &snapshot);
+    let busy = Rc::new(RefCell::new(HashSet::new()));
+    let action_bar = build_action_bar(window, &dialog, companion, &snapshot, busy);
     footer.append(&action_bar);
 
     let close_button = icons::labeled_button(
@@ -79,7 +93,9 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
     footer.append(&close_button);
     root.append(&footer);
 
-    dialog.set_child(Some(&root));
+    let toast_overlay = adw::ToastOverlay::new();
+    toast_overlay.set_child(Some(&root));
+    dialog.set_child(Some(&toast_overlay));
     dialog.set_default_widget(Some(&close_button));
     {
         let dialog = dialog.clone();
@@ -89,6 +105,9 @@ pub fn present(window: &adw::ApplicationWindow, companion: Arc<dyn CompanionInte
     }
 
     dialog.present(Some(window));
+    if let Some(notice) = notice {
+        toast_overlay.add_toast(adw::Toast::new(&notice));
+    }
 }
 
 fn build_companion_summary(snapshot: &CompanionPanelSnapshot) -> gtk::Widget {
@@ -249,6 +268,7 @@ fn build_action_bar(
     dialog: &adw::Dialog,
     companion: Arc<dyn CompanionIntegration>,
     snapshot: &CompanionPanelSnapshot,
+    busy: Rc<RefCell<HashSet<String>>>,
 ) -> gtk::Widget {
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -264,8 +284,17 @@ fn build_action_bar(
         let companion = companion.clone();
         let parent = window.clone();
         let parent_dialog = dialog.clone();
+        let button_for_click = button.clone();
+        let busy = busy.clone();
         button.connect_clicked(move |_| {
-            invoke_action(&parent, &parent_dialog, companion.clone(), action.clone());
+            invoke_action(
+                &parent,
+                &parent_dialog,
+                companion.clone(),
+                action.clone(),
+                button_for_click.clone(),
+                busy.clone(),
+            );
         });
         actions.append(&button);
     }
@@ -320,6 +349,8 @@ fn invoke_action(
     dialog: &adw::Dialog,
     companion: Arc<dyn CompanionIntegration>,
     action: CompanionAction,
+    button: gtk::Button,
+    busy: Rc<RefCell<HashSet<String>>>,
 ) {
     if let Some(url) = action.external_url.as_deref() {
         if let Err(error) =
@@ -331,25 +362,19 @@ fn invoke_action(
     }
 
     if let Some(input) = action.input.clone() {
-        present_input_prompt(window, companion, action, input);
+        present_input_prompt(window, companion, action, input, busy);
         dialog.close();
         return;
     }
-
-    match companion.invoke(&action.id, CompanionActionInput::default()) {
-        Ok(result) => {
-            logging::info(format!(
-                "companion action '{}' completed: {}",
-                action.id, result.message
-            ));
-            dialog.close();
-            present(window, companion);
-        }
-        Err(error) => logging::error(format!(
-            "companion action '{}' failed: {}",
-            action.id, error
-        )),
-    }
+    dispatch_action(
+        window,
+        dialog,
+        companion,
+        action,
+        CompanionActionInput::default(),
+        button,
+        busy,
+    );
 }
 
 fn present_input_prompt(
@@ -357,6 +382,7 @@ fn present_input_prompt(
     companion: Arc<dyn CompanionIntegration>,
     action: CompanionAction,
     input: CompanionTextInput,
+    busy: Rc<RefCell<HashSet<String>>>,
 ) {
     let dialog = adw::Dialog::new();
     dialog.set_title(&action.label);
@@ -437,21 +463,19 @@ fn present_input_prompt(
         let dialog = dialog.clone();
         let entry_for_submit = entry.clone();
         let action_for_submit = action.clone();
+        let submit_for_dispatch = submit.clone();
+        let busy = busy.clone();
         submit.connect_clicked(move |_| {
             let text = entry_for_submit.text().trim().to_string();
-            match companion.invoke(
-                &action_for_submit.id,
+            dispatch_action(
+                &parent,
+                &dialog,
+                companion.clone(),
+                action_for_submit.clone(),
                 CompanionActionInput { text: Some(text) },
-            ) {
-                Ok(_) => {
-                    dialog.close();
-                    present(&parent, companion.clone());
-                }
-                Err(error) => logging::error(format!(
-                    "companion action '{}' failed: {}",
-                    action_for_submit.id, error
-                )),
-            }
+                submit_for_dispatch.clone(),
+                busy.clone(),
+            );
         });
     }
     {
@@ -460,4 +484,80 @@ fn present_input_prompt(
     }
     dialog.present(Some(window));
     entry.grab_focus();
+}
+
+fn dispatch_action(
+    window: &adw::ApplicationWindow,
+    dialog: &adw::Dialog,
+    companion: Arc<dyn CompanionIntegration>,
+    action: CompanionAction,
+    input: CompanionActionInput,
+    button: gtk::Button,
+    busy: Rc<RefCell<HashSet<String>>>,
+) {
+    if !busy.borrow_mut().insert(action.id.clone()) {
+        return;
+    }
+    button.set_sensitive(false);
+    let (sender, receiver) = mpsc::channel();
+    let action_id = action.id.clone();
+    let timeout = action.timeout;
+    let worker_companion = companion.clone();
+    std::thread::spawn(move || {
+        let result = worker_companion.invoke(&action_id, input);
+        let _ = sender.send(result);
+    });
+
+    let started = Instant::now();
+    let window = window.clone();
+    let dialog = dialog.clone();
+    gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        let completion = receiver.try_recv();
+        let timed_out = started.elapsed() >= timeout;
+        if matches!(completion, Err(mpsc::TryRecvError::Empty)) && !timed_out {
+            return gtk::glib::ControlFlow::Continue;
+        }
+
+        busy.borrow_mut().remove(&action.id);
+        button.set_sensitive(true);
+        let (notice, refresh_scope) = match completion {
+            Ok(Ok(result)) => {
+                logging::info(format!(
+                    "companion action '{}' completed: {}",
+                    action.id, result.message
+                ));
+                (result.message, result.refresh_scope)
+            }
+            Ok(Err(error)) => {
+                logging::error(format!(
+                    "companion action '{}' failed: {}",
+                    action.id, error
+                ));
+                (
+                    format!("{} failed: {error}", action.label),
+                    CompanionRefreshScope::Panel,
+                )
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                let error = format!(
+                    "{} timed out after {} seconds",
+                    action.label,
+                    timeout.as_secs()
+                );
+                logging::error(&error);
+                (error, CompanionRefreshScope::Panel)
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let error = format!("{} worker stopped unexpectedly", action.label);
+                logging::error(&error);
+                (error, CompanionRefreshScope::Panel)
+            }
+        };
+        if !matches!(refresh_scope, CompanionRefreshScope::Panel) {
+            let _ = gtk::prelude::WidgetExt::activate_action(&window, "win.refresh-catalog", None);
+        }
+        dialog.close();
+        present_with_notice(&window, companion.clone(), Some(notice));
+        gtk::glib::ControlFlow::Break
+    });
 }

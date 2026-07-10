@@ -18,7 +18,7 @@ mod imp {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
     use windows_sys::Win32::UI::Shell::{
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-        Shell_NotifyIconW,
+        SetCurrentProcessExplicitAppUserModelID, Shell_NotifyIconW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_PUSHBUTTON,
@@ -51,7 +51,6 @@ mod imp {
         ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
     };
     use crate::platform::{home_dir, resolve_workspace_root};
-    use crate::product;
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_overrides_for_saved_session,
     };
@@ -194,6 +193,7 @@ mod imp {
     const WM_STARTUP_PROBE_REQUEST: u32 = WM_APP + 50;
     const WM_STARTUP_PROBE_COMPLETE: u32 = WM_APP + 51;
     const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 60;
+    const WM_COMPANION_ACTION_COMPLETE: u32 = WM_APP + 61;
     const TRAY_ICON_ID: u32 = 1;
     const TRAY_MENU_SHOW: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
@@ -312,12 +312,20 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         startup_init_completed: bool,
         startup_probe_running: bool,
         runtime_probe_preferred_distribution: Option<String>,
+        companion_action_running: bool,
+        companion_action_generation: u64,
     }
 
     struct StartupProbeResult {
         runtime: Option<WindowsRuntime>,
         runtime_error: Option<String>,
         webview2_error: Option<String>,
+    }
+
+    struct CompanionActionCompletion {
+        generation: u64,
+        label: String,
+        result: Result<crate::extension::CompanionActionResult, String>,
     }
 
     struct PromptWindowState {
@@ -379,6 +387,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     unsafe fn run_gui(options: RuntimeOptions) -> Result<ExitCode, String> {
+        configure_windows_taskbar_identity(options.product.effective_windows_app_user_model_id());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
             return Err("could not resolve module handle".into());
@@ -388,12 +397,13 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         register_window_classes(instance)?;
 
         let window_title = options.product.app_title.clone();
+        let catalog = options.catalog.clone();
         let state = Box::new(AppWindowState {
             runtime_options: options,
             preference_store: PreferenceStore::new(),
-            preset_store: PresetStore::new(),
+            preset_store: PresetStore::new().with_catalog_provider(catalog.clone()),
             session_store: SessionStore::new(),
-            asset_store: AssetStore::new(),
+            asset_store: AssetStore::new().with_catalog_provider(catalog),
             runtime: None,
             runtime_error: None,
             webview2_error: None,
@@ -440,6 +450,8 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             startup_init_completed: false,
             startup_probe_running: false,
             runtime_probe_preferred_distribution: None,
+            companion_action_running: false,
+            companion_action_generation: 0,
         });
         let state_ptr = Box::into_raw(state);
 
@@ -483,6 +495,16 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
 
         Ok(ExitCode::SUCCESS)
+    }
+
+    fn configure_windows_taskbar_identity(app_user_model_id: &str) {
+        let app_user_model_id = wide(app_user_model_id);
+        let status = unsafe { SetCurrentProcessExplicitAppUserModelID(app_user_model_id.as_ptr()) };
+        if status < 0 {
+            logging::error(format!(
+                "failed to configure Windows AppUserModelID (HRESULT {status})"
+            ));
+        }
     }
 
     fn register_window_classes(instance: HINSTANCE) -> Result<(), String> {
@@ -638,6 +660,45 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                     let result = unsafe { Box::from_raw(lparam as *mut StartupProbeResult) };
                     if let Some(state) = unsafe { state_mut(hwnd) } {
                         apply_startup_probe_result(hwnd, state, *result);
+                    }
+                }
+                0
+            }
+            WM_COMPANION_ACTION_COMPLETE => {
+                if lparam != 0 {
+                    let completion =
+                        unsafe { Box::from_raw(lparam as *mut CompanionActionCompletion) };
+                    if let Some(state) = unsafe { state_mut(hwnd) }
+                        && state.companion_action_running
+                        && completion.generation == state.companion_action_generation
+                    {
+                        state.companion_action_running = false;
+                        match completion.result {
+                            Ok(result) => {
+                                if !matches!(
+                                    result.refresh_scope,
+                                    crate::extension::CompanionRefreshScope::Panel
+                                ) {
+                                    refresh_state(hwnd, state);
+                                }
+                                unsafe {
+                                    MessageBoxW(
+                                        hwnd,
+                                        wide(&result.message).as_ptr(),
+                                        wide(&completion.label).as_ptr(),
+                                        MB_OK,
+                                    );
+                                }
+                            }
+                            Err(error) => unsafe {
+                                MessageBoxW(
+                                    hwnd,
+                                    wide(&error).as_ptr(),
+                                    wide(&completion.label).as_ptr(),
+                                    MB_ICONWARNING | MB_OK,
+                                );
+                            },
+                        }
                     }
                 }
                 0
@@ -2075,8 +2136,12 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             "{} Windows shell",
             state.runtime_options.product.display_name
         ));
-        lines.push(format!("License: {}", product::PRODUCT_LICENSE));
-        lines.push(format!("Source: {}", product::PRODUCT_SOURCE_URL));
+        if let Some(license) = state.runtime_options.product.license_name.as_deref() {
+            lines.push(format!("License: {license}"));
+        }
+        if let Some(source) = state.runtime_options.product.source_url.as_deref() {
+            lines.push(format!("Source: {source}"));
+        }
         lines.push(theme::accessibility_summary());
         lines.push(String::new());
 
@@ -2333,7 +2398,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn install_tray_icon(hwnd: HWND, state: &mut AppWindowState) {
         let mut notify = tray_icon_data(hwnd);
-        fill_wide_buffer(&mut notify.szTip, "TerminalTiler");
+        fill_wide_buffer(&mut notify.szTip, &state.runtime_options.product.tray_title);
         let icon = unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         if icon.is_null() {
             state.tray_icon_added = false;
@@ -2392,11 +2457,14 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
         let mut notify = tray_icon_data(hwnd);
         let tooltip = if state.window_hidden_to_tray {
-            "TerminalTiler (hidden to background)"
+            format!(
+                "{} (hidden to background)",
+                state.runtime_options.product.tray_title
+            )
         } else {
-            "TerminalTiler"
+            state.runtime_options.product.tray_title.clone()
         };
-        fill_wide_buffer(&mut notify.szTip, tooltip);
+        fill_wide_buffer(&mut notify.szTip, &tooltip);
         let icon = unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION) };
         notify.hIcon = icon;
         unsafe {
@@ -4802,10 +4870,11 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn open_command_palette(hwnd: HWND, state: &mut AppWindowState) {
         let mut actions = Vec::new();
+        let product_info = state.runtime_options.product.clone();
         actions.push(command_palette::PaletteAction {
             title: format!("About {}", state.runtime_options.product.display_name),
             subtitle: "Version, license, source, and open-core model.".into(),
-            on_activate: Rc::new(move || show_about_dialog(hwnd)),
+            on_activate: Rc::new(move || show_about_dialog(hwnd, &product_info)),
         });
         actions.push(command_palette::PaletteAction {
             title: "Refresh Runtime".into(),
@@ -4905,7 +4974,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
 
         if let Some(action) = preferred_followup_action(&snapshot) {
-            invoke_companion_action(parent_hwnd, companion, action);
+            invoke_companion_action(parent_hwnd, state, companion, action);
         }
     }
 
@@ -4974,9 +5043,13 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
     fn invoke_companion_action(
         parent_hwnd: HWND,
+        state: &mut AppWindowState,
         companion: std::sync::Arc<dyn CompanionIntegration>,
         action: CompanionAction,
     ) {
+        if state.companion_action_running {
+            return;
+        }
         if let Some(url) = action.external_url.as_deref() {
             unsafe {
                 MessageBoxW(
@@ -5002,23 +5075,41 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         } else {
             CompanionActionInput::default()
         };
-        match companion.invoke(&action.id, input) {
-            Ok(result) => unsafe {
-                MessageBoxW(
-                    parent_hwnd,
-                    wide(&result.message).as_ptr(),
-                    wide(&action.label).as_ptr(),
-                    MB_OK,
-                );
-            },
-            Err(error) => unsafe {
-                MessageBoxW(
-                    parent_hwnd,
-                    wide(&error).as_ptr(),
-                    wide(&action.label).as_ptr(),
-                    MB_ICONWARNING | MB_OK,
-                );
-            },
+        state.companion_action_running = true;
+        state.companion_action_generation = state.companion_action_generation.wrapping_add(1);
+        let generation = state.companion_action_generation;
+        let timeout = action.timeout;
+        let completion_hwnd = parent_hwnd as isize;
+        let action_id = action.id.clone();
+        let label = action.label.clone();
+        thread::spawn(move || {
+            let completion = Box::new(CompanionActionCompletion {
+                generation,
+                label,
+                result: companion.invoke(&action_id, input),
+            });
+            post_companion_completion(completion_hwnd as HWND, completion);
+        });
+        let label = action.label;
+        let timeout_hwnd = parent_hwnd as isize;
+        thread::spawn(move || {
+            thread::sleep(timeout);
+            let completion = Box::new(CompanionActionCompletion {
+                generation,
+                label,
+                result: Err(format!(
+                    "Companion action timed out after {} seconds",
+                    timeout.as_secs()
+                )),
+            });
+            post_companion_completion(timeout_hwnd as HWND, completion);
+        });
+    }
+
+    fn post_companion_completion(hwnd: HWND, completion: Box<CompanionActionCompletion>) {
+        let raw = Box::into_raw(completion);
+        if unsafe { PostMessageW(hwnd, WM_COMPANION_ACTION_COMPLETE, 0, raw as LPARAM) } == 0 {
+            unsafe { drop(Box::from_raw(raw)) };
         }
     }
 
@@ -5296,9 +5387,36 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         }
     }
 
-    fn show_about_dialog(parent_hwnd: HWND) {
-        let body = product::about_body();
-        let title = product::about_title();
+    fn show_about_dialog(parent_hwnd: HWND, product: &ProductInfo) {
+        let mut lines = vec![format!("{} v{}", product.display_name, product.version)];
+        if let Some(copyright) = product.copyright.as_deref() {
+            lines.push(copyright.to_string());
+        }
+        if let Some(license) = product.license_name.as_deref() {
+            lines.push(license.to_string());
+        }
+        if let Some(copy) = product.about_copy.as_deref() {
+            lines.extend([String::new(), copy.to_string()]);
+        }
+        if let Some(copy) = product.about_extra_copy.as_deref() {
+            lines.extend([String::new(), copy.to_string()]);
+        }
+        lines.extend([
+            String::new(),
+            format!("Website: {}", product.homepage_url),
+            format!("Account: {}", product.account_url),
+            format!("Support: {}", product.support_url),
+            format!("Privacy: {}", product.privacy_url),
+            format!("Terms: {}", product.terms_url),
+        ]);
+        if let Some(source) = product.source_url.as_deref() {
+            lines.push(format!("Source: {source}"));
+        }
+        if let Some(issues) = product.issues_url.as_deref() {
+            lines.push(format!("Issues: {issues}"));
+        }
+        let body = lines.join("\r\n");
+        let title = format!("About {}", product.display_name);
         unsafe {
             MessageBoxW(
                 parent_hwnd,

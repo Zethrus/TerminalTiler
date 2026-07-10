@@ -13,8 +13,6 @@ use crate::storage::session_store::SessionStore;
 use crate::tray;
 use crate::ui::window;
 
-pub const APP_ID: &str = "app.terminaltiler";
-
 pub fn run() -> adw::glib::ExitCode {
     run_with_options(RuntimeOptions::default())
 }
@@ -26,18 +24,19 @@ pub fn run_with_options(options: RuntimeOptions) -> adw::glib::ExitCode {
 
     let (tray_tx, tray_rx) = mpsc::channel();
     let tray_rx = Rc::new(RefCell::new(Some(tray_rx)));
-    let tray_controller = tray::TrayController::start(tray_tx);
-    let app_id = options.product.app_id.as_deref().unwrap_or(APP_ID);
+    let tray_controller = tray::TrayController::start(tray_tx, options.product.clone());
+    let app_id = options.product.effective_gtk_application_id();
     let app = adw::Application::builder().application_id(app_id).build();
 
     {
         let tray_rx = tray_rx.clone();
         let tray_controller = tray_controller.clone();
+        let options = options.clone();
         app.connect_startup(move |app| {
             crate::gtk_shell::load_css_for_default_display();
-            crate::gtk_shell::configure_application_icons();
+            crate::gtk_shell::configure_application_icons_for(&options.product.icon_name);
             if let Some(receiver) = tray_rx.borrow_mut().take() {
-                install_tray_command_pump(app, receiver, tray_controller.clone());
+                install_tray_command_pump(app, receiver, tray_controller.clone(), options.clone());
             }
         });
     }
@@ -64,11 +63,12 @@ fn install_tray_command_pump(
     app: &adw::Application,
     receiver: mpsc::Receiver<tray::TrayCommand>,
     tray_controller: tray::TrayController,
+    options: RuntimeOptions,
 ) {
     let app = app.clone();
     gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
         while let Ok(command) = receiver.try_recv() {
-            handle_tray_command(&app, &tray_controller, command);
+            handle_tray_command(&app, &tray_controller, &options, command);
         }
 
         gtk::glib::ControlFlow::Continue
@@ -78,16 +78,15 @@ fn install_tray_command_pump(
 fn handle_tray_command(
     app: &adw::Application,
     tray_controller: &tray::TrayController,
+    options: &RuntimeOptions,
     command: tray::TrayCommand,
 ) {
     match command {
         tray::TrayCommand::Show => {
-            let options = RuntimeOptions::default();
-            let _ = ensure_main_window(app, tray_controller, &options);
+            let _ = ensure_main_window(app, tray_controller, options);
         }
         tray::TrayCommand::OpenSettings => {
-            let options = RuntimeOptions::default();
-            if let Some(window) = ensure_main_window(app, tray_controller, &options)
+            if let Some(window) = ensure_main_window(app, tray_controller, options)
                 && let Err(error) =
                     gtk::prelude::WidgetExt::activate_action(&window, "win.open-settings", None)
             {
@@ -98,8 +97,7 @@ fn handle_tray_command(
             }
         }
         tray::TrayCommand::OpenStats => {
-            let options = RuntimeOptions::default();
-            if let Some(window) = ensure_main_window(app, tray_controller, &options)
+            if let Some(window) = ensure_main_window(app, tray_controller, options)
                 && let Err(error) =
                     gtk::prelude::WidgetExt::activate_action(&window, "win.open-stats", None)
             {

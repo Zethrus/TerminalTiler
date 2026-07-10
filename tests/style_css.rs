@@ -1,5 +1,6 @@
 const STYLE_CSS: &str = include_str!("../resources/style.css");
 const ABOUT_DIALOG_RS: &str = include_str!("../src/ui/about_dialog.rs");
+const APP_RS: &str = include_str!("../src/app/mod.rs");
 const APP_CHROME_RS: &str = include_str!("../src/ui/app_chrome.rs");
 const APP_PATHS_RS: &str = include_str!("../src/app_paths.rs");
 const APPEARANCE_RS: &str = include_str!("../src/ui/appearance.rs");
@@ -45,6 +46,7 @@ const TERMINAL_HISTORY_RS: &str = include_str!("../src/services/terminal_history
 const TILE_CHROME_RS: &str = include_str!("../src/ui/tile_chrome.rs");
 const TITLE_CHROME_RS: &str = include_str!("../src/ui/title_chrome.rs");
 const TRANSCRIPT_DIALOG_RS: &str = include_str!("../src/ui/transcript_dialog.rs");
+const TRAY_RS: &str = include_str!("../src/tray.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
 const WEB_CONTEXT_MENU_RS: &str = include_str!("../src/ui/web_context_menu.rs");
@@ -88,6 +90,45 @@ const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs"
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
 const VOICE_HUD_RS: &str = include_str!("../src/ui/voice_hud.rs");
+
+#[test]
+fn runtime_product_identity_reaches_tray_restore_detached_windows_and_about() {
+    assert!(
+        APP_RS.contains("TrayController::start(tray_tx, options.product.clone())")
+            && APP_RS.contains("handle_tray_command(&app, &tray_controller, &options, command)")
+            && !APP_RS.contains("let options = RuntimeOptions::default();")
+            && TRAY_RS.contains("self.product.tray_id.clone()")
+            && TRAY_RS.contains("self.product.tray_title.clone()")
+            && TRAY_RS.contains("self.product.icon_name.clone()")
+            && WINDOW_RS
+                .matches(".icon_name(&options.product.icon_name)")
+                .count()
+                >= 2
+            && WINDOWS_GTK_APP_RS.contains("product: ProductIdentity")
+            && WINDOWS_GTK_APP_RS.contains(".icon_name(&shell_state.product.icon_name)")
+            && WINDOWS_APP_RS.contains("options.product.effective_windows_app_user_model_id()")
+            && ABOUT_DIALOG_RS.contains("product_info.version")
+            && ABOUT_DIALOG_RS.contains("&product_info.account_url")
+            && ABOUT_DIALOG_RS.contains("product_info.source_url.as_deref()"),
+        "the supplied identity must remain authoritative across initial launch, tray restore, detached windows, platform shell IDs, and About links"
+    );
+}
+
+#[test]
+fn companion_actions_dispatch_off_ui_thread_with_busy_timeout_and_visible_completion() {
+    assert!(
+        COMPANION_DIALOG_RS.contains("std::thread::spawn")
+            && COMPANION_DIALOG_RS.contains("button.set_sensitive(false)")
+            && COMPANION_DIALOG_RS.contains("started.elapsed() >= timeout")
+            && COMPANION_DIALOG_RS.contains("present_with_notice")
+            && WINDOWS_APP_RS.contains("WM_COMPANION_ACTION_COMPLETE")
+            && WINDOWS_APP_RS.contains("thread::spawn(move ||")
+            && WINDOWS_APP_RS.contains("state.companion_action_running")
+            && WINDOWS_APP_RS.contains("thread::sleep(timeout)")
+            && WINDOWS_APP_RS.contains("post_companion_completion"),
+        "companion invocation must not block GTK or Win32 UI threads and must suppress duplicates, time out, and surface completion"
+    );
+}
 const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");
@@ -1183,7 +1224,9 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
                 .contains("crate::ui::workspace_preview::SessionPreview::with_runtime_assets")
             && WINDOWS_GTK_APP_RS.contains("with_runtime_assets_and_change_handler")
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState")
-            && WINDOWS_GTK_APP_RS.contains("WindowsGtkShellState::new(session_store.clone())")
+            && WINDOWS_GTK_APP_RS.contains(
+                "WindowsGtkShellState::new(session_store.clone(), options.product.clone())"
+            )
             && WINDOWS_GTK_APP_RS.contains("window.connect_close_request")
             && WINDOWS_GTK_APP_RS.contains("let quit_requested = Rc::new(Cell::new(false))")
             && WINDOWS_GTK_APP_RS
@@ -2302,21 +2345,17 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
 
     assert!(
         GTK_SHELL_RS.contains("pub const APP_ICON_NAME: &str = \"terminaltiler\"")
-            && GTK_SHELL_RS.contains("pub fn configure_application_icons()")
+            && GTK_SHELL_RS.contains("pub fn configure_application_icons_for(icon_name: &str)")
             && GTK_SHELL_RS.contains("gtk::IconTheme::for_display")
             && GTK_SHELL_RS.contains("icon_theme.add_search_path(path)")
-            && GTK_SHELL_RS.contains("gtk::Window::set_default_icon_name(APP_ICON_NAME)")
-            && WINDOW_RS.contains(".icon_name(gtk_shell::APP_ICON_NAME)")
-            && WINDOWS_GTK_APP_RS.contains("crate::gtk_shell::configure_application_icons()")
-            && WINDOWS_GTK_APP_RS.contains(".icon_name(crate::gtk_shell::APP_ICON_NAME)")
+            && GTK_SHELL_RS.contains("gtk::Window::set_default_icon_name(icon_name)")
+            && WINDOW_RS.contains(".icon_name(&options.product.icon_name)")
             && WINDOWS_GTK_APP_RS
-                .contains("const WINDOWS_APP_USER_MODEL_ID: &str = \"Zethrus.TerminalTiler\"")
+                .contains("crate::gtk_shell::configure_application_icons_for(&icon_name)")
+            && WINDOWS_GTK_APP_RS.contains(".icon_name(&options.product.icon_name)")
             && WINDOWS_GTK_APP_RS
                 .contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
-            && source_contains(
-                WINDOWS_GTK_APP_RS,
-                ".app_id\n            .as_deref()\n            .unwrap_or(WINDOWS_APP_USER_MODEL_ID)",
-            )
+            && WINDOWS_GTK_APP_RS.contains("options.product.effective_windows_app_user_model_id()")
             && WINDOWS_GTK_APP_RS
                 .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
             && CARGO_TOML.contains("\"Win32_UI_Shell\""),
@@ -3235,11 +3274,19 @@ fn dynamic_tile_header_labels_are_ellipsized_capped_and_tooltipped() {
             source.contains("build_tile_header_chrome(TileHeaderInput"),
             "{source_name} should build visible header labels through the shared tile header helper"
         );
-        assert!(
-            source.contains("set_tooltip_text(Some(&new_title))"),
-            "{source_name} should preserve updated title text in tooltips"
-        );
     }
+    assert!(
+        TILE_VIEW_RS.contains("title_label.set_text(&cleaned)")
+            && TILE_VIEW_RS.contains("title_label.set_tooltip_text(Some(&cleaned))")
+            && TILE_VIEW_RS.contains("title_label.set_tooltip_text(Some(&format!(")
+            && TILE_VIEW_RS.contains("resolved.title"),
+        "terminal title updates from both OSC and agent sessions should retain the full updated title in the tooltip"
+    );
+    assert!(
+        WEB_TILE_RS.contains("title_label.set_text(&new_title)")
+            && WEB_TILE_RS.contains("title_label.set_tooltip_text(Some(&new_title))"),
+        "web tile title updates should retain the full updated title in the tooltip"
+    );
 
     assert!(
         TILE_CHROME_RS.contains("build_pane_group_chip(&input.tile.pane_groups)")

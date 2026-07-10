@@ -13,6 +13,7 @@ pub mod project_suggestions;
 pub mod review_dispatch;
 pub mod runbooks;
 pub mod session_restore;
+pub mod session_title;
 pub mod snippets;
 pub mod stats;
 mod template_variables;
