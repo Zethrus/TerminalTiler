@@ -46,7 +46,42 @@ pub(crate) fn atomic_write_private_unlocked(path: &Path, contents: &str) -> io::
 
 /// Stage every document before committing any target. If a later rename fails,
 /// already committed targets are restored from their in-memory backups.
+#[cfg(test)]
 pub(crate) fn transactional_write_private_unlocked(writes: &[(PathBuf, String)]) -> io::Result<()> {
+    transactional_apply_private_unlocked(writes, &[])
+}
+
+/// Apply a mixed set of writes and removals as one filesystem transaction.
+///
+/// Every replacement is staged before the first target changes. Existing
+/// files are retained either in memory (writes) or as same-directory rollback
+/// files (removals) until the complete commit succeeds. This is intentionally
+/// lock-free: callers must hold the shared persistence lock for the whole
+/// preflight/stage/commit sequence.
+pub(crate) fn transactional_apply_private_unlocked(
+    writes: &[(PathBuf, String)],
+    removals: &[PathBuf],
+) -> io::Result<()> {
+    let mut targets = std::collections::BTreeSet::new();
+    for target in writes
+        .iter()
+        .map(|(target, _)| target)
+        .chain(removals.iter())
+    {
+        if !targets.insert(target.clone()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("duplicate transaction target '{}'", target.display()),
+            ));
+        }
+        if target.exists() && !target.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("sync target '{}' is not a regular file", target.display()),
+            ));
+        }
+    }
+
     let mut staged = Vec::with_capacity(writes.len());
     for (target, contents) in writes {
         let parent = target.parent().ok_or_else(|| {
@@ -85,6 +120,24 @@ pub(crate) fn transactional_write_private_unlocked(writes: &[(PathBuf, String)])
         staged.push((target.clone(), stage, backup));
     }
 
+    let mut moved_removals = Vec::new();
+    for target in removals {
+        if !target.exists() {
+            continue;
+        }
+        let backup = sibling_temp_path(target);
+        if let Err(error) = fs::rename(target, &backup) {
+            for (original, previous_backup) in moved_removals.iter().rev() {
+                let _ = fs::rename(previous_backup, original);
+            }
+            for (_, stage, _) in &staged {
+                let _ = fs::remove_file(stage);
+            }
+            return Err(error);
+        }
+        moved_removals.push((target.clone(), backup));
+    }
+
     for index in 0..staged.len() {
         let (target, stage, _) = &staged[index];
         if let Err(error) = replace_file(stage, target) {
@@ -102,8 +155,17 @@ pub(crate) fn transactional_write_private_unlocked(writes: &[(PathBuf, String)])
             for (_, remaining_stage, _) in &staged[index..] {
                 let _ = fs::remove_file(remaining_stage);
             }
+            for (original, backup) in moved_removals.iter().rev() {
+                let _ = fs::rename(backup, original);
+            }
             return Err(error);
         }
+        if let Some(parent) = target.parent() {
+            sync_dir(parent);
+        }
+    }
+    for (target, backup) in moved_removals {
+        let _ = fs::remove_file(backup);
         if let Some(parent) = target.parent() {
             sync_dir(parent);
         }
@@ -149,43 +211,6 @@ fn replace_file(staged: &Path, target: &Path) -> io::Result<()> {
     } else {
         Ok(())
     }
-}
-
-/// Remove a batch of private documents atomically from the caller's point of
-/// view. Targets are first moved to same-directory backups. If moving a later
-/// target fails, every earlier target is restored before returning the error.
-pub(crate) fn transactional_remove_private_unlocked(paths: &[PathBuf]) -> io::Result<()> {
-    let mut moved = Vec::new();
-    for target in paths {
-        if !target.exists() {
-            continue;
-        }
-        if !target.is_file() {
-            for (original, backup) in moved.iter().rev() {
-                let _ = fs::rename(backup, original);
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("sync target '{}' is not a regular file", target.display()),
-            ));
-        }
-        let backup = sibling_temp_path(target);
-        if let Err(error) = fs::rename(target, &backup) {
-            for (original, previous_backup) in moved.iter().rev() {
-                let _ = fs::rename(previous_backup, original);
-            }
-            return Err(error);
-        }
-        moved.push((target.clone(), backup));
-    }
-
-    for (target, backup) in moved {
-        let _ = fs::remove_file(backup);
-        if let Some(parent) = target.parent() {
-            sync_dir(parent);
-        }
-    }
-    Ok(())
 }
 
 pub fn preserve_corrupt_file(path: &Path) -> io::Result<Option<PathBuf>> {

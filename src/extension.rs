@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::BTreeSet, env};
 
 use crate::model::assets::{AgentRoleTemplate, CliSnippet, Runbook};
 use crate::model::preset::WorkspacePreset;
@@ -12,6 +13,32 @@ pub const CORE_EXTENSION_API_VERSION: u32 = 1;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Machine-readable Core capability probe used by packaged-runtime checks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeCapabilities {
+    pub core_package_version: String,
+    pub extension_api_version: u32,
+    pub target_os: String,
+    pub mcp: bool,
+    pub full_desktop: bool,
+    pub voice: bool,
+    pub windows_gtk_shell: bool,
+    pub windows_win32_shell: bool,
+}
+
+pub fn runtime_capabilities() -> RuntimeCapabilities {
+    RuntimeCapabilities {
+        core_package_version: CORE_PACKAGE_VERSION.to_string(),
+        extension_api_version: CORE_EXTENSION_API_VERSION,
+        target_os: env::consts::OS.to_string(),
+        mcp: true,
+        full_desktop: cfg!(feature = "full-desktop"),
+        voice: cfg!(feature = "voice-cpal"),
+        windows_gtk_shell: cfg!(feature = "windows-gtk-shell"),
+        windows_win32_shell: cfg!(feature = "windows-win32-shell"),
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct RuntimeOptions {
@@ -300,10 +327,115 @@ pub struct CatalogContributions {
     pub snippets: Vec<CliSnippet>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum CatalogItemKind {
+    Preset,
+    RoleTemplate,
+    Runbook,
+    Snippet,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogItemOrigin {
+    Persisted,
+    Provider {
+        namespace: String,
+        revision: String,
+        trust: CatalogTrustMetadata,
+    },
+}
+
+impl CatalogItemOrigin {
+    pub fn read_only(&self) -> bool {
+        match self {
+            Self::Persisted => false,
+            Self::Provider { .. } => true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogViewEntry {
+    pub kind: CatalogItemKind,
+    pub id: String,
+    pub origin: CatalogItemOrigin,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CatalogPersistedIds {
+    pub presets: BTreeSet<String>,
+    pub role_templates: BTreeSet<String>,
+    pub runbooks: BTreeSet<String>,
+    pub snippets: BTreeSet<String>,
+}
+
+impl CatalogContributions {
+    /// Origin metadata for provider items that actually participate in the
+    /// effective view. Colliding persisted ids remain user-owned and editable.
+    pub fn effective_view_metadata(
+        &self,
+        persisted: &CatalogPersistedIds,
+    ) -> Vec<CatalogViewEntry> {
+        let provider_origin = || CatalogItemOrigin::Provider {
+            namespace: self.namespace.clone(),
+            revision: self.revision.clone(),
+            trust: self.trust.clone(),
+        };
+        let mut entries = Vec::new();
+        entries.extend(
+            self.presets
+                .iter()
+                .filter(|item| !persisted.presets.contains(&item.id))
+                .map(|item| CatalogViewEntry {
+                    kind: CatalogItemKind::Preset,
+                    id: item.id.clone(),
+                    origin: provider_origin(),
+                }),
+        );
+        entries.extend(
+            self.role_templates
+                .iter()
+                .filter(|item| !persisted.role_templates.contains(&item.id))
+                .map(|item| CatalogViewEntry {
+                    kind: CatalogItemKind::RoleTemplate,
+                    id: item.id.clone(),
+                    origin: provider_origin(),
+                }),
+        );
+        entries.extend(
+            self.runbooks
+                .iter()
+                .filter(|item| !persisted.runbooks.contains(&item.id))
+                .map(|item| CatalogViewEntry {
+                    kind: CatalogItemKind::Runbook,
+                    id: item.id.clone(),
+                    origin: provider_origin(),
+                }),
+        );
+        entries.extend(
+            self.snippets
+                .iter()
+                .filter(|item| !persisted.snippets.contains(&item.id))
+                .map(|item| CatalogViewEntry {
+                    kind: CatalogItemKind::Snippet,
+                    id: item.id.clone(),
+                    origin: provider_origin(),
+                }),
+        );
+        entries
+    }
+}
+
 pub trait CatalogContributionProvider: Send + Sync {
     /// Returns cached, runtime-only contributions. Implementations must not
     /// perform network or filesystem writes from this method.
     fn contributions(&self) -> Option<CatalogContributions>;
+
+    fn view_metadata(&self, persisted: &CatalogPersistedIds) -> Vec<CatalogViewEntry> {
+        self.contributions()
+            .map(|contributions| contributions.effective_view_metadata(persisted))
+            .unwrap_or_default()
+    }
 }
 
 pub trait CompanionIntegration: Send + Sync {
@@ -318,5 +450,50 @@ pub trait CompanionIntegration: Send + Sync {
 
     fn drain_events(&self) -> Vec<CompanionEvent> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod additive_api_tests {
+    use super::*;
+    use crate::model::preset::builtin_presets;
+
+    #[test]
+    fn runtime_probe_reports_the_unchanged_extension_api() {
+        let capabilities = runtime_capabilities();
+
+        assert_eq!(capabilities.extension_api_version, 1);
+        assert_eq!(capabilities.core_package_version, env!("CARGO_PKG_VERSION"));
+        assert!(capabilities.mcp);
+        assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
+    }
+
+    #[test]
+    fn catalog_metadata_keeps_colliding_persisted_ids_user_owned() {
+        let mut collision = builtin_presets().remove(0);
+        collision.name = "Provider collision".into();
+        let mut provider_only = collision.clone();
+        provider_only.id = "provider-only".into();
+        let contributions = CatalogContributions {
+            namespace: "example.pack".into(),
+            revision: "7".into(),
+            trust: CatalogTrustMetadata {
+                read_only: true,
+                executable_content: true,
+                trusted: true,
+            },
+            presets: vec![collision.clone(), provider_only],
+            ..CatalogContributions::default()
+        };
+        let persisted = CatalogPersistedIds {
+            presets: BTreeSet::from([collision.id]),
+            ..CatalogPersistedIds::default()
+        };
+
+        let entries = contributions.effective_view_metadata(&persisted);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "provider-only");
+        assert!(entries[0].origin.read_only());
     }
 }

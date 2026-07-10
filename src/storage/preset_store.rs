@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths;
-use crate::extension::CatalogContributionProvider;
+use crate::extension::{CatalogContributionProvider, CatalogPersistedIds, CatalogViewEntry};
 use crate::logging;
 use crate::model::preset::{WorkspacePreset, builtin_presets, is_builtin_preset_id};
 use crate::storage::document::{
@@ -69,6 +69,7 @@ impl PresetStore {
         }
     }
 
+    #[cfg(test)]
     pub fn load_presets(&self) -> Vec<WorkspacePreset> {
         self.load_presets_with_status().presets
     }
@@ -154,8 +155,14 @@ impl PresetStore {
                 "TerminalTiler config directory is unavailable",
             ));
         };
+        if self.is_provider_only_preset(&preset.id) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed catalog presets are read-only; save as a new preset instead",
+            ));
+        }
 
-        let mut presets = self.load_presets();
+        let mut presets = self.load_persisted_presets_with_status().presets;
         if let Some(existing) = presets.iter_mut().find(|item| item.id == preset.id) {
             *existing = preset;
         } else {
@@ -171,8 +178,14 @@ impl PresetStore {
                 "TerminalTiler config directory is unavailable",
             ));
         };
+        if self.is_provider_only_preset(preset_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "managed catalog presets cannot be deleted",
+            ));
+        }
 
-        let mut presets = self.load_presets();
+        let mut presets = self.load_persisted_presets_with_status().presets;
         let before_len = presets.len();
         presets.retain(|p| p.id != preset_id);
 
@@ -191,7 +204,8 @@ impl PresetStore {
         };
 
         let user_presets = self
-            .load_presets()
+            .load_persisted_presets_with_status()
+            .presets
             .into_iter()
             .filter(|preset| !is_builtin_preset_id(&preset.id))
             .collect::<Vec<_>>();
@@ -202,14 +216,61 @@ impl PresetStore {
         self.write_presets_to_path(path, &presets)
     }
 
+    pub fn catalog_view_metadata(&self) -> Vec<CatalogViewEntry> {
+        let persisted = CatalogPersistedIds {
+            presets: self
+                .load_persisted_presets_with_status()
+                .presets
+                .into_iter()
+                .map(|preset| preset.id)
+                .collect(),
+            ..CatalogPersistedIds::default()
+        };
+        self.catalog
+            .as_ref()
+            .map(|provider| provider.view_metadata(&persisted))
+            .unwrap_or_default()
+    }
+
+    fn is_provider_only_preset(&self, preset_id: &str) -> bool {
+        self.catalog_view_metadata()
+            .iter()
+            .any(|entry| entry.id == preset_id && entry.origin.read_only())
+    }
+
     fn write_presets_to_path(
         &self,
         path: &std::path::Path,
         presets: &[WorkspacePreset],
     ) -> io::Result<()> {
+        let persisted_ids = self
+            .load_persisted_presets_with_status()
+            .presets
+            .into_iter()
+            .map(|preset| preset.id)
+            .collect::<std::collections::HashSet<_>>();
+        let provider_ids = self
+            .catalog
+            .as_ref()
+            .and_then(|provider| provider.contributions())
+            .map(|contributions| {
+                contributions
+                    .presets
+                    .into_iter()
+                    .map(|preset| preset.id)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let presets = presets
+            .iter()
+            .filter(|preset| {
+                !provider_ids.contains(&preset.id) || persisted_ids.contains(&preset.id)
+            })
+            .cloned()
+            .collect();
         let document = PresetDocument {
             version: STORE_VERSION,
-            presets: presets.to_vec(),
+            presets,
         };
         write_toml_private(path, &document)
     }
@@ -296,6 +357,24 @@ mod tests {
         assert!(
             !path.exists(),
             "runtime contributions must not seed user files"
+        );
+
+        store
+            .upsert_preset(custom_preset("user-owned", "User owned"))
+            .unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("user-owned"));
+        assert!(!raw.contains("runtime-only-preset"));
+        assert!(store.delete_preset("runtime-only-preset").is_err());
+        let metadata = store.catalog_view_metadata();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].id, "runtime-only-preset");
+        assert!(metadata[0].origin.read_only());
+        store.reset_builtin_presets().unwrap();
+        assert!(
+            !fs::read_to_string(path)
+                .unwrap()
+                .contains("runtime-only-preset")
         );
     }
 

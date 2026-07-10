@@ -6,7 +6,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths;
-use crate::extension::CatalogContributionProvider;
+use crate::extension::{
+    CatalogContributionProvider, CatalogItemKind, CatalogPersistedIds, CatalogViewEntry,
+};
 use crate::logging;
 use crate::model::assets::{WorkspaceAssets, builtin_role_templates};
 use crate::model::workspace_config::{ConfigScope, WorkspaceConfig};
@@ -214,11 +216,29 @@ impl AssetStore {
                     .workspace_config_store
                     .load_for_root(workspace_root)
                     .config;
-                config.assets = assets.clone();
+                config.assets = self.without_provider_only_assets(assets);
                 self.workspace_config_store
                     .save_for_root(workspace_root, &config)
             }
         }
+    }
+
+    pub fn catalog_view_metadata(&self) -> Vec<CatalogViewEntry> {
+        let assets = self.load_persisted_assets_with_status().assets;
+        let persisted = CatalogPersistedIds {
+            role_templates: assets
+                .role_templates
+                .into_iter()
+                .map(|item| item.id)
+                .collect(),
+            runbooks: assets.runbooks.into_iter().map(|item| item.id).collect(),
+            snippets: assets.snippets.into_iter().map(|item| item.id).collect(),
+            ..CatalogPersistedIds::default()
+        };
+        self.catalog
+            .as_ref()
+            .map(|provider| provider.view_metadata(&persisted))
+            .unwrap_or_default()
     }
 
     fn write_assets_to_path(
@@ -226,6 +246,7 @@ impl AssetStore {
         path: &std::path::Path,
         assets: &WorkspaceAssets,
     ) -> io::Result<()> {
+        let assets = self.without_provider_only_assets(assets);
         let document = AssetDocument {
             version: STORE_VERSION,
             connection_profiles: assets.connection_profiles.clone(),
@@ -244,6 +265,47 @@ impl AssetStore {
             snippets: assets.snippets.clone(),
         };
         write_toml_private(path, &document)
+    }
+
+    fn without_provider_only_assets(&self, assets: &WorkspaceAssets) -> WorkspaceAssets {
+        let persisted = self.load_persisted_assets_with_status().assets;
+        let persisted_role_ids = persisted
+            .role_templates
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<HashSet<_>>();
+        let persisted_runbook_ids = persisted
+            .runbooks
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<HashSet<_>>();
+        let persisted_snippet_ids = persisted
+            .snippets
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<HashSet<_>>();
+        let metadata = self.catalog_view_metadata();
+        let provider_ids = |kind| {
+            metadata
+                .iter()
+                .filter(|entry| entry.kind == kind && entry.origin.read_only())
+                .map(|entry| entry.id.clone())
+                .collect::<HashSet<_>>()
+        };
+        let provider_role_ids = provider_ids(CatalogItemKind::RoleTemplate);
+        let provider_runbook_ids = provider_ids(CatalogItemKind::Runbook);
+        let provider_snippet_ids = provider_ids(CatalogItemKind::Snippet);
+        let mut filtered = assets.clone();
+        filtered.role_templates.retain(|item| {
+            !provider_role_ids.contains(&item.id) || persisted_role_ids.contains(&item.id)
+        });
+        filtered.runbooks.retain(|item| {
+            !provider_runbook_ids.contains(&item.id) || persisted_runbook_ids.contains(&item.id)
+        });
+        filtered.snippets.retain(|item| {
+            !provider_snippet_ids.contains(&item.id) || persisted_snippet_ids.contains(&item.id)
+        });
+        filtered
     }
 
     fn recover_invalid_asset_document(
@@ -370,10 +432,23 @@ where
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use uuid::Uuid;
 
     use super::AssetStore;
+    use crate::extension::{
+        CatalogContributionProvider, CatalogContributions, CatalogItemKind, CatalogTrustMetadata,
+    };
+    use crate::model::assets::CliSnippet;
+
+    struct TestCatalog(CatalogContributions);
+
+    impl CatalogContributionProvider for TestCatalog {
+        fn contributions(&self) -> Option<CatalogContributions> {
+            Some(self.0.clone())
+        }
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("terminaltiler-{prefix}-{}", Uuid::new_v4()));
@@ -406,5 +481,49 @@ mod tests {
             })
             .count();
         assert_eq!(preserved, 1);
+    }
+
+    #[test]
+    fn saving_effective_assets_never_persists_provider_items() {
+        let dir = temp_dir("provider-assets");
+        let path = dir.join("workspace-assets.toml");
+        let provider = Arc::new(TestCatalog(CatalogContributions {
+            namespace: "test.catalog".into(),
+            revision: "1".into(),
+            trust: CatalogTrustMetadata {
+                read_only: true,
+                executable_content: true,
+                trusted: true,
+            },
+            snippets: vec![CliSnippet {
+                id: "provider-command".into(),
+                name: "Provider command".into(),
+                description: String::new(),
+                command: "echo managed".into(),
+                variables: Vec::new(),
+                tags: Vec::new(),
+            }],
+            ..CatalogContributions::default()
+        }));
+        let store = AssetStore::from_path(path.clone()).with_catalog_provider(Some(provider));
+
+        let effective = store.load_assets();
+        assert!(
+            effective
+                .snippets
+                .iter()
+                .any(|snippet| snippet.id == "provider-command")
+        );
+        store.save_assets(&effective).unwrap();
+
+        assert!(
+            !fs::read_to_string(path)
+                .unwrap()
+                .contains("provider-command")
+        );
+        let metadata = store.catalog_view_metadata();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].kind, CatalogItemKind::Snippet);
+        assert!(metadata[0].origin.read_only());
     }
 }

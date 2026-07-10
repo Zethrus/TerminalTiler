@@ -13,6 +13,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths;
+use crate::extension::CompanionRefreshScope;
+
+mod workspace_registry;
+pub use workspace_registry::{
+    ActiveWorkspaceRegistry, WorkspaceDescriptor, WorkspaceRegistrySnapshot,
+    WorkspaceRegistrySnapshotCallback,
+};
 
 pub use crate::model::{
     assets::{
@@ -58,10 +65,56 @@ pub struct SyncSnapshotOptions {
     pub workspace_roots: Vec<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncExportScope {
     Personal,
     Team,
+}
+
+/// Explicit selection of portable global assets.
+///
+/// The empty default is deliberate: global commands never become syncable as
+/// a side effect of adding a new asset class or enabling Sync.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncAssetSelection {
+    #[serde(default)]
+    pub role_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub runbook_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub snippet_ids: BTreeSet<String>,
+}
+
+/// Additive v2 export selection using opaque workspace descriptors and
+/// explicit asset ids. `SyncExportSelection` remains supported for extension
+/// API v1 consumers.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncExportSelectionV2 {
+    pub scope: SyncExportScope,
+    pub preferences: bool,
+    pub presets: bool,
+    #[serde(default)]
+    pub assets: SyncAssetSelection,
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceDescriptor>,
+}
+
+impl SyncExportSelectionV2 {
+    pub fn personal(
+        preferences: bool,
+        presets: bool,
+        assets: SyncAssetSelection,
+        workspaces: Vec<WorkspaceDescriptor>,
+    ) -> Self {
+        Self {
+            scope: SyncExportScope::Personal,
+            preferences,
+            presets,
+            assets,
+            workspaces,
+        }
+    }
 }
 
 /// Typed, caller-owned export selection. It intentionally has no `Default` so
@@ -154,6 +207,17 @@ pub struct SyncTombstone {
     pub deleted_at: String,
 }
 
+/// One preflighted filesystem transaction containing remote documents and
+/// deletions. Callers should prefer this over applying snapshots and
+/// tombstones separately.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SyncApplyBatch {
+    #[serde(default)]
+    pub documents: Vec<SyncDocument>,
+    #[serde(default)]
+    pub tombstones: Vec<SyncTombstone>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SyncSnapshot {
     pub documents: Vec<SyncDocument>,
@@ -197,6 +261,15 @@ pub struct SyncDocumentApplyResult {
     pub id: String,
     pub outcome: SyncDocumentApplyOutcome,
     pub message: Option<String>,
+}
+
+/// Structured result suitable for background controllers and platform UI
+/// dispatch. `report` retains the extension API v1 counters.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SyncApplyResult {
+    pub report: ApplyReport,
+    pub affected_scopes: Vec<CompanionRefreshScope>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -410,6 +483,50 @@ pub fn load_sync_snapshot_selected(selection: SyncExportSelection) -> io::Result
     Ok(SyncSnapshot { documents })
 }
 
+/// Builds a snapshot using explicit global-asset ids and opaque workspace
+/// identities. Unknown ids are ignored rather than broadening the export.
+pub fn load_sync_snapshot_selected_v2(
+    selection: SyncExportSelectionV2,
+) -> io::Result<SyncSnapshot> {
+    let mut documents = Vec::new();
+    if selection.preferences
+        && let Some(path) = preferences_path()
+    {
+        push_preference_document_if_exists(&mut documents, &path)?;
+    }
+    if selection.presets
+        && let Some(path) = presets_path()
+    {
+        push_portable_preset_document_if_exists(&mut documents, &path)?;
+    }
+    if (!selection.assets.role_ids.is_empty()
+        || !selection.assets.runbook_ids.is_empty()
+        || !selection.assets.snippet_ids.is_empty())
+        && let Some(path) = assets_path()
+    {
+        push_selected_asset_document_if_exists(&mut documents, &path, &selection.assets)?;
+    }
+
+    let mut workspace_ids = BTreeSet::new();
+    for workspace in selection.workspaces {
+        if !workspace_ids.insert(workspace.id.clone()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("duplicate workspace descriptor id '{}'", workspace.id),
+            ));
+        }
+        validate_opaque_workspace_id(&workspace.id)?;
+        let path = workspace_config_path(&workspace.root);
+        push_selected_workspace_document_if_exists(
+            &mut documents,
+            &workspace.id,
+            &path,
+            &selection.assets,
+        )?;
+    }
+    Ok(SyncSnapshot { documents })
+}
+
 pub fn apply_sync_snapshot(
     snapshot: &SyncSnapshot,
     conflict_policy: ConflictPolicy,
@@ -427,89 +544,125 @@ pub fn apply_sync_snapshot_with_options(
     snapshot: &SyncSnapshot,
     options: &SyncApplyOptions,
 ) -> io::Result<ApplyReport> {
-    let mut prepared = Vec::with_capacity(snapshot.documents.len());
-    let mut seen_ids = BTreeSet::new();
-    let mut seen_paths = BTreeSet::new();
-    let mut report = ApplyReport::default();
+    apply_sync_batch_with_options(
+        &SyncApplyBatch {
+            documents: snapshot.documents.clone(),
+            tombstones: Vec::new(),
+        },
+        options,
+    )
+    .map(|result| result.report)
+}
 
-    // Validate the complete batch before the first write so malformed later
-    // documents cannot leave a partially applied snapshot.
-    for document in &snapshot.documents {
-        if !seen_ids.insert(document.id.clone()) {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: document.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some("duplicate sync document id".into()),
-            });
+/// Applies documents and tombstones under one preflight and one shared
+/// persistence lock. No target changes when any later operation is invalid.
+pub fn apply_sync_batch_with_options(
+    batch: &SyncApplyBatch,
+    options: &SyncApplyOptions,
+) -> io::Result<SyncApplyResult> {
+    let mut prepared_documents = Vec::with_capacity(batch.documents.len());
+    let mut prepared_tombstones = Vec::with_capacity(batch.tombstones.len());
+    let mut seen_ids = BTreeMap::new();
+    let mut seen_paths = BTreeSet::new();
+    let mut result = SyncApplyResult::default();
+
+    for document in &batch.documents {
+        if let Some(existing_kind) = seen_ids.insert(document.id.clone(), document.kind.clone()) {
+            push_preflight_error(
+                &mut result,
+                &document.id,
+                format!("duplicate sync route id (already used by {existing_kind:?})"),
+            );
             continue;
         }
-        if let Err(error) = validate_logical_path(document) {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: document.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some(error.to_string()),
-            });
+        if let Err(error) = validate_logical_path(document)
+            .and_then(|_| validate_sync_document_identity(document))
+            .and_then(|_| validate_sync_document(document))
+        {
+            push_preflight_error(&mut result, &document.id, error.to_string());
             continue;
         }
         let path = match path_for_sync_document(document, &options.workspace_destinations) {
             Ok(path) => path,
             Err(error) => {
-                report.errors += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: document.id.clone(),
-                    outcome: SyncDocumentApplyOutcome::Error,
-                    message: Some(error.to_string()),
-                });
+                push_preflight_error(&mut result, &document.id, error.to_string());
                 continue;
             }
         };
         if let Some(path) = &path
             && !seen_paths.insert(path.clone())
         {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: document.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some("multiple sync documents resolve to the same destination".into()),
-            });
+            push_preflight_error(
+                &mut result,
+                &document.id,
+                "multiple sync routes resolve to the same destination",
+            );
             continue;
         }
-        if let Err(error) = validate_sync_document(document) {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: document.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some(error.to_string()),
-            });
-            continue;
-        }
-        prepared.push((document.clone(), path));
+        prepared_documents.push((document.clone(), path));
     }
-    if report.errors > 0 {
-        return Ok(report);
+
+    for tombstone in &batch.tombstones {
+        if let Some(existing_kind) = seen_ids.insert(tombstone.id.clone(), tombstone.kind.clone()) {
+            push_preflight_error(
+                &mut result,
+                &tombstone.id,
+                format!("duplicate sync route id (already used by {existing_kind:?})"),
+            );
+            continue;
+        }
+        if let Err(error) = validate_sync_tombstone(tombstone) {
+            push_preflight_error(&mut result, &tombstone.id, error.to_string());
+            continue;
+        }
+        let route = SyncDocument {
+            kind: tombstone.kind.clone(),
+            id: tombstone.id.clone(),
+            logical_path: logical_path_for_kind(&tombstone.kind).into(),
+            contents: String::new(),
+        };
+        let path = match path_for_sync_document(&route, &options.workspace_destinations) {
+            Ok(path) => path,
+            Err(error) => {
+                push_preflight_error(&mut result, &tombstone.id, error.to_string());
+                continue;
+            }
+        };
+        if let Some(path) = &path
+            && !seen_paths.insert(path.clone())
+        {
+            push_preflight_error(
+                &mut result,
+                &tombstone.id,
+                "multiple sync routes resolve to the same destination",
+            );
+            continue;
+        }
+        prepared_tombstones.push((tombstone.clone(), path));
+    }
+
+    if result.report.errors > 0 {
+        return Ok(result);
     }
 
     crate::storage::fs_utils::with_persistence_lock(|| {
         let mut writes = Vec::new();
-        for (document, path) in prepared {
+        let mut removals = Vec::new();
+        for (document, path) in prepared_documents {
             let Some(path) = path else {
-                report.skipped += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: document.id,
-                    outcome: SyncDocumentApplyOutcome::Skipped,
-                    message: Some("no approved local destination".into()),
-                });
+                push_skipped(
+                    &mut result.report,
+                    document.id,
+                    "no approved local destination",
+                );
                 continue;
             };
             if path.exists() && options.conflict_policy == ConflictPolicy::PreferLocal {
-                report.skipped += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: document.id,
-                    outcome: SyncDocumentApplyOutcome::Skipped,
-                    message: Some("local destination was preferred".into()),
-                });
+                push_skipped(
+                    &mut result.report,
+                    document.id,
+                    "local destination was preferred",
+                );
                 continue;
             }
             let contents = if document.kind == SyncDocumentKind::Preferences {
@@ -517,110 +670,96 @@ pub fn apply_sync_snapshot_with_options(
             } else {
                 document.contents
             };
-            report.documents.push(SyncDocumentApplyResult {
-                id: document.id,
-                outcome: SyncDocumentApplyOutcome::Applied,
-                message: None,
-            });
+            push_applied(&mut result.report, document.id);
+            push_refresh_scope(&mut result.affected_scopes, scope_for_kind(&document.kind));
             writes.push((path, contents));
         }
-        crate::storage::fs_utils::transactional_write_private_unlocked(&writes)?;
-        report.applied = writes.len();
+        for (tombstone, path) in prepared_tombstones {
+            let Some(path) = path else {
+                push_skipped(
+                    &mut result.report,
+                    tombstone.id,
+                    "no approved local destination",
+                );
+                continue;
+            };
+            if !path.exists() {
+                push_skipped(
+                    &mut result.report,
+                    tombstone.id,
+                    "local destination is already absent",
+                );
+                continue;
+            }
+            push_applied(&mut result.report, tombstone.id);
+            push_refresh_scope(&mut result.affected_scopes, scope_for_kind(&tombstone.kind));
+            removals.push(path);
+        }
+        crate::storage::fs_utils::transactional_apply_private_unlocked(&writes, &removals)?;
+        result.report.applied = writes.len() + removals.len();
         Ok(())
     })?;
-    Ok(report)
+    Ok(result)
 }
 
 /// Applies remote deletions using the same destination authority and shared
-/// persistence lock as snapshot writes. The complete batch is routed before
-/// any file is removed.
+/// persistence lock as snapshot writes. New callers should submit a
+/// `SyncApplyBatch` so writes and deletions cannot be split across transactions.
 pub fn apply_sync_tombstones_with_options(
     tombstones: &[SyncTombstone],
     options: &SyncApplyOptions,
 ) -> io::Result<ApplyReport> {
-    let mut report = ApplyReport::default();
-    let mut seen_ids = BTreeSet::new();
-    let mut seen_paths = BTreeSet::new();
-    let mut prepared = Vec::with_capacity(tombstones.len());
+    apply_sync_batch_with_options(
+        &SyncApplyBatch {
+            documents: Vec::new(),
+            tombstones: tombstones.to_vec(),
+        },
+        options,
+    )
+    .map(|result| result.report)
+}
 
-    for tombstone in tombstones {
-        if !seen_ids.insert(tombstone.id.clone()) {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: tombstone.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some("duplicate sync tombstone id".into()),
-            });
-            continue;
-        }
-        let route = SyncDocument {
-            kind: tombstone.kind.clone(),
-            id: tombstone.id.clone(),
-            logical_path: String::new(),
-            contents: String::new(),
-        };
-        let path = match path_for_sync_document(&route, &options.workspace_destinations) {
-            Ok(path) => path,
-            Err(error) => {
-                report.errors += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: tombstone.id.clone(),
-                    outcome: SyncDocumentApplyOutcome::Error,
-                    message: Some(error.to_string()),
-                });
-                continue;
-            }
-        };
-        if let Some(path) = &path
-            && !seen_paths.insert(path.clone())
-        {
-            report.errors += 1;
-            report.documents.push(SyncDocumentApplyResult {
-                id: tombstone.id.clone(),
-                outcome: SyncDocumentApplyOutcome::Error,
-                message: Some("multiple sync tombstones resolve to the same destination".into()),
-            });
-            continue;
-        }
-        prepared.push((tombstone.clone(), path));
-    }
-    if report.errors > 0 {
-        return Ok(report);
-    }
+fn push_preflight_error(result: &mut SyncApplyResult, id: &str, message: impl Into<String>) {
+    let message = message.into();
+    result.report.errors += 1;
+    result.report.documents.push(SyncDocumentApplyResult {
+        id: id.to_string(),
+        outcome: SyncDocumentApplyOutcome::Error,
+        message: Some(message.clone()),
+    });
+    result.errors.push(format!("{id}: {message}"));
+}
 
-    crate::storage::fs_utils::with_persistence_lock(|| {
-        let mut removals = Vec::new();
-        for (tombstone, path) in prepared {
-            let Some(path) = path else {
-                report.skipped += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: tombstone.id,
-                    outcome: SyncDocumentApplyOutcome::Skipped,
-                    message: Some("no approved local destination".into()),
-                });
-                continue;
-            };
-            if !path.exists() {
-                report.skipped += 1;
-                report.documents.push(SyncDocumentApplyResult {
-                    id: tombstone.id,
-                    outcome: SyncDocumentApplyOutcome::Skipped,
-                    message: Some("local destination is already absent".into()),
-                });
-                continue;
-            }
-            report.documents.push(SyncDocumentApplyResult {
-                id: tombstone.id,
-                outcome: SyncDocumentApplyOutcome::Applied,
-                message: None,
-            });
-            removals.push(path);
-        }
-        crate::storage::fs_utils::transactional_remove_private_unlocked(&removals)?;
-        report.applied = removals.len();
-        Ok(())
-    })?;
-    Ok(report)
+fn push_skipped(report: &mut ApplyReport, id: String, message: impl Into<String>) {
+    report.skipped += 1;
+    report.documents.push(SyncDocumentApplyResult {
+        id,
+        outcome: SyncDocumentApplyOutcome::Skipped,
+        message: Some(message.into()),
+    });
+}
+
+fn push_applied(report: &mut ApplyReport, id: String) {
+    report.documents.push(SyncDocumentApplyResult {
+        id,
+        outcome: SyncDocumentApplyOutcome::Applied,
+        message: None,
+    });
+}
+
+fn push_refresh_scope(scopes: &mut Vec<CompanionRefreshScope>, scope: CompanionRefreshScope) {
+    if !scopes.contains(&scope) {
+        scopes.push(scope);
+    }
+}
+
+fn scope_for_kind(kind: &SyncDocumentKind) -> CompanionRefreshScope {
+    match kind {
+        SyncDocumentKind::Preferences => CompanionRefreshScope::Preferences,
+        SyncDocumentKind::Presets => CompanionRefreshScope::Presets,
+        SyncDocumentKind::GlobalAssets => CompanionRefreshScope::Assets,
+        SyncDocumentKind::WorkspaceConfig => CompanionRefreshScope::WorkspaceConfigs,
+    }
 }
 
 pub fn apply_config_snapshot(
@@ -744,21 +883,252 @@ fn validate_blob(blob: &ConfigBlob) -> io::Result<()> {
 
 fn validate_sync_document(document: &SyncDocument) -> io::Result<()> {
     match document.kind {
-        SyncDocumentKind::Preferences => toml::from_str::<PreferenceDocument>(&document.contents)
-            .map(|_| ())
-            .map_err(toml_error),
-        SyncDocumentKind::Presets => toml::from_str::<PresetDocument>(&document.contents)
-            .map(|_| ())
-            .map_err(toml_error),
-        SyncDocumentKind::GlobalAssets => toml::from_str::<AssetDocument>(&document.contents)
-            .map(|_| ())
-            .map_err(toml_error),
+        SyncDocumentKind::Preferences => {
+            let parsed: PreferenceDocument =
+                toml::from_str(&document.contents).map_err(toml_error)?;
+            validate_schema_version(parsed.version, PREFERENCE_STORE_VERSION, "preferences")
+        }
+        SyncDocumentKind::Presets => {
+            let parsed: PresetDocument = toml::from_str(&document.contents).map_err(toml_error)?;
+            validate_schema_version(parsed.version, PRESET_STORE_VERSION, "presets")?;
+            validate_presets(&parsed.presets)
+        }
+        SyncDocumentKind::GlobalAssets => {
+            let parsed: AssetDocument = toml::from_str(&document.contents).map_err(toml_error)?;
+            validate_schema_version(parsed.version, ASSET_STORE_VERSION, "global assets")?;
+            validate_assets(&parsed.into_assets())
+        }
         SyncDocumentKind::WorkspaceConfig => {
-            toml::from_str::<WorkspaceConfigDocument>(&document.contents)
-                .map(|_| ())
-                .map_err(toml_error)
+            let parsed: WorkspaceConfigDocument =
+                toml::from_str(&document.contents).map_err(toml_error)?;
+            validate_schema_version(parsed.version, ASSET_STORE_VERSION, "workspace config")?;
+            validate_assets(&parsed.assets)
         }
     }
+}
+
+fn validate_sync_document_identity(document: &SyncDocument) -> io::Result<()> {
+    if document.id.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sync document id cannot be empty",
+        ));
+    }
+    if document.logical_path != logical_path_for_kind(&document.kind) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "sync document kind {:?} does not match logical path '{}'",
+                document.kind, document.logical_path
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sync_tombstone(tombstone: &SyncTombstone) -> io::Result<()> {
+    if tombstone.id.trim().is_empty()
+        || tombstone.device_id.trim().is_empty()
+        || tombstone.deleted_at.trim().is_empty()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sync tombstone identity, device, and deletion time are required",
+        ));
+    }
+    if tombstone.version <= 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "sync tombstone version must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn logical_path_for_kind(kind: &SyncDocumentKind) -> &'static str {
+    match kind {
+        SyncDocumentKind::Preferences => "preferences.toml",
+        SyncDocumentKind::Presets => "presets.toml",
+        SyncDocumentKind::GlobalAssets => "workspace-assets.toml",
+        SyncDocumentKind::WorkspaceConfig => ".terminaltiler/workspace.toml",
+    }
+}
+
+fn validate_schema_version(actual: u32, expected: u32, label: &str) -> io::Result<()> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported {label} schema version {actual}; expected {expected}"),
+        ))
+    }
+}
+
+fn validate_presets(presets: &[WorkspacePreset]) -> io::Result<()> {
+    validate_unique_ids(presets.iter().map(|preset| preset.id.as_str()), "preset")?;
+    for preset in presets {
+        validate_unique_ids(
+            preset
+                .layout
+                .tile_specs()
+                .iter()
+                .map(|tile| tile.id.as_str()),
+            "preset tile",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_assets(assets: &WorkspaceAssets) -> io::Result<()> {
+    validate_unique_ids(
+        assets
+            .connection_profiles
+            .iter()
+            .map(|item| item.id.as_str()),
+        "connection profile",
+    )?;
+    validate_unique_ids(
+        assets.inventory_hosts.iter().map(|item| item.id.as_str()),
+        "inventory host",
+    )?;
+    validate_unique_ids(
+        assets.inventory_groups.iter().map(|item| item.id.as_str()),
+        "inventory group",
+    )?;
+    validate_unique_ids(
+        assets.role_templates.iter().map(|item| item.id.as_str()),
+        "role template",
+    )?;
+    validate_unique_ids(
+        assets.runbooks.iter().map(|item| item.id.as_str()),
+        "runbook",
+    )?;
+    validate_unique_ids(
+        assets.snippets.iter().map(|item| item.id.as_str()),
+        "snippet",
+    )?;
+
+    let host_ids = assets
+        .inventory_hosts
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let group_ids = assets
+        .inventory_groups
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let connection_ids = assets
+        .connection_profiles
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut role_ids = assets
+        .role_templates
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<BTreeSet<_>>();
+    for builtin in crate::model::assets::builtin_role_templates() {
+        role_ids.insert(builtin.id);
+    }
+
+    for profile in &assets.connection_profiles {
+        if let Some(host_id) = profile.inventory_host_id.as_deref()
+            && !host_ids.contains(host_id)
+        {
+            return invalid_reference("connection profile", &profile.id, "inventory host", host_id);
+        }
+    }
+    for host in &assets.inventory_hosts {
+        for group_id in &host.group_ids {
+            if !group_ids.contains(group_id.as_str()) {
+                return invalid_reference("inventory host", &host.id, "inventory group", group_id);
+            }
+        }
+    }
+    for role in &assets.role_templates {
+        if let Some(connection_id) = role.default_connection_profile_id.as_deref()
+            && !connection_ids.contains(connection_id)
+        {
+            return invalid_reference(
+                "role template",
+                &role.id,
+                "connection profile",
+                connection_id,
+            );
+        }
+    }
+    for runbook in &assets.runbooks {
+        validate_unique_ids(
+            runbook
+                .variables
+                .iter()
+                .map(|variable| variable.id.as_str()),
+            "runbook variable",
+        )?;
+        validate_unique_ids(
+            runbook.steps.iter().map(|step| step.id.as_str()),
+            "runbook step",
+        )?;
+        match &runbook.target {
+            crate::model::assets::RunbookTarget::Role(role_id) if !role_ids.contains(role_id) => {
+                return invalid_reference("runbook", &runbook.id, "role template", role_id);
+            }
+            crate::model::assets::RunbookTarget::ConnectionProfile(connection_id)
+                if !connection_ids.contains(connection_id.as_str()) =>
+            {
+                return invalid_reference(
+                    "runbook",
+                    &runbook.id,
+                    "connection profile",
+                    connection_id,
+                );
+            }
+            _ => {}
+        }
+    }
+    for snippet in &assets.snippets {
+        validate_unique_ids(
+            snippet
+                .variables
+                .iter()
+                .map(|variable| variable.id.as_str()),
+            "snippet variable",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_unique_ids<'a>(ids: impl IntoIterator<Item = &'a str>, label: &str) -> io::Result<()> {
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        if id.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{label} id cannot be empty"),
+            ));
+        }
+        if !seen.insert(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("duplicate {label} id '{id}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_reference(
+    source_kind: &str,
+    source_id: &str,
+    target_kind: &str,
+    target_id: &str,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{source_kind} '{source_id}' references missing {target_kind} '{target_id}'"),
+    ))
 }
 
 fn validate_logical_path(document: &SyncDocument) -> io::Result<()> {
@@ -850,6 +1220,41 @@ fn portable_assets(mut assets: WorkspaceAssets) -> WorkspaceAssets {
     assets
 }
 
+fn selected_portable_assets(
+    mut assets: WorkspaceAssets,
+    selection: &SyncAssetSelection,
+) -> WorkspaceAssets {
+    assets.connection_profiles.clear();
+    assets.inventory_hosts.clear();
+    assets.inventory_groups.clear();
+    assets
+        .role_templates
+        .retain(|role| selection.role_ids.contains(&role.id));
+    for role in &mut assets.role_templates {
+        role.default_connection_profile_id = None;
+    }
+    assets
+        .runbooks
+        .retain(|runbook| selection.runbook_ids.contains(&runbook.id));
+    for runbook in &mut assets.runbooks {
+        match &runbook.target {
+            crate::model::assets::RunbookTarget::ConnectionProfile(_) => {
+                runbook.target = crate::model::assets::RunbookTarget::AllPanes;
+            }
+            crate::model::assets::RunbookTarget::Role(role_id)
+                if !selection.role_ids.contains(role_id) =>
+            {
+                runbook.target = crate::model::assets::RunbookTarget::AllPanes;
+            }
+            _ => {}
+        }
+    }
+    assets
+        .snippets
+        .retain(|snippet| selection.snippet_ids.contains(&snippet.id));
+    assets
+}
+
 fn push_portable_asset_document_if_exists(
     documents: &mut Vec<SyncDocument>,
     path: &Path,
@@ -858,6 +1263,31 @@ fn push_portable_asset_document_if_exists(
         Ok(raw) => {
             let document: AssetDocument = toml::from_str(&raw).map_err(toml_error)?;
             let document = AssetDocument::from_assets(portable_assets(document.into_assets()));
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::GlobalAssets,
+                id: "global-assets".into(),
+                logical_path: "workspace-assets.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn push_selected_asset_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    path: &Path,
+    selection: &SyncAssetSelection,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let document: AssetDocument = toml::from_str(&raw).map_err(toml_error)?;
+            let document = AssetDocument::from_assets(selected_portable_assets(
+                document.into_assets(),
+                selection,
+            ));
             documents.push(SyncDocument {
                 kind: SyncDocumentKind::GlobalAssets,
                 id: "global-assets".into(),
@@ -891,6 +1321,46 @@ fn push_portable_workspace_document_if_exists(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
+    Ok(())
+}
+
+fn push_selected_workspace_document_if_exists(
+    documents: &mut Vec<SyncDocument>,
+    id: &str,
+    path: &Path,
+    selection: &SyncAssetSelection,
+) -> io::Result<()> {
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            let mut document: WorkspaceConfigDocument = toml::from_str(&raw).map_err(toml_error)?;
+            document.version = ASSET_STORE_VERSION;
+            document.assets = selected_portable_assets(document.assets, selection);
+            documents.push(SyncDocument {
+                kind: SyncDocumentKind::WorkspaceConfig,
+                id: id.into(),
+                logical_path: ".terminaltiler/workspace.toml".into(),
+                contents: toml::to_string_pretty(&document).map_err(toml_ser_error)?,
+            });
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+fn validate_opaque_workspace_id(id: &str) -> io::Result<()> {
+    let value = id.strip_prefix("workspace:").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workspace id must use workspace:<uuid>",
+        )
+    })?;
+    uuid::Uuid::parse_str(value).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workspace id must contain a valid UUID",
+        )
+    })?;
     Ok(())
 }
 
@@ -1603,6 +2073,206 @@ engine_mode = "cpu"
             .unwrap();
             assert_eq!(restored.applied, 1);
             assert!(presets.exists());
+        });
+    }
+
+    #[test]
+    fn mixed_batch_preflight_failure_prevents_all_writes_and_deletions() {
+        with_config_home("sync-mixed-preflight", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let preferences = config_dir.join("preferences.toml");
+            let presets = config_dir.join("presets.toml");
+            fs::write(&presets, "version = 1\npresets = []\n").unwrap();
+
+            let result = apply_sync_batch_with_options(
+                &SyncApplyBatch {
+                    documents: vec![SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "preferences".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: "version = 1\ndefault_density = \"comfortable\"\n".into(),
+                    }],
+                    tombstones: vec![SyncTombstone {
+                        kind: SyncDocumentKind::Presets,
+                        id: "presets".into(),
+                        version: 0,
+                        device_id: "device".into(),
+                        deleted_at: "2026-07-10T00:00:00Z".into(),
+                    }],
+                },
+                &SyncApplyOptions::default(),
+            )
+            .unwrap();
+
+            assert_eq!(result.report.errors, 1);
+            assert!(!preferences.exists());
+            assert!(presets.exists());
+        });
+    }
+
+    #[test]
+    fn mixed_batch_commits_documents_and_tombstones_with_refresh_scopes() {
+        with_config_home("sync-mixed-commit", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let preferences = config_dir.join("preferences.toml");
+            let presets = config_dir.join("presets.toml");
+            fs::write(&presets, "version = 1\npresets = []\n").unwrap();
+
+            let result = apply_sync_batch_with_options(
+                &SyncApplyBatch {
+                    documents: vec![SyncDocument {
+                        kind: SyncDocumentKind::Preferences,
+                        id: "preferences".into(),
+                        logical_path: "preferences.toml".into(),
+                        contents: "version = 1\ndefault_density = \"comfortable\"\n".into(),
+                    }],
+                    tombstones: vec![SyncTombstone {
+                        kind: SyncDocumentKind::Presets,
+                        id: "presets".into(),
+                        version: 2,
+                        device_id: "device".into(),
+                        deleted_at: "2026-07-10T00:00:00Z".into(),
+                    }],
+                },
+                &SyncApplyOptions::default(),
+            )
+            .unwrap();
+
+            assert_eq!(result.report.applied, 2);
+            assert!(preferences.exists());
+            assert!(!presets.exists());
+            assert_eq!(
+                result.affected_scopes,
+                vec![
+                    CompanionRefreshScope::Preferences,
+                    CompanionRefreshScope::Presets
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn v2_asset_selection_defaults_closed_and_never_exports_unselected_commands() {
+        with_config_home("sync-v2-selection", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            let selected = CliSnippet {
+                id: "selected".into(),
+                name: "Selected".into(),
+                description: String::new(),
+                command: "echo selected-command".into(),
+                variables: Vec::new(),
+                tags: Vec::new(),
+            };
+            let unselected = CliSnippet {
+                id: "unselected".into(),
+                name: "Unselected".into(),
+                description: String::new(),
+                command: "echo must-not-export".into(),
+                variables: Vec::new(),
+                tags: Vec::new(),
+            };
+            fs::write(
+                config_dir.join("workspace-assets.toml"),
+                toml::to_string_pretty(&AssetDocument::from_assets(WorkspaceAssets {
+                    snippets: vec![selected, unselected],
+                    ..WorkspaceAssets::default()
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+
+            let closed = load_sync_snapshot_selected_v2(SyncExportSelectionV2::personal(
+                false,
+                false,
+                SyncAssetSelection::default(),
+                Vec::new(),
+            ))
+            .unwrap();
+            assert!(closed.documents.is_empty());
+
+            let selected = load_sync_snapshot_selected_v2(SyncExportSelectionV2::personal(
+                false,
+                false,
+                SyncAssetSelection {
+                    snippet_ids: BTreeSet::from(["selected".into()]),
+                    ..SyncAssetSelection::default()
+                },
+                Vec::new(),
+            ))
+            .unwrap();
+            assert_eq!(selected.documents.len(), 1);
+            assert!(selected.documents[0].contents.contains("selected-command"));
+            assert!(!selected.documents[0].contents.contains("must-not-export"));
+        });
+    }
+
+    #[test]
+    fn unsupported_schema_and_duplicate_inner_ids_fail_before_write() {
+        with_config_home("sync-schema-validation", || {
+            let config_dir = app_paths::config_dir().unwrap();
+            let result = apply_sync_batch_with_options(
+                &SyncApplyBatch {
+                    documents: vec![
+                        SyncDocument {
+                            kind: SyncDocumentKind::Preferences,
+                            id: "preferences".into(),
+                            logical_path: "preferences.toml".into(),
+                            contents: "version = 99\n".into(),
+                        },
+                        SyncDocument {
+                            kind: SyncDocumentKind::Presets,
+                            id: "presets".into(),
+                            logical_path: "presets.toml".into(),
+                            contents: r#"
+version = 1
+[[presets]]
+id = "duplicate"
+name = "First"
+description = ""
+tags = []
+root_label = "Root"
+theme = "dark"
+density = "compact"
+[presets.layout]
+kind = "tile"
+[presets.layout.value]
+id = "first"
+title = "First"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+working_directory = { kind = "workspace-root" }
+[[presets]]
+id = "duplicate"
+name = "Second"
+description = ""
+tags = []
+root_label = "Root"
+theme = "dark"
+density = "compact"
+[presets.layout]
+kind = "tile"
+[presets.layout.value]
+id = "second"
+title = "Second"
+agent_label = "Shell"
+accent_class = "accent-cyan"
+working_directory = { kind = "workspace-root" }
+"#
+                            .into(),
+                        },
+                    ],
+                    tombstones: Vec::new(),
+                },
+                &SyncApplyOptions::default(),
+            )
+            .unwrap();
+
+            assert_eq!(result.report.errors, 2);
+            assert!(!config_dir.join("preferences.toml").exists());
+            assert!(!config_dir.join("presets.toml").exists());
         });
     }
 
