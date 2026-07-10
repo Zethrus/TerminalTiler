@@ -51,11 +51,10 @@ impl SessionTitleSource for CodexSource {
                 }
             }
         }
-        let (file, mtime) = best?;
+        let (file, _mtime) = best?;
         let title = read_title(&file)?;
         Some(ResolvedTitle {
             title,
-            updated_at: mtime,
             agent: AgentKind::Codex,
         })
     }

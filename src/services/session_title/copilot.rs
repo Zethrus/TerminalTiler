@@ -77,9 +77,13 @@ fn query_active_title(conn: &Connection, cwd: &Path, max_age: Duration) -> Optio
         if !util::cwd_matches(cwd, &session_cwd) {
             continue;
         }
-        let updated_at = util::parse_iso8601_utc(&updated_at)?;
+        // Skip a row with an unparseable timestamp rather than abandoning the lookup: an
+        // older but still-active session for this cwd may follow.
+        let Some(updated_at) = util::parse_iso8601_utc(&updated_at) else {
+            continue;
+        };
         if !util::is_recent(updated_at, max_age) {
-            // Rows are newest-first; once one is stale the rest are too.
+            // Rows are newest-first; once a parseable one is stale the rest are too.
             return None;
         }
         let title = checkpoint_title(conn, &id)
@@ -90,7 +94,6 @@ fn query_active_title(conn: &Connection, cwd: &Path, max_age: Duration) -> Optio
         }
         return Some(ResolvedTitle {
             title,
-            updated_at,
             agent: AgentKind::Copilot,
         });
     }
@@ -127,7 +130,7 @@ mod tests {
     #[test]
     fn prefers_latest_checkpoint_title() {
         let tmp = tempdir();
-        let cwd = tmp.join("generic-session-fixture");
+        let cwd = tmp.join("TerminalTiler-Pro");
         fs::create_dir_all(&cwd).unwrap();
         let db = tmp.join("session-store.db");
         seed_db(&db);
@@ -156,6 +159,44 @@ mod tests {
             .expect("title");
         assert_eq!(resolved.title, "Guided Installer UX");
         assert_eq!(resolved.agent, AgentKind::Copilot);
+    }
+
+    #[test]
+    fn skips_row_with_unparseable_timestamp() {
+        let tmp = tempdir();
+        let cwd = tmp.join("proj");
+        fs::create_dir_all(&cwd).unwrap();
+        let db = tmp.join("session-store.db");
+        seed_db(&db);
+        let conn = Connection::open(&db).unwrap();
+        // Newest row (by string order) has a garbage timestamp; an older valid one follows.
+        conn.execute(
+            "INSERT INTO sessions VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "bad",
+                cwd.to_string_lossy(),
+                "should be skipped",
+                "not-a-date"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "good",
+                cwd.to_string_lossy(),
+                "Real title",
+                "2026-07-09T18:08:35.681Z"
+            ],
+        )
+        .unwrap();
+        conn.close().unwrap();
+
+        let source = CopilotSource::with_db(db);
+        let resolved = source
+            .active_title(&cwd, Duration::from_secs(1_000_000_000_000))
+            .expect("title");
+        assert_eq!(resolved.title, "Real title");
     }
 
     #[test]

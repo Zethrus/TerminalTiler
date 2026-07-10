@@ -1,16 +1,16 @@
 //! Resolves the live title of the agentic coding session running inside a terminal tile.
 //!
 //! Each supported CLI (Claude, Codex, opencode, Copilot, Grok) records its sessions on disk
-//! keyed by working directory. Given a tile's live cwd we ask every source for its most
-//! recently updated *active* session title and return the newest across all of them — that
-//! is the agent currently running in the tile. This is intentionally process-agnostic: we
-//! never inspect the foreground process, only the session stores.
+//! keyed by working directory. The caller identifies which agent is running in a tile (see
+//! [`AgentKind::from_command`]) and asks that agent's source for the active session title for
+//! the tile's cwd via [`resolve_title_for`]. Titling only from the running agent's store is
+//! what keeps two tiles that share a working directory from being cross-labelled.
 //!
 //! All sources are pure filesystem readers with no GTK dependency, so they are unit-testable
 //! with on-disk fixtures.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 pub mod claude;
 pub mod codex;
@@ -19,7 +19,10 @@ pub mod grok;
 pub mod opencode;
 mod util;
 
-pub(crate) use util::{clean_title, percent_decode};
+pub(crate) use util::clean_title;
+// `percent_decode` is only consumed by the Linux tile poller (Grok reads it via `util::` directly).
+#[cfg(target_os = "linux")]
+pub(crate) use util::percent_decode;
 
 /// The agentic coding CLI a resolved title came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +35,8 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
+    // Consumed only by the Linux tile poller's tooltip.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn label(self) -> &'static str {
         match self {
             AgentKind::Claude => "Claude",
@@ -41,13 +46,51 @@ impl AgentKind {
             AgentKind::Grok => "Grok",
         }
     }
+
+    /// Identify the agent from a process command line or launch command. Matches on the
+    /// basename tokens of each whitespace/NUL-separated argument, so `node /x/claude`,
+    /// `/usr/bin/codex --flag`, and `gh copilot` all resolve. Returns `None` for non-agents
+    /// (a plain shell), which is how the poller avoids titling non-agent tiles.
+    pub fn from_command(command: &str) -> Option<AgentKind> {
+        command
+            .split(|c: char| c.is_whitespace() || c == '\0')
+            .filter(|arg| !arg.is_empty())
+            .find_map(|arg| {
+                let token = arg
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(arg)
+                    .trim_end_matches(".exe")
+                    .to_ascii_lowercase();
+                match token.as_str() {
+                    "claude" => Some(AgentKind::Claude),
+                    "codex" => Some(AgentKind::Codex),
+                    "opencode" => Some(AgentKind::Opencode),
+                    "copilot" => Some(AgentKind::Copilot),
+                    "grok" => Some(AgentKind::Grok),
+                    _ => None,
+                }
+            })
+    }
+
+    /// The store source for this agent.
+    fn source(self) -> Box<dyn SessionTitleSource> {
+        match self {
+            AgentKind::Claude => Box::new(claude::ClaudeSource::default()),
+            AgentKind::Codex => Box::new(codex::CodexSource::default()),
+            AgentKind::Opencode => Box::new(opencode::OpencodeSource::default()),
+            AgentKind::Copilot => Box::new(copilot::CopilotSource::default()),
+            AgentKind::Grok => Box::new(grok::GrokSource::default()),
+        }
+    }
 }
 
 /// A session title resolved from an agent's on-disk store.
 #[derive(Debug, Clone)]
 pub struct ResolvedTitle {
     pub title: String,
-    pub updated_at: SystemTime,
+    // Read only by the Linux tile poller's tooltip.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub agent: AgentKind,
 }
 
@@ -57,72 +100,50 @@ pub trait SessionTitleSource {
     fn active_title(&self, cwd: &Path, max_age: Duration) -> Option<ResolvedTitle>;
 }
 
-/// Default set of sources (each rooted at the current user's home directory).
-fn default_sources() -> Vec<Box<dyn SessionTitleSource>> {
-    vec![
-        Box::new(claude::ClaudeSource::default()),
-        Box::new(codex::CodexSource::default()),
-        Box::new(opencode::OpencodeSource::default()),
-        Box::new(copilot::CopilotSource::default()),
-        Box::new(grok::GrokSource::default()),
-    ]
-}
-
-/// Resolve the most recently updated active session title across all supported agents for
-/// `cwd`. Returns `None` when no agent has an active session there within `max_age`.
-pub fn resolve_active_title(cwd: &Path, max_age: Duration) -> Option<ResolvedTitle> {
-    resolve_from(&default_sources(), cwd, max_age)
-}
-
-/// Resolution over an explicit source list (used by tests).
-pub fn resolve_from(
-    sources: &[Box<dyn SessionTitleSource>],
-    cwd: &Path,
-    max_age: Duration,
-) -> Option<ResolvedTitle> {
-    sources
-        .iter()
-        .filter_map(|source| source.active_title(cwd, max_age))
+/// Resolve the active session title for a single, already-identified agent: it only reads the
+/// store of the agent actually running in the tile, so tiles that share a working directory
+/// are not cross-labelled. Returns `None` when that agent has no active session for `cwd`
+/// within `max_age`.
+pub fn resolve_title_for(agent: AgentKind, cwd: &Path, max_age: Duration) -> Option<ResolvedTitle> {
+    agent
+        .source()
+        .active_title(cwd, max_age)
         .filter(|resolved| !resolved.title.trim().is_empty())
-        .max_by_key(|resolved| resolved.updated_at)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::UNIX_EPOCH;
 
-    struct Fixed(Option<ResolvedTitle>);
-    impl SessionTitleSource for Fixed {
-        fn active_title(&self, _cwd: &Path, _max_age: Duration) -> Option<ResolvedTitle> {
-            self.0.clone()
-        }
-    }
-
-    fn at(secs: u64, agent: AgentKind, title: &str) -> ResolvedTitle {
-        ResolvedTitle {
-            title: title.to_string(),
-            updated_at: UNIX_EPOCH + Duration::from_secs(secs),
-            agent,
-        }
+    #[test]
+    fn from_command_classifies_agents_and_wrappers() {
+        assert_eq!(AgentKind::from_command("claude"), Some(AgentKind::Claude));
+        assert_eq!(
+            AgentKind::from_command("node /home/u/.local/bin/claude --resume"),
+            Some(AgentKind::Claude)
+        );
+        assert_eq!(
+            AgentKind::from_command("/usr/bin/codex"),
+            Some(AgentKind::Codex)
+        );
+        assert_eq!(
+            AgentKind::from_command("gh copilot"),
+            Some(AgentKind::Copilot)
+        );
+        assert_eq!(
+            AgentKind::from_command(r"C:\Program Files\grok\grok.exe"),
+            Some(AgentKind::Grok)
+        );
+        assert_eq!(
+            AgentKind::from_command("bun x opencode"),
+            Some(AgentKind::Opencode)
+        );
     }
 
     #[test]
-    fn newest_updated_source_wins() {
-        let sources: Vec<Box<dyn SessionTitleSource>> = vec![
-            Box::new(Fixed(Some(at(100, AgentKind::Claude, "old claude")))),
-            Box::new(Fixed(Some(at(200, AgentKind::Codex, "fresh codex")))),
-            Box::new(Fixed(None)),
-        ];
-        let resolved = resolve_from(&sources, Path::new("/x"), Duration::from_secs(60)).unwrap();
-        assert_eq!(resolved.title, "fresh codex");
-        assert_eq!(resolved.agent, AgentKind::Codex);
-    }
-
-    #[test]
-    fn no_active_sessions_yields_none() {
-        let sources: Vec<Box<dyn SessionTitleSource>> =
-            vec![Box::new(Fixed(None)), Box::new(Fixed(None))];
-        assert!(resolve_from(&sources, Path::new("/x"), Duration::from_secs(60)).is_none());
+    fn from_command_ignores_plain_shells() {
+        assert_eq!(AgentKind::from_command("/bin/bash -l"), None);
+        assert_eq!(AgentKind::from_command("fish"), None);
+        assert_eq!(AgentKind::from_command(""), None);
     }
 }

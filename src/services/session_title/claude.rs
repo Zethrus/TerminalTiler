@@ -53,7 +53,6 @@ impl SessionTitleSource for ClaudeSource {
         let title = read_title(&session_file, cwd)?;
         Some(ResolvedTitle {
             title,
-            updated_at: mtime,
             agent: AgentKind::Claude,
         })
     }

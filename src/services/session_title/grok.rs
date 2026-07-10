@@ -59,7 +59,6 @@ impl SessionTitleSource for GrokSource {
         }
         Some(ResolvedTitle {
             title,
-            updated_at: mtime,
             agent: AgentKind::Grok,
         })
     }

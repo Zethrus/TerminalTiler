@@ -1,3 +1,4 @@
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,7 +13,8 @@ use crate::model::assets::{CliSnippet, OutputSeverity, PaneStatusSnapshot, Works
 use crate::model::layout::{TileSpec, WorkingDirectory};
 use crate::model::preset::ApplicationDensity;
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
-use crate::services::session_title::{clean_title, percent_decode, resolve_active_title};
+use crate::platform::terminal_agent_candidates;
+use crate::services::session_title::{AgentKind, clean_title, percent_decode, resolve_title_for};
 use crate::services::snippets::resolve_snippet;
 use crate::services::stats::StatsRecorder;
 use crate::terminal::session::TerminalSession;
@@ -196,7 +198,13 @@ pub fn build(
             }
         });
     }
-    install_agent_session_title_poller(&terminal, &title, &tile.working_directory, workspace_root);
+    install_agent_session_title_poller(
+        &terminal,
+        &title,
+        &tile.working_directory,
+        workspace_root,
+        tile.startup_command.clone(),
+    );
     {
         let terminal_for_update = terminal.clone();
         let session_for_update = session.clone();
@@ -584,6 +592,7 @@ fn install_agent_session_title_poller(
     title_label: &gtk::Label,
     working_directory: &WorkingDirectory,
     workspace_root: &Path,
+    startup_command: Option<String>,
 ) {
     let terminal = terminal.clone();
     let title_label = title_label.clone();
@@ -595,8 +604,13 @@ fn install_agent_session_title_poller(
         if terminal.root().is_none() {
             return glib::ControlFlow::Break;
         }
+        // Only title the tile from the store of the agent actually running in it, so tiles that
+        // share a working directory are not cross-labelled. No agent ⇒ leave the OSC/default.
+        let Some(agent) = detect_tile_agent(&terminal, startup_command.as_deref()) else {
+            return glib::ControlFlow::Continue;
+        };
         let cwd = live_working_directory(&terminal, &working_directory, &workspace_root);
-        if let Some(resolved) = resolve_active_title(&cwd, SESSION_TITLE_MAX_AGE)
+        if let Some(resolved) = resolve_title_for(agent, &cwd, SESSION_TITLE_MAX_AGE)
             && last_title.as_deref() != Some(resolved.title.as_str())
         {
             title_label.set_text(&resolved.title);
@@ -609,6 +623,16 @@ fn install_agent_session_title_poller(
         }
         glib::ControlFlow::Continue
     });
+}
+
+/// Identify the agent CLI running in the tile: first from the pty's foreground process group
+/// (precise), then falling back to the tile's launch command (covers launched-agent tiles).
+fn detect_tile_agent(terminal: &vte4::Terminal, startup_command: Option<&str>) -> Option<AgentKind> {
+    let pty_fd = terminal.pty().map(|pty| pty.fd().as_raw_fd());
+    terminal_agent_candidates(pty_fd, None)
+        .iter()
+        .find_map(|command| AgentKind::from_command(command))
+        .or_else(|| startup_command.and_then(AgentKind::from_command))
 }
 
 /// The terminal's live working directory from OSC 7 (`current_directory_uri`), falling back

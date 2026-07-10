@@ -11,7 +11,7 @@ mod imp {
     use std::rc::Rc;
     use std::sync::OnceLock;
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use adw::prelude::*;
     use gtk::glib::translate::ToGlibPtr;
@@ -41,6 +41,7 @@ mod imp {
     use crate::model::preset::ApplicationDensity;
     use crate::services::launch_resolution::resolve_tile_launch;
     use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
+    use crate::services::session_title::{AgentKind, clean_title, resolve_title_for};
     use crate::services::terminal_history::restored_terminal_history_text;
     use crate::storage::session_store::SavedTab;
     use crate::terminal_palette::{TerminalPalette, terminal_palette};
@@ -64,6 +65,10 @@ mod imp {
     const TERMINAL_RUNTIME_COLUMNS: usize = 80;
     const TERMINAL_RUNTIME_ROWS: usize = 24;
     const TERMINAL_RUNTIME_POLL_MS: u64 = 80;
+    /// Agent session-title resolution runs at most this often (the surface polls far faster).
+    const AGENT_TITLE_REFRESH: Duration = Duration::from_secs(2);
+    /// A session store must have been updated within this window to be considered "active".
+    const AGENT_TITLE_MAX_AGE: Duration = Duration::from_secs(90);
     const WEBVIEW_RUNTIME_POLL_MS: u64 = 100;
     const WEBVIEW_PARENT_HWND_LOG_POLLS: u32 = 10;
     const WEBVIEW_ENVIRONMENT_CALLBACK_TIMEOUT_SECONDS: u64 = 45;
@@ -1322,7 +1327,8 @@ mod imp {
             shell.remove_css_class("is-disconnected");
             status.remove_css_class("recovery-chip");
             let terminal = chrome_context.terminal_buffer.borrow();
-            sync_terminal_runtime_title(title_label, &terminal, default_title);
+            let agent_title = agent_session_title_for(chrome_context, &terminal);
+            sync_terminal_runtime_title(title_label, &terminal, agent_title.as_deref(), default_title);
             let snapshot = status_snapshot_for_terminal_runtime(&terminal, chrome_context);
             let status_line = snapshot.to_line();
             status.set_text(&status_line);
@@ -1346,14 +1352,60 @@ mod imp {
     fn sync_terminal_runtime_title(
         title_label: &gtk::Label,
         terminal: &VtBuffer,
+        agent_title: Option<&str>,
         default_title: &str,
     ) {
-        let title = terminal.window_title();
-        let title = title
-            .filter(|title| !title.trim().is_empty())
+        let title = agent_title
+            .or_else(|| terminal.window_title().filter(|title| !title.trim().is_empty()))
             .unwrap_or(default_title);
         title_label.set_text(title);
         title_label.set_tooltip_text(Some(title));
+    }
+
+    thread_local! {
+        /// Throttle + cache of resolved agent session titles, keyed by tile id, so the fast
+        /// runtime poll does not hit disk every tick.
+        static AGENT_TITLE_CACHE: RefCell<HashMap<String, (Instant, Option<String>)>> =
+            RefCell::new(HashMap::new());
+    }
+
+    /// The agent session title for a tile, identified from its launch command (the Windows GTK
+    /// runtime hosts agents inside WSL, so process inspection is unavailable — the launch
+    /// command is the reliable signal). Resolution is throttled to [`AGENT_TITLE_REFRESH`].
+    fn agent_session_title_for(
+        context: &TerminalRuntimeChromeContext,
+        terminal: &VtBuffer,
+    ) -> Option<String> {
+        let id = context.tile.id.clone();
+        let now = Instant::now();
+        let cached = AGENT_TITLE_CACHE.with(|cache| cache.borrow().get(&id).cloned());
+        if let Some((last, title)) = &cached
+            && now.duration_since(*last) < AGENT_TITLE_REFRESH
+        {
+            return title.clone();
+        }
+        let resolved = context
+            .tile
+            .startup_command
+            .as_deref()
+            .and_then(AgentKind::from_command)
+            .and_then(|agent| {
+                let cwd = terminal
+                    .current_working_directory()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        context.tile.working_directory.resolve(&context.workspace_root)
+                    });
+                resolve_title_for(agent, &cwd, AGENT_TITLE_MAX_AGE)
+            })
+            .map(|resolved| clean_title(&resolved.title))
+            .filter(|title| !title.is_empty());
+        // Keep the last known title when this refresh resolves nothing.
+        let title = resolved.or_else(|| cached.and_then(|(_, title)| title));
+        AGENT_TITLE_CACHE.with(|cache| {
+            cache.borrow_mut().insert(id, (now, title.clone()));
+        });
+        title
     }
 
     fn status_snapshot_for_terminal_runtime(

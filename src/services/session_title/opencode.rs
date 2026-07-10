@@ -53,7 +53,6 @@ impl SessionTitleSource for OpencodeSource {
         }
         Some(ResolvedTitle {
             title,
-            updated_at: mtime,
             agent: AgentKind::Opencode,
         })
     }

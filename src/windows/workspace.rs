@@ -90,7 +90,11 @@ mod imp {
     use crate::dropped_paths::{self, DroppedPathTarget};
     use crate::logging;
     use crate::model::assets::{TemplateVariableValues, WorkspaceAssets};
+    use std::path::PathBuf;
+
     use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec};
+    use crate::platform::terminal_agent_candidates;
+    use crate::services::session_title::{AgentKind, clean_title, resolve_title_for};
     use crate::model::preset::ApplicationDensity;
     use crate::product;
     use crate::services::agent_resume::{
@@ -138,6 +142,11 @@ mod imp {
     const WM_VOICE_TRANSCRIPTION_RESULT: u32 = WM_APP + 7;
     const VOICE_GLOBAL_HOTKEY_ID: i32 = 42_060;
     const VOICE_FLUSH_TIMER_ID: usize = 42_061;
+    /// Periodic timer that refreshes each pane's title from the running agent's session store.
+    const AGENT_TITLE_TIMER_ID: usize = 42_062;
+    const AGENT_TITLE_POLL_MS: u32 = 2_000;
+    /// A session store must have been updated within this window to be considered "active".
+    const AGENT_TITLE_MAX_AGE: Duration = Duration::from_secs(90);
     const HEADER_HEIGHT: i32 = 152;
     const OUTER_MARGIN: i32 = 12;
     const PANE_GAP: i32 = 8;
@@ -310,6 +319,8 @@ mod imp {
         session: Option<PaneSession>,
         launch_runtime: Option<WindowsLaunchRuntime>,
         restore_startup_command: Option<String>,
+        /// Cached title of the agent session running in this pane (refreshed on a timer).
+        agent_session_title: Option<String>,
     }
 
     impl Drop for PaneState {
@@ -329,6 +340,7 @@ mod imp {
     struct PaneSession {
         pseudo_console: HPCON,
         process_handle: HANDLE,
+        process_id: u32,
         input_write: HANDLE,
     }
 
@@ -543,6 +555,7 @@ mod imp {
             Ok(Self {
                 pseudo_console,
                 process_handle: process_info.hProcess,
+                process_id: process_info.dwProcessId,
                 input_write,
             })
         }
@@ -948,6 +961,9 @@ mod imp {
                     state.hwnd = hwnd;
                     create_controls(hwnd, state);
                     sync_workspace_voice_global_hotkey(hwnd, state);
+                    unsafe {
+                        SetTimer(hwnd, AGENT_TITLE_TIMER_ID, AGENT_TITLE_POLL_MS, None);
+                    }
                 }
                 0
             }
@@ -994,6 +1010,12 @@ mod imp {
                     && let Some(state) = unsafe { window_state_mut(hwnd) }
                 {
                     flush_workspace_voice_capture(hwnd, state);
+                    return 0;
+                }
+                if wparam == AGENT_TITLE_TIMER_ID
+                    && let Some(state) = unsafe { window_state_mut(hwnd) }
+                {
+                    refresh_agent_session_titles(state);
                     return 0;
                 }
                 unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
@@ -1097,6 +1119,7 @@ mod imp {
                 if let Some(state) = unsafe { window_state_mut(hwnd) } {
                     unsafe {
                         KillTimer(hwnd, VOICE_FLUSH_TIMER_ID);
+                        KillTimer(hwnd, AGENT_TITLE_TIMER_ID);
                     }
                     unregister_workspace_voice_global_hotkey(hwnd, state);
                     remove_workspace_session_state(state.window_id, &state.session_store);
@@ -3916,6 +3939,7 @@ mod imp {
             session: None,
             launch_runtime: None,
             restore_startup_command,
+            agent_session_title: None,
         });
         if !restored_history_lines.is_empty() {
             pane.terminal
@@ -4965,7 +4989,9 @@ mod imp {
             }
             return format!("{}  •  web", pane.tile.title);
         }
-        if let Some(title) = pane.terminal.window_title() {
+        if let Some(title) = pane.agent_session_title.as_deref() {
+            format!("{}  •  {}", pane.tile.title, title)
+        } else if let Some(title) = pane.terminal.window_title() {
             format!("{}  •  {}", pane.tile.title, title)
         } else if let Some(cwd) = pane.terminal.current_working_directory() {
             format!("{}  •  {}", pane.tile.title, cwd)
@@ -4974,6 +5000,50 @@ mod imp {
         } else {
             format!("{}  •  {}", pane.tile.title, pane.tile.agent_label)
         }
+    }
+
+    /// Refresh each terminal pane's cached agent session title from the running agent's store,
+    /// mirroring the Linux tile poller. Only titles a pane from the store of the agent actually
+    /// running in it, so panes sharing a working directory are not cross-labelled.
+    fn refresh_agent_session_titles(state: &mut WorkspaceWindowState) {
+        let workspace_root = active_tab(state).workspace_root.clone();
+        for pane in state.panes.iter_mut() {
+            if pane.tile.tile_kind == TileKind::WebView {
+                continue;
+            }
+            let Some(agent) = detect_pane_agent(pane) else {
+                continue;
+            };
+            let cwd = pane
+                .terminal
+                .current_working_directory()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| pane.tile.working_directory.resolve(&workspace_root));
+            if let Some(new_title) = resolve_title_for(agent, &cwd, AGENT_TITLE_MAX_AGE)
+                .map(|resolved| clean_title(&resolved.title))
+                && pane.agent_session_title.as_deref() != Some(new_title.as_str())
+            {
+                pane.agent_session_title = Some(new_title);
+                unsafe {
+                    InvalidateRect(pane.title_hwnd, ptr::null(), 1);
+                }
+            }
+        }
+    }
+
+    /// Identify the agent CLI running in a pane: first from the descendants of the pane's child
+    /// process, then falling back to the tile's launch command.
+    fn detect_pane_agent(pane: &PaneState) -> Option<AgentKind> {
+        let child_pid = pane.session.as_ref().map(|session| session.process_id as i32);
+        terminal_agent_candidates(None, child_pid)
+            .iter()
+            .find_map(|command| AgentKind::from_command(command))
+            .or_else(|| {
+                pane.tile
+                    .startup_command
+                    .as_deref()
+                    .and_then(AgentKind::from_command)
+            })
     }
 
     fn shell_status_label(pane: &PaneState) -> String {
