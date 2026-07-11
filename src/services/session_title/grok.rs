@@ -91,6 +91,7 @@ mod tests {
         let root = tmp.join("sessions");
         let encoded = cwd
             .to_string_lossy()
+            .replace(':', "%3A")
             .replace('\\', "%5C")
             .replace('/', "%2F");
         let session = root.join(encoded).join("uuid-1");
@@ -119,6 +120,7 @@ mod tests {
         let root = tmp.join("sessions");
         let encoded = cwd
             .to_string_lossy()
+            .replace(':', "%3A")
             .replace('\\', "%5C")
             .replace('/', "%2F");
         let session = root.join(encoded).join("uuid-1");
