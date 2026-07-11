@@ -89,7 +89,10 @@ mod tests {
         let cwd = tmp.join("Wildroot");
         fs::create_dir_all(&cwd).unwrap();
         let root = tmp.join("sessions");
-        let encoded = cwd.to_string_lossy().replace('/', "%2F");
+        let encoded = cwd
+            .to_string_lossy()
+            .replace('\\', "%5C")
+            .replace('/', "%2F");
         let session = root.join(encoded).join("uuid-1");
         fs::create_dir_all(&session).unwrap();
         fs::write(
@@ -114,7 +117,10 @@ mod tests {
         let cwd = tmp.join("Wildroot");
         fs::create_dir_all(&cwd).unwrap();
         let root = tmp.join("sessions");
-        let encoded = cwd.to_string_lossy().replace('/', "%2F");
+        let encoded = cwd
+            .to_string_lossy()
+            .replace('\\', "%5C")
+            .replace('/', "%2F");
         let session = root.join(encoded).join("uuid-1");
         fs::create_dir_all(&session).unwrap();
         fs::write(
