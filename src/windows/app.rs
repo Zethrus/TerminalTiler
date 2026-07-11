@@ -675,10 +675,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                         state.companion_action_running = false;
                         match completion.result {
                             Ok(result) => {
-                                if !matches!(
-                                    result.refresh_scope,
-                                    crate::extension::CompanionRefreshScope::Panel
-                                ) {
+                                if result.refresh_scope.refreshes_main_content() {
                                     refresh_state(hwnd, state);
                                 }
                                 unsafe {

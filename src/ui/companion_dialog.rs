@@ -553,7 +553,7 @@ fn dispatch_action(
                 (error, CompanionRefreshScope::Panel)
             }
         };
-        if !matches!(refresh_scope, CompanionRefreshScope::Panel) {
+        if refresh_scope.refreshes_main_content() {
             let _ = gtk::prelude::WidgetExt::activate_action(&window, "win.refresh-catalog", None);
         }
         dialog.close();

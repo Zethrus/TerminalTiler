@@ -311,6 +311,12 @@ pub enum CompanionRefreshScope {
     All,
 }
 
+impl CompanionRefreshScope {
+    pub(crate) fn refreshes_main_content(self) -> bool {
+        !matches!(self, Self::Panel)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompanionEvent {
     pub refresh_scope: CompanionRefreshScope,
@@ -505,5 +511,20 @@ mod additive_api_tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "provider-only");
         assert!(entries[0].origin.read_only());
+    }
+
+    #[test]
+    fn every_non_panel_companion_scope_refreshes_main_content() {
+        for scope in [
+            CompanionRefreshScope::Preferences,
+            CompanionRefreshScope::Presets,
+            CompanionRefreshScope::Assets,
+            CompanionRefreshScope::WorkspaceConfigs,
+            CompanionRefreshScope::Catalog,
+            CompanionRefreshScope::All,
+        ] {
+            assert!(scope.refreshes_main_content(), "{scope:?}");
+        }
+        assert!(!CompanionRefreshScope::Panel.refreshes_main_content());
     }
 }

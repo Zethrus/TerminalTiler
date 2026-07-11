@@ -587,6 +587,39 @@ mod imp {
                 refresh_windows_launch_deck(&launch_context, &refresh_launch_deck_weak)
             }));
         }
+
+        // The shared companion dialog activates this action after an account
+        // or catalog mutation. Keep the action name identical to Linux so the
+        // generic CompanionIntegration contract behaves consistently across
+        // GTK shells.
+        {
+            let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
+            let action = gio::SimpleAction::new("refresh-catalog", None);
+            action.connect_activate(move |_, _| {
+                request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
+            });
+            window.add_action(&action);
+        }
+
+        // Companion implementations may also publish asynchronous entitlement
+        // and catalog changes (for example activation or revocation). Drain on
+        // the GTK thread, refresh the provider-backed launch deck, and surface
+        // the redacted user-facing event message through the shell toast.
+        if let Some(companion) = options.companion.clone() {
+            let refresh_launch_deck_handle = refresh_launch_deck_weak.clone();
+            let overlay = overlay.clone();
+            glib::timeout_add_local(Duration::from_millis(250), move || {
+                for event in companion.drain_events() {
+                    if event.refresh_scope.refreshes_main_content() {
+                        request_windows_launch_deck_refresh(&refresh_launch_deck_handle);
+                    }
+                    if let Some(message) = event.message {
+                        overlay.add_toast(adw::Toast::new(&message));
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        }
         {
             let launch_overlay = overlay.clone();
             let launch_title = title.clone();

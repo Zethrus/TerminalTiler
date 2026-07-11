@@ -12,7 +12,7 @@ use adw::prelude::*;
 use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 
-use crate::extension::{CompanionRefreshScope, RuntimeOptions};
+use crate::extension::RuntimeOptions;
 use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
@@ -1125,7 +1125,7 @@ fn present_with_initial_workspace(
         let toast_overlay = toast_overlay.clone();
         glib::timeout_add_local(Duration::from_millis(250), move || {
             for event in companion.drain_events() {
-                if !matches!(event.refresh_scope, CompanionRefreshScope::Panel)
+                if event.refresh_scope.refreshes_main_content()
                     && let Some(refresh) = refresh_launch_tabs.borrow().as_ref()
                 {
                     refresh();

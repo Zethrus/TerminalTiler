@@ -129,6 +129,18 @@ fn companion_actions_dispatch_off_ui_thread_with_busy_timeout_and_visible_comple
         "companion invocation must not block GTK or Win32 UI threads and must suppress duplicates, time out, and surface completion"
     );
 }
+
+#[test]
+fn windows_gtk_companion_events_refresh_main_content() {
+    assert!(
+        WINDOWS_GTK_APP_RS.contains("gio::SimpleAction::new(\"refresh-catalog\", None)")
+            && WINDOWS_GTK_APP_RS.contains("for event in companion.drain_events()")
+            && WINDOWS_GTK_APP_RS.contains("event.refresh_scope.refreshes_main_content()")
+            && WINDOWS_GTK_APP_RS
+                .contains("request_windows_launch_deck_refresh(&refresh_launch_deck_handle)"),
+        "Windows GTK must rebuild its preference-derived launch deck for every non-panel companion event"
+    );
+}
 const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");
