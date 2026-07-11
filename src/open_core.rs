@@ -1606,15 +1606,15 @@ mod tests {
     fn with_config_home<T>(prefix: &str, test: impl FnOnce() -> T) -> T {
         let _guard = env_lock().lock().unwrap();
         let dir = temp_config_home(prefix);
-        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        let previous = std::env::var_os(crate::app_paths::PROFILE_ROOT_ENV);
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", &dir);
+            std::env::set_var(crate::app_paths::PROFILE_ROOT_ENV, &dir);
         }
         let result = test();
         unsafe {
             match previous {
-                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
+                Some(value) => std::env::set_var(crate::app_paths::PROFILE_ROOT_ENV, value),
+                None => std::env::remove_var(crate::app_paths::PROFILE_ROOT_ENV),
             }
         }
         result
