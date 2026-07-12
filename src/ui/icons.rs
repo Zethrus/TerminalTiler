@@ -16,6 +16,8 @@ pub(crate) mod name {
     pub(crate) const CLOSE: &str = "hover:x-icon";
     pub(crate) const COPY: &str = "hover:copy-icon";
     pub(crate) const DELETE: &str = "hover:trash-icon";
+    pub(crate) const DIALOG_INFO: &str = "dialog-information-symbolic";
+    pub(crate) const DIALOG_WARNING: &str = "dialog-warning-symbolic";
     pub(crate) const EDIT: &str = "document-edit-symbolic";
     pub(crate) const FOLDER: &str = "folder-open-symbolic";
     pub(crate) const FULLSCREEN: &str = "view-fullscreen-symbolic";
@@ -31,6 +33,7 @@ pub(crate) mod name {
     pub(crate) const RESTORE: &str = "view-restore-symbolic";
     pub(crate) const RUN: &str = "system-run-symbolic";
     pub(crate) const SAVE: &str = "hover:save-icon";
+    pub(crate) const SAVE_SYMBOLIC: &str = "document-save-symbolic";
     pub(crate) const SEARCH: &str = "system-search-symbolic";
     pub(crate) const SETTINGS: &str = "preferences-system-symbolic";
     pub(crate) const SNIPPET: &str = "insert-text-symbolic";

@@ -6818,26 +6818,14 @@ fn confirm_tab_close<F>(
 ) where
     F: Fn(bool) + 'static,
 {
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "tab-close-confirm-dialog");
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("confirm", confirm_label);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    dialog.connect_response(None, move |dialog, response| {
-        on_response(response == "confirm");
-        dialog.close();
-    });
-
-    dialog.present();
+    dialog_chrome::confirm_destructive_choice(
+        Some(window),
+        "tab-close-confirm-dialog",
+        heading,
+        body,
+        confirm_label,
+        on_response,
+    );
 }
 
 fn prompt_session_resume<F, G, H>(
@@ -6852,152 +6840,47 @@ fn prompt_session_resume<F, G, H>(
     G: Fn() + 'static,
     H: Fn() + 'static,
 {
-    let body = if let Some(warning) = warning {
-        format!(
-            "TerminalTiler found {} saved workspace(s). You can rerun commands, reopen the same layouts as plain shells, or start fresh.\n\n{}",
-            saved_session.tabs.len(),
-            warning
-        )
-    } else {
-        format!(
-            "TerminalTiler found {} saved workspace(s). You can rerun commands, reopen the same layouts as plain shells, or start fresh.",
-            saved_session.tabs.len()
-        )
-    };
-
-    let dialog = adw::Dialog::new();
-    dialog.set_title("Resume Previous Session?");
-    dialog.set_content_width(380);
-    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "session-resume-dialog");
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(18)
-        .margin_top(24)
-        .margin_bottom(24)
-        .margin_start(24)
-        .margin_end(24)
-        .css_classes(["session-resume-content"])
-        .build();
-
-    let heading = gtk::Label::builder()
-        .label("Resume Previous Session?")
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(pango::WrapMode::WordChar)
-        .css_classes(["session-resume-heading"])
-        .build();
-    content.append(&heading);
-
-    let body_label = gtk::Label::builder()
-        .label(&body)
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(pango::WrapMode::WordChar)
-        .css_classes(["session-resume-body"])
-        .build();
-    content.append(&body_label);
-
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
-        .css_classes(["session-resume-actions"])
-        .build();
-
-    let resume_button = gtk::Button::with_label("Resume And Rerun");
-    resume_button.add_css_class("session-resume-action");
-    resume_button.add_css_class("primary-cta-button");
-    resume_button.set_hexpand(true);
-    resume_button.set_halign(gtk::Align::Fill);
-
-    let shells_button = gtk::Button::with_label("Resume As Shells");
-    shells_button.add_css_class("session-resume-action");
-    shells_button.add_css_class("secondary-button");
-    shells_button.set_hexpand(true);
-    shells_button.set_halign(gtk::Align::Fill);
-
-    let fresh_button = gtk::Button::with_label("Start Fresh");
-    fresh_button.add_css_class("session-resume-action");
-    fresh_button.add_css_class("secondary-button");
-    fresh_button.set_hexpand(true);
-    fresh_button.set_halign(gtk::Align::Fill);
-
-    actions.append(&resume_button);
-    actions.append(&shells_button);
-    actions.append(&fresh_button);
-    content.append(&actions);
-
-    let action_taken = Rc::new(Cell::new(false));
-    let on_resume: Rc<dyn Fn()> = Rc::new(on_resume);
-    let on_resume_shells: Rc<dyn Fn()> = Rc::new(on_resume_shells);
     let on_start_fresh: Rc<dyn Fn()> = Rc::new(on_start_fresh);
+    let on_start_fresh_dismiss = on_start_fresh.clone();
 
-    {
-        let action_taken = action_taken.clone();
-        let on_resume = on_resume.clone();
-        let dialog = dialog.clone();
-        resume_button.connect_clicked(move |_| {
-            if !action_taken.replace(true) {
-                on_resume();
-            }
-            dialog.close();
-        });
+    let mut modal = dialog_chrome::PremiumModal::new(
+        "session-resume-dialog",
+        "Resume Previous Session?",
+    )
+    .content_width(380)
+    .eyebrow("Session Restore")
+    .icon(icon_name::RESTORE, dialog_chrome::ModalAccent::Amber)
+    .meta_chip(&format!("{} saved workspace(s)", saved_session.tabs.len()))
+    .body("Rerun the saved commands, reopen the same layouts as plain shells, or start fresh.");
+    if let Some(warning) = warning {
+        modal = modal.warning(warning);
     }
-
-    {
-        let action_taken = action_taken.clone();
-        let on_resume_shells = on_resume_shells.clone();
-        let dialog = dialog.clone();
-        shells_button.connect_clicked(move |_| {
-            if !action_taken.replace(true) {
-                on_resume_shells();
-            }
-            dialog.close();
-        });
-    }
-
-    {
-        let action_taken = action_taken.clone();
-        let on_start_fresh = on_start_fresh.clone();
-        let dialog = dialog.clone();
-        fresh_button.connect_clicked(move |_| {
-            if !action_taken.replace(true) {
-                on_start_fresh();
-            }
-            dialog.close();
-        });
-    }
-
-    {
-        let action_taken = action_taken.clone();
-        let on_start_fresh = on_start_fresh.clone();
-        dialog.connect_closed(move |_| {
-            if !action_taken.replace(true) {
-                on_start_fresh();
-            }
-        });
-    }
-
-    dialog.set_child(Some(&content));
-    dialog.set_default_widget(Some(&shells_button));
-    dialog.present(Some(window));
+    modal
+        .stacked_actions()
+        .action(
+            "Resume And Rerun",
+            dialog_chrome::ModalActionRole::Primary,
+            false,
+            on_resume,
+        )
+        .action(
+            "Resume As Shells",
+            dialog_chrome::ModalActionRole::Secondary,
+            true,
+            on_resume_shells,
+        )
+        .action(
+            "Start Fresh",
+            dialog_chrome::ModalActionRole::Ghost,
+            false,
+            move || on_start_fresh(),
+        )
+        .on_dismiss(move || on_start_fresh_dismiss())
+        .present(Some(window));
 }
 
 fn show_startup_notice(window: &adw::ApplicationWindow, heading: &str, body: &str) {
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .transient_for(window)
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "startup-notice-dialog");
-    dialog.add_response("ok", "OK");
-    dialog.set_default_response(Some("ok"));
-    dialog.set_close_response("ok");
-    dialog.connect_response(None, move |dialog, _| {
-        dialog.close();
-    });
-    dialog.present();
+    dialog_chrome::present_notice(window, "startup-notice-dialog", heading, body);
 }
 
 #[cfg(test)]

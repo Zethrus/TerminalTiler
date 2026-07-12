@@ -70,6 +70,7 @@ pub const SHARED_VISUAL_CONTRACT_CLASSES: &[&str] = &[
     "ghost-link-button",
     "surface-button",
     "destructive-button",
+    "premium-modal",
 ];
 
 /// Internal adapter boundaries that platform frontends must provide while
