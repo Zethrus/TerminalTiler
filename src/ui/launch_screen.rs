@@ -2283,38 +2283,26 @@ fn present_delete_board_confirmation(
     board_workspace_store: Rc<BoardWorkspaceStore>,
     on_boards_changed: Rc<dyn Fn()>,
 ) {
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .heading("Delete Kanban Shortcut?")
-        .body(format!(
+    dialog_chrome::confirm_destructive_choice(
+        window,
+        "launch-delete-board-dialog",
+        "Delete Kanban Shortcut?",
+        &format!(
             "\"{}\" will be removed from the launch deck. The project board file stays on disk.",
             board_name
-        ))
-        .build();
-
-    if let Some(win) = window {
-        dialog.set_transient_for(Some(win));
-        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-delete-board-dialog");
-    }
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("delete", "Delete Shortcut");
-    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "delete" {
+        ),
+        "Delete Shortcut",
+        move |confirmed| {
+            if !confirmed {
+                return;
+            }
             if let Err(err) = board_workspace_store.delete(&board_id) {
                 logging::error(format!("Failed to delete Kanban shortcut: {}", err));
             } else {
                 on_boards_changed();
             }
-        }
-        dialog.close();
-    });
-
-    dialog.present();
+        },
+    );
 }
 
 fn build_header(default_restore_mode: RestoreLaunchMode) -> gtk::Widget {
@@ -2712,42 +2700,31 @@ fn present_delete_preset_confirmation(
     preset_store: Rc<PresetStore>,
     on_presets_changed: Rc<dyn Fn()>,
 ) {
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .heading("Delete Preset?")
-        .body(if is_builtin {
-            format!(
-                "\"{}\" will be removed. You can restore the shipped presets from Settings later.",
-                preset_name
-            )
-        } else {
-            format!("\"{}\" will be permanently removed.", preset_name)
-        })
-        .build();
-
-    if let Some(win) = window {
-        dialog.set_transient_for(Some(win));
-        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-delete-preset-dialog");
-    }
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("delete", "Delete");
-    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "delete" {
+    let body = if is_builtin {
+        format!(
+            "\"{}\" will be removed. You can restore the shipped presets from Settings later.",
+            preset_name
+        )
+    } else {
+        format!("\"{}\" will be permanently removed.", preset_name)
+    };
+    dialog_chrome::confirm_destructive_choice(
+        window,
+        "launch-delete-preset-dialog",
+        "Delete Preset?",
+        &body,
+        "Delete",
+        move |confirmed| {
+            if !confirmed {
+                return;
+            }
             if let Err(err) = preset_store.delete_preset(&preset_id) {
                 logging::error(format!("Failed to delete preset: {}", err));
             } else {
                 on_presets_changed();
             }
-        }
-        dialog.close();
-    });
-
-    dialog.present();
+        },
+    );
 }
 
 fn build_tile_editor_panel() -> TileEditorPanel {
@@ -3860,42 +3837,30 @@ pub(crate) fn prompt_preset_name<F>(window: Option<&gtk::Window>, default_name: 
 where
     F: Fn(String) + 'static,
 {
-    let dialog = adw::MessageDialog::builder()
-        .modal(true)
-        .heading("Save Workspace Preset")
-        .body("Enter the name to show on the Workspaces dashboard.")
-        .build();
-
-    if let Some(win) = window {
-        dialog.set_transient_for(Some(win));
-        dialog_chrome::sync_dialog_chrome_classes(win, &dialog, "launch-save-preset-dialog");
-    }
-
-    let entry = gtk::Entry::builder()
-        .hexpand(true)
-        .text(default_name)
-        .activates_default(true)
-        .build();
-    dialog.set_extra_child(Some(&entry));
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("save", "Save");
-    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("save"));
-    dialog.set_close_response("cancel");
-
-    let on_submit = Rc::new(on_submit);
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "save" {
-            let name = entry.text().trim().to_string();
-            if !name.is_empty() {
-                on_submit(name);
-            }
-        }
-        dialog.close();
-    });
-
-    dialog.present();
+    let modal =
+        dialog_chrome::PremiumModal::new("launch-save-preset-dialog", "Save Workspace Preset")
+            .icon(icon_name::SAVE_SYMBOLIC, dialog_chrome::ModalAccent::Amber)
+            .body("Enter the name to show on the Workspaces dashboard.");
+    let entry = modal.entry(default_name);
+    modal
+        .action(
+            "Cancel",
+            dialog_chrome::ModalActionRole::Ghost,
+            false,
+            || {},
+        )
+        .action(
+            "Save",
+            dialog_chrome::ModalActionRole::Primary,
+            true,
+            move || {
+                let name = entry.text().trim().to_string();
+                if !name.is_empty() {
+                    on_submit(name);
+                }
+            },
+        )
+        .present(window);
 }
 
 fn slugify(name: &str) -> String {

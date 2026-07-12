@@ -145,6 +145,31 @@ const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");
 
+#[test]
+fn task_attachments_render_safe_image_previews_and_open_other_files() {
+    assert!(
+        TASK_DETAIL_DIALOG_RS.contains("fn is_image_attachment")
+            && TASK_DETAIL_DIALOG_RS.contains("fn resolve_attachment_path")
+            && TASK_DETAIL_DIALOG_RS.contains("fs::canonicalize")
+            && TASK_DETAIL_DIALOG_RS.contains("fn present_image_viewer")
+            && TASK_DETAIL_DIALOG_RS.contains("gtk::ContentFit::Contain")
+            && TASK_DETAIL_DIALOG_RS.contains("gio::AppInfo::launch_default_for_uri")
+            && TASK_DETAIL_DIALOG_RS.contains("Open attachment"),
+        "attachment actions must distinguish images, contain selected previews, validate paths, and open other files externally"
+    );
+    for hook in [
+        ".task-detail-thumbnail-grid",
+        ".task-detail-image-thumbnail",
+        ".task-attachment-viewer",
+        ".task-attachment-viewer-image",
+    ] {
+        assert!(
+            STYLE_CSS.contains(hook),
+            "task attachment image UI requires the {hook} CSS hook"
+        );
+    }
+}
+
 const TERMINAL_CARD_STATES: &[&str] = &[
     ".terminal-card.is-active-tile",
     ".terminal-card.is-disconnected",
@@ -1004,34 +1029,62 @@ fn session_resume_prompt_uses_stable_custom_dialog_layout() {
         .expect("prompt_session_resume should stay before show_startup_notice");
 
     assert!(
-        resume_prompt.contains("let dialog = adw::Dialog::new();")
+        resume_prompt.contains("dialog_chrome::PremiumModal::new(")
+            && resume_prompt.contains("\"session-resume-dialog\"")
             && !resume_prompt.contains("MessageDialog")
-            && resume_prompt.contains("dialog.set_content_width(380)")
-            && !resume_prompt.contains("set_follows_content_size(true)")
-            && resume_prompt.contains(".css_classes([\"session-resume-content\"])")
-            && resume_prompt.contains(".css_classes([\"session-resume-actions\"])")
-            && resume_prompt.contains("gtk::Button::with_label(\"Resume And Rerun\")")
-            && resume_prompt.contains("gtk::Button::with_label(\"Resume As Shells\")")
-            && resume_prompt.contains("gtk::Button::with_label(\"Start Fresh\")")
-            && resume_prompt.contains("dialog.connect_closed")
-            && resume_prompt.contains("if !action_taken.replace(true)")
-            && resume_prompt.contains("dialog.set_default_widget(Some(&shells_button))"),
-        "startup session resume should use a fixed-width custom AdwDialog layout with separate wrapped copy, action stack, and once-guarded close fallback"
+            && resume_prompt.contains(".content_width(380)")
+            && resume_prompt.contains(".stacked_actions()")
+            && resume_prompt.contains("\"Resume And Rerun\"")
+            && resume_prompt.contains("\"Resume As Shells\"")
+            && resume_prompt.contains("\"Start Fresh\"")
+            && resume_prompt.contains(".on_dismiss("),
+        "startup session resume should use the fixed-width premium modal scaffold with a stacked action list and once-guarded close fallback"
     );
 
     for selector in [
-        ".session-resume-dialog .session-resume-content",
-        ".session-resume-dialog .session-resume-heading",
-        ".session-resume-dialog .session-resume-body",
-        ".session-resume-dialog .session-resume-actions",
-        ".session-resume-dialog button.session-resume-action",
-        ".session-resume-dialog.windows-gtk-shell button.session-resume-action",
+        "dialog.parity-dialog-window.premium-modal sheet",
+        ".premium-modal .premium-modal-heading",
+        ".premium-modal .premium-modal-body",
+        "button.premium-modal-action",
+        ".session-resume-dialog button.premium-modal-action",
+        ".premium-modal.windows-gtk-shell button.premium-modal-action",
     ] {
         assert!(
             STYLE_CSS.contains(selector),
             "resume prompt should have scoped CSS hook: {selector}"
         );
     }
+}
+
+#[test]
+fn premium_modal_dialogs_share_premium_surface_contract() {
+    for selector in [
+        "dialog.parity-dialog-window.premium-modal sheet",
+        ".premium-modal .premium-modal-eyebrow",
+        ".premium-modal .premium-modal-icon-chip",
+        ".premium-modal .premium-modal-icon-chip.accent-danger",
+        ".premium-modal .premium-modal-icon-chip.accent-amber",
+        ".premium-modal .premium-modal-warning",
+        ".premium-modal .premium-modal-actions",
+        "dialog.parity-dialog-window.premium-modal.theme-light sheet",
+    ] {
+        assert!(
+            STYLE_CSS.contains(selector),
+            "premium modal dialogs should share the scoped CSS hook: {selector}"
+        );
+    }
+
+    assert!(
+        DIALOG_CHROME_RS.contains("let dialog = adw::Dialog::new();")
+            && DIALOG_CHROME_RS.contains("\"premium-modal\"")
+            && DIALOG_CHROME_RS.contains("connect_closed")
+            && DIALOG_CHROME_RS.contains("if !action_taken.replace(true)")
+            && DIALOG_CHROME_RS.contains("set_default_widget(Some(&button))")
+            && DIALOG_CHROME_RS.contains(".activates_default(true)")
+            && !DIALOG_CHROME_RS.contains("MessageDialog")
+            && !LAUNCH_SCREEN_RS.contains("MessageDialog"),
+        "alert-style dialogs should be built on the shared PremiumModal scaffold instead of stock adw::MessageDialog"
+    );
 }
 
 #[test]
@@ -1143,6 +1196,39 @@ fn launch_buttons_use_premium_role_contract() {
         "background",
         "light-mode pill buttons should remain usable and not inherit dark glass",
     );
+    for (selector, color) in [
+        (
+            "window.theme-light button.secondary-button label",
+            "rgba(25, 35, 50, 0.92)",
+        ),
+        (
+            "window.theme-light button.secondary-button:hover label",
+            "#192332",
+        ),
+        (
+            "window.theme-light button.secondary-button:disabled label",
+            "rgba(25, 35, 50, 0.42)",
+        ),
+        (
+            "window.theme-light button.ghost-link-button label",
+            "rgba(25, 35, 50, 0.78)",
+        ),
+        (
+            "window.theme-light button.ghost-link-button:hover label",
+            "#192332",
+        ),
+        (
+            "window.theme-light button.ghost-link-button:disabled label",
+            "rgba(25, 35, 50, 0.42)",
+        ),
+    ] {
+        assert_css_declaration(
+            selector,
+            "color",
+            color,
+            "light-mode secondary and ghost labels must override dark-role label colors",
+        );
+    }
 
     let global_flat_button_override = css_blocks(STYLE_CSS).into_iter().any(|(selectors, _)| {
         selectors
@@ -2470,14 +2556,19 @@ fn windows_gtk_shell_has_targeted_density_normalization_without_touching_linux()
             && TAB_RENAME_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-rename-dialog-window\")")
             && TRANSCRIPT_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(&window, &dialog, \"transcript-dialog-window\")")
             && SETTINGS_DIALOG_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, dialog, \"settings-dialog-window\")")
-            && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-delete-preset-dialog\")")
+            && LAUNCH_SCREEN_RS.contains("\"launch-delete-board-dialog\"")
+            && LAUNCH_SCREEN_RS.contains("\"launch-delete-preset-dialog\"")
             && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-folder-picker-dialog\")")
-            && LAUNCH_SCREEN_RS.contains("dialog_chrome::sync_dialog_chrome_classes(win, &dialog, \"launch-save-preset-dialog\")")
-            && DIALOG_CHROME_RS.contains("sync_dialog_chrome_classes(window, &dialog, \"destructive-confirm-dialog\")")
+            && LAUNCH_SCREEN_RS.contains("\"launch-save-preset-dialog\"")
+            && LAUNCH_SCREEN_RS.contains("dialog_chrome::PremiumModal::new(")
+            && DIALOG_CHROME_RS.contains("pub(crate) fn confirm_destructive_choice")
+            && DIALOG_CHROME_RS.contains("\"destructive-confirm-dialog\"")
+            && DIALOG_CHROME_RS.contains("sync_dialog_chrome_classes(parent, &self.dialog, &self.surface_class)")
             && WINDOW_RS.contains("dialog_chrome::confirm_destructive_action")
-            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"tab-close-confirm-dialog\")")
-            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"session-resume-dialog\")")
-            && WINDOW_RS.contains("dialog_chrome::sync_dialog_chrome_classes(window, &dialog, \"startup-notice-dialog\")")
+            && WINDOW_RS.contains("\"tab-close-confirm-dialog\"")
+            && WINDOW_RS.contains("dialog_chrome::PremiumModal::new(")
+            && WINDOW_RS.contains("\"session-resume-dialog\"")
+            && WINDOW_RS.contains("dialog_chrome::present_notice(window, \"startup-notice-dialog\"")
             && CONTEXT_MENU_RS.contains("dialog_chrome::sync_popover_chrome_classes(parent, &popover, \"terminal-context-popover-window\")")
             && SNIPPET_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(button, &popover, \"snippet-popover-window\")")
             && TERMINAL_RECOVERY_POPOVER_RS.contains("dialog_chrome::sync_popover_chrome_classes(")
