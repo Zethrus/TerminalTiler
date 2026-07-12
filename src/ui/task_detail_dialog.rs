@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::accessible::AccessibleExtManual;
+use gtk::gio;
 
 use crate::model::board::{KnowledgeEntry, Task, TaskAttachment, now_epoch_secs};
 use crate::services::board as board_service;
@@ -29,6 +31,15 @@ const MAX_ATTACHMENT_BYTES: u64 = 25 * 1024 * 1024;
 const ALLOWED_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "pdf", "doc", "docx", "xls", "xlsx", "csv",
     "txt", "md", "json", "zip",
+];
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
+const IMAGE_MIME_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/svg+xml",
 ];
 
 /// Present the task-detail dialog for `task_id`.
@@ -514,9 +525,11 @@ fn build_attachments_tab(
     let refresh: RefreshFn = {
         let project_root = project_root.to_path_buf();
         let task_id = task_id.to_string();
+        let window = window.clone();
         let list = list.clone();
         let count_label = count_label.clone();
         let on_changed = on_changed.clone();
+        let status = status.clone();
         let refresh_holder = refresh_holder.clone();
         Rc::new(move || {
             let board = board_store::load(&project_root);
@@ -535,8 +548,31 @@ fn build_attachments_tab(
                 );
                 return;
             }
+
+            let image_grid = gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .max_children_per_line(3)
+                .min_children_per_line(1)
+                .row_spacing(8)
+                .column_spacing(8)
+                .css_classes(["task-detail-thumbnail-grid"])
+                .build();
+            let mut has_images = false;
+            let mut errors = Vec::new();
             for attachment in attachments {
-                let row = build_attachment_row(&attachment);
+                let is_image = is_image_attachment(&attachment);
+                let resolved_path =
+                    resolve_attachment_path(&project_root, &task_id, &attachment.path);
+                if let Err(error) = &resolved_path {
+                    errors.push(format!("Cannot open '{}': {error}", attachment.name));
+                }
+                let row = match (is_image, resolved_path.as_ref()) {
+                    (true, Ok(path)) => {
+                        has_images = true;
+                        build_image_attachment_tile(&attachment, path)
+                    }
+                    _ => build_attachment_row(&attachment),
+                };
                 {
                     let project_root = project_root.clone();
                     let task_id = task_id.clone();
@@ -551,7 +587,41 @@ fn build_attachments_tab(
                         on_changed();
                     });
                 }
-                list.append(&row.widget);
+                {
+                    let project_root = project_root.clone();
+                    let task_id = task_id.clone();
+                    let attachment = attachment.clone();
+                    let status = status.clone();
+                    let window = window.clone();
+                    row.open.connect_clicked(move |_| {
+                        match resolve_attachment_path(&project_root, &task_id, &attachment.path) {
+                            Ok(path) if is_image_attachment(&attachment) => {
+                                present_image_viewer(&window, &path, &attachment.name);
+                            }
+                            Ok(_) => {
+                                if let Err(error) =
+                                    open_attachment(&project_root, &task_id, &attachment)
+                                {
+                                    show_attachment_error(&status, &error);
+                                }
+                            }
+                            Err(error) => show_attachment_error(&status, &error),
+                        }
+                    });
+                }
+                if is_image && resolved_path.is_ok() {
+                    image_grid.insert(&row.widget, -1);
+                } else {
+                    list.append(&row.widget);
+                }
+            }
+            if has_images {
+                list.prepend(&image_grid);
+            }
+            if errors.is_empty() {
+                status.set_visible(false);
+            } else {
+                show_attachment_error(&status, &errors.join(" "));
             }
         })
     };
@@ -610,6 +680,7 @@ fn build_attachments_tab(
 
 struct AttachmentRow {
     widget: gtk::Box,
+    open: gtk::Button,
     remove: gtk::Button,
 }
 
@@ -642,6 +713,13 @@ fn build_attachment_row(attachment: &TaskAttachment) -> AttachmentRow {
     );
     row.append(&info);
 
+    let open = icons::icon_button(
+        icon_name::OPEN,
+        "Open attachment",
+        &["flat", "surface-button"],
+    );
+    row.append(&open);
+
     let remove = icons::icon_button(
         icon_name::DELETE,
         "Remove attachment",
@@ -651,8 +729,207 @@ fn build_attachment_row(attachment: &TaskAttachment) -> AttachmentRow {
 
     AttachmentRow {
         widget: row,
+        open,
         remove,
     }
+}
+
+fn build_image_attachment_tile(attachment: &TaskAttachment, path: &Path) -> AttachmentRow {
+    let tile = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .width_request(150)
+        .css_classes(["task-detail-image-attachment"])
+        .build();
+
+    let preview = gtk::Button::builder()
+        .tooltip_text("View image")
+        .css_classes(["flat", "task-detail-image-thumbnail"])
+        .build();
+    let accessible_label = format!("View image {}", attachment.name);
+    preview.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
+    let picture = gtk::Picture::for_file(&gio::File::for_path(path));
+    picture.set_content_fit(gtk::ContentFit::Cover);
+    picture.set_can_shrink(true);
+    picture.set_size_request(150, 112);
+    preview.set_child(Some(&picture));
+    tile.append(&preview);
+
+    tile.append(
+        &gtk::Label::builder()
+            .label(&attachment.name)
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .css_classes(["card-title"])
+            .build(),
+    );
+    tile.append(
+        &gtk::Label::builder()
+            .label(format_size(attachment.size_bytes))
+            .halign(gtk::Align::Start)
+            .css_classes(["field-hint"])
+            .build(),
+    );
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::End)
+        .build();
+    let remove = icons::icon_button(
+        icon_name::DELETE,
+        "Remove attachment",
+        &["flat", "surface-button"],
+    );
+    actions.append(&remove);
+    tile.append(&actions);
+
+    AttachmentRow {
+        widget: tile,
+        open: preview,
+        remove,
+    }
+}
+
+fn present_image_viewer(window: &adw::ApplicationWindow, path: &Path, name: &str) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(name);
+    dialog.set_content_width(820);
+    dialog.set_content_height(620);
+    dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "task-attachment-viewer-window");
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(18)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
+        .css_classes(["task-attachment-viewer"])
+        .build();
+    let picture = gtk::Picture::for_file(&gio::File::for_path(path));
+    picture.set_content_fit(gtk::ContentFit::Contain);
+    picture.set_can_shrink(true);
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_css_classes(&["task-attachment-viewer-image"]);
+    content.append(&picture);
+
+    let close = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &["pill-button", "surface-button"],
+    );
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .halign(gtk::Align::End)
+        .build();
+    actions.append(&close);
+    content.append(&actions);
+    {
+        let dialog = dialog.clone();
+        close.connect_clicked(move |_| {
+            dialog.close();
+        });
+    }
+    dialog.set_child(Some(&content));
+    dialog.present(Some(window));
+}
+
+fn is_image_attachment(attachment: &TaskAttachment) -> bool {
+    attachment
+        .mime_type
+        .as_deref()
+        .map(|mime| {
+            mime.split(';')
+                .next()
+                .unwrap_or(mime)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|mime| IMAGE_MIME_TYPES.contains(&mime.as_str()))
+        || attachment_extension(&attachment.path)
+            .or_else(|| attachment_extension(&attachment.name))
+            .is_some_and(|extension| IMAGE_EXTENSIONS.contains(&extension.as_str()))
+}
+
+fn attachment_extension(value: &str) -> Option<String> {
+    Path::new(value)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
+fn attachment_directory(project_root: &Path, task_id: &str) -> Result<PathBuf, String> {
+    let task_id_path = Path::new(task_id);
+    if task_id_path.is_absolute()
+        || task_id_path.components().count() != 1
+        || !matches!(
+            task_id_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err("Attachment has an unsafe task directory.".to_string());
+    }
+    Ok(project_root
+        .join(board_store::BOARD_DIR_NAME)
+        .join("attachments")
+        .join(task_id))
+}
+
+/// Resolve a stored attachment path only when it remains a regular file beneath this task's
+/// attachment directory. Canonical paths prevent a malicious board entry or symlink from
+/// escaping the project attachment store.
+fn resolve_attachment_path(
+    project_root: &Path,
+    task_id: &str,
+    stored_path: &str,
+) -> Result<PathBuf, String> {
+    let path = Path::new(stored_path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("Attachment path is unsafe.".to_string());
+    }
+
+    let attachment_dir = attachment_directory(project_root, task_id)?;
+    let candidate = project_root.join(path);
+    if !candidate.starts_with(&attachment_dir) {
+        return Err("Attachment is outside this task's attachment directory.".to_string());
+    }
+
+    let canonical_dir = fs::canonicalize(&attachment_dir)
+        .map_err(|error| format!("Cannot access attachment directory: {error}"))?;
+    let canonical_path = fs::canonicalize(&candidate)
+        .map_err(|error| format!("Attachment file is missing or unreadable: {error}"))?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err("Attachment resolves outside this task's attachment directory.".to_string());
+    }
+    let metadata = fs::metadata(&canonical_path)
+        .map_err(|error| format!("Cannot inspect attachment: {error}"))?;
+    if !metadata.is_file() {
+        return Err("Attachment is not a file.".to_string());
+    }
+    fs::File::open(&canonical_path)
+        .map_err(|error| format!("Attachment is unreadable: {error}"))?;
+    Ok(canonical_path)
+}
+
+fn open_attachment(
+    project_root: &Path,
+    task_id: &str,
+    attachment: &TaskAttachment,
+) -> Result<(), String> {
+    let path = resolve_attachment_path(project_root, task_id, &attachment.path)?;
+    let uri = gio::File::for_path(path).uri();
+    gio::AppInfo::launch_default_for_uri(uri.as_str(), None::<&gio::AppLaunchContext>)
+        .map_err(|error| format!("Could not open '{}': {error}", attachment.name))
+}
+
+fn show_attachment_error(status: &gtk::Label, error: &str) {
+    status.set_text(error);
+    status.add_css_class("error-text");
+    status.set_visible(true);
 }
 
 /// Build the closure that imports a batch of dropped/picked files into the task.
@@ -915,8 +1192,10 @@ fn remove_attachment(project_root: &Path, task_id: &str, path: &str) {
             .ok()
             .flatten()
     });
-    if let Ok(Some(attachment)) = removed {
-        let _ = fs::remove_file(project_root.join(&attachment.path));
+    if let Ok(Some(attachment)) = removed
+        && let Ok(path) = resolve_attachment_path(project_root, task_id, &attachment.path)
+    {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -1077,6 +1356,90 @@ mod tests {
                 .attachments
                 .is_empty()
         );
+
+        let _ = fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn image_attachments_use_supported_mime_types_or_legacy_extensions() {
+        let image_from_mime = TaskAttachment {
+            path: ".terminaltiler/attachments/task-1/render.bin".into(),
+            name: "render.bin".into(),
+            mime_type: Some("image/png; charset=binary".into()),
+            size_bytes: 0,
+            added_at: 0,
+        };
+        let legacy_image = TaskAttachment {
+            path: ".terminaltiler/attachments/task-1/PHOTO.JPEG".into(),
+            name: "PHOTO.JPEG".into(),
+            mime_type: None,
+            size_bytes: 0,
+            added_at: 0,
+        };
+        let document = TaskAttachment {
+            path: ".terminaltiler/attachments/task-1/notes.pdf".into(),
+            name: "notes.pdf".into(),
+            mime_type: Some("application/pdf".into()),
+            size_bytes: 0,
+            added_at: 0,
+        };
+
+        assert!(is_image_attachment(&image_from_mime));
+        assert!(is_image_attachment(&legacy_image));
+        assert!(!is_image_attachment(&document));
+    }
+
+    #[test]
+    fn attachment_paths_must_be_existing_files_in_the_task_directory() {
+        let project_root = temp_project("resolve-attachment");
+        let task_id = "task-1";
+        let attachment_dir = attachment_directory(&project_root, task_id).unwrap();
+        fs::create_dir_all(&attachment_dir).unwrap();
+        let attachment_path = attachment_dir.join("shot.png");
+        fs::write(&attachment_path, b"png-bytes").unwrap();
+
+        let resolved = resolve_attachment_path(
+            &project_root,
+            task_id,
+            ".terminaltiler/attachments/task-1/shot.png",
+        )
+        .unwrap();
+        assert_eq!(resolved, fs::canonicalize(&attachment_path).unwrap());
+
+        assert!(
+            resolve_attachment_path(
+                &project_root,
+                task_id,
+                ".terminaltiler/attachments/task-1/missing.png",
+            )
+            .is_err()
+        );
+        assert!(resolve_attachment_path(&project_root, task_id, "../shot.png").is_err());
+        assert!(resolve_attachment_path(&project_root, task_id, "/tmp/shot.png").is_err());
+
+        let _ = fs::remove_dir_all(&project_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_paths_reject_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let project_root = temp_project("attachment-symlink");
+        let task_id = "task-1";
+        let attachment_dir = attachment_directory(&project_root, task_id).unwrap();
+        fs::create_dir_all(&attachment_dir).unwrap();
+        let outside_file = project_root.join("outside.png");
+        fs::write(&outside_file, b"not-an-attachment").unwrap();
+        symlink(&outside_file, attachment_dir.join("escape.png")).unwrap();
+
+        let error = resolve_attachment_path(
+            &project_root,
+            task_id,
+            ".terminaltiler/attachments/task-1/escape.png",
+        )
+        .unwrap_err();
+        assert!(error.contains("outside"));
 
         let _ = fs::remove_dir_all(&project_root);
     }

@@ -55,7 +55,9 @@ Click a card body to open the task detail dialog. The dialog has three tabs:
 
 - **Instructions** saves extra instructions that are injected into implementation and review prompts.
 - **Knowledge** displays entries recorded by agents through `add_task_knowledge`.
-- **Attachments** imports local files for agent context.
+- **Attachments** imports local files for agent context. Supported images appear as inline
+  thumbnails; select one to view that image at full size without cropping. Other file types
+  have an **Open** action that launches the desktop default application.
 
 Attachments are copied under:
 

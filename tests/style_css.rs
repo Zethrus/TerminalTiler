@@ -145,6 +145,31 @@ const VOICE_PACK_RS: &str = include_str!("../src/voice/pack.rs");
 const VOICE_PROCESS_RS: &str = include_str!("../src/voice/process.rs");
 const BOARD_DRAG_RS: &str = include_str!("../src/ui/board_drag.rs");
 
+#[test]
+fn task_attachments_render_safe_image_previews_and_open_other_files() {
+    assert!(
+        TASK_DETAIL_DIALOG_RS.contains("fn is_image_attachment")
+            && TASK_DETAIL_DIALOG_RS.contains("fn resolve_attachment_path")
+            && TASK_DETAIL_DIALOG_RS.contains("fs::canonicalize")
+            && TASK_DETAIL_DIALOG_RS.contains("fn present_image_viewer")
+            && TASK_DETAIL_DIALOG_RS.contains("gtk::ContentFit::Contain")
+            && TASK_DETAIL_DIALOG_RS.contains("gio::AppInfo::launch_default_for_uri")
+            && TASK_DETAIL_DIALOG_RS.contains("Open attachment"),
+        "attachment actions must distinguish images, contain selected previews, validate paths, and open other files externally"
+    );
+    for hook in [
+        ".task-detail-thumbnail-grid",
+        ".task-detail-image-thumbnail",
+        ".task-attachment-viewer",
+        ".task-attachment-viewer-image",
+    ] {
+        assert!(
+            STYLE_CSS.contains(hook),
+            "task attachment image UI requires the {hook} CSS hook"
+        );
+    }
+}
+
 const TERMINAL_CARD_STATES: &[&str] = &[
     ".terminal-card.is-active-tile",
     ".terminal-card.is-disconnected",

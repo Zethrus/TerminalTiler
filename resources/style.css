@@ -5294,6 +5294,49 @@ window.theme-light .new-task-dialog-window dropdown.dialog-select button {
   border: 1px solid alpha(@tt_white, 0.06);
 }
 
+.task-detail-thumbnail-grid {
+  margin-top: 2px;
+}
+
+.task-detail-image-attachment {
+  min-width: 150px;
+  padding: 8px;
+  border-radius: 10px;
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+}
+
+.task-detail-image-thumbnail {
+  min-height: 112px;
+  padding: 0;
+  border-radius: 7px;
+  overflow: hidden;
+  background: alpha(@tt_shadow, 0.32);
+  border: 1px solid alpha(@tt_white, 0.08);
+}
+
+.task-detail-image-thumbnail:hover,
+.task-detail-image-thumbnail:focus-visible {
+  border-color: @tt_amber;
+  background: alpha(@tt_amber, 0.10);
+}
+
+.task-detail-image-thumbnail:focus-visible {
+  outline: 2px solid alpha(@tt_amber, 0.82);
+  outline-offset: 2px;
+}
+
+.task-attachment-viewer {
+  background: alpha(@tt_shadow, 0.16);
+}
+
+.task-attachment-viewer-image {
+  min-width: 280px;
+  min-height: 240px;
+  background: alpha(@tt_shadow, 0.38);
+  border-radius: 10px;
+}
+
 .task-detail-dropzone {
   padding: 20px;
   border-radius: 12px;
@@ -5358,9 +5401,17 @@ window.theme-light .new-task-dialog-window dropdown.dialog-select button {
 
 window.theme-light .task-detail-knowledge-entry,
 window.theme-light .task-detail-attachment-row,
-window.theme-light .task-detail-lifecycle-panel {
+window.theme-light .task-detail-lifecycle-panel,
+window.theme-light .task-detail-image-attachment {
   background: alpha(@tt_white, 0.7);
   border-color: rgba(17, 18, 22, 0.10);
+}
+
+window.theme-light .task-detail-image-thumbnail,
+window.theme-light .task-attachment-viewer,
+window.theme-light .task-attachment-viewer-image {
+  background: alpha(@tt_white, 0.78);
+  border-color: rgba(17, 18, 22, 0.12);
 }
 
 window.theme-light .task-detail-dropzone {
