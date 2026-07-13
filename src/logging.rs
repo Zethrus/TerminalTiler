@@ -12,7 +12,10 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 use gtk::glib;
 
 #[cfg(unix)]
@@ -281,7 +284,10 @@ unsafe extern "system" fn windows_exception_handler(
     EXCEPTION_CONTINUE_SEARCH
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 fn install_platform_logging_hooks() {
     glib::log_set_writer_func(|log_level, fields| {
         let mut domain = None;
@@ -302,7 +308,10 @@ fn install_platform_logging_hooks() {
     });
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+)))]
 fn install_platform_logging_hooks() {}
 
 #[cfg(unix)]

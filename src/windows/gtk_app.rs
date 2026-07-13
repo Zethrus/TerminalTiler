@@ -101,7 +101,13 @@ mod imp {
             present_launch_window(app, &options);
         });
 
-        glib_exit_to_process_exit(app.run())
+        logging::info("windows GTK shell entering application main loop");
+        let exit_code = app.run();
+        logging::info(format!(
+            "windows GTK shell exited application main loop with {}",
+            exit_code.get()
+        ));
+        glib_exit_to_process_exit(exit_code)
     }
 
     fn install_update_pump(
