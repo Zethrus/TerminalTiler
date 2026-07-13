@@ -581,6 +581,96 @@ fn workspace_summary_toolbar_uses_dense_squared_controls() {
 }
 
 #[test]
+fn chip_family_shares_shape_contract() {
+    assert_css_declaration(
+        ".status-chip",
+        "border-radius",
+        "999px",
+        "the chip family base owns the shared pill shape",
+    );
+    assert_css_declaration(
+        ".status-chip",
+        "padding",
+        "3px 8px",
+        "the chip family base owns the shared padding step",
+    );
+    // Converged variants keep the base padding so the family reads as one system.
+    assert_css_declaration(
+        ".saved-workspace-tile-chip",
+        "padding",
+        "3px 8px",
+        "tile-count chips must sit on the family padding step",
+    );
+    assert_css_declaration(
+        ".saved-board-kind-chip",
+        "padding",
+        "3px 8px",
+        "board-kind chips must sit on the family padding step",
+    );
+    assert!(
+        STYLE_CSS.contains(".settings-meta-chip,\n.launch-meta-chip"),
+        "meta chips form the documented micro tier and share one rule block"
+    );
+}
+
+#[test]
+fn settings_switch_uses_brand_accent() {
+    assert_css_block_contains(
+        "switch.settings-toggle-switch:checked",
+        "@tt_amber",
+        "checked switches must carry the brand amber accent instead of stock Adwaita blue",
+    );
+    assert_css_declaration(
+        "switch.settings-toggle-switch",
+        "border-radius",
+        "999px",
+        "switch troughs should share the chip pill radius",
+    );
+    assert_css_declaration(
+        "switch.settings-toggle-switch:checked slider",
+        "background",
+        "@tt_ink",
+        "checked slider should use ink for contrast on the amber trough",
+    );
+    assert!(
+        STYLE_CSS
+            .contains("window.theme-light .settings-dialog-content switch.settings-toggle-switch"),
+        "brand switch styling must keep a light-theme sibling"
+    );
+}
+
+#[test]
+fn scrollbars_are_slim_and_quiet() {
+    for selector in [
+        ".window-shell scrollbar slider",
+        ".parity-dialog-window scrollbar slider",
+    ] {
+        assert_css_declaration(
+            selector,
+            "min-width",
+            "6px",
+            "scrollbar sliders should be slim overlay-style pills",
+        );
+        assert_css_declaration(
+            selector,
+            "border-radius",
+            "999px",
+            "scrollbar sliders should share the pill radius",
+        );
+    }
+    assert_css_declaration(
+        ".window-shell scrollbar trough",
+        "background",
+        "transparent",
+        "scrollbar troughs should stay invisible so sliders read as overlays",
+    );
+    assert!(
+        STYLE_CSS.contains(".window-shell.theme-light scrollbar slider"),
+        "slim scrollbars must keep a light-theme sibling"
+    );
+}
+
+#[test]
 fn terminal_card_states_have_header_local_indicators() {
     for state in TERMINAL_CARD_STATES {
         assert!(

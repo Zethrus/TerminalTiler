@@ -7,7 +7,7 @@ use std::rc::Rc;
 pub(crate) const TERMINAL_HEADER_BADGE_MAX_CHARS: i32 = 12;
 pub(crate) const WEB_HEADER_BADGE_MAX_CHARS: i32 = 4;
 pub(crate) const HEADER_GROUP_MAX_CHARS: i32 = 16;
-pub(crate) const HEADER_STATUS_MAX_CHARS: i32 = 28;
+pub(crate) const HEADER_STATUS_MAX_CHARS: i32 = 36;
 /// The title label is not width-capped (`-1`): it expands to fill the header and only
 /// ellipsizes when the tile is physically too narrow, so agent session titles show in full.
 pub(crate) const HEADER_TITLE_MAX_CHARS: i32 = -1;

@@ -263,10 +263,11 @@ mod imp {
             .build();
         make_shrinkable(&terminal_output);
         let appearance_provider = gtk::CssProvider::new();
-        terminal_output.style_context().add_provider(
-            &appearance_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
+        // Must outrank the shared stylesheet, which gtk_shell loads at USER
+        // priority (see load_css_for_default_display).
+        terminal_output
+            .style_context()
+            .add_provider(&appearance_provider, gtk::STYLE_PROVIDER_PRIORITY_USER + 1);
         apply_terminal_runtime_appearance(
             &appearance_provider,
             use_dark_palette.get(),

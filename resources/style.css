@@ -27,6 +27,17 @@
        per region; active tab is muted copper + a thin amber underline;
        secondary controls avoid amber rim-glow.
      Motion:  140ms ease.  Interactive cards lift translateY(-1px) on hover.
+     Controls (2026-07 polish):
+       switch    quiet trough alpha(@tt_white, 0.08); checked = amber→copper
+                 gradient with @tt_ink slider; never stock Adwaita blue.
+       scrollbar overlay-style 6px pill slider alpha(@tt_white, 0.14),
+                 hover 0.30; transparent trough; no scrollbar chrome.
+       combo     arrow rests neutral alpha(@tt_white, 0.55), amber only on
+                 hover/open; popup rows 6px radius, amber-tint selection.
+       entry     focus = border alpha(@tt_amber, 0.38), no glow halo.
+       chips     one family: radius 999, padding 3px 8px, 10px/600; micro
+                 tier 9px; tones neutral (ink 0.82) / muted (0.56) /
+                 accent (amber tint) / semantic. Kanban chips stay squared.
    ============================================================ */
 
 /* Neutrals (theme-agnostic structural colors) */
@@ -51,6 +62,51 @@ window.window-shell {
     radial-gradient(circle at top, rgba(28, 31, 39, 0.28), transparent 28%),
     linear-gradient(180deg, #060607 0%, #030303 100%);
   color: #f4f4f1;
+}
+
+.window-shell scrollbar,
+.parity-dialog-window scrollbar {
+  /* Slim quiet scrollbars: overlay-style 6px pill sliders, no trough chrome.
+     Scoped to the app shell and parity dialog roots so terminal scrollback,
+     settings sheets, and launch scrollers all share one recipe. */
+  background: transparent;
+  border: none;
+}
+
+.window-shell scrollbar trough,
+.parity-dialog-window scrollbar trough {
+  background: transparent;
+  border: none;
+}
+
+.window-shell scrollbar slider,
+.parity-dialog-window scrollbar slider {
+  min-width: 6px;
+  min-height: 6px;
+  border-radius: 999px;
+  margin: 2px;
+  background: alpha(@tt_white, 0.14);
+  transition: background 140ms ease;
+}
+
+.window-shell scrollbar slider:hover,
+.parity-dialog-window scrollbar slider:hover {
+  background: alpha(@tt_white, 0.30);
+}
+
+.window-shell scrollbar slider:active,
+.parity-dialog-window scrollbar slider:active {
+  background: alpha(@tt_white, 0.38);
+}
+
+.window-shell.theme-light scrollbar slider,
+.parity-dialog-window.theme-light scrollbar slider {
+  background: rgba(25, 35, 50, 0.18);
+}
+
+.window-shell.theme-light scrollbar slider:hover,
+.parity-dialog-window.theme-light scrollbar slider:hover {
+  background: rgba(25, 35, 50, 0.36);
 }
 
 /*
@@ -93,11 +149,9 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button {
   letter-spacing: 0.045em;
   text-transform: uppercase;
   color: alpha(@tt_white, 0.86);
-  background: linear-gradient(180deg, alpha(@tt_white, 0.10), alpha(@tt_white, 0.05));
+  background: alpha(@tt_white, 0.05);
   border: 1px solid alpha(@tt_white, 0.12);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.05),
-    0 2px 6px alpha(@tt_shadow, 0.08);
+  box-shadow: none;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -116,11 +170,9 @@ window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:hover {
   color: rgba(255, 251, 242, 0.96);
-  background: linear-gradient(180deg, alpha(@tt_white, 0.13), alpha(@tt_white, 0.06));
-  border-color: alpha(@tt_amber, 0.28);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.06),
-    0 6px 14px alpha(@tt_shadow, 0.14);
+  background: alpha(@tt_white, 0.08);
+  border-color: alpha(@tt_amber, 0.22);
+  box-shadow: none;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:active {
@@ -540,14 +592,16 @@ tabbar.app-tab-strip {
 }
 
 tabbar.app-tab-strip tabbox tab {
+  /* Resting tabs are flat and quiet; the active tab's copper surface and
+     amber underline carry all the emphasis. */
   min-width: 136px;
   min-height: 32px;
   margin: 0 6px 0 0;
   padding: 0 6px 0 8px;
   border-radius: 12px 12px 0 0 / 8px 8px 0 0;
-  background: linear-gradient(180deg, alpha(@tt_white, 0.075), alpha(@tt_white, 0.028));
-  border: 1px solid alpha(@tt_white, 0.08);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.04);
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+  box-shadow: none;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -565,24 +619,34 @@ tabbar.app-tab-strip tabbox tab:checked {
   border-bottom: 2px solid alpha(@tt_amber, 0.9);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.06),
-    0 6px 14px alpha(@tt_shadow, 0.14);
+    0 8px 18px alpha(@tt_shadow, 0.12);
 }
 
 tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.045));
+  background: alpha(@tt_white, 0.06);
   border-color: alpha(@tt_white, 0.10);
   transform: translateY(-1px);
 }
 
 tabbar.app-tab-strip tabbox tab image {
-  color: alpha(@tt_white, 0.72);
+  color: alpha(@tt_white, 0.52);
+  transition: color 140ms ease;
 }
 
 tabbar.app-tab-strip tabbox tab label {
-  color: alpha(@tt_white, 0.92);
+  color: alpha(@tt_white, 0.68);
   font-size: 12px;
   font-weight: 700;
   min-width: 72px;
+  transition: color 140ms ease;
+}
+
+tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) label {
+  color: alpha(@tt_white, 0.92);
+}
+
+tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) image {
+  color: alpha(@tt_white, 0.72);
 }
 
 tabbar.app-tab-strip tabbox tab:selected image,
@@ -663,17 +727,18 @@ window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
   border-bottom: 2px solid alpha(@tt_amber, 0.9);
   box-shadow:
     inset 0 1px alpha(@tt_white, 0.06),
-    0 6px 14px alpha(@tt_shadow, 0.14);
+    0 8px 18px alpha(@tt_shadow, 0.12);
 }
 
 .app-tab-shell.is-inactive {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.075), alpha(@tt_white, 0.028));
-  border: 1px solid alpha(@tt_white, 0.08);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.04);
+  /* Same flat resting treatment as the tabbar variant above. */
+  background: alpha(@tt_white, 0.03);
+  border: 1px solid alpha(@tt_white, 0.06);
+  box-shadow: none;
 }
 
 .app-tab-shell.is-inactive:hover {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.045));
+  background: alpha(@tt_white, 0.06);
   border-color: alpha(@tt_white, 0.10);
   transform: translateY(-1px);
 }
@@ -715,14 +780,23 @@ button.app-tab-select {
   font-size: 12px;
   font-weight: 700;
   min-width: 72px;
+  transition: color 140ms ease;
 }
 
 .app-tab-shell.is-inactive .app-tab-title {
+  color: alpha(@tt_white, 0.68);
+}
+
+.app-tab-shell.is-inactive:hover .app-tab-title {
   color: alpha(@tt_white, 0.92);
 }
 
 .app-tab-shell.is-inactive .app-tab-icon {
   color: alpha(@tt_white, 0.52);
+}
+
+.app-tab-shell.is-inactive:hover .app-tab-icon {
+  color: alpha(@tt_white, 0.72);
 }
 
 button.app-tab-close {
@@ -759,10 +833,10 @@ button.app-tab-add {
   min-height: 26px;
   margin-top: 1px;
   border-radius: 8px;
-  background: linear-gradient(180deg, alpha(@tt_white, 0.07), alpha(@tt_white, 0.03));
+  background: alpha(@tt_white, 0.05);
   color: alpha(@tt_white, 0.82);
   border: 1px solid alpha(@tt_white, 0.09);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
+  box-shadow: none;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -770,11 +844,9 @@ button.app-tab-add {
 }
 
 button.app-tab-add:hover {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.11), alpha(@tt_white, 0.05));
-  border-color: alpha(@tt_amber, 0.20);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.06),
-    0 4px 12px alpha(@tt_shadow, 0.12);
+  background: alpha(@tt_white, 0.08);
+  border-color: alpha(@tt_amber, 0.22);
+  box-shadow: none;
 }
 
 .launch-shell {
@@ -1096,7 +1168,7 @@ button.template-button {
 }
 
 .muted-chip {
-  color: alpha(@tt_white, 0.54);
+  color: alpha(@tt_white, 0.56);
 }
 
 .control-strip {
@@ -1673,13 +1745,16 @@ button.surface-button:disabled {
 
 .workspace-summary.workspace-summary-dense .workspace-summary-path {
   font-size: 10px;
+  opacity: 0.45;
 }
 
 .workspace-summary.workspace-summary-dense .toolbar-group {
+  /* Dividers alone carry the grouping; a filled box per group is one layer
+     of chrome too many at this density. */
   padding: 0 2px;
   border-radius: 2px;
-  background: alpha(@tt_white, 0.010);
-  border-color: alpha(@tt_white, 0.05);
+  background: transparent;
+  border-color: transparent;
 }
 
 .workspace-summary.workspace-summary-dense separator.toolbar-divider {
@@ -1690,28 +1765,30 @@ button.surface-button:disabled {
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button {
+  /* One flat recipe for every species in the strip (buttons, combos,
+     entries): same fill, same border, hover speaks through the border only. */
   min-height: 20px;
   padding: 0 7px;
   border-radius: 2px;
   font-size: 10px;
   font-weight: 650;
-  background: linear-gradient(180deg, rgba(40, 42, 50, 0.92), rgba(20, 21, 27, 0.94));
-  border-color: alpha(@tt_white, 0.14);
+  background: alpha(@tt_white, 0.05);
+  border-color: alpha(@tt_white, 0.12);
   color: rgba(255, 251, 242, 0.88);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
+  box-shadow: none;
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button:hover {
-  background: linear-gradient(180deg, rgba(50, 52, 61, 0.96), rgba(24, 25, 32, 0.97));
+  background: alpha(@tt_white, 0.08);
   border-color: alpha(@tt_amber, 0.22);
   color: rgba(255, 250, 238, 0.96);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.07);
+  box-shadow: none;
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button:active {
-  background: linear-gradient(180deg, rgba(16, 17, 22, 0.96), rgba(8, 9, 13, 0.98));
+  background: alpha(@tt_white, 0.02);
   border-color: alpha(@tt_amber, 0.28);
-  box-shadow: inset 0 1px alpha(@tt_shadow, 0.18);
+  box-shadow: none;
 }
 
 .workspace-summary.workspace-summary-dense button.surface-button.workspace-toolbar-action,
@@ -1739,6 +1816,20 @@ button.surface-button:disabled {
   border-color: alpha(@tt_white, 0.14);
 }
 
+.workspace-summary.workspace-summary-dense .workspace-broadcast-status.is-off {
+  /* Idle broadcast is plain text, not a boxed control: one less resting box
+     in the strip, and the amber "on" state below reads unmistakably. */
+  background: transparent;
+  border-color: transparent;
+  color: alpha(@tt_white, 0.50);
+}
+
+.workspace-summary.workspace-summary-dense .workspace-broadcast-status.is-on {
+  background: alpha(@tt_amber, 0.10);
+  border-color: alpha(@tt_amber, 0.35);
+  color: alpha(@tt_amber, 0.92);
+}
+
 .workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry,
 .workspace-summary.workspace-summary-dense entry.workspace-url-entry {
   min-height: 20px;
@@ -1756,30 +1847,41 @@ button.surface-button:disabled {
   color: alpha(@tt_white, 0.42);
 }
 
+entry.workspace-broadcast-entry:focus-within,
+entry.workspace-url-entry:focus-within {
+  border-color: alpha(@tt_amber, 0.38);
+  box-shadow: none;
+}
+
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo {
   min-height: 20px;
   padding: 0 6px;
   border-radius: 2px;
   font-size: 10px;
-  background: linear-gradient(180deg, rgba(40, 42, 50, 0.92), rgba(20, 21, 27, 0.94));
-  border-color: alpha(@tt_white, 0.14);
+  background: alpha(@tt_white, 0.05);
+  border-color: alpha(@tt_white, 0.12);
   color: alpha(@tt_white, 0.9);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.05);
+  box-shadow: none;
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:hover {
-  background: linear-gradient(180deg, rgba(50, 52, 61, 0.96), rgba(24, 25, 32, 0.97));
+  background: alpha(@tt_white, 0.08);
   border-color: alpha(@tt_amber, 0.22);
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:active,
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:checked {
-  background: linear-gradient(180deg, rgba(16, 17, 23, 0.96), rgba(9, 10, 14, 0.98));
+  background: alpha(@tt_white, 0.02);
   border-color: alpha(@tt_amber, 0.28);
 }
 
 .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo arrow {
   min-width: 10px;
+  color: alpha(@tt_white, 0.55);
+}
+
+.workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:hover arrow,
+.workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:checked arrow {
   color: alpha(@tt_amber, 0.82);
 }
 
@@ -1901,6 +2003,14 @@ button.tile-header-action:disabled {
 
 .terminal-card.is-active-tile .tile-title {
   color: alpha(@tt_white, 0.82);
+}
+
+.terminal-header .status-chip.muted-chip {
+  /* Pane-group tag rides between title and status: plain quiet text, so the
+     header carries at most two boxed chips (role badge + status). */
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 2px;
 }
 
 .terminal-card.is-active-tile {
@@ -2119,12 +2229,6 @@ button.tile-header-action:disabled {
 
 .settings-choice-strip {
   margin-top: 0;
-}
-
-.settings-meta-chip {
-  background: alpha(@tt_white, 0.06);
-  color: alpha(@tt_white, 0.72);
-  border: 1px solid alpha(@tt_white, 0.08);
 }
 
 .settings-shortcut-row {
@@ -2373,11 +2477,12 @@ button.tile-header-action:disabled {
 
 .settings-meta-chip,
 .launch-meta-chip {
+  /* Micro tier of the chip family: 9px type, same neutral tone as .status-chip. */
   min-height: 20px;
   padding: 0 8px;
   background: alpha(@tt_white, 0.04);
   border: 1px solid alpha(@tt_white, 0.1);
-  color: alpha(@tt_white, 0.74);
+  color: alpha(@tt_white, 0.82);
   font-size: 9px;
   letter-spacing: 0.04em;
 }
@@ -2446,6 +2551,75 @@ button.tile-header-action:disabled {
   border: 1px solid alpha(@tt_white, 0.07);
 }
 
+switch.settings-toggle-switch {
+  /* Brand switch: quiet dark trough at rest, amber gradient when checked.
+     Replaces the stock Adwaita blue, which clashes with the amber accent. */
+  min-width: 40px;
+  min-height: 22px;
+  border-radius: 999px;
+  background: alpha(@tt_white, 0.08);
+  border: 1px solid alpha(@tt_white, 0.12);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+switch.settings-toggle-switch slider {
+  min-width: 16px;
+  min-height: 16px;
+  margin: 2px;
+  border-radius: 999px;
+  background: @tt_text;
+  box-shadow: 0 8px 18px alpha(@tt_shadow, 0.12);
+  transition: background 140ms ease;
+}
+
+switch.settings-toggle-switch image {
+  opacity: 0;
+}
+
+switch.settings-toggle-switch:checked {
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.92), alpha(@tt_copper_hi, 0.88));
+  border-color: alpha(@tt_amber, 0.40);
+}
+
+switch.settings-toggle-switch:checked slider {
+  background: @tt_ink;
+}
+
+switch.settings-toggle-switch:disabled {
+  background: alpha(@tt_white, 0.04);
+  border-color: alpha(@tt_white, 0.06);
+}
+
+switch.settings-toggle-switch:disabled slider {
+  background: alpha(@tt_white, 0.30);
+}
+
+switch.settings-toggle-switch:focus-visible {
+  outline: 2px solid alpha(@tt_amber, 0.58);
+  outline-offset: 2px;
+}
+
+window.theme-light .settings-dialog-content switch.settings-toggle-switch {
+  background: rgba(25, 35, 50, 0.12);
+  border-color: rgba(25, 35, 50, 0.16);
+}
+
+window.theme-light .settings-dialog-content switch.settings-toggle-switch slider {
+  background: alpha(@tt_white, 0.98);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.16);
+}
+
+window.theme-light .settings-dialog-content switch.settings-toggle-switch:checked {
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.95), alpha(@tt_copper_hi, 0.92));
+  border-color: alpha(@tt_copper_hi, 0.45);
+}
+
+window.theme-light .settings-dialog-content switch.settings-toggle-switch:checked slider {
+  background: @tt_ink;
+}
+
 .settings-microphone-row {
   padding: 16px;
 }
@@ -2490,9 +2664,31 @@ combobox.surface-select-control button.combo:checked {
   border-color: alpha(@tt_amber, 0.32);
 }
 
+.window-shell combobox button.combo arrow,
+.parity-dialog-window combobox button.combo arrow,
+.window-shell dropdown button.combo arrow,
+.parity-dialog-window dropdown button.combo arrow {
+  /* Full reset: desktop themes (e.g. a user gtk.css) paint combo arrows as
+     accent-colored stepper pills with bitmap icons; the brand look is a bare
+     symbolic caret that inherits the control's ink. */
+  background: none;
+  border: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  -gtk-icon-source: -gtk-icontheme("pan-down-symbolic");
+}
+
 combobox.surface-select-control button.combo arrow {
-  color: alpha(@tt_amber, 0.86);
+  color: alpha(@tt_white, 0.55);
   min-width: 16px;
+  transition: color 140ms ease;
+}
+
+combobox.surface-select-control button.combo:hover arrow,
+combobox.surface-select-control button.combo:checked arrow {
+  color: alpha(@tt_amber, 0.86);
 }
 
 combobox.surface-select-control button.combo cellview {
@@ -2501,9 +2697,35 @@ combobox.surface-select-control button.combo cellview {
 }
 
 combobox.surface-select-control window.popup {
+  padding: 4px;
+  border-radius: 8px;
   background: linear-gradient(180deg, rgba(25, 25, 31, 0.99), rgba(13, 13, 18, 0.99));
   border: 1px solid alpha(@tt_white, 0.10);
-  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.36);
+  box-shadow: 0 18px 36px alpha(@tt_shadow, 0.22);
+}
+
+combobox.surface-select-control window.popup menu,
+combobox.surface-select-control window.popup listview {
+  background: transparent;
+}
+
+combobox.surface-select-control window.popup menuitem,
+combobox.surface-select-control window.popup row {
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: alpha(@tt_white, 0.86);
+  transition: background 140ms ease;
+}
+
+combobox.surface-select-control window.popup menuitem:hover,
+combobox.surface-select-control window.popup row:hover {
+  background: alpha(@tt_white, 0.06);
+}
+
+combobox.surface-select-control window.popup menuitem:selected,
+combobox.surface-select-control window.popup row:selected {
+  background: alpha(@tt_amber, 0.12);
+  color: alpha(@tt_amber, 0.92);
 }
 
 combobox.microphone-select-control button.combo {
@@ -3045,11 +3267,12 @@ button.pill-button.mcp-health-fix-button {
 }
 
 .saved-workspace-tile-chip {
-  padding: 4px 9px;
+  /* Muted tone of the chip family: card metadata, quieter than status chips. */
+  padding: 3px 8px;
   font-size: 10px;
-  color: alpha(@tt_white, 0.68);
-  background: alpha(@tt_white, 0.045);
-  border-color: alpha(@tt_white, 0.065);
+  color: alpha(@tt_white, 0.56);
+  background: alpha(@tt_white, 0.04);
+  border-color: alpha(@tt_white, 0.08);
 }
 
 .saved-workspace-footer {
@@ -3759,14 +3982,14 @@ window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-b
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab,
 window.window-shell.theme-light .app-tab-shell.is-inactive {
-  background: linear-gradient(180deg, rgba(25, 35, 50, 0.065), rgba(25, 35, 50, 0.03));
-  border: 1px solid rgba(25, 35, 50, 0.10);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.52);
+  background: rgba(25, 35, 50, 0.04);
+  border: 1px solid rgba(25, 35, 50, 0.08);
+  box-shadow: none;
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked),
 window.window-shell.theme-light .app-tab-shell.is-inactive:hover {
-  background: linear-gradient(180deg, rgba(25, 35, 50, 0.095), rgba(25, 35, 50, 0.045));
+  background: rgba(25, 35, 50, 0.07);
   border-color: rgba(25, 35, 50, 0.13);
 }
 
@@ -3792,10 +4015,20 @@ window.window-shell.theme-light .app-tab-shell.is-preview-slot {
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab image,
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab label,
 window.window-shell.theme-light .app-tab-shell.is-inactive .app-tab-title {
-  color: rgba(25, 35, 50, 0.86);
+  color: rgba(25, 35, 50, 0.66);
+}
+
+window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) label,
+window.window-shell.theme-light tabbar.app-tab-strip tabbox tab:hover:not(:selected):not(:checked) image,
+window.window-shell.theme-light .app-tab-shell.is-inactive:hover .app-tab-title {
+  color: rgba(25, 35, 50, 0.88);
 }
 
 window.window-shell.theme-light .app-tab-shell.is-inactive .app-tab-icon {
+  color: rgba(25, 35, 50, 0.55);
+}
+
+window.window-shell.theme-light .app-tab-shell.is-inactive:hover .app-tab-icon {
   color: rgba(25, 35, 50, 0.72);
 }
 
@@ -4047,9 +4280,9 @@ window.window-shell.theme-light .wizard-stepper {
 }
 
 window.window-shell.theme-light .saved-workspace-tile-chip {
-  background: rgba(25, 35, 50, 0.055);
-  border-color: rgba(25, 35, 50, 0.075);
-  color: rgba(25, 35, 50, 0.66);
+  background: rgba(25, 35, 50, 0.05);
+  border-color: rgba(25, 35, 50, 0.08);
+  color: rgba(25, 35, 50, 0.60);
 }
 
 window.window-shell.theme-light .saved-workspace-card .card-meta,
@@ -4403,6 +4636,22 @@ window.theme-light combobox.surface-select-control window.popup {
   box-shadow: 0 18px 32px rgba(15, 23, 42, 0.10);
 }
 
+window.theme-light combobox.surface-select-control window.popup menuitem,
+window.theme-light combobox.surface-select-control window.popup row {
+  color: rgba(25, 35, 50, 0.86);
+}
+
+window.theme-light combobox.surface-select-control window.popup menuitem:hover,
+window.theme-light combobox.surface-select-control window.popup row:hover {
+  background: rgba(25, 35, 50, 0.06);
+}
+
+window.theme-light combobox.surface-select-control window.popup menuitem:selected,
+window.theme-light combobox.surface-select-control window.popup row:selected {
+  background: alpha(@tt_amber, 0.16);
+  color: rgba(122, 63, 24, 0.95);
+}
+
 window.theme-light button.surface-button {
   min-height: 30px;
   padding: 0 12px;
@@ -4439,25 +4688,37 @@ window.theme-light button.surface-button.surface-button-icon {
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense button.surface-button {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(236, 241, 247, 0.94));
+  background: rgba(255, 255, 255, 0.70);
   border-color: rgba(101, 119, 151, 0.16);
   color: rgba(25, 35, 50, 0.82);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.74);
+  box-shadow: none;
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense button.surface-button:hover {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(243, 246, 250, 0.98));
+  background: rgba(255, 255, 255, 0.94);
   border-color: rgba(25, 35, 50, 0.20);
   color: #192332;
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense .toolbar-group {
-  background: rgba(25, 35, 50, 0.025);
-  border-color: rgba(25, 35, 50, 0.055);
+  background: transparent;
+  border-color: transparent;
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense .workspace-broadcast-status {
   border-radius: 2px;
+}
+
+window.window-shell.theme-light .workspace-summary.workspace-summary-dense .workspace-broadcast-status.is-off {
+  background: transparent;
+  border-color: transparent;
+  color: rgba(25, 35, 50, 0.55);
+}
+
+window.window-shell.theme-light .workspace-summary.workspace-summary-dense .workspace-broadcast-status.is-on {
+  background: alpha(@tt_amber, 0.16);
+  border-color: alpha(@tt_copper_hi, 0.40);
+  color: rgba(122, 63, 24, 0.95);
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense entry.workspace-broadcast-entry,
@@ -4469,14 +4730,14 @@ window.window-shell.theme-light .workspace-summary.workspace-summary-dense entry
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(236, 241, 247, 0.94));
+  background: rgba(255, 255, 255, 0.70);
   border-color: rgba(101, 119, 151, 0.16);
   color: rgba(25, 35, 50, 0.86);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.74);
+  box-shadow: none;
 }
 
 window.window-shell.theme-light .workspace-summary.workspace-summary-dense combobox.surface-select-control button.combo:hover {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(243, 246, 250, 0.98));
+  background: rgba(255, 255, 255, 0.94);
   border-color: rgba(25, 35, 50, 0.20);
 }
 

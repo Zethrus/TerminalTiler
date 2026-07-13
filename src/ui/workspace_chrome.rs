@@ -254,6 +254,10 @@ pub(crate) fn build_workspace_summary_chrome(
         .build();
     let broadcast_button = toolbar_icon_button(icon_name::BROADCAST, "Send quick command");
     broadcast_button.set_sensitive(input.controls_sensitive);
+    // The quick-send entry only makes sense with a broadcast target selected,
+    // so it stays hidden while broadcast is off — same contextual-reveal rule
+    // as the URL controls below.
+    sync_broadcast_controls(&broadcast_state, &broadcast_entry, &broadcast_button, false);
 
     let add_terminal_tile_button = toolbar_icon_button(icon_name::TERMINAL, "Add Terminal Tile");
     add_terminal_tile_button.set_sensitive(input.controls_sensitive);
@@ -352,6 +356,25 @@ pub(crate) fn build_workspace_summary_chrome(
         open_board_button,
         path_label,
     }
+}
+
+/// Reflects the broadcast selector on the idle chip and reveals the quick-send
+/// entry and button only while a broadcast target is active.
+pub(crate) fn sync_broadcast_controls(
+    state: &gtk::Label,
+    entry: &gtk::Entry,
+    send_button: &gtk::Button,
+    active: bool,
+) {
+    let (added, removed) = if active {
+        ("is-on", "is-off")
+    } else {
+        ("is-off", "is-on")
+    };
+    state.remove_css_class(removed);
+    state.add_css_class(added);
+    entry.set_visible(active);
+    send_button.set_visible(active);
 }
 
 fn toolbar_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {

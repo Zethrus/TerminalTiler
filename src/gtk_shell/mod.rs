@@ -135,10 +135,15 @@ pub fn load_css_for_default_display() {
     provider.load_from_data(STYLE_CSS);
 
     if let Some(display) = gtk::gdk::Display::default() {
+        // USER priority, not APPLICATION: libadwaita's stylesheet outranks
+        // APPLICATION for stock-widget rules (verified with `switch:checked`,
+        // which stays Adwaita blue at priorities up to 601 but restyles at
+        // 800), so the brand stylesheet must sit above it to own controls
+        // like switches end to end.
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
         );
     }
 }

@@ -34,7 +34,7 @@ use crate::ui::workspace_alerts::{self, AlertRowAction, WorkspaceAlertListInput}
 use crate::ui::workspace_chrome::{
     WorkspaceSummaryInput, build_workspace_alert_revealer, build_workspace_alert_sidebar_chrome,
     build_workspace_content_chrome, build_workspace_shell_chrome, build_workspace_summary_chrome,
-    toggle_workspace_alert_revealer,
+    sync_broadcast_controls, toggle_workspace_alert_revealer,
 };
 use crate::ui::workspace_navigation;
 use crate::ui::workspace_tile_state;
@@ -1288,9 +1288,17 @@ pub fn build_with_layout_change_handler(
     {
         let broadcast_target = broadcast_target.clone();
         let broadcast_state = broadcast_state.clone();
+        let broadcast_entry = broadcast_entry.clone();
+        let broadcast_button = broadcast_button.clone();
         broadcast_selector.connect_changed(move |combo| {
             let next_target = target_from_selector_id(combo.active_id().as_deref());
             broadcast_state.set_text(&next_target.label());
+            sync_broadcast_controls(
+                &broadcast_state,
+                &broadcast_entry,
+                &broadcast_button,
+                !matches!(next_target, BroadcastTarget::Off),
+            );
             *broadcast_target.borrow_mut() = next_target;
         });
     }

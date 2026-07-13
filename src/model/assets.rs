@@ -280,16 +280,20 @@ pub struct PaneStatusSnapshot {
 impl PaneStatusSnapshot {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn to_line(&self) -> String {
-        [
+        // Adjacent duplicates collapse: a workspace whose directory matches its
+        // shell/session label would otherwise render "name  •  name".
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        for part in [
             self.connection_label.trim(),
             self.location_label.trim(),
             self.shell_label.trim(),
             self.helper_label.trim(),
-        ]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("  •  ")
+        ] {
+            if !part.is_empty() && parts.last() != Some(&part) {
+                parts.push(part);
+            }
+        }
+        parts.join("  •  ")
     }
 }
 
@@ -429,4 +433,36 @@ pub fn builtin_role_templates() -> Vec<AgentRoleTemplate> {
             }],
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_status_line_collapses_adjacent_duplicate_segments() {
+        let snapshot = PaneStatusSnapshot {
+            connection_label: "Local".into(),
+            location_label: "TerminalTiler".into(),
+            shell_label: "TerminalTiler".into(),
+            helper_label: String::new(),
+            helper_severity: None,
+        };
+        assert_eq!(snapshot.to_line(), "Local  •  TerminalTiler");
+    }
+
+    #[test]
+    fn pane_status_line_keeps_distinct_segments() {
+        let snapshot = PaneStatusSnapshot {
+            connection_label: "ssh: build-box".into(),
+            location_label: "repo".into(),
+            shell_label: "zsh".into(),
+            helper_label: "2 helpers".into(),
+            helper_severity: None,
+        };
+        assert_eq!(
+            snapshot.to_line(),
+            "ssh: build-box  •  repo  •  zsh  •  2 helpers"
+        );
+    }
 }

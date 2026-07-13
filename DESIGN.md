@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-07-12 (premium modal pass: shared alert/confirm dialog scaffold on the refinement scale)
+- Last refreshed: 2026-07-13 (premium control polish: brand switch/scrollbar/combo recipes, chip family contract, flat toolbar + tab treatment, stylesheet moved to USER priority so desktop themes cannot re-skin the app)
 - Primary product surfaces: workspace launch dashboard, workspace creation/edit wizard, saved preset/workspace cards, saved Kanban board cards, active Kanban board tabs, task detail dialogs, agent run panel, tile editor, active workspace tabs.
 - Evidence reviewed: `README.md`, `docs/core-boundary.md`, `docs/kanban-board.md`, `src/ui/launch_screen.rs`, `src/ui/window.rs`, `src/ui/workspace_view.rs`, `src/ui/board_view.rs`, `src/ui/task_detail_dialog.rs`, `src/ui/agent_setup_dialog.rs`, `src/model/preset.rs`, `src/model/layout.rs`, `src/model/board.rs`, `src/services/agent_orchestrator.rs`, `resources/style.css`.
 
@@ -38,10 +38,12 @@
 - Spacing/layout rhythm: 4px-based scale (4 · 6 · 8 · 12 · 16 · 20) applied as literals (GTK4 CSS has no length variables). Card surfaces use ~12px panel padding (Standard); wizard body limited to the active step. GTK `Box` spacings follow the same steps.
 - Shape/radius/elevation: radius scale control 8 · chip 999 · card 12 · panel 14 (`profile-compact` stays squared; `workspace-summary` stays squared, with dense runtime-toolbar controls using crisp 2px corners). Elevation is soft — 1px hairline borders (`alpha(@tt_white, 0.06–0.08)`) do primary separation, shadows are secondary (e1 0.12 · e2 0.16 · e3 0.22). Alert/confirm dialog sheets use panel radius 14, a hairline outline, and the popover overlay shadow. Pill CTAs and selected-card borders retained. The numeric scale's single source of truth is the header comment in `resources/style.css` mirrored here.
 - Motion: native GTK stack transitions are acceptable; avoid long or distracting animations. Interactive cards lift `translateY(-1px)` on hover at 140ms ease.
+- Control recipes (2026-07 polish): switches use a quiet dark trough with an amber→copper gradient when checked and an ink slider — never stock Adwaita blue; scrollbars are overlay-style 6px pill sliders on a transparent trough; combo arrows rest neutral and take amber only on hover/open, with amber-tint selected rows in the popup; entry focus is a calm amber border (`alpha(@tt_amber, 0.38)`) with no glow halo.
 - Imagery/iconography: use symbolic GTK icons only; no new bitmap assets.
 
 ## Components
 - Existing components to reuse: `config-panel`, `preset-card`, `preset-card-compact`, `control-strip`, `pill-button`, `primary-cta-button`, `secondary-button`, `surface-button`, `status-chip`, `tile-editor-row`.
+- Chip family contract: all pill chips share shape (radius 999, padding 3px 8px, 10px/600) with a micro tier (9px, 0.04em tracking, `settings-meta-chip`/`launch-meta-chip`) and four tones — neutral (`status-chip` base: ink 0.82), muted (ink 0.56: `muted-chip`, `saved-workspace-tile-chip`), accent (amber tint: `saved-board-kind-chip`), semantic (`companion-status-chip.is-*` colors). Intentional exceptions: `settings-shortcut-chip` (mono key-cap) and the squared Kanban board chips, which follow the board's crisp-corner family.
 - Premium modal scaffold: alert/confirm/notice dialogs are composed by `dialog_chrome::PremiumModal` (`src/ui/dialog_chrome.rs`) using the `premium-modal-*` classes (surface sheet, icon chip with danger/amber accents, eyebrow, heading, body, warning callout, action row); every alert surface should use it instead of stock `adw::MessageDialog`.
 - New/changed components: launch dashboard, saved workspace action cards, saved Kanban board cards, workspace wizard stepper, board wizard stepper, board columns/cards, task detail tabs, agent setup dialog, agent run rows, wizard footer navigation, step containers.
 - Variants and states: selected template/preset, saved board shortcut, disabled Back on first step, primary Next vs Launch/Open on final step, built-in preset “Save Copy” state, invalid path state, Kanban status column, drag target, active agent run, completed/cancelled agent run.

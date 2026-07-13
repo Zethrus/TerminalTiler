@@ -1996,6 +1996,9 @@ where
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
         .hexpand(false)
+        // Fills the homogeneous FlowBox cell so every card in a row shares the
+        // tallest card's height and the footer rows align across the row.
+        .vexpand(true)
         .css_classes(["preset-card-compact", "saved-workspace-card"])
         .build();
 
@@ -2028,6 +2031,7 @@ where
         .label(&preset.description)
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Start)
+        .xalign(0.0)
         .wrap(true)
         .wrap_mode(gtk::pango::WrapMode::WordChar)
         .max_width_chars(48)
@@ -2134,6 +2138,8 @@ where
         .orientation(gtk::Orientation::Vertical)
         .spacing(12)
         .hexpand(false)
+        // Same row-height contract as build_saved_workspace_card above.
+        .vexpand(true)
         .css_classes([
             "preset-card-compact",
             "saved-workspace-card",
@@ -2167,6 +2173,7 @@ where
         &gtk::Label::builder()
             .label("Per-project task board for humans and MCP-connected agents.")
             .halign(gtk::Align::Start)
+            .xalign(0.0)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::WordChar)
             .max_width_chars(48)
