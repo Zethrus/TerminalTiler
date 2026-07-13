@@ -2986,6 +2986,11 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
     );
 
     assert!(
+        windows_release.contains("-SkipLaunchSmoke"),
+        "Release should retain Windows build, payload, installer, and uninstall coverage on hosted runners while reserving GTK GUI activation for an interactive Windows desktop"
+    );
+
+    assert!(
         publish_release.contains("needs: [resolve-release, release-linux, release-windows]")
             && publish_release.contains("actions/download-artifact@v8")
             && publish_release.contains("pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}")

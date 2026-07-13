@@ -140,7 +140,10 @@ jobs:
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ needs.resolve-release.outputs.package_version }}
-        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
+        # GitHub-hosted Windows runners do not have an interactive desktop, so
+        # GtkApplication exits before activation. Keep build, payload, installer,
+        # and uninstall verification here; run GTK activation on an interactive host.
+        run: ./packaging/windows-smoke-test.ps1 -PackageVersion $env:PACKAGE_VERSION -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild -SkipLaunchSmoke
 
       - name: Upload Windows smoke diagnostics
         if: failure()
