@@ -2490,7 +2490,7 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && BUILD_RS.contains("rc.exe")
             && BUILD_RS.contains("find_windows_kit_resource_compiler")
             && BUILD_RS.contains("Windows Kits")
-            && BUILD_RS.contains("cargo:rustc-link-arg-bin=terminaltiler=")
+            && BUILD_RS.contains("cargo:rustc-link-arg-bins=")
             && BUILD_RS.contains("windows_version_resource")
             && WINDOWS_SMOKE_PS1.contains("VersionInfo")
             && BUILD_RS.contains("host.contains(\"windows\")")
