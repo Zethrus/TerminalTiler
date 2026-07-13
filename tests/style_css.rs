@@ -2542,8 +2542,8 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
                 .contains("crate::gtk_shell::configure_application_icons_for(&icon_name)")
             && WINDOWS_GTK_APP_RS.contains(".icon_name(&options.product.icon_name)")
             && WINDOWS_GTK_APP_RS
-                .contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
-            && WINDOWS_GTK_APP_RS.contains("options.product.effective_windows_app_user_model_id()")
+                .contains("configure_windows_taskbar_identity(&taskbar_app_user_model_id)")
+            && WINDOWS_GTK_APP_RS.contains("effective_windows_app_user_model_id()")
             && WINDOWS_GTK_APP_RS
                 .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
             && CARGO_TOML.contains("\"Win32_UI_Shell\""),

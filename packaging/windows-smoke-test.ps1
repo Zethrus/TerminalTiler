@@ -80,11 +80,17 @@ function Assert-EmbeddedPackageVersion {
         [string]$ExpectedVersion
     )
 
-    $capabilities = & $ExePath --runtime-capabilities 2>&1
-    $capabilitiesExitCode = $LASTEXITCODE
-    $capabilitiesText = $capabilities -join "`n"
-    if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
-        throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion (exit code $capabilitiesExitCode). Output:`n$capabilitiesText"
+    $capabilitiesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("terminaltiler-capabilities-{0}.json" -f [guid]::NewGuid())
+    try {
+        & $ExePath --runtime-capabilities-file $capabilitiesPath
+        $capabilitiesExitCode = $LASTEXITCODE
+        $capabilitiesText = if (Test-Path $capabilitiesPath) { Get-Content -Raw $capabilitiesPath } else { "" }
+        if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
+            throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion (exit code $capabilitiesExitCode). Capability file: $capabilitiesPath. Output:`n$capabilitiesText"
+        }
+    }
+    finally {
+        Remove-Item -Force $capabilitiesPath -ErrorAction SilentlyContinue
     }
 }
 
