@@ -81,8 +81,10 @@ function Assert-EmbeddedPackageVersion {
     )
 
     $capabilitiesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("terminaltiler-capabilities-{0}.json" -f [guid]::NewGuid())
+    $previousCapabilitiesPath = $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE
     try {
-        & $ExePath --runtime-capabilities-file $capabilitiesPath
+        $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE = $capabilitiesPath
+        & $ExePath
         $capabilitiesExitCode = $LASTEXITCODE
         $capabilitiesText = if (Test-Path $capabilitiesPath) { Get-Content -Raw $capabilitiesPath } else { "" }
         if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
@@ -90,6 +92,12 @@ function Assert-EmbeddedPackageVersion {
         }
     }
     finally {
+        if ($null -eq $previousCapabilitiesPath) {
+            Remove-Item Env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE = $previousCapabilitiesPath
+        }
         Remove-Item -Force $capabilitiesPath -ErrorAction SilentlyContinue
     }
 }

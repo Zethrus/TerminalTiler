@@ -9,6 +9,18 @@ enum RuntimeCapabilitiesDestination {
 }
 
 fn runtime_capabilities_destination() -> Option<Result<RuntimeCapabilitiesDestination, String>> {
+    if let Some(path) = std::env::var_os("TERMINALTILER_RUNTIME_CAPABILITIES_FILE") {
+        let path = PathBuf::from(path);
+        return Some(
+            path.is_absolute()
+                .then_some(RuntimeCapabilitiesDestination::File(path))
+                .ok_or_else(|| {
+                    "TERMINALTILER_RUNTIME_CAPABILITIES_FILE requires an absolute output path"
+                        .to_string()
+                }),
+        );
+    }
+
     let mut arguments = std::env::args_os().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == OsStr::new("--runtime-capabilities") {
