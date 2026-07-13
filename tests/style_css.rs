@@ -608,7 +608,7 @@ fn chip_family_shares_shape_contract() {
         "board-kind chips must sit on the family padding step",
     );
     assert!(
-        STYLE_CSS.contains(".settings-meta-chip,\n.launch-meta-chip"),
+        source_contains(STYLE_CSS, ".settings-meta-chip,\n.launch-meta-chip"),
         "meta chips form the documented micro tier and share one rule block"
     );
 }
@@ -1046,7 +1046,7 @@ fn launch_deck_keeps_dashboard_polished_and_bounded() {
             && LAUNCH_SCREEN_RS.contains("compact-icon-button")
             && LAUNCH_SCREEN_RS.contains("saved-workspace-footer")
             && LAUNCH_SCREEN_RS.contains("saved-workspace-actions")
-            && !LAUNCH_SCREEN_RS.contains("Delete\",\n        icon_name::DELETE"),
+            && !source_contains(LAUNCH_SCREEN_RS, "Delete\",\n        icon_name::DELETE"),
         "saved workspace cards should balance the path and compact actions in a footer row with an icon-only Delete action"
     );
     assert!(
@@ -3041,7 +3041,7 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
     );
 
     assert!(
-        !PACKAGE_ARTIFACTS_YML.contains("\n  push:"),
+        !source_contains(PACKAGE_ARTIFACTS_YML, "\n  push:"),
         "Package Artifacts should not race CI by triggering directly on push"
     );
 

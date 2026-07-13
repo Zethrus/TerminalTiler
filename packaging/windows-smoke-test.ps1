@@ -894,6 +894,7 @@ function Invoke-LaunchSmoke {
             TEMP = $env:TEMP
             TMP = $env:TMP
             TERMINALTILER_PROFILE_ROOT = $env:TERMINALTILER_PROFILE_ROOT
+            TERMINALTILER_DISABLE_UPDATES = $env:TERMINALTILER_DISABLE_UPDATES
         }
         $process = $null
         $launchStartTime = Get-Date
@@ -910,6 +911,11 @@ function Invoke-LaunchSmoke {
         $env:TEMP = $profile.Temp
         $env:TMP = $profile.Tmp
         $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
+        # Smoke tests validate packaged startup and restore behavior.  Keep
+        # them hermetic: updater unit tests cover release discovery, while a
+        # smoke run must never depend on GitHub availability or present a live
+        # release dialog over the UI under test.
+        $env:TERMINALTILER_DISABLE_UPDATES = "1"
 
         try {
             $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
@@ -1016,6 +1022,7 @@ function Invoke-LaunchSmoke {
             $env:TEMP = $previousEnvironment.TEMP
             $env:TMP = $previousEnvironment.TMP
             $env:TERMINALTILER_PROFILE_ROOT = $previousEnvironment.TERMINALTILER_PROFILE_ROOT
+            $env:TERMINALTILER_DISABLE_UPDATES = $previousEnvironment.TERMINALTILER_DISABLE_UPDATES
         }
     }
 }

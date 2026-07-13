@@ -33,7 +33,7 @@ fn run_with_options_and_updates(
     // Only the Core `run()` entrypoint opts into the public Core release
     // channel. Embedded callers using run_with_options() keep full control of
     // their own update/provenance policy.
-    let update_runtime = if enable_updates {
+    let update_runtime = if enable_updates && update::automatic_updates_enabled() {
         let (service, receiver) = UpdateService::start();
         Some((service, receiver))
     } else {

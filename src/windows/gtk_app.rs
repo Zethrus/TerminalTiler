@@ -69,7 +69,7 @@ mod imp {
 
         let app_id = options.product.effective_gtk_application_id();
         let app = adw::Application::builder().application_id(app_id).build();
-        let update_runtime = if enable_updates {
+        let update_runtime = if enable_updates && update::automatic_updates_enabled() {
             let (service, receiver) = UpdateService::start();
             Some((service, receiver))
         } else {
