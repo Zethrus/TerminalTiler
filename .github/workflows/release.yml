@@ -231,16 +231,19 @@ jobs:
         run: |
           release_json=""
           for attempt in {1..12}; do
-            if release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" 2>/dev/null)"; then
+            releases_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100")"
+            release_json="$(jq -c --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag)' <<<"$releases_json")"
+            if [[ -n "$release_json" ]]; then
               break
             fi
             if [[ "$attempt" -eq 12 ]]; then
-              echo "Release for ${RELEASE_TAG} was not discoverable by tag after 60 seconds" >&2
+              echo "Draft release for ${RELEASE_TAG} was not discoverable after 60 seconds" >&2
               exit 1
             fi
-            echo "Release for ${RELEASE_TAG} is not discoverable by tag yet; retrying in 5 seconds..."
+            echo "Draft release for ${RELEASE_TAG} is not discoverable yet; retrying in 5 seconds..."
             sleep 5
           done
+          echo "RELEASE_ID=$(jq -r '.id' <<<"$release_json")" >> "$GITHUB_ENV"
           jq -e '.draft == true' <<<"$release_json" >/dev/null
           asset_count="$(jq '.assets | length' <<<"$release_json")"
           test "$asset_count" -eq 6
@@ -262,16 +265,14 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
-        run: gh release edit "$RELEASE_TAG" --draft=false
+        run: gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -F draft=false >/dev/null
 
       - name: Verify published release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
         run: |
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
           jq -e '.draft == false and .prerelease == false' <<<"$release_json" >/dev/null
           asset_count="$(jq '.assets | length' <<<"$release_json")"
           test "$asset_count" -eq 6
