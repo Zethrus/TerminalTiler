@@ -174,3 +174,20 @@ fn newest_windows_kit_rc(bin_root: &Path, kit_arch: &str) -> Option<PathBuf> {
     candidates.sort();
     candidates.pop()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::windows_version_resource;
+    use std::path::Path;
+
+    #[test]
+    fn version_resource_embeds_the_resolved_package_version() {
+        let resource =
+            windows_version_resource(Path::new(r"C:\\icons\\terminaltiler.ico"), "1.2.3");
+
+        assert!(resource.contains("FILEVERSION 1,2,3,0"));
+        assert!(resource.contains("PRODUCTVERSION 1,2,3,0"));
+        assert!(resource.contains(r#"VALUE "FileVersion", "1.2.3\0""#));
+        assert!(resource.contains(r#"VALUE "ProductVersion", "1.2.3\0""#));
+    }
+}
