@@ -2997,8 +2997,10 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
             && publish_release.contains("merge-multiple: true")
             && publish_release.contains("Verify release assets before publishing")
             && publish_release.contains("Missing release asset: $file")
-            && publish_release.contains("for attempt in {1..12}")
-            && publish_release.contains("was not discoverable by tag after 60 seconds")
+            && publish_release.contains("releases?per_page=100")
+            && publish_release.contains("Draft release for ${RELEASE_TAG} was not discoverable after 60 seconds")
+            && publish_release.contains("RELEASE_ID=$(jq -r '.id'")
+            && publish_release.contains("releases/${RELEASE_ID}")
             && publish_release.contains("softprops/action-gh-release@v3")
             && !RELEASE_YML.contains("softprops/action-gh-release@v2")
             && !RELEASE_YML.contains("actions/download-artifact@v4")
@@ -3011,7 +3013,7 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
             && publish_release.contains("Verify draft release and every asset")
             && publish_release
                 .contains(r#"local_digest="sha256:$(sha256sum "$file" | cut -d' ' -f1)""#)
-            && publish_release.contains("gh release edit \"$RELEASE_TAG\" --draft=false")
+            && publish_release.contains("gh api --method PATCH \"repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}\" -F draft=false")
             && publish_release.contains("Verify published release")
             && publish_release.contains(".draft == false and .prerelease == false")
             && !publish_release.contains(".immutable == true"),
