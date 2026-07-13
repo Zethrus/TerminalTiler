@@ -69,21 +69,22 @@ function Assert-WindowsGtkPayload {
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\layout-dashboard.svg") -Description "GTK dashboard hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\save.svg") -Description "GTK save hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "terminaltiler-updater.exe") -Description "Updater helper"
+    Assert-Path -Path (Join-Path $PayloadRoot "terminaltiler-package-version") -Description "Package version manifest"
     if ($RequireMarker) {
         Assert-Path -Path (Join-Path $PayloadRoot "terminaltiler-install-kind") -Description "Portable installer marker"
     }
 }
 
-function Assert-EmbeddedPackageVersion {
+function Assert-PackagedVersion {
     param(
-        [string]$ExePath,
+        [string]$PayloadRoot,
         [string]$ExpectedVersion
     )
 
-    $capabilities = & $ExePath --runtime-capabilities 2>$null
-    $capabilitiesText = $capabilities -join "`n"
-    if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
-        throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion"
+    $versionManifest = Join-Path $PayloadRoot "terminaltiler-package-version"
+    $actualVersion = (Get-Content -LiteralPath $versionManifest -Raw).Trim()
+    if ($actualVersion -ne $ExpectedVersion) {
+        throw "Packaged payload at $PayloadRoot has version manifest '$actualVersion', expected '$ExpectedVersion'"
     }
 }
 
@@ -477,6 +478,17 @@ function Write-SmokeDiagnostics {
             Out-String
         if ($diagnosticRoot) {
             Set-Content -Path (Join-Path $diagnosticRoot "sandbox-tree.txt") -Value $profileTree -Encoding UTF8
+        }
+    }
+
+    foreach ($stream in @("process-stdout.log", "process-stderr.log")) {
+        $streamPath = Join-Path $SandboxRoot $stream
+        if (Test-Path $streamPath) {
+            Write-Host "--- $streamPath ---"
+            Get-Content -Path $streamPath -Raw -ErrorAction SilentlyContinue | Write-Host
+            if ($diagnosticRoot) {
+                Copy-Item -Path $streamPath -Destination (Join-Path $diagnosticRoot $stream) -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -894,6 +906,7 @@ function Invoke-LaunchSmoke {
             TEMP = $env:TEMP
             TMP = $env:TMP
             TERMINALTILER_PROFILE_ROOT = $env:TERMINALTILER_PROFILE_ROOT
+            TERMINALTILER_DISABLE_UPDATES = $env:TERMINALTILER_DISABLE_UPDATES
         }
         $process = $null
         $launchStartTime = Get-Date
@@ -910,11 +923,18 @@ function Invoke-LaunchSmoke {
         $env:TEMP = $profile.Temp
         $env:TMP = $profile.Tmp
         $env:TERMINALTILER_PROFILE_ROOT = $profile.ProfileRoot
+        # Smoke tests validate packaged startup and restore behavior.  Keep
+        # them hermetic: updater unit tests cover release discovery, while a
+        # smoke run must never depend on GitHub availability or present a live
+        # release dialog over the UI under test.
+        $env:TERMINALTILER_DISABLE_UPDATES = "1"
 
         try {
             $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
             Write-Host "$Label WebView2 user data folder: $webView2UserDataFolder"
-            $process = Start-Process -FilePath $ExePath -PassThru
+            $stdoutPath = Join-Path $SandboxRoot "process-stdout.log"
+            $stderrPath = Join-Path $SandboxRoot "process-stderr.log"
+            $process = Start-Process -FilePath $ExePath -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
             $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
             Start-Sleep -Seconds 2
@@ -1016,6 +1036,7 @@ function Invoke-LaunchSmoke {
             $env:TEMP = $previousEnvironment.TEMP
             $env:TMP = $previousEnvironment.TMP
             $env:TERMINALTILER_PROFILE_ROOT = $previousEnvironment.TERMINALTILER_PROFILE_ROOT
+            $env:TERMINALTILER_DISABLE_UPDATES = $previousEnvironment.TERMINALTILER_DISABLE_UPDATES
         }
     }
 }
@@ -1118,7 +1139,7 @@ Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
 if (Test-Path (Join-Path $PortableExtractRoot "terminaltiler-install-kind")) { throw "Portable ZIP unexpectedly contains an update provenance marker" }
 Assert-WindowsGtkPayload -PayloadRoot $PortableExtractRoot
-Assert-EmbeddedPackageVersion -ExePath $PortableExe -ExpectedVersion $ResolvedVersion
+Assert-PackagedVersion -PayloadRoot $PortableExtractRoot -ExpectedVersion $ResolvedVersion
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $PortableExtractRoot
 }
@@ -1166,7 +1187,7 @@ $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
 if ((Get-Content -Raw (Join-Path $NsisInstallRoot "terminaltiler-install-kind")).Trim() -ne "nsis") { throw "NSIS marker is incorrect" }
-Assert-EmbeddedPackageVersion -ExePath $InstalledExe -ExpectedVersion $ResolvedVersion
+Assert-PackagedVersion -PayloadRoot $NsisInstallRoot -ExpectedVersion $ResolvedVersion
 Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $NsisInstallRoot
@@ -1191,7 +1212,7 @@ $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
 if ((Get-Content -Raw (Join-Path $MsiInstallRoot "terminaltiler-install-kind")).Trim() -ne "msi") { throw "MSI payload marker is incorrect" }
 if ((Get-ItemProperty -Path "HKCU:\Software\Zethrus\TerminalTiler" -Name InstallerKind -ErrorAction Stop).InstallerKind -ne "msi") { throw "MSI marker is incorrect" }
-Assert-EmbeddedPackageVersion -ExePath $MsiInstalledExe -ExpectedVersion $ResolvedVersion
+Assert-PackagedVersion -PayloadRoot $MsiInstallRoot -ExpectedVersion $ResolvedVersion
 Assert-WindowsGtkPayload -PayloadRoot $MsiInstallRoot
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $MsiInstallRoot

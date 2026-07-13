@@ -408,12 +408,13 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
         let window_title = options.product.app_title.clone();
         let catalog = options.catalog.clone();
-        let (update_service, update_receiver) = if enable_updates {
-            let (service, receiver) = UpdateService::start();
-            (Some(service), Some(receiver))
-        } else {
-            (None, None)
-        };
+        let (update_service, update_receiver) =
+            if enable_updates && update::automatic_updates_enabled() {
+                let (service, receiver) = UpdateService::start();
+                (Some(service), Some(receiver))
+            } else {
+                (None, None)
+            };
         let state = Box::new(AppWindowState {
             runtime_options: options,
             preference_store: PreferenceStore::new(),

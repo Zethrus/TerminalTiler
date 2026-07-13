@@ -64,12 +64,14 @@ mod imp {
     fn run_with_options_and_updates(options: RuntimeOptions, enable_updates: bool) -> ExitCode {
         logging::init();
         logging::info("windows GTK shell startup");
-        let taskbar_app_user_model_id = options.product.effective_windows_app_user_model_id();
-        configure_windows_taskbar_identity(taskbar_app_user_model_id);
-
+        let taskbar_app_user_model_id = options
+            .product
+            .effective_windows_app_user_model_id()
+            .to_string();
         let app_id = options.product.effective_gtk_application_id();
         let app = adw::Application::builder().application_id(app_id).build();
-        let update_runtime = if enable_updates {
+        logging::info("windows GTK shell created application");
+        let update_runtime = if enable_updates && update::automatic_updates_enabled() {
             let (service, receiver) = UpdateService::start();
             Some((service, receiver))
         } else {
@@ -78,6 +80,11 @@ mod imp {
 
         let icon_name = options.product.icon_name.clone();
         app.connect_startup(move |_| {
+            // Run after GTK has initialized its application context but before it
+            // creates any windows. This keeps the Windows taskbar identity while
+            // avoiding a shell call during native runtime initialization.
+            configure_windows_taskbar_identity(&taskbar_app_user_model_id);
+            logging::info("windows GTK shell configured taskbar identity");
             crate::gtk_shell::load_css_for_default_display();
             crate::gtk_shell::configure_application_icons_for(&icon_name);
             logging::info("windows GTK shell loaded canonical GTK CSS and app icon contract");
@@ -94,7 +101,13 @@ mod imp {
             present_launch_window(app, &options);
         });
 
-        glib_exit_to_process_exit(app.run())
+        logging::info("windows GTK shell entering application main loop");
+        let exit_code = app.run();
+        logging::info(format!(
+            "windows GTK shell exited application main loop with {}",
+            exit_code.get()
+        ));
+        glib_exit_to_process_exit(exit_code)
     }
 
     fn install_update_pump(

@@ -86,10 +86,7 @@ impl Installation {
 /// Detect only installations with explicit, trustworthy provenance.  A binary
 /// launched from a checkout, a portable ZIP, or an embedded host returns None.
 pub(crate) fn detect_installation() -> Option<Installation> {
-    if !cfg!(target_arch = "x86_64")
-        || std::env::var_os("TERMINALTILER_DISABLE_UPDATES").is_some()
-        || std::env::var_os("CARGO_MANIFEST_DIR").is_some()
-    {
+    if !automatic_updates_enabled() {
         return None;
     }
 
@@ -164,6 +161,17 @@ pub(crate) fn detect_installation() -> Option<Installation> {
         target,
         helper,
     })
+}
+
+/// Whether this process may start the automatic-update worker.
+///
+/// CI smoke tests and embedded callers can opt out before a worker or any
+/// network activity is created.  Keep this gate shared with installation
+/// detection so every desktop shell applies the same policy.
+pub(crate) fn automatic_updates_enabled() -> bool {
+    cfg!(target_arch = "x86_64")
+        && std::env::var_os("TERMINALTILER_DISABLE_UPDATES").is_none()
+        && std::env::var_os("CARGO_MANIFEST_DIR").is_none()
 }
 
 fn portable_wrapper_argument() -> Option<PathBuf> {

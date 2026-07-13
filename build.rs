@@ -55,10 +55,10 @@ fn main() {
 
     match status {
         Ok(status) if status.success() => {
-            println!(
-                "cargo:rustc-link-arg-bin=terminaltiler={}",
-                res_path.display()
-            );
+            // Link the resource into every binary target.  This avoids
+            // coupling the resource to Cargo's implicit package-binary name
+            // and preserves the icon/version metadata for shipped helpers.
+            println!("cargo:rustc-link-arg-bins={}", res_path.display());
         }
         Ok(status) if host.contains("windows") => {
             panic!("rc.exe failed while embedding TerminalTiler icon: {status}");

@@ -608,7 +608,7 @@ fn chip_family_shares_shape_contract() {
         "board-kind chips must sit on the family padding step",
     );
     assert!(
-        STYLE_CSS.contains(".settings-meta-chip,\n.launch-meta-chip"),
+        source_contains(STYLE_CSS, ".settings-meta-chip,\n.launch-meta-chip"),
         "meta chips form the documented micro tier and share one rule block"
     );
 }
@@ -1046,7 +1046,7 @@ fn launch_deck_keeps_dashboard_polished_and_bounded() {
             && LAUNCH_SCREEN_RS.contains("compact-icon-button")
             && LAUNCH_SCREEN_RS.contains("saved-workspace-footer")
             && LAUNCH_SCREEN_RS.contains("saved-workspace-actions")
-            && !LAUNCH_SCREEN_RS.contains("Delete\",\n        icon_name::DELETE"),
+            && !source_contains(LAUNCH_SCREEN_RS, "Delete\",\n        icon_name::DELETE"),
         "saved workspace cards should balance the path and compact actions in a footer row with an icon-only Delete action"
     );
     assert!(
@@ -2490,7 +2490,10 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
             && BUILD_RS.contains("rc.exe")
             && BUILD_RS.contains("find_windows_kit_resource_compiler")
             && BUILD_RS.contains("Windows Kits")
-            && BUILD_RS.contains("cargo:rustc-link-arg-bin=terminaltiler=")
+            && BUILD_RS.contains("cargo:rustc-link-arg-bins=")
+            && WINDOWS_BUILD_PS1.contains("terminaltiler-package-version")
+            && WINDOWS_SMOKE_PS1.contains("Assert-PackagedVersion")
+            && WINDOWS_SMOKE_PS1.contains("terminaltiler-package-version")
             && BUILD_RS.contains("host.contains(\"windows\")")
             && WINDOWS_RC.contains("1 ICON \"terminaltiler.ico\""),
         "Cargo should embed the TerminalTiler icon in Windows MSVC binaries while letting non-Windows cross-checks skip rc.exe"
@@ -2542,8 +2545,8 @@ fn windows_builds_embed_and_package_terminaltiler_icon() {
                 .contains("crate::gtk_shell::configure_application_icons_for(&icon_name)")
             && WINDOWS_GTK_APP_RS.contains(".icon_name(&options.product.icon_name)")
             && WINDOWS_GTK_APP_RS
-                .contains("configure_windows_taskbar_identity(taskbar_app_user_model_id)")
-            && WINDOWS_GTK_APP_RS.contains("options.product.effective_windows_app_user_model_id()")
+                .contains("configure_windows_taskbar_identity(&taskbar_app_user_model_id)")
+            && WINDOWS_GTK_APP_RS.contains("effective_windows_app_user_model_id()")
             && WINDOWS_GTK_APP_RS
                 .contains("windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID")
             && CARGO_TOML.contains("\"Win32_UI_Shell\""),
@@ -2684,8 +2687,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && CI_YML.contains("actions/upload-artifact@v6")
             && CI_YML.contains("cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
-            && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
-        "CI should include native Windows GTK build, package, smoke coverage, and Node 24-ready artifact/cache actions"
+            && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell")
+            && workflow_job_block(CI_YML, "verify-windows-gtk").contains("-SkipLaunchSmoke"),
+        "CI should include native Windows GTK build and package coverage while reserving GUI activation for an interactive Windows host"
     );
 
     assert!(
@@ -3041,7 +3045,7 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
     );
 
     assert!(
-        !PACKAGE_ARTIFACTS_YML.contains("\n  push:"),
+        !source_contains(PACKAGE_ARTIFACTS_YML, "\n  push:"),
         "Package Artifacts should not race CI by triggering directly on push"
     );
 
@@ -3215,7 +3219,8 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains(
                 "never an `nsx*.tmp` self-extraction directory"
             )
-            && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`"),
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("GitHub-hosted Windows runners do not expose an interactive desktop"),
         "visual QA documentation should define baseline, capture command, and required comparison screens"
     );
 

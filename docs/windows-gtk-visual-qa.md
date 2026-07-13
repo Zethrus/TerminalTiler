@@ -4,7 +4,7 @@ TerminalTiler treats the Ubuntu/Linux GTK shell as the canonical visual baseline
 
 ## Automated preflight before screenshots
 
-Run these on a native Windows 11 machine or Windows GitHub runner with the MSVC Rust target installed:
+Run these on a native, interactive Windows 11 desktop with the MSVC Rust target installed:
 
 ```powershell
 ./packaging/setup-windows-gtk.ps1 -InstallWithGvsbuild -SkipBuildIfPresent
@@ -14,6 +14,12 @@ cargo check --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-sh
 ```
 
 `setup-windows-gtk.ps1` accepts `TERMINALTILER_GTK_RUNTIME_ROOT` if you already have a GTK runtime, and otherwise can build one with gvsbuild. The script exports `PATH`, `LIB`, `INCLUDE`, and `PKG_CONFIG_PATH` for gtk-rs/MSVC builds.
+
+GitHub-hosted Windows runners do not expose an interactive desktop: `GtkApplication`
+can create its application object but exits before activation. CI therefore verifies
+the GTK build, packaged payload, ZIP, NSIS, and MSI paths with `-SkipLaunchSmoke`.
+Run the command above without that switch on an interactive Windows host before
+approving GTK visual or runtime changes.
 
 ## Capture helpers
 

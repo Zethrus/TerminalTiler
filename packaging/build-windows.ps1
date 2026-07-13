@@ -356,6 +356,9 @@ $McpBinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler-mcp.e
 Copy-Item -Path $McpBinaryPath -Destination (Join-Path $PortableRoot "terminaltiler-mcp.exe")
 $UpdaterBinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler-updater.exe"
 Copy-Item -Path $UpdaterBinaryPath -Destination (Join-Path $PortableRoot "terminaltiler-updater.exe")
+# Runtime command-line output is unavailable from the GUI-subsystem binary, so
+# package the resolved release identity as part of every payload instead.
+Set-Content -Path (Join-Path $PortableRoot "terminaltiler-package-version") -Value $ResolvedVersion -Encoding ASCII -NoNewline
 # The self-extracting wrapper is the only supported Windows portable
 # provenance. Installed NSIS/MSI variants overwrite this marker below.
 Set-Content -Path (Join-Path $PortableRoot "terminaltiler-install-kind") -Value "portable-exe" -Encoding ASCII -NoNewline
