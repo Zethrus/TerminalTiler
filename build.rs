@@ -88,6 +88,7 @@ fn main() {
 }
 
 fn windows_version_resource(icon_path: &Path, package_version: &str) -> String {
+    let escaped_icon_path = icon_path.display().to_string().replace('\\', "/");
     let mut components = package_version.split('.').map(|component| {
         component
             .parse::<u16>()
@@ -132,7 +133,7 @@ BEGIN
     END
 END
 "#,
-        icon_path.display()
+        escaped_icon_path
     )
 }
 
@@ -182,9 +183,9 @@ mod tests {
 
     #[test]
     fn version_resource_embeds_the_resolved_package_version() {
-        let resource =
-            windows_version_resource(Path::new(r"C:\\icons\\terminaltiler.ico"), "1.2.3");
+        let resource = windows_version_resource(Path::new(r"C:\icons\terminaltiler.ico"), "1.2.3");
 
+        assert!(resource.contains(r#"1 ICON "C:/icons/terminaltiler.ico""#));
         assert!(resource.contains("FILEVERSION 1,2,3,0"));
         assert!(resource.contains("PRODUCTVERSION 1,2,3,0"));
         assert!(resource.contains(r#"VALUE "FileVersion", "1.2.3\0""#));
