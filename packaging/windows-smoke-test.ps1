@@ -80,10 +80,11 @@ function Assert-EmbeddedPackageVersion {
         [string]$ExpectedVersion
     )
 
-    $capabilities = & $ExePath --runtime-capabilities 2>$null
+    $capabilities = & $ExePath --runtime-capabilities 2>&1
+    $capabilitiesExitCode = $LASTEXITCODE
     $capabilitiesText = $capabilities -join "`n"
     if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
-        throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion"
+        throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion (exit code $capabilitiesExitCode). Output:`n$capabilitiesText"
     }
 }
 
@@ -477,6 +478,17 @@ function Write-SmokeDiagnostics {
             Out-String
         if ($diagnosticRoot) {
             Set-Content -Path (Join-Path $diagnosticRoot "sandbox-tree.txt") -Value $profileTree -Encoding UTF8
+        }
+    }
+
+    foreach ($stream in @("process-stdout.log", "process-stderr.log")) {
+        $streamPath = Join-Path $SandboxRoot $stream
+        if (Test-Path $streamPath) {
+            Write-Host "--- $streamPath ---"
+            Get-Content -Path $streamPath -Raw -ErrorAction SilentlyContinue | Write-Host
+            if ($diagnosticRoot) {
+                Copy-Item -Path $streamPath -Destination (Join-Path $diagnosticRoot $stream) -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -920,7 +932,9 @@ function Invoke-LaunchSmoke {
         try {
             $webView2UserDataFolder = Join-Path $profile.ProfileRoot "local-data\webview2"
             Write-Host "$Label WebView2 user data folder: $webView2UserDataFolder"
-            $process = Start-Process -FilePath $ExePath -PassThru
+            $stdoutPath = Join-Path $SandboxRoot "process-stdout.log"
+            $stderrPath = Join-Path $SandboxRoot "process-stderr.log"
+            $process = Start-Process -FilePath $ExePath -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             $mainWindowTimeoutSeconds = if ($expectGtkShell) { 20 } else { 8 }
             $hasMainWindow = Wait-ForMainWindow -Process $process -TimeoutSeconds $mainWindowTimeoutSeconds
             Start-Sleep -Seconds 2

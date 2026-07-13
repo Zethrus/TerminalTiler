@@ -66,9 +66,11 @@ mod imp {
         logging::info("windows GTK shell startup");
         let taskbar_app_user_model_id = options.product.effective_windows_app_user_model_id();
         configure_windows_taskbar_identity(taskbar_app_user_model_id);
+        logging::info("windows GTK shell configured taskbar identity");
 
         let app_id = options.product.effective_gtk_application_id();
         let app = adw::Application::builder().application_id(app_id).build();
+        logging::info("windows GTK shell created application");
         let update_runtime = if enable_updates && update::automatic_updates_enabled() {
             let (service, receiver) = UpdateService::start();
             Some((service, receiver))
