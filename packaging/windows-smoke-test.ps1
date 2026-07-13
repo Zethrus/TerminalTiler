@@ -81,10 +81,15 @@ function Assert-EmbeddedPackageVersion {
     )
 
     $versionInfo = (Get-Item -LiteralPath $ExePath).VersionInfo
-    $escapedVersion = [regex]::Escape($ExpectedVersion)
-    $versionValues = @($versionInfo.FileVersion, $versionInfo.ProductVersion) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if (-not ($versionValues | Where-Object { $_ -match "^$escapedVersion(?:\\.0)?$" })) {
-        throw "Packaged runtime at $ExePath does not embed PACKAGE_VERSION $ExpectedVersion in its Windows version resource. FileVersion='$($versionInfo.FileVersion)', ProductVersion='$($versionInfo.ProductVersion)'"
+    $expectedParts = @($ExpectedVersion.Split('.') | ForEach-Object { [int]$_ }) + 0
+    $embeddedParts = @(
+        $versionInfo.FileMajorPart,
+        $versionInfo.FileMinorPart,
+        $versionInfo.FileBuildPart,
+        $versionInfo.FilePrivatePart
+    )
+    if (-not (($embeddedParts -join '.') -eq ($expectedParts -join '.'))) {
+        throw "Packaged runtime at $ExePath does not embed PACKAGE_VERSION $ExpectedVersion in its Windows version resource. FixedVersion='$($embeddedParts -join '.')', FileVersion='$($versionInfo.FileVersion)', ProductVersion='$($versionInfo.ProductVersion)'"
     }
 }
 
