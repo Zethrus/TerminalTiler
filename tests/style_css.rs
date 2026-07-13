@@ -3050,6 +3050,11 @@ fn package_artifacts_waits_for_successful_ci_on_main() {
     );
 
     assert!(
+        workflow_job_block(PACKAGE_ARTIFACTS_YML, "package-windows").contains("-SkipLaunchSmoke"),
+        "Package Artifacts should retain Windows build, payload, installer, and uninstall coverage on hosted runners while reserving GTK GUI activation for an interactive Windows desktop"
+    );
+
+    assert!(
         RELEASE_SMOKE_TEST_SH.contains(r#"SMOKE_LAUNCH_TIMEOUT="${SMOKE_LAUNCH_TIMEOUT:-60s}""#)
             && RELEASE_SMOKE_TEST_SH
                 .contains("did not complete restore within $SMOKE_LAUNCH_TIMEOUT"),
