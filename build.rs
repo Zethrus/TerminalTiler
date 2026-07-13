@@ -36,6 +36,7 @@ fn main() {
 
     let host = env::var("HOST").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let version_rc_path = out_dir.join("terminaltiler-version.rc");
     let res_path = out_dir.join("terminaltiler.res");
     let Some(rc_exe) = find_resource_compiler() else {
         if host.contains("windows") {
@@ -46,11 +47,18 @@ fn main() {
         );
         return;
     };
+    if let Err(error) = fs::write(
+        &version_rc_path,
+        windows_version_resource(&icon_path, &package_version),
+    ) {
+        panic!("could not write TerminalTiler Windows version resource: {error}");
+    }
+
     let status = Command::new(&rc_exe)
         .current_dir(&resource_dir)
         .arg("/nologo")
         .arg(format!("/fo{}", res_path.display()))
-        .arg(&rc_path)
+        .arg(&version_rc_path)
         .status();
 
     match status {
@@ -77,6 +85,55 @@ fn main() {
             );
         }
     }
+}
+
+fn windows_version_resource(icon_path: &Path, package_version: &str) -> String {
+    let mut components = package_version.split('.').map(|component| {
+        component
+            .parse::<u16>()
+            .expect("PACKAGE_VERSION must be numeric")
+    });
+    let major = components
+        .next()
+        .expect("PACKAGE_VERSION must include major");
+    let minor = components
+        .next()
+        .expect("PACKAGE_VERSION must include minor");
+    let patch = components
+        .next()
+        .expect("PACKAGE_VERSION must include patch");
+    assert!(
+        components.next().is_none(),
+        "PACKAGE_VERSION must be semver"
+    );
+
+    format!(
+        r#"1 ICON "{}"
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION {major},{minor},{patch},0
+ PRODUCTVERSION {major},{minor},{patch},0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileVersion", "{package_version}\0"
+            VALUE "ProductVersion", "{package_version}\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+"#,
+        icon_path.display()
+    )
 }
 
 fn find_resource_compiler() -> Option<PathBuf> {

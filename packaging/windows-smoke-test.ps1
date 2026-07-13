@@ -80,25 +80,11 @@ function Assert-EmbeddedPackageVersion {
         [string]$ExpectedVersion
     )
 
-    $capabilitiesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("terminaltiler-capabilities-{0}.json" -f [guid]::NewGuid())
-    $previousCapabilitiesPath = $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE
-    try {
-        $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE = $capabilitiesPath
-        & $ExePath
-        $capabilitiesExitCode = $LASTEXITCODE
-        $capabilitiesText = if (Test-Path $capabilitiesPath) { Get-Content -Raw $capabilitiesPath } else { "" }
-        if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
-            throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion (exit code $capabilitiesExitCode). Capability file: $capabilitiesPath. Output:`n$capabilitiesText"
-        }
-    }
-    finally {
-        if ($null -eq $previousCapabilitiesPath) {
-            Remove-Item Env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:TERMINALTILER_RUNTIME_CAPABILITIES_FILE = $previousCapabilitiesPath
-        }
-        Remove-Item -Force $capabilitiesPath -ErrorAction SilentlyContinue
+    $versionInfo = (Get-Item -LiteralPath $ExePath).VersionInfo
+    $escapedVersion = [regex]::Escape($ExpectedVersion)
+    $versionValues = @($versionInfo.FileVersion, $versionInfo.ProductVersion) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (-not ($versionValues | Where-Object { $_ -match "^$escapedVersion(?:\\.0)?$" })) {
+        throw "Packaged runtime at $ExePath does not embed PACKAGE_VERSION $ExpectedVersion in its Windows version resource. FileVersion='$($versionInfo.FileVersion)', ProductVersion='$($versionInfo.ProductVersion)'"
     }
 }
 
