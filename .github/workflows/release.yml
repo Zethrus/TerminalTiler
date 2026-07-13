@@ -229,7 +229,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
         run: |
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          release_json=""
+          for attempt in {1..12}; do
+            if release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" 2>/dev/null)"; then
+              break
+            fi
+            if [[ "$attempt" -eq 12 ]]; then
+              echo "Release for ${RELEASE_TAG} was not discoverable by tag after 60 seconds" >&2
+              exit 1
+            fi
+            echo "Release for ${RELEASE_TAG} is not discoverable by tag yet; retrying in 5 seconds..."
+            sleep 5
+          done
           jq -e '.draft == true' <<<"$release_json" >/dev/null
           asset_count="$(jq '.assets | length' <<<"$release_json")"
           test "$asset_count" -eq 6

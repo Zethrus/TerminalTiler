@@ -2997,6 +2997,8 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
             && publish_release.contains("merge-multiple: true")
             && publish_release.contains("Verify release assets before publishing")
             && publish_release.contains("Missing release asset: $file")
+            && publish_release.contains("for attempt in {1..12}")
+            && publish_release.contains("was not discoverable by tag after 60 seconds")
             && publish_release.contains("softprops/action-gh-release@v3")
             && !RELEASE_YML.contains("softprops/action-gh-release@v2")
             && !RELEASE_YML.contains("actions/download-artifact@v4")
