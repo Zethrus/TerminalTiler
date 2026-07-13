@@ -2687,8 +2687,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             && CI_YML.contains("actions/upload-artifact@v6")
             && CI_YML.contains("cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
-            && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell"),
-        "CI should include native Windows GTK build, package, smoke coverage, and Node 24-ready artifact/cache actions"
+            && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell")
+            && workflow_job_block(CI_YML, "verify-windows-gtk").contains("-SkipLaunchSmoke"),
+        "CI should include native Windows GTK build and package coverage while reserving GUI activation for an interactive Windows host"
     );
 
     assert!(
@@ -3218,7 +3219,8 @@ fn windows_gtk_visual_qa_harness_documents_and_captures_required_views() {
             && DOC_WINDOWS_GTK_VISUAL_QA.contains(
                 "never an `nsx*.tmp` self-extraction directory"
             )
-            && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`"),
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("published self-extracting portable `.exe`")
+            && DOC_WINDOWS_GTK_VISUAL_QA.contains("GitHub-hosted Windows runners do not expose an interactive desktop"),
         "visual QA documentation should define baseline, capture command, and required comparison screens"
     );
 

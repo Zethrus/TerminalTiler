@@ -154,7 +154,11 @@ jobs:
 
       - name: Run Windows GTK smoke test
         shell: pwsh
-        run: ./packaging/windows-smoke-test.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild
+        # Hosted Windows runners have no interactive desktop. They compile and
+        # package GTK successfully, but GtkApplication exits before activation.
+        # Keep installer/payload smoke coverage here; interactive GTK visual
+        # coverage runs on an interactive Windows host.
+        run: ./packaging/windows-smoke-test.ps1 -UseGtkShell -GtkRuntimeRoot $env:TERMINALTILER_GTK_RUNTIME_ROOT -SmokeProfileKind terminal-only -SkipBuild -SkipLaunchSmoke
 
       - name: Upload Windows GTK smoke diagnostics
         if: failure()
