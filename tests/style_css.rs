@@ -2995,6 +2995,18 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
         "Release publishing should wait for both platform jobs, download merged artifacts with Node 24-ready actions, verify them, and publish once"
     );
 
+    assert!(
+        publish_assets_step.contains("draft: true")
+            && publish_release.contains("Verify draft release and every asset")
+            && publish_release
+                .contains(r#"local_digest="sha256:$(sha256sum "$file" | cut -d' ' -f1)""#)
+            && publish_release.contains("gh release edit \"$RELEASE_TAG\" --draft=false")
+            && publish_release.contains("Verify published release")
+            && publish_release.contains(".draft == false and .prerelease == false")
+            && !publish_release.contains(".immutable == true"),
+        "Release publishing should stage assets, compare their GitHub SHA-256 metadata with local files, then accept the repository's normal published release state instead of requiring unavailable immutable releases"
+    );
+
     for asset_output in [
         "${{ needs.resolve-release.outputs.deb_path }}",
         "${{ needs.resolve-release.outputs.appimage_path }}",

@@ -56,7 +56,10 @@ function Assert-DirectoryHasFiles {
 }
 
 function Assert-WindowsGtkPayload {
-    param([string]$PayloadRoot)
+    param(
+        [string]$PayloadRoot,
+        [switch]$RequireMarker
+    )
 
     Assert-Path -Path (Join-Path $PayloadRoot "share\style.css") -Description "Shared GTK CSS"
     Assert-Path -Path (Join-Path $PayloadRoot "share\terminaltiler.svg") -Description "TerminalTiler GTK logo"
@@ -65,6 +68,23 @@ function Assert-WindowsGtkPayload {
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\terminal.svg") -Description "GTK terminal hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\layout-dashboard.svg") -Description "GTK dashboard hover icon"
     Assert-Path -Path (Join-Path $PayloadRoot "share\hover-icons\save.svg") -Description "GTK save hover icon"
+    Assert-Path -Path (Join-Path $PayloadRoot "terminaltiler-updater.exe") -Description "Updater helper"
+    if ($RequireMarker) {
+        Assert-Path -Path (Join-Path $PayloadRoot "terminaltiler-install-kind") -Description "Portable installer marker"
+    }
+}
+
+function Assert-EmbeddedPackageVersion {
+    param(
+        [string]$ExePath,
+        [string]$ExpectedVersion
+    )
+
+    $capabilities = & $ExePath --runtime-capabilities 2>$null
+    $capabilitiesText = $capabilities -join "`n"
+    if (-not ($capabilitiesText -match ('"core_package_version":"' + [regex]::Escape($ExpectedVersion) + '"'))) {
+        throw "Packaged runtime at $ExePath did not report PACKAGE_VERSION $ExpectedVersion"
+    }
 }
 
 function Assert-WindowsGtkRuntimePayload {
@@ -1096,7 +1116,9 @@ $PortableExe = Join-Path $PortableExtractRoot "TerminalTiler.exe"
 $PortableReadme = Join-Path $PortableExtractRoot "README-windows.txt"
 Assert-Path -Path $PortableExe -Description "Portable executable"
 Assert-Path -Path $PortableReadme -Description "Portable README"
+if (Test-Path (Join-Path $PortableExtractRoot "terminaltiler-install-kind")) { throw "Portable ZIP unexpectedly contains an update provenance marker" }
 Assert-WindowsGtkPayload -PayloadRoot $PortableExtractRoot
+Assert-EmbeddedPackageVersion -ExePath $PortableExe -ExpectedVersion $ResolvedVersion
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $PortableExtractRoot
 }
@@ -1143,6 +1165,8 @@ $InstalledExe = Join-Path $NsisInstallRoot "TerminalTiler.exe"
 $InstalledUninstaller = Join-Path $NsisInstallRoot "Uninstall.exe"
 Assert-Path -Path $InstalledExe -Description "Installed executable"
 Assert-Path -Path $InstalledUninstaller -Description "Installed uninstaller"
+if ((Get-Content -Raw (Join-Path $NsisInstallRoot "terminaltiler-install-kind")).Trim() -ne "nsis") { throw "NSIS marker is incorrect" }
+Assert-EmbeddedPackageVersion -ExePath $InstalledExe -ExpectedVersion $ResolvedVersion
 Assert-WindowsGtkPayload -PayloadRoot $NsisInstallRoot
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $NsisInstallRoot
@@ -1165,6 +1189,9 @@ Invoke-MsiExecWithRetry -ArgumentList @("/i", $MsiPath, "/qn", "/norestart", "IN
 
 $MsiInstalledExe = Join-Path $MsiInstallRoot "TerminalTiler.exe"
 Assert-Path -Path $MsiInstalledExe -Description "MSI-installed executable"
+if ((Get-Content -Raw (Join-Path $MsiInstallRoot "terminaltiler-install-kind")).Trim() -ne "msi") { throw "MSI payload marker is incorrect" }
+if ((Get-ItemProperty -Path "HKCU:\Software\Zethrus\TerminalTiler" -Name InstallerKind -ErrorAction Stop).InstallerKind -ne "msi") { throw "MSI marker is incorrect" }
+Assert-EmbeddedPackageVersion -ExePath $MsiInstalledExe -ExpectedVersion $ResolvedVersion
 Assert-WindowsGtkPayload -PayloadRoot $MsiInstallRoot
 if ($ExpectGtkShell) {
     Assert-WindowsGtkRuntimePayload -PayloadRoot $MsiInstallRoot

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 . "$ROOT_DIR/packaging/render-icons.sh"
 . "$ROOT_DIR/packaging/validate-metadata.sh"
+export PACKAGE_VERSION
 
 APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppDir"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
@@ -43,6 +44,8 @@ rm -rf "$APPDIR"
 mkdir -p "$APP_PREFIX/bin" "$APP_PREFIX/share/hover-icons" "$APP_PREFIX/share/applications" "$APP_PREFIX/share/icons/hicolor/scalable/apps" "$APP_PREFIX/share/metainfo"
 
 cp "$TARGET_BIN" "$APP_PREFIX/bin/terminaltiler-bin"
+# The helper is launched from outside the loaded AppImage before replacement.
+cp "$TARGET_DIR/release/terminaltiler-updater" "$APP_PREFIX/bin/terminaltiler-updater"
 # Bundle the Kanban MCP server next to the app binary so agents need no extra install.
 cp "$TARGET_DIR/release/terminaltiler-mcp" "$APP_PREFIX/bin/terminaltiler-mcp"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_PREFIX/share/hover-icons/"
@@ -60,7 +63,7 @@ ln -sf terminaltiler.svg "$APPDIR/.DirIcon"
 
 bash "$ROOT_DIR/packaging/bundle-runtime.sh" "$TARGET_BIN" "$APP_PREFIX"
 
-chmod +x "$APP_PREFIX/bin/terminaltiler" "$APPDIR/AppRun"
+chmod +x "$APP_PREFIX/bin/terminaltiler" "$APP_PREFIX/bin/terminaltiler-updater" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"
 
 validate_app_metadata "$DESKTOP_FILE" "$METAINFO_FILE"

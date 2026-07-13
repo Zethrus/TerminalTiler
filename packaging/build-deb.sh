@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 . "$ROOT_DIR/packaging/render-icons.sh"
 . "$ROOT_DIR/packaging/validate-metadata.sh"
+export PACKAGE_VERSION
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 TARGET_BIN="$TARGET_DIR/release/terminaltiler"
@@ -47,11 +48,14 @@ render_app_icons "$ROOT_DIR/resources/terminaltiler.svg" "$STAGE_ROOT/usr/share/
 set_control_version "$STAGE_ROOT/DEBIAN/control"
 set_appdata_release "$METAINFO_FILE"
 cp "$TARGET_BIN" "$APP_ROOT/bin/terminaltiler-bin"
+# Keep the helper beside the bundled binary; it is used only after consent.
+cp "$TARGET_DIR/release/terminaltiler-updater" "$APP_ROOT/bin/terminaltiler-updater"
 # Bundle the Kanban MCP server next to the app binary so agents need no extra install.
 cp "$TARGET_DIR/release/terminaltiler-mcp" "$APP_ROOT/bin/terminaltiler-mcp"
 cp "$ROOT_DIR"/resources/hover-icons/*.svg "$APP_ROOT/share/hover-icons/"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$APP_ROOT/bin/terminaltiler"
 cp "$ROOT_DIR/packaging/run-bundled.sh" "$STAGE_ROOT/usr/bin/terminaltiler"
+printf 'deb\n' > "$APP_ROOT/bin/terminaltiler-install-kind"
 sed -i "s#APP_ROOT=\"\$(cd \"\$(dirname \"\$0\")/..\" && pwd)\"#APP_ROOT=\"/opt/terminaltiler\"#" "$STAGE_ROOT/usr/bin/terminaltiler"
 
 bash "$ROOT_DIR/packaging/bundle-runtime.sh" "$TARGET_BIN" "$APP_ROOT"
@@ -70,7 +74,7 @@ if [[ -z "$GLIBC_FLOOR" ]]; then
 fi
 
 set_control_glibc_floor "$STAGE_ROOT/DEBIAN/control" "$GLIBC_FLOOR"
-chmod 0755 "$APP_ROOT/bin/terminaltiler-bin" "$APP_ROOT/bin/terminaltiler" "$STAGE_ROOT/usr/bin/terminaltiler"
+chmod 0755 "$APP_ROOT/bin/terminaltiler-bin" "$APP_ROOT/bin/terminaltiler" "$APP_ROOT/bin/terminaltiler-updater" "$STAGE_ROOT/usr/bin/terminaltiler"
 
 validate_app_metadata "$DESKTOP_FILE" "$METAINFO_FILE"
 

@@ -29,6 +29,7 @@ mod tray;
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
 mod ui;
+mod update;
 pub mod voice;
 #[cfg(target_os = "windows")]
 mod windows;

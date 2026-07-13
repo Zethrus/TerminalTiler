@@ -263,6 +263,8 @@ function Assert-WindowsStagedPayload {
     )
 
     Assert-Path -Path (Join-Path $PortableRoot "TerminalTiler.exe") -Description "Staged TerminalTiler executable"
+    Assert-Path -Path (Join-Path $PortableRoot "terminaltiler-updater.exe") -Description "Staged TerminalTiler updater helper"
+    Assert-Path -Path (Join-Path $PortableRoot "terminaltiler-install-kind") -Description "Staged installer provenance marker"
     Assert-Path -Path (Join-Path $PortableRoot "share\style.css") -Description "Staged canonical GTK CSS"
     Assert-Path -Path (Join-Path $PortableRoot "share\terminaltiler.svg") -Description "Staged TerminalTiler logo"
     Assert-Path -Path (Join-Path $PortableRoot "share\icons\hicolor\scalable\apps\terminaltiler.svg") -Description "Staged TerminalTiler icon theme logo"
@@ -289,6 +291,9 @@ function Assert-WindowsStagedPayload {
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ResolvedVersion = Get-PackageVersion -RootDir $RootDir
+# Keep Cargo's embedded product identity in lockstep with the artifact names
+# even when callers provide -PackageVersion instead of an environment value.
+$env:PACKAGE_VERSION = $ResolvedVersion
 $TargetTriple = "x86_64-pc-windows-msvc"
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $RootDir "target" }
 $BinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler.exe"
@@ -349,6 +354,11 @@ Copy-Item -Path $BinaryPath -Destination (Join-Path $PortableRoot "TerminalTiler
 # Bundle the Kanban MCP server next to the app so agents need no extra install.
 $McpBinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler-mcp.exe"
 Copy-Item -Path $McpBinaryPath -Destination (Join-Path $PortableRoot "terminaltiler-mcp.exe")
+$UpdaterBinaryPath = Join-Path $TargetDir "$TargetTriple\release\terminaltiler-updater.exe"
+Copy-Item -Path $UpdaterBinaryPath -Destination (Join-Path $PortableRoot "terminaltiler-updater.exe")
+# The self-extracting wrapper is the only supported Windows portable
+# provenance. Installed NSIS/MSI variants overwrite this marker below.
+Set-Content -Path (Join-Path $PortableRoot "terminaltiler-install-kind") -Value "portable-exe" -Encoding ASCII -NoNewline
 Copy-WindowsGtkResources -RootDir $RootDir -PortableRoot $PortableRoot
 if ($BuildGtkShell) {
     Copy-WindowsGtkRuntime -RuntimeRoot $GtkRuntimeRoot -PortableRoot $PortableRoot
@@ -423,7 +433,11 @@ Copy-Item -Path $PortableExePath -Destination $PortableExeLatestPath -Force
 
 Write-Host "==> creating portable zip"
 Remove-Item -Force $ZipPath, $ZipLatestPath -ErrorAction SilentlyContinue
-Compress-Archive -Path (Join-Path $PortableRoot "*") -DestinationPath $ZipPath -Force
+# A ZIP extraction is intentionally a manual-install provenance.  Keep the
+# marker inside the self-extracting wrapper payload, but omit it from the ZIP
+# so an extracted copy cannot silently enter the Core release channel.
+$ZipItems = Get-ChildItem -Path $PortableRoot -Force | Where-Object { $_.Name -ne "terminaltiler-install-kind" }
+Compress-Archive -Path $ZipItems.FullName -DestinationPath $ZipPath -Force
 Copy-Item -Path $ZipPath -Destination $ZipLatestPath -Force
 
 if ($Makensis) {
@@ -450,6 +464,11 @@ if ($Makensis) {
 
 if ($Candle -and $Light -and $Heat) {
     Write-Host "==> building MSI installer"
+    $ProvenanceMarkerPath = Join-Path $PortableRoot "terminaltiler-install-kind"
+    # The MSI has explicit provenance in both its payload and HKCU registry.
+    # Switch the harvested marker for this build only; the self-extracting
+    # wrapper and its already-created ZIP retain their portable semantics.
+    Set-Content -Path $ProvenanceMarkerPath -Value "msi" -Encoding ASCII -NoNewline
     $WixBuildDir = Join-Path $StageRoot "wix"
     $WixHarvestedSourcePath = Join-Path $WixBuildDir "harvested-payload.wxs"
     $WixObjectPath = Join-Path $WixBuildDir "terminaltiler-installer.wixobj"
@@ -520,6 +539,7 @@ if ($Candle -and $Light -and $Heat) {
     }
 
     Copy-Item -Path $MsiPath -Destination $MsiLatestPath -Force
+    Set-Content -Path $ProvenanceMarkerPath -Value "portable-exe" -Encoding ASCII -NoNewline
 } else {
     Write-Host "==> WiX Toolset not found - skipping MSI build"
     Write-Host "    To build the MSI, install WiX Toolset from https://wixtoolset.org/"

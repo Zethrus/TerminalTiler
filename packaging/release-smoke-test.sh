@@ -320,6 +320,17 @@ validate_appstream() {
   fi
 }
 
+assert_embedded_package_version() {
+  local launcher="$1"
+  local capabilities
+  capabilities="$("$launcher" --runtime-capabilities 2>/dev/null)"
+  if ! grep -Fq "\"core_package_version\":\"$PACKAGE_VERSION\"" <<<"$capabilities"; then
+    echo "packaged runtime reported the wrong PACKAGE_VERSION via --runtime-capabilities: $launcher" >&2
+    echo "$capabilities" >&2
+    exit 1
+  fi
+}
+
 echo "==> validating AppStream metadata"
 validate_appstream
 
@@ -354,7 +365,10 @@ test -f "$BUILD_DIR/deb/usr/share/icons/hicolor/128x128/apps/terminaltiler.png"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libvte-2.91-gtk4.so.0"
+test -x "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-updater"
+test "$(tr -d '[:space:]' < "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-install-kind")" = "deb"
 assert_packaged_runtime_assets "$BUILD_DIR/deb/opt/terminaltiler"
+assert_embedded_package_version "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler"
 
 echo "==> verifying bundled MCP server is present and GTK-free"
 # The same release binary ships in the AppImage, where agent configs point at a copy
@@ -388,7 +402,9 @@ test -f "$BUILD_DIR/appimage/squashfs-root/usr/share/icons/hicolor/128x128/apps/
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/appimage/squashfs-root/usr/lib/libvte-2.91-gtk4.so.0"
+test -x "$BUILD_DIR/appimage/squashfs-root/usr/bin/terminaltiler-updater"
 assert_packaged_runtime_assets "$BUILD_DIR/appimage/squashfs-root/usr"
+assert_embedded_package_version "$BUILD_DIR/appimage/squashfs-root/usr/bin/terminaltiler"
 
 if command -v xvfb-run >/dev/null 2>&1; then
   echo "==> smoke-testing AppImage launch"

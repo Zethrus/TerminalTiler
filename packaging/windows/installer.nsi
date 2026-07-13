@@ -42,6 +42,11 @@ Section "Install"
   SetShellVarContext current
   SetOutPath "$INSTDIR"
   File /r "${STAGE_DIR}\*"
+  ; The staged payload is also used for portable builds. Mark this copy as an
+  ; installed NSIS build so the Core updater never treats a ZIP as updateable.
+  FileOpen $0 "$INSTDIR\terminaltiler-install-kind" w
+  FileWrite $0 "nsis"
+  FileClose $0
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\TerminalTiler"
@@ -53,6 +58,8 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "DisplayIcon" "$INSTDIR\share\terminaltiler.ico"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Zethrus\TerminalTiler" "InstallerKind" "nsis"
+  WriteRegStr HKCU "Software\Zethrus\TerminalTiler" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "URLInfoAbout" "https://terminaltiler.app"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler" "HelpLink" "https://terminaltiler.app"
@@ -155,4 +162,5 @@ Section "Uninstall"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TerminalTiler"
+  DeleteRegKey HKCU "Software\Zethrus\TerminalTiler"
 SectionEnd

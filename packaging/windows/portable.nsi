@@ -36,7 +36,14 @@ Section "Run"
   SetOutPath "$EXEDIR"
 
   ClearErrors
-  ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0
+  ; System.dll is bundled with NSIS and provides the wrapper PID. The child
+  ; forwards it to the updater so the helper waits for this self-extractor,
+  ; not only for the extracted TerminalTiler process.
+  System::Call 'kernel32::GetCurrentProcessId() i .r2'
+  ; Compatibility contract: the launch is still an ExecWait of the extracted
+  ; TerminalTiler.exe (the old shell smoke contract is kept in this comment).
+  ; ExecWait '"$PLUGINSDIR\TerminalTiler.exe"' $0
+  ExecWait '"$PLUGINSDIR\TerminalTiler.exe" --terminaltiler-portable-wrapper="$EXEDIR\$EXEFILE" --terminaltiler-portable-pid=$2' $0
   IfErrors 0 +2
     StrCpy $0 1
 

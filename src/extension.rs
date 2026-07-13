@@ -14,7 +14,7 @@ use crate::product;
 pub const CORE_EXTENSION_API_VERSION: u32 = 1;
 
 /// Package version of the Core library that implements the extension contract.
-pub const CORE_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
 
 /// Machine-readable Core capability probe used by packaged-runtime checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -149,7 +149,7 @@ mod product_identity_tests {
     fn default_identity_carries_platform_shell_and_link_contracts() {
         let identity = ProductIdentity::default();
 
-        assert_eq!(identity.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(identity.version, env!("TERMINALTILER_PACKAGE_VERSION"));
         assert_eq!(identity.effective_gtk_application_id(), "app.terminaltiler");
         assert_eq!(
             identity.effective_windows_app_user_model_id(),
@@ -477,7 +477,10 @@ mod additive_api_tests {
         let capabilities = runtime_capabilities();
 
         assert_eq!(capabilities.extension_api_version, 1);
-        assert_eq!(capabilities.core_package_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            capabilities.core_package_version,
+            env!("TERMINALTILER_PACKAGE_VERSION")
+        );
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();

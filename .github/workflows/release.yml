@@ -209,6 +209,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve-release.outputs.tag }}
+          draft: true
           generate_release_notes: true
           files: |
             ${{ needs.resolve-release.outputs.deb_path }}
@@ -218,3 +219,46 @@ jobs:
             ${{ needs.resolve-release.outputs.windows_installer_path }}
             ${{ needs.resolve-release.outputs.windows_msi_path }}
           fail_on_unmatched_files: true
+
+      - name: Verify draft release and every asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: |
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          jq -e '.draft == true' <<<"$release_json" >/dev/null
+          asset_count="$(jq '.assets | length' <<<"$release_json")"
+          test "$asset_count" -eq 6
+          jq -e '.assets | all(.digest != null and (.digest | test("^sha256:[0-9a-fA-F]{64}$")))' <<<"$release_json" >/dev/null
+          for file in \
+            "${{ needs.resolve-release.outputs.deb_path }}" \
+            "${{ needs.resolve-release.outputs.appimage_path }}" \
+            "${{ needs.resolve-release.outputs.windows_portable_exe_path }}" \
+            "${{ needs.resolve-release.outputs.windows_zip_path }}" \
+            "${{ needs.resolve-release.outputs.windows_installer_path }}" \
+            "${{ needs.resolve-release.outputs.windows_msi_path }}"; do
+            name="$(basename "$file")"
+            remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release_json")"
+            local_digest="sha256:$(sha256sum "$file" | cut -d' ' -f1)"
+            test "$remote_digest" = "$local_digest"
+          done
+
+      - name: Publish verified release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: Verify published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: |
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          jq -e '.draft == false and .prerelease == false' <<<"$release_json" >/dev/null
+          asset_count="$(jq '.assets | length' <<<"$release_json")"
+          test "$asset_count" -eq 6
+          jq -e '.assets | all(.digest != null and (.digest | test("^sha256:[0-9a-fA-F]{64}$")))' <<<"$release_json" >/dev/null

@@ -6,6 +6,16 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=resources/windows/terminaltiler.rc");
     println!("cargo:rerun-if-changed=resources/windows/terminaltiler.ico");
+    println!("cargo:rerun-if-env-changed=PACKAGE_VERSION");
+
+    // Packaging resolves a release tag independently from Cargo.toml's base
+    // development version.  Embed that resolved identity in every binary so
+    // About, capability probes, and the updater all agree on the artifact.
+    let package_version = env::var("PACKAGE_VERSION")
+        .ok()
+        .filter(|version| !version.trim().is_empty())
+        .unwrap_or_else(|| env::var("CARGO_PKG_VERSION").expect("Cargo supplies package version"));
+    println!("cargo:rustc-env=TERMINALTILER_PACKAGE_VERSION={package_version}");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();

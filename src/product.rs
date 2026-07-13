@@ -1,5 +1,5 @@
 pub const PRODUCT_DISPLAY_NAME: &str = "TerminalTiler Core";
-pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const PRODUCT_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
 pub const PRODUCT_HOMEPAGE: &str = "https://terminaltiler.app";
 pub const PRODUCT_ACCOUNT_URL: &str = "https://terminaltiler.app/account/";
 pub const PRODUCT_SUPPORT_URL: &str = "https://terminaltiler.app/support/";

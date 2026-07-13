@@ -4,11 +4,12 @@ use std::process::ExitCode;
 mod imp {
     use super::ExitCode;
     use std::mem;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::ptr;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+    use std::sync::mpsc::Receiver;
     use std::thread;
 
     use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -27,15 +28,16 @@ mod imp {
         DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL,
         ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_PASSWORD, ES_READONLY, GWLP_USERDATA,
         GetClientRect, GetCursorPos, GetDlgItem, GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW,
-        IDI_APPLICATION, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
-        LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, LoadIconW, MB_ICONWARNING, MB_OK,
-        MB_OKCANCEL, MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW,
-        SW_HIDE, SW_SHOW, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
-        SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+        IDI_APPLICATION, IDNO, IDOK, IDYES, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL,
+        LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW,
+        LoadIconW, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_YESNOCANCEL, MF_STRING, MSG, MessageBoxW,
+        PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOZORDER,
+        SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
+        SetWindowTextW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
         TranslateMessage, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLOREDIT,
         WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONUP,
-        WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_BORDER,
-        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+        WM_NCCREATE, WM_NCDESTROY, WM_RBUTTONUP, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW,
+        WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
     };
 
     use crate::extension::{
@@ -63,6 +65,7 @@ mod imp {
     use crate::storage::preference_store::{AppPreferences, PreferenceStore};
     use crate::storage::preset_store::PresetStore;
     use crate::storage::session_store::{SavedSession, SessionStore};
+    use crate::update::{self, UpdateEvent, UpdateService};
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
@@ -194,6 +197,7 @@ mod imp {
     const WM_STARTUP_PROBE_COMPLETE: u32 = WM_APP + 51;
     const WM_SETTINGS_VOICE_PACK_EVENT: u32 = WM_APP + 60;
     const WM_COMPANION_ACTION_COMPLETE: u32 = WM_APP + 61;
+    const UPDATE_TIMER_ID: usize = 1_;
     const TRAY_ICON_ID: u32 = 1;
     const TRAY_MENU_SHOW: usize = 1;
     const TRAY_MENU_SETTINGS: usize = 2;
@@ -207,14 +211,18 @@ mod imp {
     }
 
     pub fn run() -> ExitCode {
-        run_with_options(RuntimeOptions::default())
+        run_with_options_and_updates(RuntimeOptions::default(), true)
     }
 
     pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
+        run_with_options_and_updates(options, false)
+    }
+
+    fn run_with_options_and_updates(options: RuntimeOptions, enable_updates: bool) -> ExitCode {
         logging::init();
         logging::info("windows GUI shell startup");
 
-        match unsafe { run_gui(options) } {
+        match unsafe { run_gui(options, enable_updates) } {
             Ok(code) => code,
             Err(error) => {
                 logging::error(format!("windows GUI shell failed: {error}"));
@@ -314,6 +322,8 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         runtime_probe_preferred_distribution: Option<String>,
         companion_action_running: bool,
         companion_action_generation: u64,
+        update_service: Option<UpdateService>,
+        update_receiver: Option<Receiver<UpdateEvent>>,
     }
 
     struct StartupProbeResult {
@@ -386,7 +396,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         VoiceHotkey,
     }
 
-    unsafe fn run_gui(options: RuntimeOptions) -> Result<ExitCode, String> {
+    unsafe fn run_gui(options: RuntimeOptions, enable_updates: bool) -> Result<ExitCode, String> {
         configure_windows_taskbar_identity(options.product.effective_windows_app_user_model_id());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         if instance.is_null() {
@@ -398,6 +408,12 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
 
         let window_title = options.product.app_title.clone();
         let catalog = options.catalog.clone();
+        let (update_service, update_receiver) = if enable_updates {
+            let (service, receiver) = UpdateService::start();
+            (Some(service), Some(receiver))
+        } else {
+            (None, None)
+        };
         let state = Box::new(AppWindowState {
             runtime_options: options,
             preference_store: PreferenceStore::new(),
@@ -452,6 +468,8 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             runtime_probe_preferred_distribution: None,
             companion_action_running: false,
             companion_action_generation: 0,
+            update_service,
+            update_receiver,
         });
         let state_ptr = Box::into_raw(state);
 
@@ -484,6 +502,33 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
+            // Keep the blocking Win32 message loop responsive to worker
+            // events even when the user is idle and no input messages arrive.
+            if enable_updates {
+                SetTimer(hwnd, UPDATE_TIMER_ID, 250, None);
+            }
+        }
+
+        if enable_updates {
+            if let Some(result) = update::take_update_result()
+                && !result.success
+            {
+                let details = result
+                    .error
+                    .unwrap_or_else(|| "unknown installer error".into());
+                unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&format!(
+                            "TerminalTiler could not install {}.\r\n\r\n{}",
+                            result.version, details
+                        ))
+                        .as_ptr(),
+                        wide("Previous update failed").as_ptr(),
+                        MB_ICONWARNING | MB_OK,
+                    );
+                }
+            }
         }
 
         let mut message = unsafe { mem::zeroed::<MSG>() };
@@ -492,9 +537,96 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+            pump_updates(hwnd);
         }
 
         Ok(ExitCode::SUCCESS)
+    }
+
+    fn pump_updates(hwnd: HWND) {
+        let Some(event) = (unsafe { state_mut(hwnd) }).and_then(|state| {
+            state
+                .update_receiver
+                .as_ref()
+                .and_then(|receiver| receiver.try_recv().ok())
+        }) else {
+            return;
+        };
+
+        match event {
+            UpdateEvent::Available(release) => {
+                let notes = if release.notes.trim().is_empty() {
+                    "This release contains improvements and fixes.".to_string()
+                } else {
+                    release.notes.chars().take(900).collect::<String>()
+                };
+                let message = format!(
+                    "TerminalTiler {} is available.\r\n\r\n{}\r\n\r\nYes: Install and Restart\r\nNo: View Release\r\nCancel: Later",
+                    release.version, notes
+                );
+                let response = unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&message).as_ptr(),
+                        wide("TerminalTiler update").as_ptr(),
+                        MB_YESNOCANCEL | MB_ICONWARNING,
+                    )
+                };
+                if response == IDNO {
+                    let url = format!(
+                        "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
+                        release.tag
+                    );
+                    let _ = open_path_with_shell(hwnd, Path::new(&url));
+                } else if response == IDYES
+                    && let Some(state) = unsafe { state_mut(hwnd) }
+                    && let Some(service) = state.update_service.as_ref()
+                {
+                    service.download(release);
+                }
+            }
+            UpdateEvent::Downloaded { release, artifact } => {
+                let Some(state) = (unsafe { state_mut(hwnd) }) else {
+                    return;
+                };
+                let Some(installation) = update::detect_installation() else {
+                    unsafe {
+                        MessageBoxW(
+                            hwnd,
+                            wide("The installation provenance changed, so the current installation was left untouched.").as_ptr(),
+                            wide("TerminalTiler update").as_ptr(),
+                            MB_ICONWARNING | MB_OK,
+                        );
+                    }
+                    return;
+                };
+                match update::spawn_updater(&release, &artifact, &installation) {
+                    Ok(()) => {
+                        state.quit_requested = true;
+                        unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
+                    }
+                    Err(error) => unsafe {
+                        MessageBoxW(
+                            hwnd,
+                            wide(&format!("Could not start the update helper: {error}")).as_ptr(),
+                            wide("TerminalTiler update").as_ptr(),
+                            MB_ICONWARNING | MB_OK,
+                        );
+                    },
+                }
+            }
+            UpdateEvent::DownloadFailed { version, error } => unsafe {
+                MessageBoxW(
+                    hwnd,
+                    wide(&format!(
+                        "Could not install TerminalTiler {version}: {error}"
+                    ))
+                    .as_ptr(),
+                    wide("TerminalTiler update").as_ptr(),
+                    MB_ICONWARNING | MB_OK,
+                );
+            },
+        }
     }
 
     fn configure_windows_taskbar_identity(app_user_model_id: &str) {
@@ -700,6 +832,10 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 }
                 0
             }
+            WM_TIMER if wparam == UPDATE_TIMER_ID => {
+                pump_updates(hwnd);
+                0
+            }
             WM_COMMAND => {
                 let command_id = (wparam & 0xffff) as isize;
                 if let Some(state) = unsafe { state_mut(hwnd) } {
@@ -780,6 +916,11 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 0
             }
             WM_DESTROY => {
+                if unsafe { state_mut(hwnd) }.is_some_and(|state| state.update_service.is_some()) {
+                    unsafe {
+                        KillTimer(hwnd, UPDATE_TIMER_ID);
+                    }
+                }
                 if let Some(state) = unsafe { state_mut(hwnd) } {
                     remove_tray_icon(hwnd, state);
                 }

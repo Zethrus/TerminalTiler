@@ -51,6 +51,18 @@
           Type="integer"
           Value="1"
           KeyPath="yes" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Zethrus\TerminalTiler"
+          Name="InstallerKind"
+          Type="string"
+          Value="msi" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Zethrus\TerminalTiler"
+          Name="InstallLocation"
+          Type="string"
+          Value="[INSTALLFOLDER]" />
       </Component>
     </DirectoryRef>
 

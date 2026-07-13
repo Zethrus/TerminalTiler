@@ -1,7 +1,7 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
     use std::cell::{Cell, RefCell};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::ExitCode;
     use std::rc::{Rc, Weak};
     use std::sync::mpsc;
@@ -40,6 +40,7 @@ mod imp {
         voice_hud::VoiceHud,
     };
     // Source-contract anchor: dialog_smoke, settings_dialog, tab_rename_dialog.
+    use crate::update::{self, ReleaseInfo, UpdateEvent, UpdateService};
     use crate::voice::audio::AudioCapture;
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
@@ -53,10 +54,14 @@ mod imp {
     const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 
     pub fn run() -> ExitCode {
-        run_with_options(RuntimeOptions::default())
+        run_with_options_and_updates(RuntimeOptions::default(), true)
     }
 
     pub fn run_with_options(options: RuntimeOptions) -> ExitCode {
+        run_with_options_and_updates(options, false)
+    }
+
+    fn run_with_options_and_updates(options: RuntimeOptions, enable_updates: bool) -> ExitCode {
         logging::init();
         logging::info("windows GTK shell startup");
         let taskbar_app_user_model_id = options.product.effective_windows_app_user_model_id();
@@ -64,6 +69,12 @@ mod imp {
 
         let app_id = options.product.effective_gtk_application_id();
         let app = adw::Application::builder().application_id(app_id).build();
+        let update_runtime = if enable_updates {
+            let (service, receiver) = UpdateService::start();
+            Some((service, receiver))
+        } else {
+            None
+        };
 
         let icon_name = options.product.icon_name.clone();
         app.connect_startup(move |_| {
@@ -72,11 +83,147 @@ mod imp {
             logging::info("windows GTK shell loaded canonical GTK CSS and app icon contract");
         });
 
+        if let Some((service, receiver)) = update_runtime {
+            let receiver = Rc::new(RefCell::new(Some(receiver)));
+            app.connect_startup(move |app| {
+                install_update_pump(app, receiver.clone(), service.clone());
+            });
+        }
+
         app.connect_activate(move |app| {
             present_launch_window(app, &options);
         });
 
         glib_exit_to_process_exit(app.run())
+    }
+
+    fn install_update_pump(
+        app: &adw::Application,
+        receiver: Rc<RefCell<Option<mpsc::Receiver<UpdateEvent>>>>,
+        service: UpdateService,
+    ) {
+        let app = app.clone();
+        let pending = Rc::new(RefCell::new(None::<ReleaseInfo>));
+        let pending_failure = Rc::new(RefCell::new(None::<update::UpdateResult>));
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            if let Some(result) = update::take_update_result()
+                && !result.success
+            {
+                *pending_failure.borrow_mut() = Some(result);
+            }
+            if let Some(receiver) = receiver.borrow_mut().as_mut() {
+                while let Ok(event) = receiver.try_recv() {
+                    match event {
+                        UpdateEvent::Available(release) => *pending.borrow_mut() = Some(release),
+                        UpdateEvent::Downloaded { release, artifact } => {
+                            if let Some(installation) = update::detect_installation()
+                                && let Some(window) = primary_window(&app)
+                            {
+                                if let Err(error) =
+                                    update::spawn_updater(&release, &artifact, &installation)
+                                {
+                                    dialog_chrome::present_notice(
+                                        &window,
+                                        "update-error-dialog",
+                                        "Update failed",
+                                        &error,
+                                    );
+                                } else if gtk::prelude::WidgetExt::activate_action(
+                                    &window,
+                                    "win.quit-app",
+                                    None,
+                                )
+                                .is_err()
+                                {
+                                    app.quit();
+                                }
+                            } else if let Some(window) = primary_window(&app) {
+                                dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update failed",
+                                    "The installation provenance changed, so the current installation was left untouched.",
+                                );
+                            }
+                        }
+                        UpdateEvent::DownloadFailed { version, error } => {
+                            if let Some(window) = primary_window(&app) {
+                                dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update failed",
+                                    &format!("Could not install TerminalTiler {version}: {error}"),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if pending.borrow().is_some()
+                && let Some(window) = primary_window(&app)
+                && let Some(release) = pending.borrow_mut().take()
+            {
+                let version = release.version.to_string();
+                let notes = if release.notes.trim().is_empty() {
+                    "This release contains improvements and fixes.".to_string()
+                } else {
+                    release.notes.chars().take(1200).collect()
+                };
+                let download_release = release.clone();
+                let tag = release.tag.clone();
+                let service = service.clone();
+                dialog_chrome::PremiumModal::new(
+                    "update-dialog",
+                    &format!("TerminalTiler {version} is available"),
+                )
+                .icon(
+                    crate::ui::icons::name::DIALOG_INFO,
+                    dialog_chrome::ModalAccent::Amber,
+                )
+                .body(&notes)
+                .action(
+                    "Later",
+                    dialog_chrome::ModalActionRole::Secondary,
+                    true,
+                    || {},
+                )
+                .action(
+                    "View Release",
+                    dialog_chrome::ModalActionRole::Ghost,
+                    false,
+                    move || {
+                        let url =
+                            format!("https://github.com/Zethrus/TerminalTiler/releases/tag/{tag}");
+                        let _ = open_path_with_shell(std::ptr::null_mut(), Path::new(&url));
+                    },
+                )
+                .action(
+                    "Install and Restart",
+                    dialog_chrome::ModalActionRole::Primary,
+                    false,
+                    move || service.download(download_release.clone()),
+                )
+                .present(Some(&window));
+            }
+            if pending_failure.borrow().is_some()
+                && let Some(window) = primary_window(&app)
+                && let Some(result) = pending_failure.borrow_mut().take()
+            {
+                dialog_chrome::present_notice(
+                    &window,
+                    "update-error-dialog",
+                    "Previous update failed",
+                    &format!(
+                        "TerminalTiler could not install {}: {}",
+                        result.version,
+                        result
+                            .error
+                            .unwrap_or_else(|| "unknown installer error".into())
+                    ),
+                );
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     fn glib_exit_to_process_exit(code: gtk::glib::ExitCode) -> ExitCode {

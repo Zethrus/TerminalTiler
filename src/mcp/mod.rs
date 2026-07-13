@@ -208,7 +208,7 @@ fn initialize_result() -> Value {
         "serverInfo": {
             "name": SERVER_NAME,
             "title": "TerminalTiler Kanban",
-            "version": env!("CARGO_PKG_VERSION")
+            "version": env!("TERMINALTILER_PACKAGE_VERSION")
         },
         "instructions": INSTRUCTIONS
     })
