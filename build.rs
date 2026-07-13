@@ -36,7 +36,6 @@ fn main() {
 
     let host = env::var("HOST").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let version_rc_path = out_dir.join("terminaltiler-version.rc");
     let res_path = out_dir.join("terminaltiler.res");
     let Some(rc_exe) = find_resource_compiler() else {
         if host.contains("windows") {
@@ -47,18 +46,11 @@ fn main() {
         );
         return;
     };
-    if let Err(error) = fs::write(
-        &version_rc_path,
-        windows_version_resource(&icon_path, &package_version),
-    ) {
-        panic!("could not write TerminalTiler Windows version resource: {error}");
-    }
-
     let status = Command::new(&rc_exe)
         .current_dir(&resource_dir)
         .arg("/nologo")
         .arg(format!("/fo{}", res_path.display()))
-        .arg(&version_rc_path)
+        .arg(&rc_path)
         .status();
 
     match status {
@@ -85,56 +77,6 @@ fn main() {
             );
         }
     }
-}
-
-fn windows_version_resource(icon_path: &Path, package_version: &str) -> String {
-    let escaped_icon_path = icon_path.display().to_string().replace('\\', "/");
-    let mut components = package_version.split('.').map(|component| {
-        component
-            .parse::<u16>()
-            .expect("PACKAGE_VERSION must be numeric")
-    });
-    let major = components
-        .next()
-        .expect("PACKAGE_VERSION must include major");
-    let minor = components
-        .next()
-        .expect("PACKAGE_VERSION must include minor");
-    let patch = components
-        .next()
-        .expect("PACKAGE_VERSION must include patch");
-    assert!(
-        components.next().is_none(),
-        "PACKAGE_VERSION must be semver"
-    );
-
-    format!(
-        r#"1 ICON "{}"
-VS_VERSION_INFO VERSIONINFO
- FILEVERSION {major},{minor},{patch},0
- PRODUCTVERSION {major},{minor},{patch},0
- FILEFLAGSMASK 0x3fL
- FILEFLAGS 0x0L
- FILEOS 0x40004L
- FILETYPE 0x1L
- FILESUBTYPE 0x0L
-BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904B0"
-        BEGIN
-            VALUE "FileVersion", "{package_version}\0"
-            VALUE "ProductVersion", "{package_version}\0"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x0409, 1200
-    END
-END
-"#,
-        escaped_icon_path
-    )
 }
 
 fn find_resource_compiler() -> Option<PathBuf> {
@@ -174,21 +116,4 @@ fn newest_windows_kit_rc(bin_root: &Path, kit_arch: &str) -> Option<PathBuf> {
         .collect::<Vec<_>>();
     candidates.sort();
     candidates.pop()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::windows_version_resource;
-    use std::path::Path;
-
-    #[test]
-    fn version_resource_embeds_the_resolved_package_version() {
-        let resource = windows_version_resource(Path::new(r"C:\icons\terminaltiler.ico"), "1.2.3");
-
-        assert!(resource.contains(r#"1 ICON "C:/icons/terminaltiler.ico""#));
-        assert!(resource.contains("FILEVERSION 1,2,3,0"));
-        assert!(resource.contains("PRODUCTVERSION 1,2,3,0"));
-        assert!(resource.contains(r#"VALUE "FileVersion", "1.2.3\0""#));
-        assert!(resource.contains(r#"VALUE "ProductVersion", "1.2.3\0""#));
-    }
 }
