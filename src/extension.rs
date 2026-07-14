@@ -62,6 +62,43 @@ pub struct RuntimeOptions {
     pub runtime_authorizer: Option<Arc<dyn RuntimeCapabilityAuthorizer>>,
 }
 
+/// Connect a companion to a host's live runtime control surface.
+///
+/// Desktop shells call this as soon as a control port exists.  The explicit
+/// host authorizer takes precedence over the legacy companion callback so API
+/// v2 hosts do not silently lose their authorization policy.
+pub fn attach_runtime_control(
+    options: &RuntimeOptions,
+    fallback_control: Arc<dyn WorkspaceControlPort>,
+) {
+    let Some(companion) = options.companion.as_ref() else {
+        return;
+    };
+    let control = options
+        .workspace_control
+        .clone()
+        .unwrap_or(fallback_control);
+    companion.attach_workspace_control(control.clone());
+    let authorizer = options
+        .runtime_authorizer
+        .clone()
+        .or_else(|| companion.runtime_authorizer());
+    if let Some(authorizer) = authorizer {
+        companion.attach_runtime_mcp(Arc::new(crate::runtime_control::RuntimeMcpService::new(
+            control, authorizer,
+        )));
+    }
+}
+
+/// Windows shells may be given a host-owned runtime port.  Unlike the Linux
+/// GTK shell they do not construct a GTK workspace-control queue themselves,
+/// but must still publish the supplied control surface to the companion.
+pub fn attach_supplied_runtime_control(options: &RuntimeOptions) {
+    if let Some(control) = options.workspace_control.clone() {
+        attach_runtime_control(options, control);
+    }
+}
+
 /// Product-specific identity supplied by a Core host or companion build.
 ///
 /// The legacy `app_id` field remains as a compatibility override. New callers
@@ -473,8 +510,8 @@ pub trait CompanionIntegration: Send + Sync {
         Vec::new()
     }
 
-    /// Called by the Core desktop after it has created the live workspace
-    /// control queue. Companions may retain the port for a private MCP/tool
+    /// Called by the Core desktop after it has connected a live workspace
+    /// control port. Companions may retain the port for a private MCP/tool
     /// router; the default implementation keeps API-1 consumers unchanged.
     fn attach_workspace_control(&self, _control: Arc<dyn WorkspaceControlPort>) {}
 
@@ -494,6 +531,122 @@ pub trait CompanionIntegration: Send + Sync {
 mod additive_api_tests {
     use super::*;
     use crate::model::preset::builtin_presets;
+    use crate::runtime_control::{
+        ActionResult, CreateTerminalTileRequest, EventRequest, EventResponse, ExecuteActionRequest,
+        FocusTileRequest, InterruptTileRequest, PrepareActionRequest, PreparedAction,
+        RuntimeControlError, RuntimeMcpService, SnapshotRequest, WorkspaceSnapshot,
+    };
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    struct DenyMutations;
+
+    impl RuntimeCapabilityAuthorizer for DenyMutations {
+        fn allows_runtime_session(&self) -> bool {
+            true
+        }
+
+        fn allows_mutation(&self) -> bool {
+            false
+        }
+    }
+
+    struct AllowMutations;
+
+    impl RuntimeCapabilityAuthorizer for AllowMutations {
+        fn allows_runtime_session(&self) -> bool {
+            true
+        }
+
+        fn allows_mutation(&self) -> bool {
+            true
+        }
+    }
+
+    struct NoopControl;
+
+    impl WorkspaceControlPort for NoopControl {
+        fn workspace_snapshot(
+            &self,
+            _request: SnapshotRequest,
+        ) -> Result<WorkspaceSnapshot, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn workspace_events(
+            &self,
+            _request: EventRequest,
+        ) -> Result<EventResponse, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn focus_tile(
+            &self,
+            _request: FocusTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn create_terminal_tile(
+            &self,
+            _request: CreateTerminalTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn prepare_terminal_action(
+            &self,
+            _request: PrepareActionRequest,
+        ) -> Result<PreparedAction, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn execute_terminal_action(
+            &self,
+            _request: ExecuteActionRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn interrupt_tile(
+            &self,
+            _request: InterruptTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingCompanion {
+        control_attached: Mutex<bool>,
+        service: Mutex<Option<Arc<RuntimeMcpService>>>,
+    }
+
+    impl CompanionIntegration for RecordingCompanion {
+        fn snapshot(&self) -> CompanionPanelSnapshot {
+            CompanionPanelSnapshot::default()
+        }
+
+        fn invoke(
+            &self,
+            _action_id: &str,
+            _input: CompanionActionInput,
+        ) -> Result<CompanionActionResult, String> {
+            Ok(CompanionActionResult::message("ok"))
+        }
+
+        fn attach_workspace_control(&self, _control: Arc<dyn WorkspaceControlPort>) {
+            *self.control_attached.lock().unwrap() = true;
+        }
+
+        fn runtime_authorizer(&self) -> Option<Arc<dyn RuntimeCapabilityAuthorizer>> {
+            Some(Arc::new(AllowMutations))
+        }
+
+        fn attach_runtime_mcp(&self, service: Arc<RuntimeMcpService>) {
+            *self.service.lock().unwrap() = Some(service);
+        }
+    }
 
     #[test]
     fn runtime_probe_reports_the_unchanged_extension_api() {
@@ -508,6 +661,29 @@ mod additive_api_tests {
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
         assert!(json.contains("\"extension_api_version\":2"));
+    }
+
+    #[test]
+    fn host_runtime_authorizer_is_attached_and_overrides_companion_fallback() {
+        let companion = Arc::new(RecordingCompanion::default());
+        let options = RuntimeOptions {
+            companion: Some(companion.clone()),
+            workspace_control: Some(Arc::new(NoopControl)),
+            runtime_authorizer: Some(Arc::new(DenyMutations)),
+            ..RuntimeOptions::default()
+        };
+
+        attach_supplied_runtime_control(&options);
+
+        assert!(*companion.control_attached.lock().unwrap());
+        let service = companion.service.lock().unwrap().clone().unwrap();
+        assert!(matches!(
+            service.call(
+                "focus_tile",
+                json!({ "workspace_id": "workspace:test", "tile_id": "tile-1" })
+            ),
+            Err(RuntimeControlError::Unauthorized)
+        ));
     }
 
     #[test]

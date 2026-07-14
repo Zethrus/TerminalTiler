@@ -85,6 +85,7 @@ struct WorkspaceRuntimeInner {
     focused_web_tile_id: RefCell<Option<String>>,
     maximized_tile: RefCell<Option<String>>,
     maximized_hidden: RefCell<Vec<gtk::Widget>>,
+    workspace_revision: Rc<Cell<u64>>,
 }
 
 #[derive(Clone)]
@@ -215,6 +216,20 @@ impl WorkspaceRuntime {
         format!("workspace:{}", self.inner.workspace_root.display())
     }
 
+    pub fn workspace_revision(&self) -> u64 {
+        self.inner.workspace_revision.get()
+    }
+
+    pub fn record_runtime_mutation(&self) -> u64 {
+        let revision = self.inner.workspace_revision.get().wrapping_add(1);
+        self.inner.workspace_revision.set(revision);
+        revision
+    }
+
+    fn bump_workspace_revision(&self) -> u64 {
+        self.record_runtime_mutation()
+    }
+
     pub fn runtime_snapshot(&self, request: SnapshotRequest) -> WorkspaceSnapshot {
         let visual_order = self
             .inner
@@ -278,7 +293,7 @@ impl WorkspaceRuntime {
         WorkspaceSnapshot {
             schema_version: crate::runtime_control::RUNTIME_SCHEMA_VERSION,
             workspace_id: self.workspace_id(),
-            workspace_revision: 0,
+            workspace_revision: self.workspace_revision(),
             generated_at_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -306,7 +321,11 @@ impl WorkspaceRuntime {
     }
 
     pub fn interrupt_tile(&self, tile_id: &str) -> bool {
-        self.send_text_to_tile_with_submit(tile_id, "\u{3}", false)
+        let interrupted = self.send_text_to_tile_with_submit(tile_id, "\u{3}", false);
+        if interrupted {
+            self.record_runtime_mutation();
+        }
+        interrupted
     }
 
     pub fn alert_store(&self) -> AlertStore {
@@ -378,6 +397,7 @@ impl WorkspaceRuntime {
         if let Some((tile_id, is_web_tile, session, web_view, widget)) = tile_target {
             self.restore_maximized_tile_if_different(&tile_id);
             self.set_focused_tile(Some(tile_id.clone()), is_web_tile);
+            self.bump_workspace_revision();
             if let Some(session) = &session {
                 session.widget().grab_focus();
             } else if let Some(web_view) = &web_view {
@@ -447,6 +467,7 @@ impl WorkspaceRuntime {
         }
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.bump_workspace_revision();
         (self.inner.on_layout_changed)(next_layout);
         true
     }
@@ -520,6 +541,7 @@ impl WorkspaceRuntime {
             });
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.bump_workspace_revision();
         *self.inner.focused_tile_id.borrow_mut() = next_focused_tile;
         *self.inner.focused_web_tile_id.borrow_mut() = next_focused_web_tile;
         self.replace_layout_shell(&next_layout);
@@ -747,6 +769,7 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.bump_workspace_revision();
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
         self.set_focused_tile(Some(new_tile_id.clone()), true);
@@ -765,11 +788,18 @@ impl WorkspaceRuntime {
                 .map(|tile| tile.tile.id.clone())
         })?;
 
+        self.add_terminal_tile_at(&target_tile_id, SplitAxis::Horizontal)
+    }
+
+    /// Inserts a terminal beside the requested tile.  Runtime control uses
+    /// this rather than the UI convenience method so its split target and
+    /// axis are honored exactly.
+    pub fn add_terminal_tile_at(&self, target_tile_id: &str, axis: SplitAxis) -> Option<String> {
         let current_layout = self.inner.layout.borrow().clone();
         let (next_layout, new_tile_id) = split_tile_with_kind(
             &current_layout,
-            &target_tile_id,
-            SplitAxis::Horizontal,
+            target_tile_id,
+            axis,
             false,
             TileKind::Terminal,
         )?;
@@ -795,6 +825,7 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.bump_workspace_revision();
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
         self.set_focused_tile(Some(new_tile_id.clone()), false);
@@ -1154,18 +1185,21 @@ impl WorkspaceRuntime {
             layout.clone()
         };
         (self.inner.on_layout_changed)(next_layout);
+        self.bump_workspace_revision();
         true
     }
 
     fn replace_layout_shell(&self, layout: &LayoutNode) {
         let layout_state = self.inner.layout.clone();
         let on_layout_changed = self.inner.on_layout_changed.clone();
+        let workspace_revision = self.inner.workspace_revision.clone();
         let layout_shell = layout_tree::build(
             layout,
             Some(Rc::new(move |split_path, ratio| {
                 let current = layout_state.borrow().clone();
                 if let Some(next_layout) = update_split_ratio(&current, &split_path, ratio) {
                     *layout_state.borrow_mut() = next_layout.clone();
+                    workspace_revision.set(workspace_revision.get().wrapping_add(1));
                     on_layout_changed(next_layout);
                 }
             })),
@@ -1344,6 +1378,7 @@ pub fn build_with_layout_change_handler(
             focused_web_tile_id: RefCell::new(None),
             maximized_tile: RefCell::new(None),
             maximized_hidden: RefCell::new(Vec::new()),
+            workspace_revision: Rc::new(Cell::new(0)),
         }),
     };
     runtime.rebuild_from_layout();

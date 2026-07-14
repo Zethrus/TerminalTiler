@@ -6,6 +6,7 @@
 //! only typed contracts and deterministic policy helpers; Pro-specific
 //! licensing, provider clients, and conversation logic stay outside Core.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -227,7 +228,7 @@ pub struct PrepareActionRequest {
     pub expected_revision: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PreparedAction {
     pub action_id: ActionId,
     pub workspace_id: WorkspaceId,
@@ -238,6 +239,71 @@ pub struct PreparedAction {
     pub confirmation: ConfirmationRequirement,
     pub expires_at_unix_ms: u128,
     pub workspace_revision: u64,
+    /// Kept only in the desktop process.  A command hash is useful for
+    /// display/auditing, but must never double as a confirmation secret: the
+    /// caller already knows it at prepare time.
+    #[serde(skip)]
+    confirmation_nonce: String,
+}
+
+impl PreparedAction {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        action_id: ActionId,
+        workspace_id: WorkspaceId,
+        tile_id: TileId,
+        command_hash: String,
+        display_command: String,
+        risk: ActionRisk,
+        confirmation: ConfirmationRequirement,
+        expires_at_unix_ms: u128,
+        workspace_revision: u64,
+    ) -> Self {
+        Self {
+            action_id,
+            workspace_id,
+            tile_id,
+            command_hash,
+            display_command,
+            risk,
+            confirmation,
+            expires_at_unix_ms,
+            workspace_revision,
+            // UUID v4 is backed by the operating system CSPRNG.  This value
+            // is intentionally omitted from the serialized prepare response.
+            confirmation_nonce: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    pub fn confirmation_matches(&self, token: Option<&str>) -> bool {
+        matches!(self.confirmation, ConfirmationRequirement::None)
+            || token.is_some_and(|token| token == self.confirmation_nonce)
+    }
+
+    /// Only desktop-owned UI code may reveal this value to a person.  It is
+    /// deliberately crate-private so companion crates cannot turn preparing
+    /// an action into automatic confirmation.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub(crate) fn confirmation_nonce(&self) -> &str {
+        &self.confirmation_nonce
+    }
+}
+
+impl std::fmt::Debug for PreparedAction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedAction")
+            .field("action_id", &self.action_id)
+            .field("workspace_id", &self.workspace_id)
+            .field("tile_id", &self.tile_id)
+            .field("command_hash", &self.command_hash)
+            .field("display_command", &self.display_command)
+            .field("risk", &self.risk)
+            .field("confirmation", &self.confirmation)
+            .field("expires_at_unix_ms", &self.expires_at_unix_ms)
+            .field("workspace_revision", &self.workspace_revision)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -354,7 +420,12 @@ pub enum RuntimeOperation {
 struct QueuedRequest {
     operation: RuntimeOperation,
     response: mpsc::SyncSender<Result<Value, RuntimeControlError>>,
+    lifecycle: Arc<AtomicU8>,
 }
+
+const REQUEST_PENDING: u8 = 0;
+const REQUEST_DISPATCHING: u8 = 1;
+const REQUEST_CANCELLED: u8 = 2;
 
 /// A bounded cross-thread request queue. The desktop drains this queue from
 /// the GTK main loop and executes operations against `WorkspaceRuntime`, while
@@ -393,6 +464,21 @@ impl WorkspaceControlQueue {
             let Ok(request) = receiver.try_recv() else {
                 break;
             };
+            // A caller that timed out cancels while the request is still
+            // pending.  Never dispatch a cancelled operation later: this is
+            // especially important for terminal execution requests.
+            if request
+                .lifecycle
+                .compare_exchange(
+                    REQUEST_PENDING,
+                    REQUEST_DISPATCHING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err()
+            {
+                continue;
+            }
             let result = handler(request.operation);
             let _ = request.response.send(result);
             drained += 1;
@@ -407,18 +493,54 @@ struct QueuedWorkspaceControl {
 
 impl QueuedWorkspaceControl {
     fn call(&self, operation: RuntimeOperation) -> Result<Value, RuntimeControlError> {
+        self.call_with_timeout(operation, Duration::from_secs(5))
+    }
+
+    fn call_with_timeout(
+        &self,
+        operation: RuntimeOperation,
+        timeout: Duration,
+    ) -> Result<Value, RuntimeControlError> {
         let (response_tx, response_rx) = mpsc::sync_channel(1);
+        let lifecycle = Arc::new(AtomicU8::new(REQUEST_PENDING));
         self.sender
             .send(QueuedRequest {
                 operation,
                 response: response_tx,
+                lifecycle: lifecycle.clone(),
             })
             .map_err(|_| {
                 RuntimeControlError::Internal("workspace control is unavailable".into())
             })?;
-        response_rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| RuntimeControlError::Internal("workspace control timed out".into()))?
+        match response_rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if lifecycle
+                    .compare_exchange(
+                        REQUEST_PENDING,
+                        REQUEST_CANCELLED,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    Err(RuntimeControlError::Internal(
+                        "workspace control timed out".into(),
+                    ))
+                } else {
+                    // The GTK thread acquired this request just before the
+                    // deadline.  Wait for its authoritative result rather
+                    // than telling the caller it failed and executing it
+                    // later in the background.
+                    response_rx.recv().map_err(|_| {
+                        RuntimeControlError::Internal("workspace control is unavailable".into())
+                    })?
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RuntimeControlError::Internal(
+                "workspace control is unavailable".into(),
+            )),
+        }
     }
 }
 
@@ -530,11 +652,17 @@ impl RuntimeMcpService {
                 result_value(self.control.workspace_events(request))
             }
             "focus_tile" => {
+                if !self.authorizer.allows_mutation() {
+                    return Err(RuntimeControlError::Unauthorized);
+                }
                 let request: FocusTileRequest = serde_json::from_value(arguments)
                     .map_err(|error| RuntimeControlError::InvalidRequest(error.to_string()))?;
                 result_value(self.control.focus_tile(request))
             }
             "create_terminal_tile" => {
+                if !self.authorizer.allows_mutation() {
+                    return Err(RuntimeControlError::Unauthorized);
+                }
                 let request: CreateTerminalTileRequest = serde_json::from_value(arguments)
                     .map_err(|error| RuntimeControlError::InvalidRequest(error.to_string()))?;
                 result_value(self.control.create_terminal_tile(request))
@@ -603,22 +731,41 @@ pub fn classify_command(command: &str) -> ActionRisk {
         return ActionRisk::Destructive;
     }
     if [
-        "git pull",
-        "git checkout",
-        "git commit",
-        "npm install",
-        "cargo test",
-        "cargo build",
-        "make",
-        "docker run",
-        "docker compose",
+        "rm ",
+        "rmdir ",
+        "git reset --hard",
+        "git clean",
+        "wipefs",
+        "format ",
     ]
     .iter()
     .any(|pattern| normalized.starts_with(pattern))
     {
-        return ActionRisk::Mutating;
+        return ActionRisk::Destructive;
     }
-    ActionRisk::ReadOnly
+    if [
+        "ls",
+        "pwd",
+        "whoami",
+        "id",
+        "git status",
+        "git log",
+        "git diff",
+        "git show",
+        "docker ps",
+        "docker images",
+        "cargo metadata",
+        "cargo tree",
+    ]
+    .iter()
+    .any(|command| normalized == *command || normalized.starts_with(&format!("{command} ")))
+    {
+        return ActionRisk::ReadOnly;
+    }
+    // The shell surface is open-ended.  Treat every command that is not on
+    // the small, argument-safe read-only allowlist as mutating so it requires
+    // user confirmation rather than silently expanding a dangerous allowlist.
+    ActionRisk::Mutating
 }
 
 fn contains_shell_metacharacter(command: &str) -> bool {
@@ -689,6 +836,110 @@ fn now_unix_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    struct ReadOnlyAuthorizer;
+
+    impl RuntimeCapabilityAuthorizer for ReadOnlyAuthorizer {
+        fn allows_runtime_session(&self) -> bool {
+            true
+        }
+
+        fn allows_mutation(&self) -> bool {
+            false
+        }
+    }
+
+    struct CountingControl {
+        calls: AtomicUsize,
+    }
+
+    impl CountingControl {
+        fn called(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+
+        fn record(&self) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl WorkspaceControlPort for CountingControl {
+        fn workspace_snapshot(
+            &self,
+            _request: SnapshotRequest,
+        ) -> Result<WorkspaceSnapshot, RuntimeControlError> {
+            self.record();
+            Ok(WorkspaceSnapshot::new("workspace:test".into(), 0))
+        }
+
+        fn workspace_events(
+            &self,
+            _request: EventRequest,
+        ) -> Result<EventResponse, RuntimeControlError> {
+            self.record();
+            Ok(EventResponse {
+                workspace_id: "workspace:test".into(),
+                next_cursor: 0,
+                events: Vec::new(),
+            })
+        }
+
+        fn focus_tile(
+            &self,
+            _request: FocusTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            self.record();
+            Ok(ActionResult {
+                workspace_revision: 0,
+                message: String::new(),
+            })
+        }
+
+        fn create_terminal_tile(
+            &self,
+            _request: CreateTerminalTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            self.record();
+            Ok(ActionResult {
+                workspace_revision: 0,
+                message: String::new(),
+            })
+        }
+
+        fn prepare_terminal_action(
+            &self,
+            _request: PrepareActionRequest,
+        ) -> Result<PreparedAction, RuntimeControlError> {
+            self.record();
+            Err(RuntimeControlError::Internal(
+                "not used by this test".into(),
+            ))
+        }
+
+        fn execute_terminal_action(
+            &self,
+            _request: ExecuteActionRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            self.record();
+            Ok(ActionResult {
+                workspace_revision: 0,
+                message: String::new(),
+            })
+        }
+
+        fn interrupt_tile(
+            &self,
+            _request: InterruptTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            self.record();
+            Ok(ActionResult {
+                workspace_revision: 0,
+                message: String::new(),
+            })
+        }
+    }
 
     #[test]
     fn shell_metacharacters_fail_closed() {
@@ -706,6 +957,85 @@ mod tests {
     fn ordinary_read_only_and_mutating_commands_are_distinguished() {
         assert_eq!(classify_command("docker ps"), ActionRisk::ReadOnly);
         assert_eq!(classify_command("git pull"), ActionRisk::Mutating);
+        assert_eq!(
+            classify_command("curl -o output https://x"),
+            ActionRisk::Mutating
+        );
+        assert_eq!(
+            classify_command("rm important-file"),
+            ActionRisk::Destructive
+        );
+    }
+
+    #[test]
+    fn tile_focus_and_creation_require_mutation_capability() {
+        let control = Arc::new(CountingControl {
+            calls: AtomicUsize::new(0),
+        });
+        let service = RuntimeMcpService::new(control.clone(), Arc::new(ReadOnlyAuthorizer));
+
+        let focus = service.call(
+            "focus_tile",
+            json!({ "workspace_id": "workspace:test", "tile_id": "tile-1" }),
+        );
+        let create = service.call(
+            "create_terminal_tile",
+            json!({
+                "workspace_id": "workspace:test",
+                "axis": "horizontal"
+            }),
+        );
+
+        assert!(matches!(focus, Err(RuntimeControlError::Unauthorized)));
+        assert!(matches!(create, Err(RuntimeControlError::Unauthorized)));
+        assert_eq!(control.called(), 0);
+    }
+
+    #[test]
+    fn confirmation_nonce_is_not_the_returned_command_hash() {
+        let action = PreparedAction::new(
+            "action-1".into(),
+            "workspace:test".into(),
+            "tile-1".into(),
+            "known-command-hash".into(),
+            "git pull".into(),
+            ActionRisk::Mutating,
+            ConfirmationRequirement::ExactAction,
+            now_unix_ms() + 30_000,
+            7,
+        );
+
+        let serialized = serde_json::to_value(&action).unwrap();
+        assert!(serialized.get("confirmation_nonce").is_none());
+        assert!(!action.confirmation_matches(Some("known-command-hash")));
+        assert!(!action.confirmation_matches(None));
+    }
+
+    #[test]
+    fn timed_out_queue_requests_are_cancelled_before_dispatch() {
+        let (queue, _) = WorkspaceControlQueue::new();
+        let control = QueuedWorkspaceControl {
+            sender: queue.sender.clone(),
+        };
+        let result = thread::spawn(move || {
+            control.call_with_timeout(
+                RuntimeOperation::Snapshot(SnapshotRequest::default()),
+                Duration::from_millis(10),
+            )
+        })
+        .join()
+        .unwrap();
+
+        assert!(
+            matches!(result, Err(RuntimeControlError::Internal(message)) if message == "workspace control timed out")
+        );
+        let handled = Arc::new(AtomicUsize::new(0));
+        let handled_for_drain = handled.clone();
+        queue.drain(1, move |_| {
+            handled_for_drain.fetch_add(1, Ordering::Relaxed);
+            Ok(json!({}))
+        });
+        assert_eq!(handled.load(Ordering::Relaxed), 0);
     }
 
     #[test]

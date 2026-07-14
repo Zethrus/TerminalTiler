@@ -22,7 +22,7 @@ use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::runtime_control::{
     ActionResult, EventResponse, PreparedAction, RuntimeControlError, RuntimeOperation,
-    WorkspaceControlQueue, classify_command, confirmation_for,
+    SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue, classify_command, confirmation_for,
 };
 use crate::services::agent_resume::{
     RestoreStartupOverrideMap, initial_startup_overrides_for_tiles,
@@ -887,20 +887,7 @@ pub fn present(
     options: RuntimeOptions,
 ) {
     let (runtime_control_queue, runtime_control_port) = WorkspaceControlQueue::new();
-    if let Some(companion) = options.companion.as_ref() {
-        companion.attach_workspace_control(runtime_control_port.clone());
-        if let Some(authorizer) = companion.runtime_authorizer() {
-            companion.attach_runtime_mcp(std::sync::Arc::new(
-                crate::runtime_control::RuntimeMcpService::new(
-                    options
-                        .workspace_control
-                        .clone()
-                        .unwrap_or(runtime_control_port),
-                    authorizer,
-                ),
-            ));
-        }
-    }
+    crate::extension::attach_runtime_control(&options, runtime_control_port);
     present_with_initial_workspace(
         app,
         preference_store,
@@ -917,6 +904,7 @@ pub fn present(
 }
 
 fn dispatch_runtime_operation(
+    window: &adw::ApplicationWindow,
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     prepared: &Rc<RefCell<HashMap<String, PreparedAction>>>,
@@ -946,36 +934,44 @@ fn dispatch_runtime_operation(
             .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
         RuntimeOperation::Focus(request) => {
-            ensure_revision(request.expected_revision, 0)?;
+            ensure_revision(request.expected_revision, runtime.workspace_revision())?;
             if request.workspace_id != runtime.workspace_id()
                 || !runtime.focus_tile(&request.tile_id)
             {
                 return Err(RuntimeControlError::NotFound(request.tile_id));
             }
             serde_json::to_value(ActionResult {
-                workspace_revision: 0,
+                workspace_revision: runtime.workspace_revision(),
                 message: format!("Focused tile {}.", request.tile_id),
             })
             .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
         RuntimeOperation::Create(request) => {
-            ensure_revision(request.expected_revision, 0)?;
+            ensure_revision(request.expected_revision, runtime.workspace_revision())?;
             if request.workspace_id != runtime.workspace_id() {
                 return Err(RuntimeControlError::NotFound(request.workspace_id));
             }
-            let Some(tile_id) = runtime.add_terminal_tile() else {
+            let target_tile_id = request
+                .split_target
+                .or_else(|| runtime.focused_tile_id())
+                .ok_or_else(|| RuntimeControlError::NotFound("no split target".into()))?;
+            let axis = match request.axis {
+                RuntimeSplitAxis::Horizontal => crate::model::layout::SplitAxis::Horizontal,
+                RuntimeSplitAxis::Vertical => crate::model::layout::SplitAxis::Vertical,
+            };
+            let Some(tile_id) = runtime.add_terminal_tile_at(&target_tile_id, axis) else {
                 return Err(RuntimeControlError::Internal(
                     "could not create a terminal tile".into(),
                 ));
             };
             serde_json::to_value(ActionResult {
-                workspace_revision: 0,
+                workspace_revision: runtime.workspace_revision(),
                 message: format!("Created and focused tile {tile_id}."),
             })
             .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
         RuntimeOperation::Prepare(request) => {
-            ensure_revision(request.expected_revision, 0)?;
+            ensure_revision(request.expected_revision, runtime.workspace_revision())?;
             if request.workspace_id != runtime.workspace_id()
                 || !runtime
                     .tile_specs()
@@ -991,21 +987,21 @@ fn dispatch_runtime_operation(
             }
             let risk = classify_command(&request.command);
             let command_hash = format!("{:x}", Sha256::digest(request.command.as_bytes()));
-            let action = PreparedAction {
-                action_id: uuid::Uuid::new_v4().to_string(),
-                workspace_id: request.workspace_id,
-                tile_id: request.tile_id,
-                command_hash: command_hash.clone(),
-                display_command: request.command,
+            let action = PreparedAction::new(
+                uuid::Uuid::new_v4().to_string(),
+                request.workspace_id,
+                request.tile_id,
+                command_hash,
+                request.command,
                 risk,
-                confirmation: confirmation_for(risk),
-                expires_at_unix_ms: std::time::SystemTime::now()
+                confirmation_for(risk),
+                std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis()
                     + 30_000,
-                workspace_revision: 0,
-            };
+                runtime.workspace_revision(),
+            );
             prepared
                 .borrow_mut()
                 .insert(action.action_id.clone(), action.clone());
@@ -1023,11 +1019,20 @@ fn dispatch_runtime_operation(
             if now >= action.expires_at_unix_ms {
                 return Err(RuntimeControlError::ExpiredAction);
             }
-            if !matches!(
+            ensure_revision(
+                Some(action.workspace_revision),
+                runtime.workspace_revision(),
+            )?;
+            // Never accept a provider-supplied token as proof of user consent.
+            // The desktop presents the command and its one-time nonce directly
+            // to the user, then validates what they type locally.
+            let confirmation_token = (!matches!(
                 action.confirmation,
                 crate::runtime_control::ConfirmationRequirement::None
-            ) && request.confirmation_token.as_deref() != Some(action.command_hash.as_str())
-            {
+            ))
+            .then(|| confirm_runtime_action(window, &action))
+            .flatten();
+            if !action.confirmation_matches(confirmation_token.as_deref()) {
                 return Err(RuntimeControlError::ConfirmationRequired);
             }
             if action.workspace_id != runtime.workspace_id()
@@ -1039,26 +1044,95 @@ fn dispatch_runtime_operation(
             {
                 return Err(RuntimeControlError::NotFound(action.tile_id));
             }
+            runtime.record_runtime_mutation();
             serde_json::to_value(ActionResult {
-                workspace_revision: 0,
+                workspace_revision: runtime.workspace_revision(),
                 message: "Terminal action submitted.".into(),
             })
             .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
         RuntimeOperation::Interrupt(request) => {
-            ensure_revision(request.expected_revision, 0)?;
+            ensure_revision(request.expected_revision, runtime.workspace_revision())?;
             if request.workspace_id != runtime.workspace_id()
                 || !runtime.interrupt_tile(&request.tile_id)
             {
                 return Err(RuntimeControlError::NotFound(request.tile_id));
             }
             serde_json::to_value(ActionResult {
-                workspace_revision: 0,
+                workspace_revision: runtime.workspace_revision(),
                 message: "Interrupt sent to tile.".into(),
             })
             .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
     }
+}
+
+fn confirm_runtime_action(
+    window: &adw::ApplicationWindow,
+    action: &PreparedAction,
+) -> Option<String> {
+    let dialog = gtk::Dialog::builder()
+        .transient_for(window)
+        .modal(true)
+        .title("Confirm terminal action")
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Execute", gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_spacing(12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+    content.append(
+        &gtk::Label::builder()
+            .label("A runtime companion requested this terminal action:")
+            .xalign(0.0)
+            .wrap(true)
+            .build(),
+    );
+    content.append(
+        &gtk::Label::builder()
+            .label(&action.display_command)
+            .xalign(0.0)
+            .wrap(true)
+            .selectable(true)
+            .css_classes(["monospace"])
+            .build(),
+    );
+    content.append(
+        &gtk::Label::builder()
+            .label(&format!(
+                "Type this one-time confirmation nonce to execute: {}",
+                action.confirmation_nonce()
+            ))
+            .xalign(0.0)
+            .wrap(true)
+            .build(),
+    );
+    let entry = gtk::Entry::builder()
+        .placeholder_text("Confirmation nonce")
+        .hexpand(true)
+        .build();
+    content.append(&entry);
+
+    let response = Rc::new(RefCell::new(None::<String>));
+    let response_for_signal = response.clone();
+    let entry_for_signal = entry.clone();
+    let nested_loop = glib::MainLoop::new(None, false);
+    let nested_loop_for_signal = nested_loop.clone();
+    dialog.connect_response(move |dialog, response_id| {
+        if response_id == gtk::ResponseType::Accept {
+            *response_for_signal.borrow_mut() = Some(entry_for_signal.text().to_string());
+        }
+        dialog.close();
+        nested_loop_for_signal.quit();
+    });
+    dialog.present();
+    entry.grab_focus();
+    nested_loop.run();
+    response.borrow_mut().take()
 }
 
 fn ensure_revision(expected: Option<u64>, actual: u64) -> Result<(), RuntimeControlError> {
@@ -1177,9 +1251,16 @@ fn present_with_initial_workspace(
         let tabs = tabs.clone();
         let active_tab_id = active_tab_id.clone();
         let prepared = prepared_runtime_actions.clone();
+        let window = window.clone();
         glib::timeout_add_local(Duration::from_millis(50), move || {
             queue.drain(16, |operation| {
-                dispatch_runtime_operation(&tabs, active_tab_id.get(), &prepared, operation)
+                dispatch_runtime_operation(
+                    &window,
+                    &tabs,
+                    active_tab_id.get(),
+                    &prepared,
+                    operation,
+                )
             });
             glib::ControlFlow::Continue
         });
