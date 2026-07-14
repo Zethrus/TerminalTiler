@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use adw::prelude::*;
 use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
+use sha2::{Digest, Sha256};
 
 use crate::extension::RuntimeOptions;
 use crate::gtk_shell;
@@ -19,6 +20,10 @@ use crate::model::assets::RestoreLaunchMode;
 use crate::model::board::Board;
 use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::runtime_control::{
+    ActionResult, EventResponse, PreparedAction, RuntimeControlError, RuntimeOperation,
+    WorkspaceControlQueue, classify_command, confirmation_for,
+};
 use crate::services::agent_resume::{
     RestoreStartupOverrideMap, initial_startup_overrides_for_tiles,
     restore_startup_overrides_for_saved_tab,
@@ -881,6 +886,21 @@ pub fn present(
     tray_controller: TrayController,
     options: RuntimeOptions,
 ) {
+    let (runtime_control_queue, runtime_control_port) = WorkspaceControlQueue::new();
+    if let Some(companion) = options.companion.as_ref() {
+        companion.attach_workspace_control(runtime_control_port.clone());
+        if let Some(authorizer) = companion.runtime_authorizer() {
+            companion.attach_runtime_mcp(std::sync::Arc::new(
+                crate::runtime_control::RuntimeMcpService::new(
+                    options
+                        .workspace_control
+                        .clone()
+                        .unwrap_or(runtime_control_port),
+                    authorizer,
+                ),
+            ));
+        }
+    }
     present_with_initial_workspace(
         app,
         preference_store,
@@ -891,8 +911,163 @@ pub fn present(
         startup_warning,
         tray_controller,
         options,
+        runtime_control_queue,
         None,
     );
+}
+
+fn dispatch_runtime_operation(
+    tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
+    active_tab_id: usize,
+    prepared: &Rc<RefCell<HashMap<String, PreparedAction>>>,
+    operation: RuntimeOperation,
+) -> Result<serde_json::Value, RuntimeControlError> {
+    let runtime = active_workspace_runtime(tabs, active_tab_id)
+        .ok_or_else(|| RuntimeControlError::NotFound("no focused workspace".into()))?;
+    match operation {
+        RuntimeOperation::Snapshot(request) => {
+            if let Some(workspace_id) = request.workspace_id.as_deref()
+                && workspace_id != runtime.workspace_id()
+            {
+                return Err(RuntimeControlError::NotFound(workspace_id.to_string()));
+            }
+            serde_json::to_value(runtime.runtime_snapshot(request))
+                .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Events(request) => {
+            if request.workspace_id != runtime.workspace_id() {
+                return Err(RuntimeControlError::NotFound(request.workspace_id));
+            }
+            serde_json::to_value(EventResponse {
+                workspace_id: runtime.workspace_id(),
+                next_cursor: request.after_cursor,
+                events: Vec::new(),
+            })
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Focus(request) => {
+            ensure_revision(request.expected_revision, 0)?;
+            if request.workspace_id != runtime.workspace_id()
+                || !runtime.focus_tile(&request.tile_id)
+            {
+                return Err(RuntimeControlError::NotFound(request.tile_id));
+            }
+            serde_json::to_value(ActionResult {
+                workspace_revision: 0,
+                message: format!("Focused tile {}.", request.tile_id),
+            })
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Create(request) => {
+            ensure_revision(request.expected_revision, 0)?;
+            if request.workspace_id != runtime.workspace_id() {
+                return Err(RuntimeControlError::NotFound(request.workspace_id));
+            }
+            let Some(tile_id) = runtime.add_terminal_tile() else {
+                return Err(RuntimeControlError::Internal(
+                    "could not create a terminal tile".into(),
+                ));
+            };
+            serde_json::to_value(ActionResult {
+                workspace_revision: 0,
+                message: format!("Created and focused tile {tile_id}."),
+            })
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Prepare(request) => {
+            ensure_revision(request.expected_revision, 0)?;
+            if request.workspace_id != runtime.workspace_id()
+                || !runtime
+                    .tile_specs()
+                    .iter()
+                    .any(|tile| tile.id == request.tile_id)
+            {
+                return Err(RuntimeControlError::NotFound(request.tile_id));
+            }
+            if request.command.trim().len() > 4096 || request.command.trim().is_empty() {
+                return Err(RuntimeControlError::InvalidRequest(
+                    "command must contain 1-4096 non-whitespace bytes".into(),
+                ));
+            }
+            let risk = classify_command(&request.command);
+            let command_hash = format!("{:x}", Sha256::digest(request.command.as_bytes()));
+            let action = PreparedAction {
+                action_id: uuid::Uuid::new_v4().to_string(),
+                workspace_id: request.workspace_id,
+                tile_id: request.tile_id,
+                command_hash: command_hash.clone(),
+                display_command: request.command,
+                risk,
+                confirmation: confirmation_for(risk),
+                expires_at_unix_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+                    + 30_000,
+                workspace_revision: 0,
+            };
+            prepared
+                .borrow_mut()
+                .insert(action.action_id.clone(), action.clone());
+            serde_json::to_value(action)
+                .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Execute(request) => {
+            let Some(action) = prepared.borrow_mut().remove(&request.action_id) else {
+                return Err(RuntimeControlError::NotFound(request.action_id));
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            if now >= action.expires_at_unix_ms {
+                return Err(RuntimeControlError::ExpiredAction);
+            }
+            if !matches!(
+                action.confirmation,
+                crate::runtime_control::ConfirmationRequirement::None
+            ) && request.confirmation_token.as_deref() != Some(action.command_hash.as_str())
+            {
+                return Err(RuntimeControlError::ConfirmationRequired);
+            }
+            if action.workspace_id != runtime.workspace_id()
+                || !runtime.send_text_to_tile_with_submit(
+                    &action.tile_id,
+                    &action.display_command,
+                    true,
+                )
+            {
+                return Err(RuntimeControlError::NotFound(action.tile_id));
+            }
+            serde_json::to_value(ActionResult {
+                workspace_revision: 0,
+                message: "Terminal action submitted.".into(),
+            })
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+        RuntimeOperation::Interrupt(request) => {
+            ensure_revision(request.expected_revision, 0)?;
+            if request.workspace_id != runtime.workspace_id()
+                || !runtime.interrupt_tile(&request.tile_id)
+            {
+                return Err(RuntimeControlError::NotFound(request.tile_id));
+            }
+            serde_json::to_value(ActionResult {
+                workspace_revision: 0,
+                message: "Interrupt sent to tile.".into(),
+            })
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+        }
+    }
+}
+
+fn ensure_revision(expected: Option<u64>, actual: u64) -> Result<(), RuntimeControlError> {
+    if let Some(expected) = expected
+        && expected != actual
+    {
+        return Err(RuntimeControlError::RevisionConflict { expected, actual });
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -906,6 +1081,7 @@ fn present_with_initial_workspace(
     startup_warning: Option<String>,
     tray_controller: TrayController,
     options: RuntimeOptions,
+    runtime_control_queue: std::sync::Arc<WorkspaceControlQueue>,
     initial_workspace_tab: Option<WorkspaceTab>,
 ) {
     let preference_store = Rc::new(preference_store);
@@ -994,6 +1170,20 @@ fn present_with_initial_workspace(
     let tabs = Rc::new(RefCell::new(Vec::<WorkspaceTab>::new()));
     let next_tab_id = Rc::new(Cell::new(1usize));
     let active_tab_id = Rc::new(Cell::new(0usize));
+    let prepared_runtime_actions = Rc::new(RefCell::new(HashMap::<String, PreparedAction>::new()));
+
+    {
+        let queue = runtime_control_queue.clone();
+        let tabs = tabs.clone();
+        let active_tab_id = active_tab_id.clone();
+        let prepared = prepared_runtime_actions.clone();
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            queue.drain(16, |operation| {
+                dispatch_runtime_operation(&tabs, active_tab_id.get(), &prepared, operation)
+            });
+            glib::ControlFlow::Continue
+        });
+    }
     let select_tab: SelectTabHandle = Rc::new(RefCell::new(None));
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
@@ -2132,6 +2322,7 @@ fn present_with_initial_workspace(
         let session_store_for_detach = session_store.clone();
         let tray_controller_for_detach = tray_controller.clone();
         let options_for_detach = options.clone();
+        let runtime_control_queue_for_detach = runtime_control_queue.clone();
         let toast_overlay_for_detach = toast_overlay.clone();
 
         *detach_tab.borrow_mut() = Some(Box::new(move |tab_id| {
@@ -2166,6 +2357,7 @@ fn present_with_initial_workspace(
                 &session_store_for_detach,
                 &tray_controller_for_detach,
                 options_for_detach.clone(),
+                runtime_control_queue_for_detach.clone(),
             );
         }));
     }
@@ -6337,6 +6529,7 @@ fn present_detached_workspace_window(
     session_store: &SessionStore,
     tray_controller: &TrayController,
     options: RuntimeOptions,
+    runtime_control_queue: std::sync::Arc<WorkspaceControlQueue>,
 ) {
     let window_id = NEXT_LINUX_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let origin_window_id = payload.origin_window_id;
@@ -6441,6 +6634,7 @@ fn present_detached_workspace_window(
         let session_store_for_reattach = session_store.clone();
         let tray_controller_for_reattach = tray_controller.clone();
         let options_for_reattach = options.clone();
+        let runtime_control_queue_for_reattach = runtime_control_queue.clone();
         let do_reattach = Rc::new(move || {
             let tab = tabs_for_reattach.borrow_mut().pop();
             let Some(tab) = tab else {
@@ -6467,6 +6661,7 @@ fn present_detached_workspace_window(
                     None,
                     tray_controller_for_reattach.clone(),
                     options_for_reattach.clone(),
+                    runtime_control_queue_for_reattach.clone(),
                     Some(tab),
                 );
             }

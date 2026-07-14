@@ -7,11 +7,12 @@ use serde::Serialize;
 use crate::model::assets::{AgentRoleTemplate, CliSnippet, Runbook};
 use crate::model::preset::WorkspacePreset;
 use crate::product;
+use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 1;
+pub const CORE_EXTENSION_API_VERSION: u32 = 2;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -53,6 +54,12 @@ pub struct RuntimeOptions {
     pub product: ProductInfo,
     pub companion: Option<Arc<dyn CompanionIntegration>>,
     pub catalog: Option<Arc<dyn CatalogContributionProvider>>,
+    /// Optional live workspace control supplied by the desktop host.
+    ///
+    /// Core keeps this product-neutral. A paid companion must also provide a
+    /// capability authorizer before mutation tools are exposed.
+    pub workspace_control: Option<Arc<dyn WorkspaceControlPort>>,
+    pub runtime_authorizer: Option<Arc<dyn RuntimeCapabilityAuthorizer>>,
 }
 
 /// Product-specific identity supplied by a Core host or companion build.
@@ -465,6 +472,22 @@ pub trait CompanionIntegration: Send + Sync {
     fn drain_events(&self) -> Vec<CompanionEvent> {
         Vec::new()
     }
+
+    /// Called by the Core desktop after it has created the live workspace
+    /// control queue. Companions may retain the port for a private MCP/tool
+    /// router; the default implementation keeps API-1 consumers unchanged.
+    fn attach_workspace_control(&self, _control: Arc<dyn WorkspaceControlPort>) {}
+
+    /// Returns the companion's current runtime capability authorizer. Core
+    /// never treats local preferences or cached provider credentials as paid
+    /// authorization.
+    fn runtime_authorizer(&self) -> Option<Arc<dyn RuntimeCapabilityAuthorizer>> {
+        None
+    }
+
+    /// Receives the transport-neutral runtime MCP service once both the live
+    /// control port and companion authorizer are available.
+    fn attach_runtime_mcp(&self, _service: Arc<crate::runtime_control::RuntimeMcpService>) {}
 }
 
 #[cfg(test)]
@@ -476,7 +499,7 @@ mod additive_api_tests {
     fn runtime_probe_reports_the_unchanged_extension_api() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 1);
+        assert_eq!(capabilities.extension_api_version, 2);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -484,7 +507,7 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":1"));
+        assert!(json.contains("\"extension_api_version\":2"));
     }
 
     #[test]

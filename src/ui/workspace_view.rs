@@ -12,6 +12,10 @@ use crate::logging;
 use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::runtime_control::{
+    AgentSnapshot, LayoutSnapshot, OutputPolicy, ProcessSnapshot, ProcessState, SnapshotRequest,
+    TileKind as RuntimeTileKind, TileSnapshot, WorkspaceSnapshot, sanitize_output,
+};
 use crate::services::agent_resume::{RestoreStartupOverrideMap, saved_resume_command_for_tile};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
@@ -200,6 +204,105 @@ impl WorkspaceRuntime {
             .iter()
             .map(|tile| tile.tile.clone())
             .collect()
+    }
+
+    pub fn focused_tile_id(&self) -> Option<String> {
+        self.inner.focused_tile_id.borrow().clone()
+    }
+
+    pub fn workspace_id(&self) -> String {
+        format!("workspace:{}", self.inner.workspace_root.display())
+    }
+
+    pub fn runtime_snapshot(&self, request: SnapshotRequest) -> WorkspaceSnapshot {
+        let visual_order = self
+            .inner
+            .layout
+            .borrow()
+            .tile_specs()
+            .into_iter()
+            .map(|tile| tile.id)
+            .collect::<Vec<_>>();
+        let focused_tile_id = self.focused_tile_id();
+        let tiles = self.inner.tiles.borrow();
+        let snapshots = visual_order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tile_id)| {
+                let tile = tiles.iter().find(|tile| tile.tile.id == *tile_id)?;
+                let kind = match tile.tile.tile_kind {
+                    TileKind::Terminal => RuntimeTileKind::Terminal,
+                    TileKind::WebView => RuntimeTileKind::Web,
+                };
+                let session = tile.session.as_ref();
+                let process = session
+                    .map(|session| ProcessSnapshot {
+                        state: if session.has_active_process() {
+                            ProcessState::Running
+                        } else if session.last_exit_status().is_some() {
+                            ProcessState::Exited
+                        } else {
+                            ProcessState::Idle
+                        },
+                        child_pid: session.child_pid(),
+                        foreground_command: None,
+                        exit_code: session.last_exit_status(),
+                    })
+                    .unwrap_or_default();
+                let recent_output = (request.output_policy == OutputPolicy::Sanitized)
+                    .then(|| {
+                        session.map(|session| {
+                            sanitize_output(
+                                &session.recent_output(request.max_lines as i64),
+                                request.max_lines,
+                                request.max_bytes,
+                            )
+                        })
+                    })
+                    .flatten();
+                Some(TileSnapshot {
+                    tile_id: tile.tile.id.clone(),
+                    visual_ordinal: index + 1,
+                    title: tile.tile.title.clone(),
+                    agent_label: (!tile.tile.agent_label.trim().is_empty())
+                        .then(|| tile.tile.agent_label.clone()),
+                    kind,
+                    focused: focused_tile_id.as_deref() == Some(tile.tile.id.as_str()),
+                    working_directory: Some(tile.tile.working_directory.short_label()),
+                    process,
+                    recent_output,
+                })
+            })
+            .collect();
+        WorkspaceSnapshot {
+            schema_version: crate::runtime_control::RUNTIME_SCHEMA_VERSION,
+            workspace_id: self.workspace_id(),
+            workspace_revision: 0,
+            generated_at_unix_ms: 0,
+            focused_tile_id,
+            layout: LayoutSnapshot { visual_order },
+            tiles: snapshots,
+            active_agents: Vec::<AgentSnapshot>::new(),
+        }
+    }
+
+    pub fn send_text_to_tile_with_submit(&self, tile_id: &str, text: &str, submit: bool) -> bool {
+        let payload = if submit {
+            format!("{text}\n")
+        } else {
+            text.to_string()
+        };
+        self.inner
+            .tiles
+            .borrow()
+            .iter()
+            .find(|tile| tile.tile.id == tile_id)
+            .and_then(|tile| tile.session.as_ref())
+            .is_some_and(|session| session.send_text(&payload))
+    }
+
+    pub fn interrupt_tile(&self, tile_id: &str) -> bool {
+        self.send_text_to_tile_with_submit(tile_id, "\u{3}", false)
     }
 
     pub fn alert_store(&self) -> AlertStore {
