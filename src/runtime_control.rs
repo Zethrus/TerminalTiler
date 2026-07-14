@@ -1296,7 +1296,10 @@ mod tests {
             OutputPolicy::MetadataOnly
         );
         assert_eq!(RUNTIME_SCHEMA_VERSION, 2);
-        assert_eq!(WorkspaceSnapshot::new("workspace:test".into(), 0).workspace_revision, 1);
+        assert_eq!(
+            WorkspaceSnapshot::new("workspace:test".into(), 0).workspace_revision,
+            1
+        );
     }
 
     #[test]
