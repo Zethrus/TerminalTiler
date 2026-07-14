@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -278,7 +279,10 @@ impl WorkspaceRuntime {
             schema_version: crate::runtime_control::RUNTIME_SCHEMA_VERSION,
             workspace_id: self.workspace_id(),
             workspace_revision: 0,
-            generated_at_unix_ms: 0,
+            generated_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
             focused_tile_id,
             layout: LayoutSnapshot { visual_order },
             tiles: snapshots,
