@@ -12,7 +12,7 @@ use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 2;
+pub const CORE_EXTENSION_API_VERSION: u32 = 3;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -60,6 +60,55 @@ pub struct RuntimeOptions {
     /// capability authorizer before mutation tools are exposed.
     pub workspace_control: Option<Arc<dyn WorkspaceControlPort>>,
     pub runtime_authorizer: Option<Arc<dyn RuntimeCapabilityAuthorizer>>,
+    /// Optional Pro-owned voice controller. Core only forwards activation and
+    /// UI events through this product-neutral trait; provider credentials and
+    /// conversation policy remain outside the open desktop process.
+    pub voice_controller: Option<Arc<dyn CompanionVoiceController>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceActivationRequest {
+    PushToTalkPressed,
+    PushToTalkReleased,
+    OnScreenPressed,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VoiceControllerStatus {
+    #[default]
+    Disabled,
+    Ready,
+    Connecting,
+    Listening,
+    Thinking,
+    Speaking,
+    AwaitingConfirmation,
+    Fallback,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VoiceUiEvent {
+    PartialTranscript(String),
+    FinalTranscript(String),
+    Status(VoiceControllerStatus),
+    Error(String),
+    ConfirmationRequested {
+        action_id: String,
+        redacted_preview: String,
+    },
+}
+
+/// Product-neutral activation bridge. Implementations must be non-blocking:
+/// Core invokes these methods from the GTK event path and the companion owns
+/// its worker/audio queues.
+pub trait CompanionVoiceController: Send + Sync {
+    fn activate(&self, mode: VoiceActivationRequest) -> Result<(), String>;
+    fn release_push_to_talk(&self) -> Result<(), String>;
+    fn cancel(&self);
+    fn status(&self) -> VoiceControllerStatus;
+    fn drain_ui_events(&self, limit: usize) -> Vec<VoiceUiEvent>;
 }
 
 /// Connect a companion to a host's live runtime control surface.
@@ -79,6 +128,9 @@ pub fn attach_runtime_control(
         .clone()
         .unwrap_or(fallback_control);
     companion.attach_workspace_control(control.clone());
+    if let Some(controller) = options.voice_controller.clone() {
+        companion.attach_voice_controller(controller);
+    }
     let authorizer = options
         .runtime_authorizer
         .clone()
@@ -525,6 +577,10 @@ pub trait CompanionIntegration: Send + Sync {
     /// Receives the transport-neutral runtime MCP service once both the live
     /// control port and companion authorizer are available.
     fn attach_runtime_mcp(&self, _service: Arc<crate::runtime_control::RuntimeMcpService>) {}
+
+    /// Receives the optional Pro voice activation bridge. Core may expose
+    /// activation affordances only when this controller is present.
+    fn attach_voice_controller(&self, _controller: Arc<dyn CompanionVoiceController>) {}
 }
 
 #[cfg(test)]
@@ -652,7 +708,7 @@ mod additive_api_tests {
     fn runtime_probe_reports_the_unchanged_extension_api() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 2);
+        assert_eq!(capabilities.extension_api_version, 3);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -660,7 +716,7 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":2"));
+        assert!(json.contains("\"extension_api_version\":3"));
     }
 
     #[test]
