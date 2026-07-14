@@ -7,11 +7,12 @@ use serde::Serialize;
 use crate::model::assets::{AgentRoleTemplate, CliSnippet, Runbook};
 use crate::model::preset::WorkspacePreset;
 use crate::product;
+use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 1;
+pub const CORE_EXTENSION_API_VERSION: u32 = 3;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -53,6 +54,101 @@ pub struct RuntimeOptions {
     pub product: ProductInfo,
     pub companion: Option<Arc<dyn CompanionIntegration>>,
     pub catalog: Option<Arc<dyn CatalogContributionProvider>>,
+    /// Optional live workspace control supplied by the desktop host.
+    ///
+    /// Core keeps this product-neutral. A paid companion must also provide a
+    /// capability authorizer before mutation tools are exposed.
+    pub workspace_control: Option<Arc<dyn WorkspaceControlPort>>,
+    pub runtime_authorizer: Option<Arc<dyn RuntimeCapabilityAuthorizer>>,
+    /// Optional Pro-owned voice controller. Core only forwards activation and
+    /// UI events through this product-neutral trait; provider credentials and
+    /// conversation policy remain outside the open desktop process.
+    pub voice_controller: Option<Arc<dyn CompanionVoiceController>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceActivationRequest {
+    PushToTalkPressed,
+    PushToTalkReleased,
+    OnScreenPressed,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VoiceControllerStatus {
+    #[default]
+    Disabled,
+    Ready,
+    Connecting,
+    Listening,
+    Thinking,
+    Speaking,
+    AwaitingConfirmation,
+    Fallback,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VoiceUiEvent {
+    PartialTranscript(String),
+    FinalTranscript(String),
+    Status(VoiceControllerStatus),
+    Error(String),
+    ConfirmationRequested {
+        action_id: String,
+        redacted_preview: String,
+    },
+}
+
+/// Product-neutral activation bridge. Implementations must be non-blocking:
+/// Core invokes these methods from the GTK event path and the companion owns
+/// its worker/audio queues.
+pub trait CompanionVoiceController: Send + Sync {
+    fn activate(&self, mode: VoiceActivationRequest) -> Result<(), String>;
+    fn release_push_to_talk(&self) -> Result<(), String>;
+    fn cancel(&self);
+    fn status(&self) -> VoiceControllerStatus;
+    fn drain_ui_events(&self, limit: usize) -> Vec<VoiceUiEvent>;
+}
+
+/// Connect a companion to a host's live runtime control surface.
+///
+/// Desktop shells call this as soon as a control port exists.  The explicit
+/// host authorizer takes precedence over the legacy companion callback so API
+/// v2 hosts do not silently lose their authorization policy.
+pub fn attach_runtime_control(
+    options: &RuntimeOptions,
+    fallback_control: Arc<dyn WorkspaceControlPort>,
+) {
+    let Some(companion) = options.companion.as_ref() else {
+        return;
+    };
+    let control = options
+        .workspace_control
+        .clone()
+        .unwrap_or(fallback_control);
+    companion.attach_workspace_control(control.clone());
+    if let Some(controller) = options.voice_controller.clone() {
+        companion.attach_voice_controller(controller);
+    }
+    let authorizer = options
+        .runtime_authorizer
+        .clone()
+        .or_else(|| companion.runtime_authorizer());
+    if let Some(authorizer) = authorizer {
+        companion.attach_runtime_mcp(Arc::new(crate::runtime_control::RuntimeMcpService::new(
+            control, authorizer,
+        )));
+    }
+}
+
+/// Windows shells may be given a host-owned runtime port.  Unlike the Linux
+/// GTK shell they do not construct a GTK workspace-control queue themselves,
+/// but must still publish the supplied control surface to the companion.
+pub fn attach_supplied_runtime_control(options: &RuntimeOptions) {
+    if let Some(control) = options.workspace_control.clone() {
+        attach_runtime_control(options, control);
+    }
 }
 
 /// Product-specific identity supplied by a Core host or companion build.
@@ -465,18 +561,154 @@ pub trait CompanionIntegration: Send + Sync {
     fn drain_events(&self) -> Vec<CompanionEvent> {
         Vec::new()
     }
+
+    /// Called by the Core desktop after it has connected a live workspace
+    /// control port. Companions may retain the port for a private MCP/tool
+    /// router; the default implementation keeps API-1 consumers unchanged.
+    fn attach_workspace_control(&self, _control: Arc<dyn WorkspaceControlPort>) {}
+
+    /// Returns the companion's current runtime capability authorizer. Core
+    /// never treats local preferences or cached provider credentials as paid
+    /// authorization.
+    fn runtime_authorizer(&self) -> Option<Arc<dyn RuntimeCapabilityAuthorizer>> {
+        None
+    }
+
+    /// Receives the transport-neutral runtime MCP service once both the live
+    /// control port and companion authorizer are available.
+    fn attach_runtime_mcp(&self, _service: Arc<crate::runtime_control::RuntimeMcpService>) {}
+
+    /// Receives the optional Pro voice activation bridge. Core may expose
+    /// activation affordances only when this controller is present.
+    fn attach_voice_controller(&self, _controller: Arc<dyn CompanionVoiceController>) {}
 }
 
 #[cfg(test)]
 mod additive_api_tests {
     use super::*;
     use crate::model::preset::builtin_presets;
+    use crate::runtime_control::{
+        ActionResult, CreateTerminalTileRequest, EventRequest, EventResponse, ExecuteActionRequest,
+        FocusTileRequest, InterruptTileRequest, PrepareActionRequest, PreparedAction,
+        RuntimeControlError, RuntimeMcpService, SnapshotRequest, WorkspaceSnapshot,
+    };
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    struct DenyMutations;
+
+    impl RuntimeCapabilityAuthorizer for DenyMutations {
+        fn allows_runtime_session(&self) -> bool {
+            true
+        }
+
+        fn allows_mutation(&self) -> bool {
+            false
+        }
+    }
+
+    struct AllowMutations;
+
+    impl RuntimeCapabilityAuthorizer for AllowMutations {
+        fn allows_runtime_session(&self) -> bool {
+            true
+        }
+
+        fn allows_mutation(&self) -> bool {
+            true
+        }
+    }
+
+    struct NoopControl;
+
+    impl WorkspaceControlPort for NoopControl {
+        fn workspace_snapshot(
+            &self,
+            _request: SnapshotRequest,
+        ) -> Result<WorkspaceSnapshot, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn workspace_events(
+            &self,
+            _request: EventRequest,
+        ) -> Result<EventResponse, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn focus_tile(
+            &self,
+            _request: FocusTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn create_terminal_tile(
+            &self,
+            _request: CreateTerminalTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn prepare_terminal_action(
+            &self,
+            _request: PrepareActionRequest,
+        ) -> Result<PreparedAction, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn execute_terminal_action(
+            &self,
+            _request: ExecuteActionRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+
+        fn interrupt_tile(
+            &self,
+            _request: InterruptTileRequest,
+        ) -> Result<ActionResult, RuntimeControlError> {
+            Err(RuntimeControlError::Internal("not called".into()))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingCompanion {
+        control_attached: Mutex<bool>,
+        service: Mutex<Option<Arc<RuntimeMcpService>>>,
+    }
+
+    impl CompanionIntegration for RecordingCompanion {
+        fn snapshot(&self) -> CompanionPanelSnapshot {
+            CompanionPanelSnapshot::default()
+        }
+
+        fn invoke(
+            &self,
+            _action_id: &str,
+            _input: CompanionActionInput,
+        ) -> Result<CompanionActionResult, String> {
+            Ok(CompanionActionResult::message("ok"))
+        }
+
+        fn attach_workspace_control(&self, _control: Arc<dyn WorkspaceControlPort>) {
+            *self.control_attached.lock().unwrap() = true;
+        }
+
+        fn runtime_authorizer(&self) -> Option<Arc<dyn RuntimeCapabilityAuthorizer>> {
+            Some(Arc::new(AllowMutations))
+        }
+
+        fn attach_runtime_mcp(&self, service: Arc<RuntimeMcpService>) {
+            *self.service.lock().unwrap() = Some(service);
+        }
+    }
 
     #[test]
     fn runtime_probe_reports_the_unchanged_extension_api() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 1);
+        assert_eq!(capabilities.extension_api_version, 3);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -484,7 +716,30 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":1"));
+        assert!(json.contains("\"extension_api_version\":3"));
+    }
+
+    #[test]
+    fn host_runtime_authorizer_is_attached_and_overrides_companion_fallback() {
+        let companion = Arc::new(RecordingCompanion::default());
+        let options = RuntimeOptions {
+            companion: Some(companion.clone()),
+            workspace_control: Some(Arc::new(NoopControl)),
+            runtime_authorizer: Some(Arc::new(DenyMutations)),
+            ..RuntimeOptions::default()
+        };
+
+        attach_supplied_runtime_control(&options);
+
+        assert!(*companion.control_attached.lock().unwrap());
+        let service = companion.service.lock().unwrap().clone().unwrap();
+        assert!(matches!(
+            service.call(
+                "focus_tile",
+                json!({ "workspace_id": "workspace:test", "tile_id": "tile-1" })
+            ),
+            Err(RuntimeControlError::Unauthorized)
+        ));
     }
 
     #[test]

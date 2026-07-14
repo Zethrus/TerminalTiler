@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -12,6 +13,11 @@ use crate::logging;
 use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::runtime_control::{
+    AgentSnapshot, EventRequest, EventResponse, LayoutSnapshot, OutputPolicy, ProcessSnapshot,
+    ProcessState, SnapshotRequest, TileKind as RuntimeTileKind, TileSnapshot,
+    WorkspaceEventJournal, WorkspaceEventType, WorkspaceSnapshot, sanitize_output,
+};
 use crate::services::agent_resume::{RestoreStartupOverrideMap, saved_resume_command_for_tile};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
@@ -80,6 +86,8 @@ struct WorkspaceRuntimeInner {
     focused_web_tile_id: RefCell<Option<String>>,
     maximized_tile: RefCell<Option<String>>,
     maximized_hidden: RefCell<Vec<gtk::Widget>>,
+    workspace_revision: Rc<Cell<u64>>,
+    event_journal: Rc<RefCell<WorkspaceEventJournal>>,
 }
 
 #[derive(Clone)]
@@ -202,6 +210,226 @@ impl WorkspaceRuntime {
             .collect()
     }
 
+    pub fn focused_tile_id(&self) -> Option<String> {
+        self.inner.focused_tile_id.borrow().clone()
+    }
+
+    pub fn workspace_id(&self) -> String {
+        format!("workspace:{}", self.inner.workspace_root.display())
+    }
+
+    pub fn workspace_revision(&self) -> u64 {
+        self.inner.workspace_revision.get()
+    }
+
+    #[allow(dead_code)]
+    pub fn record_runtime_mutation(&self) -> u64 {
+        self.record_runtime_event(
+            WorkspaceEventType::ActionSubmitted,
+            None,
+            "runtime mutation",
+            true,
+        )
+    }
+
+    /// Record a sanitized workspace event and optionally advance the state
+    /// revision. Output activity advances only the event cursor so that
+    /// transient terminal output does not invalidate prepared actions.
+    pub fn record_runtime_event(
+        &self,
+        event_type: WorkspaceEventType,
+        tile_id: Option<String>,
+        safe_summary: impl AsRef<str>,
+        advances_revision: bool,
+    ) -> u64 {
+        let revision = if advances_revision {
+            let next = self.inner.workspace_revision.get().saturating_add(1);
+            self.inner.workspace_revision.set(next);
+            next
+        } else {
+            self.workspace_revision()
+        };
+        self.inner
+            .event_journal
+            .borrow_mut()
+            .append(revision, event_type, tile_id, safe_summary);
+        revision
+    }
+
+    pub fn workspace_events(
+        &self,
+        request: EventRequest,
+    ) -> Result<EventResponse, crate::runtime_control::RuntimeControlError> {
+        if request.workspace_id != self.workspace_id() {
+            return Err(crate::runtime_control::RuntimeControlError::NotFound(
+                request.workspace_id,
+            ));
+        }
+        Ok(self.inner.event_journal.borrow().response(
+            self.workspace_id(),
+            request.after_cursor,
+            request.limit,
+            self.workspace_revision(),
+        ))
+    }
+
+    /// Journal sanitized output activity without advancing the workspace
+    /// revision. Raw terminal bytes are never retained in the event ring.
+    #[allow(dead_code)]
+    pub fn record_output_activity(&self, tile_id: &str, output: &str) {
+        let summary = sanitize_output(output, 4, 512);
+        self.record_runtime_event(
+            WorkspaceEventType::OutputActivity,
+            Some(tile_id.to_string()),
+            summary.text,
+            false,
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn record_action_completed(&self, tile_id: &str, status: &str) {
+        self.record_runtime_event(
+            WorkspaceEventType::ActionCompleted,
+            Some(tile_id.to_string()),
+            format!("action completed: {status}"),
+            true,
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn record_process_started(&self, tile_id: &str) {
+        self.record_runtime_event(
+            WorkspaceEventType::ProcessStarted,
+            Some(tile_id.to_string()),
+            "terminal process started",
+            true,
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn record_process_exited(&self, tile_id: &str, exit_code: Option<i32>) {
+        self.record_runtime_event(
+            WorkspaceEventType::ProcessExited,
+            Some(tile_id.to_string()),
+            format!("terminal process exited ({exit_code:?})"),
+            true,
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn record_manual_input(&self, tile_id: &str) {
+        self.record_runtime_event(
+            WorkspaceEventType::ManualInput,
+            Some(tile_id.to_string()),
+            "manual terminal input submitted",
+            true,
+        );
+    }
+
+    pub fn runtime_snapshot(&self, request: SnapshotRequest) -> WorkspaceSnapshot {
+        let visual_order = self
+            .inner
+            .layout
+            .borrow()
+            .tile_specs()
+            .into_iter()
+            .map(|tile| tile.id)
+            .collect::<Vec<_>>();
+        let focused_tile_id = self.focused_tile_id();
+        let tiles = self.inner.tiles.borrow();
+        let snapshots = visual_order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tile_id)| {
+                let tile = tiles.iter().find(|tile| tile.tile.id == *tile_id)?;
+                let kind = match tile.tile.tile_kind {
+                    TileKind::Terminal => RuntimeTileKind::Terminal,
+                    TileKind::WebView => RuntimeTileKind::Web,
+                };
+                let session = tile.session.as_ref();
+                let process = session
+                    .map(|session| ProcessSnapshot {
+                        state: if session.has_active_process() {
+                            ProcessState::Running
+                        } else if session.last_exit_status().is_some() {
+                            ProcessState::Exited
+                        } else {
+                            ProcessState::Idle
+                        },
+                        child_pid: session.child_pid(),
+                        foreground_command: None,
+                        exit_code: session.last_exit_status(),
+                    })
+                    .unwrap_or_default();
+                let recent_output = (request.output_policy == OutputPolicy::Sanitized)
+                    .then(|| {
+                        session.map(|session| {
+                            sanitize_output(
+                                &session.recent_output(request.max_lines as i64),
+                                request.max_lines,
+                                request.max_bytes,
+                            )
+                        })
+                    })
+                    .flatten();
+                Some(TileSnapshot {
+                    tile_id: tile.tile.id.clone(),
+                    visual_ordinal: index + 1,
+                    title: tile.tile.title.clone(),
+                    agent_label: (!tile.tile.agent_label.trim().is_empty())
+                        .then(|| tile.tile.agent_label.clone()),
+                    kind,
+                    focused: focused_tile_id.as_deref() == Some(tile.tile.id.as_str()),
+                    working_directory: Some(tile.tile.working_directory.short_label()),
+                    process,
+                    recent_output,
+                })
+            })
+            .collect();
+        WorkspaceSnapshot {
+            schema_version: crate::runtime_control::RUNTIME_SCHEMA_VERSION,
+            workspace_id: self.workspace_id(),
+            workspace_revision: self.workspace_revision(),
+            latest_event_cursor: self.inner.event_journal.borrow().latest_cursor(),
+            generated_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+            focused_tile_id,
+            layout: LayoutSnapshot { visual_order },
+            tiles: snapshots,
+            active_agents: Vec::<AgentSnapshot>::new(),
+        }
+    }
+
+    pub fn send_text_to_tile_with_submit(&self, tile_id: &str, text: &str, submit: bool) -> bool {
+        let payload = if submit {
+            format!("{text}\n")
+        } else {
+            text.to_string()
+        };
+        self.inner
+            .tiles
+            .borrow()
+            .iter()
+            .find(|tile| tile.tile.id == tile_id)
+            .and_then(|tile| tile.session.as_ref())
+            .is_some_and(|session| session.send_text(&payload))
+    }
+
+    pub fn interrupt_tile(&self, tile_id: &str) -> bool {
+        let interrupted = self.send_text_to_tile_with_submit(tile_id, "\u{3}", false);
+        if interrupted {
+            self.record_runtime_event(
+                WorkspaceEventType::ActionInterrupted,
+                Some(tile_id.to_string()),
+                format!("interrupt requested for tile {tile_id}"),
+                true,
+            );
+        }
+        interrupted
+    }
+
     pub fn alert_store(&self) -> AlertStore {
         self.inner.alert_store.clone()
     }
@@ -271,6 +499,12 @@ impl WorkspaceRuntime {
         if let Some((tile_id, is_web_tile, session, web_view, widget)) = tile_target {
             self.restore_maximized_tile_if_different(&tile_id);
             self.set_focused_tile(Some(tile_id.clone()), is_web_tile);
+            self.record_runtime_event(
+                WorkspaceEventType::FocusChanged,
+                Some(tile_id.clone()),
+                format!("focused tile {tile_id}"),
+                true,
+            );
             if let Some(session) = &session {
                 session.widget().grab_focus();
             } else if let Some(web_view) = &web_view {
@@ -340,6 +574,12 @@ impl WorkspaceRuntime {
         }
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.record_runtime_event(
+            WorkspaceEventType::TileMoved,
+            Some(dragged_id.to_string()),
+            format!("moved tile {dragged_id}"),
+            true,
+        );
         (self.inner.on_layout_changed)(next_layout);
         true
     }
@@ -413,6 +653,12 @@ impl WorkspaceRuntime {
             });
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.record_runtime_event(
+            WorkspaceEventType::TileRemoved,
+            Some(tile_id.to_string()),
+            format!("removed tile {tile_id}"),
+            true,
+        );
         *self.inner.focused_tile_id.borrow_mut() = next_focused_tile;
         *self.inner.focused_web_tile_id.borrow_mut() = next_focused_web_tile;
         self.replace_layout_shell(&next_layout);
@@ -640,6 +886,12 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.record_runtime_event(
+            WorkspaceEventType::TileCreated,
+            Some(new_tile_id.clone()),
+            format!("created web tile {new_tile_id}"),
+            true,
+        );
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
         self.set_focused_tile(Some(new_tile_id.clone()), true);
@@ -658,11 +910,18 @@ impl WorkspaceRuntime {
                 .map(|tile| tile.tile.id.clone())
         })?;
 
+        self.add_terminal_tile_at(&target_tile_id, SplitAxis::Horizontal)
+    }
+
+    /// Inserts a terminal beside the requested tile.  Runtime control uses
+    /// this rather than the UI convenience method so its split target and
+    /// axis are honored exactly.
+    pub fn add_terminal_tile_at(&self, target_tile_id: &str, axis: SplitAxis) -> Option<String> {
         let current_layout = self.inner.layout.borrow().clone();
         let (next_layout, new_tile_id) = split_tile_with_kind(
             &current_layout,
-            &target_tile_id,
-            SplitAxis::Horizontal,
+            target_tile_id,
+            axis,
             false,
             TileKind::Terminal,
         )?;
@@ -688,6 +947,12 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
 
         *self.inner.layout.borrow_mut() = next_layout.clone();
+        self.record_runtime_event(
+            WorkspaceEventType::TileCreated,
+            Some(new_tile_id.clone()),
+            format!("created terminal tile {new_tile_id}"),
+            true,
+        );
         self.replace_layout_shell(&next_layout);
         self.set_tiles(next_tiles);
         self.set_focused_tile(Some(new_tile_id.clone()), false);
@@ -1047,18 +1312,34 @@ impl WorkspaceRuntime {
             layout.clone()
         };
         (self.inner.on_layout_changed)(next_layout);
+        self.record_runtime_event(
+            WorkspaceEventType::LayoutChanged,
+            Some(tile_id.to_string()),
+            format!("updated layout for tile {tile_id}"),
+            true,
+        );
         true
     }
 
     fn replace_layout_shell(&self, layout: &LayoutNode) {
         let layout_state = self.inner.layout.clone();
         let on_layout_changed = self.inner.on_layout_changed.clone();
+        let workspace_revision = self.inner.workspace_revision.clone();
+        let event_journal = self.inner.event_journal.clone();
         let layout_shell = layout_tree::build(
             layout,
             Some(Rc::new(move |split_path, ratio| {
                 let current = layout_state.borrow().clone();
                 if let Some(next_layout) = update_split_ratio(&current, &split_path, ratio) {
                     *layout_state.borrow_mut() = next_layout.clone();
+                    let revision = workspace_revision.get().saturating_add(1);
+                    workspace_revision.set(revision);
+                    event_journal.borrow_mut().append(
+                        revision,
+                        WorkspaceEventType::LayoutChanged,
+                        None,
+                        "split ratio changed",
+                    );
                     on_layout_changed(next_layout);
                 }
             })),
@@ -1237,6 +1518,10 @@ pub fn build_with_layout_change_handler(
             focused_web_tile_id: RefCell::new(None),
             maximized_tile: RefCell::new(None),
             maximized_hidden: RefCell::new(Vec::new()),
+            // Revision one is the initial state cut; zero is reserved for
+            // "no state" and must never be used for a live workspace.
+            workspace_revision: Rc::new(Cell::new(1)),
+            event_journal: Rc::new(RefCell::new(WorkspaceEventJournal::new())),
         }),
     };
     runtime.rebuild_from_layout();

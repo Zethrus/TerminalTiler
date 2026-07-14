@@ -10,6 +10,7 @@ mod model;
 pub mod open_core;
 mod platform;
 mod product;
+pub mod runtime_control;
 mod services;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod stats_hub;
