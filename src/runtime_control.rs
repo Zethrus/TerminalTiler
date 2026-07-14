@@ -6,6 +6,7 @@
 //! only typed contracts and deterministic policy helpers; Pro-specific
 //! licensing, provider clients, and conversation logic stay outside Core.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,9 +18,12 @@ pub type WorkspaceId = String;
 pub type TileId = String;
 pub type ActionId = String;
 
-pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_SCHEMA_VERSION: u32 = 2;
 pub const MAX_OUTPUT_LINES: usize = 40;
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024;
+pub const EVENT_JOURNAL_CAPACITY: usize = 4_096;
+const OUTPUT_COALESCE_WINDOW_MS: u128 = 250;
+const MAX_EVENT_SUMMARY_BYTES: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +73,10 @@ pub struct WorkspaceSnapshot {
     pub schema_version: u32,
     pub workspace_id: WorkspaceId,
     pub workspace_revision: u64,
+    /// Event cursor for the state represented by this snapshot. Consumers can
+    /// request events after this cursor to observe subsequent changes.
+    #[serde(default)]
+    pub latest_event_cursor: u64,
     pub generated_at_unix_ms: u128,
     pub focused_tile_id: Option<TileId>,
     pub layout: LayoutSnapshot,
@@ -82,7 +90,8 @@ impl WorkspaceSnapshot {
         Self {
             schema_version: RUNTIME_SCHEMA_VERSION,
             workspace_id,
-            workspace_revision,
+            workspace_revision: workspace_revision.max(1),
+            latest_event_cursor: 0,
             generated_at_unix_ms: now_unix_ms(),
             focused_tile_id: None,
             layout: LayoutSnapshot::default(),
@@ -176,6 +185,10 @@ pub enum WorkspaceEventType {
     OutputActivity,
     AgentChanged,
     ActionCompleted,
+    TileMoved,
+    LayoutChanged,
+    ActionSubmitted,
+    ActionInterrupted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -194,8 +207,198 @@ fn default_event_limit() -> usize {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EventResponse {
     pub workspace_id: WorkspaceId,
+    #[serde(default)]
+    pub oldest_cursor: u64,
     pub next_cursor: u64,
+    #[serde(default)]
+    pub latest_revision: u64,
+    #[serde(default)]
+    pub truncated: bool,
     pub events: Vec<WorkspaceEvent>,
+}
+
+/// Descriptive alias used by the v2 wire contract; retained alongside the
+/// original `EventResponse` name for source compatibility.
+pub type WorkspaceEventResponse = EventResponse;
+
+/// Bounded in-memory event journal for one live workspace. The journal is
+/// intentionally process-local: it contains only sanitized metadata and
+/// never raw terminal output.
+#[derive(Debug)]
+pub struct WorkspaceEventJournal {
+    events: VecDeque<WorkspaceEvent>,
+    next_cursor: u64,
+    last_output: HashMap<TileId, u128>,
+}
+
+impl Default for WorkspaceEventJournal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WorkspaceEventJournal {
+    pub fn new() -> Self {
+        Self {
+            events: VecDeque::with_capacity(EVENT_JOURNAL_CAPACITY),
+            next_cursor: 1,
+            last_output: HashMap::new(),
+        }
+    }
+
+    pub fn latest_cursor(&self) -> u64 {
+        self.next_cursor.saturating_sub(1)
+    }
+
+    pub fn oldest_cursor(&self) -> u64 {
+        self.events
+            .front()
+            .map(|event| event.cursor)
+            .unwrap_or(self.next_cursor)
+    }
+
+    pub fn append(
+        &mut self,
+        workspace_revision: u64,
+        event_type: WorkspaceEventType,
+        tile_id: Option<TileId>,
+        safe_summary: impl AsRef<str>,
+    ) -> Option<u64> {
+        let timestamp = now_unix_ms();
+        if event_type == WorkspaceEventType::OutputActivity {
+            if let Some(tile) = tile_id.as_ref() {
+                if let Some(previous_timestamp) = self.last_output.get(tile)
+                    && timestamp.saturating_sub(*previous_timestamp) < OUTPUT_COALESCE_WINDOW_MS
+                {
+                    return None;
+                }
+                self.last_output.insert(tile.clone(), timestamp);
+                if self.last_output.len() > EVENT_JOURNAL_CAPACITY {
+                    self.last_output.clear();
+                }
+            }
+        }
+
+        let cursor = self.next_cursor;
+        self.next_cursor = self.next_cursor.saturating_add(1);
+        if self.events.len() >= EVENT_JOURNAL_CAPACITY {
+            self.events.pop_front();
+        }
+        self.events.push_back(WorkspaceEvent {
+            cursor,
+            workspace_revision,
+            timestamp_unix_ms: timestamp,
+            event_type,
+            tile_id,
+            safe_summary: cap_event_summary(&redact_event_summary(safe_summary.as_ref())),
+        });
+        Some(cursor)
+    }
+
+    pub fn response(
+        &self,
+        workspace_id: WorkspaceId,
+        after_cursor: u64,
+        limit: usize,
+        latest_revision: u64,
+    ) -> EventResponse {
+        let oldest_cursor = self.oldest_cursor();
+        let latest_cursor = self.latest_cursor();
+        // A non-zero cursor older than the retained ring means the consumer
+        // cannot reconstruct state and must refresh its snapshot.
+        let truncated = after_cursor > 0 && after_cursor.saturating_add(1) < oldest_cursor;
+        if truncated {
+            return EventResponse {
+                workspace_id,
+                oldest_cursor,
+                next_cursor: latest_cursor.saturating_add(1),
+                latest_revision,
+                truncated: true,
+                events: Vec::new(),
+            };
+        }
+
+        let limit = limit.clamp(1, EVENT_JOURNAL_CAPACITY);
+        let events = self
+            .events
+            .iter()
+            .filter(|event| event.cursor > after_cursor)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let next_cursor = events
+            .last()
+            .map(|event| event.cursor.saturating_add(1))
+            .unwrap_or_else(|| after_cursor.saturating_add(1));
+        EventResponse {
+            workspace_id,
+            oldest_cursor,
+            next_cursor,
+            latest_revision,
+            truncated: false,
+            events,
+        }
+    }
+}
+
+fn cap_event_summary(summary: &str) -> String {
+    if summary.len() <= MAX_EVENT_SUMMARY_BYTES {
+        return summary.to_string();
+    }
+    let mut end = MAX_EVENT_SUMMARY_BYTES.saturating_sub("…".len());
+    while end > 0 && !summary.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &summary[..end])
+}
+
+fn redact_event_summary(summary: &str) -> String {
+    let mut redacted = summary.to_string();
+    for prefix in [
+        "OPENAI_API_KEY=",
+        "ANTHROPIC_API_KEY=",
+        "AWS_SECRET_ACCESS_KEY=",
+        "TOKEN=",
+        "PASSWORD=",
+        "Authorization: Bearer ",
+    ] {
+        if let Some(index) = redacted.find(prefix) {
+            let value_start = index + prefix.len();
+            let value_end = redacted[value_start..]
+                .find(char::is_whitespace)
+                .map(|offset| value_start + offset)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(value_start..value_end, "[REDACTED]");
+        }
+    }
+    if redacted.contains("-----BEGIN ") {
+        return "[REDACTED PRIVATE KEY]".into();
+    }
+    redacted
+}
+
+fn redact_command_preview(command: &str) -> String {
+    let mut redacted = command.to_string();
+    for prefix in [
+        "OPENAI_API_KEY=",
+        "ANTHROPIC_API_KEY=",
+        "AWS_SECRET_ACCESS_KEY=",
+        "TOKEN=",
+        "PASSWORD=",
+    ] {
+        if let Some(index) = redacted.find(prefix) {
+            let value_start = index + prefix.len();
+            let value_end = redacted[value_start..]
+                .find(char::is_whitespace)
+                .map(|offset| value_start + offset)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(value_start..value_end, "[REDACTED]");
+        }
+    }
+    if redacted.contains("-----BEGIN ") {
+        return "[REDACTED PRIVATE KEY]".into();
+    }
+    redacted
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -233,12 +436,18 @@ pub struct PreparedAction {
     pub action_id: ActionId,
     pub workspace_id: WorkspaceId,
     pub tile_id: TileId,
-    pub command_hash: String,
-    pub display_command: String,
+    /// SHA-256 digest used for auditing. This is not a confirmation secret.
+    pub command_digest: String,
+    /// Human-readable, redacted preview shown by the trusted local UI.
+    pub redacted_preview: String,
+    #[serde(skip)]
+    command: String,
     pub risk: ActionRisk,
+    #[serde(skip, default = "default_confirmation_requirement")]
     pub confirmation: ConfirmationRequirement,
+    pub requires_confirmation: bool,
     pub expires_at_unix_ms: u128,
-    pub workspace_revision: u64,
+    pub prepared_revision: u64,
     /// Kept only in the desktop process.  A command hash is useful for
     /// display/auditing, but must never double as a confirmation secret: the
     /// caller already knows it at prepare time.
@@ -252,23 +461,25 @@ impl PreparedAction {
         action_id: ActionId,
         workspace_id: WorkspaceId,
         tile_id: TileId,
-        command_hash: String,
+        command_digest: String,
         display_command: String,
         risk: ActionRisk,
         confirmation: ConfirmationRequirement,
         expires_at_unix_ms: u128,
-        workspace_revision: u64,
+        prepared_revision: u64,
     ) -> Self {
         Self {
             action_id,
             workspace_id,
             tile_id,
-            command_hash,
-            display_command,
+            command_digest,
+            redacted_preview: redact_command_preview(&display_command),
+            command: display_command,
             risk,
             confirmation,
+            requires_confirmation: !matches!(confirmation, ConfirmationRequirement::None),
             expires_at_unix_ms,
-            workspace_revision,
+            prepared_revision,
             // UUID v4 is backed by the operating system CSPRNG.  This value
             // is intentionally omitted from the serialized prepare response.
             confirmation_nonce: uuid::Uuid::new_v4().to_string(),
@@ -278,6 +489,10 @@ impl PreparedAction {
     pub fn confirmation_matches(&self, token: Option<&str>) -> bool {
         matches!(self.confirmation, ConfirmationRequirement::None)
             || token.is_some_and(|token| token == self.confirmation_nonce)
+    }
+
+    pub(crate) fn command(&self) -> &str {
+        &self.command
     }
 
     /// Only desktop-owned UI code may reveal this value to a person.  It is
@@ -296,12 +511,12 @@ impl std::fmt::Debug for PreparedAction {
             .field("action_id", &self.action_id)
             .field("workspace_id", &self.workspace_id)
             .field("tile_id", &self.tile_id)
-            .field("command_hash", &self.command_hash)
-            .field("display_command", &self.display_command)
+            .field("command_digest", &self.command_digest)
+            .field("redacted_preview", &self.redacted_preview)
             .field("risk", &self.risk)
             .field("confirmation", &self.confirmation)
             .field("expires_at_unix_ms", &self.expires_at_unix_ms)
-            .field("workspace_revision", &self.workspace_revision)
+            .field("prepared_revision", &self.prepared_revision)
             .finish_non_exhaustive()
     }
 }
@@ -322,9 +537,16 @@ pub enum ConfirmationRequirement {
     SpokenNonce,
 }
 
+fn default_confirmation_requirement() -> ConfirmationRequirement {
+    ConfirmationRequirement::None
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecuteActionRequest {
     pub action_id: ActionId,
+    /// Kept for compatibility with older in-process callers. It is ignored
+    /// by provider-facing serialization; trusted UI approval is authoritative.
+    #[serde(skip)]
     pub confirmation_token: Option<String>,
 }
 
@@ -631,7 +853,6 @@ impl RuntimeMcpService {
             "focus_tile",
             "create_terminal_tile",
             "prepare_terminal_action",
-            "execute_terminal_action",
             "interrupt_tile"
         ])
     }
@@ -881,7 +1102,10 @@ mod tests {
             self.record();
             Ok(EventResponse {
                 workspace_id: "workspace:test".into(),
+                oldest_cursor: 1,
                 next_cursor: 0,
+                latest_revision: 1,
+                truncated: false,
                 events: Vec::new(),
             })
         }
@@ -1007,6 +1231,21 @@ mod tests {
 
         let serialized = serde_json::to_value(&action).unwrap();
         assert!(serialized.get("confirmation_nonce").is_none());
+        assert_eq!(
+            serialized.get("command_digest").and_then(Value::as_str),
+            Some("known-command-hash")
+        );
+        assert_eq!(
+            serialized.get("prepared_revision").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            serialized
+                .get("requires_confirmation")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(serialized.get("command").is_none());
         assert!(!action.confirmation_matches(Some("known-command-hash")));
         assert!(!action.confirmation_matches(None));
     }
@@ -1056,6 +1295,62 @@ mod tests {
             SnapshotRequest::default().output_policy,
             OutputPolicy::MetadataOnly
         );
-        assert_eq!(RUNTIME_SCHEMA_VERSION, 1);
+        assert_eq!(RUNTIME_SCHEMA_VERSION, 2);
+        assert_eq!(WorkspaceSnapshot::new("workspace:test".into(), 0).workspace_revision, 1);
+    }
+
+    #[test]
+    fn event_journal_cursors_and_truncation_are_deterministic() {
+        let mut journal = WorkspaceEventJournal::new();
+        let first = journal
+            .append(
+                1,
+                WorkspaceEventType::FocusChanged,
+                Some("tile-1".into()),
+                "focused",
+            )
+            .unwrap();
+        assert_eq!(first, 1);
+        let response = journal.response("workspace:test".into(), 0, 100, 1);
+        assert_eq!(response.oldest_cursor, 1);
+        assert_eq!(response.next_cursor, 2);
+        assert!(!response.truncated);
+        assert_eq!(response.events.len(), 1);
+
+        for index in 0..(EVENT_JOURNAL_CAPACITY + 2) {
+            journal.append(
+                index as u64 + 2,
+                WorkspaceEventType::ActionCompleted,
+                None,
+                "done",
+            );
+        }
+        assert!(journal.oldest_cursor() > 1);
+        let stale = journal.response("workspace:test".into(), 1, 100, 2);
+        assert!(stale.truncated);
+        assert!(stale.events.is_empty());
+    }
+
+    #[test]
+    fn output_events_are_coalesced_and_summaries_are_bounded() {
+        let mut journal = WorkspaceEventJournal::new();
+        let summary = "x".repeat(MAX_EVENT_SUMMARY_BYTES + 20);
+        let first = journal.append(
+            1,
+            WorkspaceEventType::OutputActivity,
+            Some("tile-1".into()),
+            summary,
+        );
+        let second = journal.append(
+            1,
+            WorkspaceEventType::OutputActivity,
+            Some("tile-1".into()),
+            "more",
+        );
+        assert!(first.is_some());
+        assert!(second.is_none());
+        let response = journal.response("workspace:test".into(), 0, 100, 1);
+        assert_eq!(response.events.len(), 1);
+        assert!(response.events[0].safe_summary.len() <= MAX_EVENT_SUMMARY_BYTES);
     }
 }

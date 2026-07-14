@@ -21,7 +21,7 @@ use crate::model::board::Board;
 use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::runtime_control::{
-    ActionResult, EventResponse, PreparedAction, RuntimeControlError, RuntimeOperation,
+    ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation,
     SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue, classify_command, confirmation_for,
 };
 use crate::services::agent_resume::{
@@ -926,12 +926,8 @@ fn dispatch_runtime_operation(
             if request.workspace_id != runtime.workspace_id() {
                 return Err(RuntimeControlError::NotFound(request.workspace_id));
             }
-            serde_json::to_value(EventResponse {
-                workspace_id: runtime.workspace_id(),
-                next_cursor: request.after_cursor,
-                events: Vec::new(),
-            })
-            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+            serde_json::to_value(runtime.workspace_events(request)?)
+                .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
         RuntimeOperation::Focus(request) => {
             ensure_revision(request.expected_revision, runtime.workspace_revision())?;
@@ -1019,10 +1015,7 @@ fn dispatch_runtime_operation(
             if now >= action.expires_at_unix_ms {
                 return Err(RuntimeControlError::ExpiredAction);
             }
-            ensure_revision(
-                Some(action.workspace_revision),
-                runtime.workspace_revision(),
-            )?;
+            ensure_revision(Some(action.prepared_revision), runtime.workspace_revision())?;
             // Never accept a provider-supplied token as proof of user consent.
             // The desktop presents the command and its one-time nonce directly
             // to the user, then validates what they type locally.
@@ -1036,15 +1029,16 @@ fn dispatch_runtime_operation(
                 return Err(RuntimeControlError::ConfirmationRequired);
             }
             if action.workspace_id != runtime.workspace_id()
-                || !runtime.send_text_to_tile_with_submit(
-                    &action.tile_id,
-                    &action.display_command,
-                    true,
-                )
+                || !runtime.send_text_to_tile_with_submit(&action.tile_id, action.command(), true)
             {
                 return Err(RuntimeControlError::NotFound(action.tile_id));
             }
-            runtime.record_runtime_mutation();
+            runtime.record_runtime_event(
+                crate::runtime_control::WorkspaceEventType::ActionSubmitted,
+                Some(action.tile_id.clone()),
+                "terminal action submitted",
+                true,
+            );
             serde_json::to_value(ActionResult {
                 workspace_revision: runtime.workspace_revision(),
                 message: "Terminal action submitted.".into(),
@@ -1094,7 +1088,7 @@ fn confirm_runtime_action(
     );
     content.append(
         &gtk::Label::builder()
-            .label(&action.display_command)
+            .label(&action.redacted_preview)
             .xalign(0.0)
             .wrap(true)
             .selectable(true)
