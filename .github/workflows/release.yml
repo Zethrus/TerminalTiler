@@ -277,3 +277,21 @@ jobs:
           asset_count="$(jq '.assets | length' <<<"$release_json")"
           test "$asset_count" -eq 6
           jq -e '.assets | all(.digest != null and (.digest | test("^sha256:[0-9a-fA-F]{64}$")))' <<<"$release_json" >/dev/null
+
+      - name: Notify TerminalTiler Pro of published Core release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.TERMINALTILER_PRO_DISPATCH_TOKEN }}
+          CORE_RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN:-}" || {
+            echo "TERMINALTILER_PRO_DISPATCH_TOKEN is required" >&2
+            exit 1
+          }
+          jq -nc --arg tag "$CORE_RELEASE_TAG" \
+            '{event_type:"terminaltiler-core-release-published", client_payload:{core_release_tag:$tag}}' \
+            | gh api --method POST \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                'repos/Zethrus/TerminalTiler-Pro/dispatches' --input -

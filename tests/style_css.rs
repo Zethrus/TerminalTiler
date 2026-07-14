@@ -3020,6 +3020,22 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
         "Release publishing should stage assets, compare their GitHub SHA-256 metadata with local files, then accept the repository's normal published release state instead of requiring unavailable immutable releases"
     );
 
+    let published_release_verification = publish_release
+        .find("- name: Verify published release")
+        .expect("publish-release should verify the published stable release");
+    let pro_notification = publish_release
+        .find("- name: Notify TerminalTiler Pro of published Core release")
+        .expect("publish-release should notify Pro only after publication");
+    assert!(
+        pro_notification > published_release_verification
+            && publish_release.contains("TERMINALTILER_PRO_DISPATCH_TOKEN")
+            && publish_release.contains("terminaltiler-core-release-published")
+            && publish_release.contains("client_payload:{core_release_tag:$tag}")
+            && publish_release.contains("repos/Zethrus/TerminalTiler-Pro/dispatches")
+            && publish_release.contains("X-GitHub-Api-Version: 2022-11-28"),
+        "a verified stable Core release must dispatch its exact tag to Pro with the least-privilege cross-repository token"
+    );
+
     for asset_output in [
         "${{ needs.resolve-release.outputs.deb_path }}",
         "${{ needs.resolve-release.outputs.appimage_path }}",

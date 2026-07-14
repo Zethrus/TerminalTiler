@@ -241,6 +241,13 @@ GitHub Actions also publishes tagged releases automatically. Push a semver tag i
 - build the Windows portable `.exe`, NSIS installer `.exe`, and WiX `.msi` artifacts
 - run the Linux and Windows smoke coverage already in the repo
 - attach `dist/terminaltiler_X.Y.Z_amd64.deb`, `dist/TerminalTiler-X.Y.Z-x86_64.AppImage`, `dist/TerminalTiler-X.Y.Z-portable-x86_64.exe`, `dist/TerminalTiler-setup-X.Y.Z-x86_64.exe`, and `dist/TerminalTiler-setup-X.Y.Z-x86_64.msi` to the GitHub Release for that tag
+- after verifying that the GitHub Release is published and stable, notify `Zethrus/TerminalTiler-Pro` with a `terminaltiler-core-release-published` repository-dispatch event whose `client_payload.core_release_tag` is the released tag
+
+The final notification requires the Core repository secret
+`TERMINALTILER_PRO_DISPATCH_TOKEN`: use a fine-grained token limited to the
+`Zethrus/TerminalTiler-Pro` repository with **Contents: write** permission.
+The workflow fails closed if the secret is unavailable so a published Core
+release cannot silently skip its Pro compatibility handoff.
 
 Pushes to the repository default branch also trigger the `Package Artifacts` workflow. That workflow resolves a snapshot package version automatically, builds the Linux and Windows distributables, runs the same smoke coverage, and uploads the resulting `.deb`, `.AppImage`, portable `.exe`, installer `.exe`, and `.msi` files as GitHub Actions artifacts for that run.
 
