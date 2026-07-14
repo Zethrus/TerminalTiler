@@ -1036,8 +1036,7 @@ pub fn sanitize_output(input: &str, max_lines: usize, max_bytes: usize) -> Outpu
     let mut text = lines.join("\n");
     let truncated = text.len() > max_bytes || input.lines().count() > max_lines;
     if text.len() > max_bytes {
-        text.truncate(max_bytes);
-        text.push_str("…");
+        text = truncate_utf8(&text, max_bytes);
     }
     OutputSnapshot {
         line_count: text.lines().count(),
@@ -1045,6 +1044,18 @@ pub fn sanitize_output(input: &str, max_lines: usize, max_bytes: usize) -> Outpu
         truncated,
         redacted,
     }
+}
+
+fn truncate_utf8(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+    let suffix = "…";
+    let mut end = max_bytes.saturating_sub(suffix.len());
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &input[..end], suffix)
 }
 
 fn now_unix_ms() -> u128 {
@@ -1287,6 +1298,14 @@ mod tests {
         assert!(output.redacted);
         assert!(output.text.contains("[REDACTED]"));
         assert!(!output.text.contains("secret"));
+    }
+
+    #[test]
+    fn output_byte_bounds_do_not_split_unicode() {
+        let output = sanitize_output("🙂🙂🙂", 3, 5);
+        assert!(output.truncated);
+        assert!(output.text.is_char_boundary(output.text.len()));
+        assert!(output.text.len() <= 5);
     }
 
     #[test]
