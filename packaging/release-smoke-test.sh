@@ -366,6 +366,20 @@ test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libgtk-4.so.1"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libadwaita-1.so.0"
 test -f "$BUILD_DIR/deb/opt/terminaltiler/lib/libvte-2.91-gtk4.so.0"
 test -x "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-updater"
+DEB_UPDATER="$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-updater"
+# Debian updates use the packaged helper for the root-side handoff and later
+# for the post-install restart. Exercise the restart contract without
+# launching an application.
+if "$DEB_UPDATER" --restart-only --target /tmp/not-terminaltiler --version 1.2.3 --pid 0 \
+  >"$BUILD_DIR/deb-updater-restart-check.log" 2>&1; then
+  echo "ERROR: Debian restart-only updater accepted an invalid launcher" >&2
+  exit 1
+fi
+if ! grep -q "invalid restart-only updater arguments" "$BUILD_DIR/deb-updater-restart-check.log"; then
+  echo "ERROR: packaged Debian updater does not support the restart-only contract" >&2
+  cat "$BUILD_DIR/deb-updater-restart-check.log" >&2
+  exit 1
+fi
 test "$(tr -d '[:space:]' < "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler-install-kind")" = "deb"
 assert_packaged_runtime_assets "$BUILD_DIR/deb/opt/terminaltiler"
 assert_embedded_package_version "$BUILD_DIR/deb/opt/terminaltiler/bin/terminaltiler"

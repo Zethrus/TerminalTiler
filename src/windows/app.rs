@@ -628,6 +628,23 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                     MB_ICONWARNING | MB_OK,
                 );
             },
+            // Debian authorization is an in-session Linux-only flow. These
+            // variants are retained here solely so the shared updater event
+            // contract remains exhaustive; they must never request a Windows
+            // shutdown.
+            UpdateEvent::DebInstallStarted { .. } | UpdateEvent::DebInstallSucceeded { .. } => {}
+            UpdateEvent::DebInstallFailed { release, error } => unsafe {
+                MessageBoxW(
+                    hwnd,
+                    wide(&format!(
+                        "Could not install TerminalTiler {}:\r\n\r\n{error}",
+                        release.version
+                    ))
+                    .as_ptr(),
+                    wide("TerminalTiler update").as_ptr(),
+                    MB_ICONWARNING | MB_OK,
+                );
+            },
         }
     }
 

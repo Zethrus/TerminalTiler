@@ -1,5 +1,5 @@
 use adw::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -45,6 +45,8 @@ fn run_with_options_and_updates(
     let update_receiver = Rc::new(RefCell::new(update_runtime.map(|(_, receiver)| receiver)));
     let pending_update = Rc::new(RefCell::new(None::<ReleaseInfo>));
     let pending_update_failure = Rc::new(RefCell::new(None::<update::UpdateResult>));
+    let deb_install_in_progress = Rc::new(Cell::new(false));
+    let deb_install_progress = Rc::new(RefCell::new(None::<adw::Dialog>));
 
     let (tray_tx, tray_rx) = mpsc::channel();
     let tray_rx = Rc::new(RefCell::new(Some(tray_rx)));
@@ -60,6 +62,8 @@ fn run_with_options_and_updates(
         let update_receiver = update_receiver.clone();
         let pending_update = pending_update.clone();
         let pending_update_failure = pending_update_failure.clone();
+        let deb_install_in_progress = deb_install_in_progress.clone();
+        let deb_install_progress = deb_install_progress.clone();
         app.connect_startup(move |app| {
             crate::gtk_shell::load_css_for_default_display();
             crate::gtk_shell::configure_application_icons_for(&options.product.icon_name);
@@ -73,6 +77,8 @@ fn run_with_options_and_updates(
                     service,
                     pending_update.clone(),
                     pending_update_failure.clone(),
+                    deb_install_in_progress.clone(),
+                    deb_install_progress.clone(),
                 );
             }
         });
@@ -102,6 +108,8 @@ fn install_update_pump(
     service: UpdateService,
     pending_update: Rc<RefCell<Option<ReleaseInfo>>>,
     pending_update_failure: Rc<RefCell<Option<update::UpdateResult>>>,
+    deb_install_in_progress: Rc<Cell<bool>>,
+    deb_install_progress: Rc<RefCell<Option<adw::Dialog>>>,
 ) {
     let app = app.clone();
     let mut startup_result_checked = false;
@@ -132,6 +140,72 @@ fn install_update_pump(
                                 "Update failed",
                                 &format!("TerminalTiler could not install {version}: {error}"),
                             );
+                        }
+                    }
+                    UpdateEvent::DebInstallStarted { version } => {
+                        logging::info(format!(
+                            "requesting PolicyKit authorization for TerminalTiler {version}"
+                        ));
+                    }
+                    UpdateEvent::DebInstallSucceeded { release } => {
+                        deb_install_in_progress.set(false);
+                        close_deb_install_progress(&deb_install_progress);
+                        let Some(installation) = update::detect_installation() else {
+                            if let Some(window) = primary_window(&app) {
+                                crate::ui::dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update installed, but restart failed",
+                                    "TerminalTiler remains open because its Debian launcher could no longer be verified. Close and reopen TerminalTiler manually.",
+                                );
+                            }
+                            continue;
+                        };
+                        if installation.kind != update::InstallerKind::Deb {
+                            if let Some(window) = primary_window(&app) {
+                                crate::ui::dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update installed, but restart failed",
+                                    "TerminalTiler remains open because its Debian installation provenance changed. Close and reopen it manually.",
+                                );
+                            }
+                            continue;
+                        }
+                        match update::spawn_deb_restart_helper(&installation, &release.version) {
+                            Ok(()) => {
+                                logging::info(format!(
+                                    "TerminalTiler {} installed; delayed restart helper started",
+                                    release.version
+                                ));
+                                quit_after_update(&app);
+                            }
+                            Err(error) => {
+                                logging::error(format!(
+                                    "could not prepare Debian restart helper: {error}"
+                                ));
+                                if let Some(window) = primary_window(&app) {
+                                    crate::ui::dialog_chrome::present_notice(
+                                        &window,
+                                        "update-error-dialog",
+                                        "Update installed, but restart failed",
+                                        &format!(
+                                            "TerminalTiler remains open because it could not prepare a safe restart: {error}. Close and reopen it manually."
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    UpdateEvent::DebInstallFailed { release, error } => {
+                        deb_install_in_progress.set(false);
+                        close_deb_install_progress(&deb_install_progress);
+                        logging::error(format!(
+                            "could not install Debian update {}: {error}",
+                            release.version
+                        ));
+                        if let Some(window) = primary_window(&app) {
+                            present_deb_install_failure(&window, &release, &error);
                         }
                     }
                 }
@@ -165,35 +239,54 @@ fn install_update_pump(
 
         if let Some((release, artifact)) = downloaded {
             if let Some(installation) = update::detect_installation() {
-                match update::spawn_updater(&release, &artifact, &installation) {
-                    Ok(()) => {
-                        logging::info(format!(
-                            "update helper started for TerminalTiler {}",
-                            release.version
-                        ));
-                        if let Some(window) = primary_window(&app) {
-                            if gtk::prelude::WidgetExt::activate_action(
-                                &window,
-                                "win.quit-app",
-                                None,
-                            )
-                            .is_err()
-                            {
-                                app.quit();
-                            }
-                        } else {
-                            app.quit();
-                        }
-                    }
-                    Err(error) => {
-                        logging::error(format!("could not start update helper: {error}"));
+                if installation.kind == update::InstallerKind::Deb {
+                    if deb_install_in_progress.replace(true) {
+                        logging::info("ignored duplicate Debian update install request");
                         if let Some(window) = primary_window(&app) {
                             crate::ui::dialog_chrome::present_notice(
                                 &window,
                                 "update-error-dialog",
-                                "Update failed",
-                                &format!("Could not restart TerminalTiler for the update: {error}"),
+                                "Update already in progress",
+                                "TerminalTiler is already waiting for system authorization or package installation to finish.",
                             );
+                        }
+                    } else {
+                        if let Some(window) = primary_window(&app) {
+                            *deb_install_progress.borrow_mut() =
+                                Some(present_deb_install_progress(&window, &release));
+                        }
+                        if let Err(error) = service.install_deb(release.clone(), artifact.clone()) {
+                            deb_install_in_progress.set(false);
+                            close_deb_install_progress(&deb_install_progress);
+                            logging::error(format!(
+                                "could not request Debian update install: {error}"
+                            ));
+                            if let Some(window) = primary_window(&app) {
+                                present_deb_install_request_failure(&window, &release, &error);
+                            }
+                        }
+                    }
+                } else {
+                    match update::spawn_updater(&release, &artifact, &installation) {
+                        Ok(()) => {
+                            logging::info(format!(
+                                "update helper started for TerminalTiler {}",
+                                release.version
+                            ));
+                            quit_after_update(&app);
+                        }
+                        Err(error) => {
+                            logging::error(format!("could not start update helper: {error}"));
+                            if let Some(window) = primary_window(&app) {
+                                crate::ui::dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update failed",
+                                    &format!(
+                                        "Could not restart TerminalTiler for the update: {error}"
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -208,6 +301,94 @@ fn install_update_pump(
         }
         gtk::glib::ControlFlow::Continue
     });
+}
+
+/// Keep the authorization/install progress visible only once per transaction.
+/// The actual work runs on the update worker, so this visual state never
+/// blocks GTK while PolicyKit owns its desktop prompt.
+fn present_deb_install_progress(
+    window: &adw::ApplicationWindow,
+    release: &ReleaseInfo,
+) -> adw::Dialog {
+    crate::ui::dialog_chrome::PremiumModal::new(
+        "update-install-progress-dialog",
+        "Installing update",
+    )
+    .icon(
+        crate::ui::icons::name::DIALOG_INFO,
+        crate::ui::dialog_chrome::ModalAccent::Amber,
+    )
+    .body(&format!(
+        "TerminalTiler is requesting system authorization to install {}. Keep this window open while your desktop shows the password prompt.",
+        release.version
+    ))
+    .present_with_handle(Some(window))
+}
+
+fn close_deb_install_progress(progress: &RefCell<Option<adw::Dialog>>) {
+    if let Some(dialog) = progress.borrow_mut().take() {
+        dialog.close();
+    }
+}
+
+fn present_deb_install_failure(
+    window: &adw::ApplicationWindow,
+    release: &ReleaseInfo,
+    error: &update::DebInstallFailure,
+) {
+    let release_url = format!(
+        "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
+        release.tag
+    );
+    crate::ui::dialog_chrome::PremiumModal::new("update-error-dialog", "Update not installed")
+        .icon(
+            crate::ui::icons::name::DIALOG_INFO,
+            crate::ui::dialog_chrome::ModalAccent::Amber,
+        )
+        .body(&format!(
+            "{}\n\nTerminalTiler is still running. You can retry the update or download {} manually.",
+            error.actionable_message(),
+            release.version
+        ))
+        .action(
+            "View Release",
+            crate::ui::dialog_chrome::ModalActionRole::Ghost,
+            false,
+            move || open_release_url(&release_url),
+        )
+        .action(
+            "OK",
+            crate::ui::dialog_chrome::ModalActionRole::Secondary,
+            true,
+            || {},
+        )
+        .present(Some(window));
+}
+
+fn present_deb_install_request_failure(
+    window: &adw::ApplicationWindow,
+    release: &ReleaseInfo,
+    error: &str,
+) {
+    crate::ui::dialog_chrome::present_notice(
+        window,
+        "update-error-dialog",
+        "Update not installed",
+        &format!(
+            "TerminalTiler remains open because it could not request system authorization: {error}. Retry the update or download {} manually from the release page.",
+            release.version
+        ),
+    );
+}
+
+fn quit_after_update(app: &adw::Application) {
+    if let Some(window) = primary_window(app) {
+        if gtk::prelude::WidgetExt::activate_action(&window, "win.quit-app", None).is_err() {
+            app.quit();
+        }
+    } else {
+        app.quit();
+    }
 }
 
 fn present_update_dialog(

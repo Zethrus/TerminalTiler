@@ -170,6 +170,26 @@ mod imp {
                                 );
                             }
                         }
+                        // Debian installation is handled only by the Linux
+                        // shell while its PolicyKit desktop session is alive.
+                        // Windows never emits these events for a supported
+                        // installation, but keep the cross-platform event
+                        // contract exhaustive without triggering a quit.
+                        UpdateEvent::DebInstallStarted { .. }
+                        | UpdateEvent::DebInstallSucceeded { .. } => {}
+                        UpdateEvent::DebInstallFailed { release, error } => {
+                            if let Some(window) = primary_window(&app) {
+                                dialog_chrome::present_notice(
+                                    &window,
+                                    "update-error-dialog",
+                                    "Update failed",
+                                    &format!(
+                                        "Could not install TerminalTiler {}: {error}",
+                                        release.version
+                                    ),
+                                );
+                            }
+                        }
                     }
                 }
             }

@@ -282,6 +282,15 @@ impl PremiumModal {
             }
         }
     }
+
+    /// Present the modal and retain a handle for a later programmatic close.
+    /// Long-running operations use this to replace progress UI with the final
+    /// result instead of stacking another dialog above it.
+    pub(crate) fn present_with_handle(self, parent: Option<&impl IsA<gtk::Widget>>) -> adw::Dialog {
+        let dialog = self.dialog.clone();
+        self.present(parent);
+        dialog
+    }
 }
 
 /// Destructive confirmation that reports both outcomes; Esc/close counts as

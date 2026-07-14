@@ -6,12 +6,10 @@
 //! decide when to ask the user for consent.
 
 use std::collections::HashSet;
-#[cfg(unix)]
-use std::fs::File;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -32,6 +30,15 @@ const MAX_RELEASE_JSON_BYTES: u64 = 2 * 1024 * 1024;
 /// download without a product change.  This also bounds malicious metadata.
 pub(crate) const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_READ_CHUNK: usize = 1024 * 1024;
+/// Keep diagnostics useful without allowing a package manager to retain an
+/// unbounded amount of output in the desktop process.
+const MAX_INSTALL_DIAGNOSTIC_BYTES: usize = 8 * 1024;
+const PKEXEC_PATH: &str = "/usr/bin/pkexec";
+const DEBIAN_LAUNCHER_PATH: &str = "/usr/bin/terminaltiler";
+// This binary is installed by the Debian package and owned by root.  Never
+// run the per-user copied restart helper through pkexec: that copy exists only
+// to survive an application upgrade and is not a privileged trust boundary.
+const DEBIAN_PRIVILEGED_UPDATER_PATH: &str = "/opt/terminaltiler/bin/terminaltiler-updater";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallerKind {
@@ -144,14 +151,20 @@ pub(crate) fn detect_installation() -> Option<Installation> {
             })
             .unwrap_or_else(|| current.clone())
     } else if kind == InstallerKind::Deb {
-        // The Debian launcher sets the bundled runtime environment before it
-        // execs terminaltiler-bin. Relaunch that launcher after apt replaces
-        // the payload so WebKit and the bundled libraries remain available.
-        let launcher = current
-            .parent()
-            .map(|parent| parent.join("terminaltiler"))
-            .filter(|path| path.is_file());
-        launcher.unwrap_or_else(|| current.clone())
+        // Relaunch the system launcher after apt replaces the payload. It sets
+        // the bundled runtime environment before it execs terminaltiler-bin.
+        // The adjacent launcher is retained only for older packages that did
+        // not install the /usr/bin entry.
+        let system_launcher = PathBuf::from(DEBIAN_LAUNCHER_PATH);
+        if system_launcher.is_file() {
+            system_launcher
+        } else {
+            current
+                .parent()
+                .map(|parent| parent.join("terminaltiler"))
+                .filter(|path| path.is_file())
+                .unwrap_or_else(|| current.clone())
+        }
     } else {
         current.clone()
     };
@@ -552,6 +565,235 @@ fn sync_directory(_directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Failures from the in-session Debian installer. These are intentionally
+/// distinct from deferred-helper failures: the app remains open so the user
+/// can retry or choose a manual install after seeing the real authorization
+/// outcome.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DebInstallFailure {
+    /// The downloaded file changed after the original verified download.
+    ArtifactVerificationFailed { error: String },
+    /// PolicyKit returned 126, which means its dialog was dismissed or no
+    /// desktop agent was available to present it.
+    AuthorizationPromptUnavailableOrDismissed { diagnostic: String },
+    /// PolicyKit returned 127 before apt could run.
+    AuthorizationFailed { diagnostic: String },
+    /// The absolute pkexec executable could not be started at all.
+    PrivilegeLauncherUnavailable { error: String },
+    /// apt-get ran but did not complete the package transaction successfully.
+    PackageManagerFailed {
+        exit_code: Option<i32>,
+        diagnostic: String,
+    },
+}
+
+impl DebInstallFailure {
+    pub(crate) fn actionable_message(&self) -> String {
+        match self {
+            Self::ArtifactVerificationFailed { .. } => {
+                "The downloaded package could not be verified again, so TerminalTiler did not request administrator access. Download the release again or install it manually.".into()
+            }
+            Self::AuthorizationPromptUnavailableOrDismissed { .. } => {
+                "The system authorization prompt was dismissed or could not be shown. Unlock your desktop and try again, or install the downloaded release manually.".into()
+            }
+            Self::AuthorizationFailed { .. } => {
+                "System authorization failed before the package manager could start. Check that PolicyKit and apt are available, then try again or install the release manually.".into()
+            }
+            Self::PrivilegeLauncherUnavailable { .. } => format!(
+                "The system authorization program ({PKEXEC_PATH}) is unavailable. Install the release manually or restore PolicyKit before retrying."
+            ),
+            Self::PackageManagerFailed { .. } => {
+                "The package manager could not install the release. Resolve any package-manager error, then retry or install the release manually.".into()
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for DebInstallFailure {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ArtifactVerificationFailed { error } => {
+                write!(
+                    output,
+                    "downloaded Debian package verification failed: {error}"
+                )
+            }
+            Self::AuthorizationPromptUnavailableOrDismissed { diagnostic } => write!(
+                output,
+                "PolicyKit authorization dialog was dismissed or unavailable: {diagnostic}"
+            ),
+            Self::AuthorizationFailed { diagnostic } => {
+                write!(output, "PolicyKit authorization failed: {diagnostic}")
+            }
+            Self::PrivilegeLauncherUnavailable { error } => {
+                write!(output, "could not start {PKEXEC_PATH}: {error}")
+            }
+            Self::PackageManagerFailed {
+                exit_code,
+                diagnostic,
+            } => write!(
+                output,
+                "apt-get installation failed with {}: {diagnostic}",
+                exit_code
+                    .map(|code| format!("exit code {code}"))
+                    .unwrap_or_else(|| "an unavailable exit status".into())
+            ),
+        }
+    }
+}
+
+/// Construct the privileged Debian installation command without involving a
+/// shell. Both executables are absolute so the desktop updater cannot inherit
+/// a user-controlled PATH when it crosses the PolicyKit boundary.
+fn deb_install_command(release: &ReleaseInfo, artifact: &Path) -> Command {
+    let digest = release
+        .digest
+        .strip_prefix("sha256:")
+        .expect("validated Debian releases always have a SHA-256 digest");
+    let mut command = Command::new(PKEXEC_PATH);
+    command
+        .arg(DEBIAN_PRIVILEGED_UPDATER_PATH)
+        .arg("--install-deb")
+        .arg("--artifact")
+        .arg(artifact)
+        .arg("--version")
+        .arg(release.version.to_string())
+        .arg("--size")
+        .arg(release.size.to_string())
+        .arg("--digest")
+        .arg(digest);
+    command
+}
+
+fn classify_deb_install_failure(exit_code: Option<i32>, diagnostic: String) -> DebInstallFailure {
+    match exit_code {
+        Some(126) => DebInstallFailure::AuthorizationPromptUnavailableOrDismissed { diagnostic },
+        Some(127) => DebInstallFailure::AuthorizationFailed { diagnostic },
+        _ => DebInstallFailure::PackageManagerFailed {
+            exit_code,
+            diagnostic,
+        },
+    }
+}
+
+/// Drain a process stream completely while retaining only a bounded prefix for
+/// user-facing diagnostics. Continuing to drain after the bound prevents a
+/// verbose apt process from blocking on a full stderr pipe.
+fn bounded_diagnostic<R: Read>(mut reader: R, limit: usize) -> io::Result<String> {
+    let mut captured = Vec::with_capacity(limit);
+    let mut buffer = [0u8; 4096];
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = limit.saturating_sub(captured.len());
+        let retained = remaining.min(read);
+        captured.extend_from_slice(&buffer[..retained]);
+        truncated |= retained < read;
+    }
+    let mut diagnostic = String::from_utf8_lossy(&captured).trim().to_string();
+    if diagnostic.is_empty() {
+        diagnostic = "no diagnostic output was provided".into();
+    }
+    if truncated {
+        diagnostic.push_str("\n[diagnostic output truncated]");
+    }
+    Ok(diagnostic)
+}
+
+/// Recheck the on-disk Debian payload immediately before handing its path to
+/// apt. The download path is user-writable and could otherwise change after
+/// the original streaming verification completed.
+fn verify_deb_artifact(release: &ReleaseInfo, artifact: &Path) -> Result<(), String> {
+    if release.kind != InstallerKind::Deb {
+        return Err("a non-Debian release was sent to the Debian verifier".into());
+    }
+    if !artifact.is_absolute()
+        || !artifact.is_file()
+        || artifact.file_name().and_then(|name| name.to_str()) != Some(release.asset_name.as_str())
+    {
+        return Err("the downloaded Debian package path is no longer valid".into());
+    }
+    if release.size == 0 || release.size >= MAX_ASSET_BYTES {
+        return Err("the downloaded Debian package has an invalid expected size".into());
+    }
+    let expected = release
+        .digest
+        .strip_prefix("sha256:")
+        .ok_or("the downloaded Debian package has an invalid expected digest")?;
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("the downloaded Debian package has an invalid expected digest".into());
+    }
+    let mut file = File::open(artifact).map_err(|error| error.to_string())?;
+    let mut hash = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; MAX_READ_CHUNK];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > release.size || total >= MAX_ASSET_BYTES {
+            return Err("the downloaded Debian package size changed".into());
+        }
+        hash.update(&buffer[..read]);
+    }
+    if total != release.size {
+        return Err("the downloaded Debian package size changed".into());
+    }
+    let actual = format!("{:x}", hash.finalize());
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err("the downloaded Debian package digest changed".into());
+    }
+    Ok(())
+}
+
+fn install_deb_while_application_is_running(
+    release: &ReleaseInfo,
+    artifact: &Path,
+) -> Result<(), DebInstallFailure> {
+    if !Path::new(DEBIAN_PRIVILEGED_UPDATER_PATH).is_file() {
+        return Err(DebInstallFailure::PackageManagerFailed {
+            exit_code: None,
+            diagnostic: format!(
+                "the root-owned Debian update helper is missing at {DEBIAN_PRIVILEGED_UPDATER_PATH}"
+            ),
+        });
+    }
+    let mut command = deb_install_command(release, artifact);
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child =
+        command
+            .spawn()
+            .map_err(|error| DebInstallFailure::PrivilegeLauncherUnavailable {
+                error: error.to_string(),
+            })?;
+    let stderr = child
+        .stderr
+        .take()
+        .expect("stderr is piped before spawning the Debian installer");
+    let diagnostics =
+        thread::spawn(move || bounded_diagnostic(stderr, MAX_INSTALL_DIAGNOSTIC_BYTES));
+    let status = child
+        .wait()
+        .map_err(|error| DebInstallFailure::PackageManagerFailed {
+            exit_code: None,
+            diagnostic: error.to_string(),
+        })?;
+    let diagnostic = diagnostics
+        .join()
+        .unwrap_or_else(|_| Ok("could not collect package-manager diagnostics".into()))
+        .unwrap_or_else(|error| format!("could not read package-manager diagnostics: {error}"));
+    if status.success() {
+        Ok(())
+    } else {
+        Err(classify_deb_install_failure(status.code(), diagnostic))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum UpdateEvent {
     Available(ReleaseInfo),
@@ -562,6 +804,16 @@ pub(crate) enum UpdateEvent {
     DownloadFailed {
         version: Version,
         error: String,
+    },
+    DebInstallStarted {
+        version: Version,
+    },
+    DebInstallSucceeded {
+        release: ReleaseInfo,
+    },
+    DebInstallFailed {
+        release: ReleaseInfo,
+        error: DebInstallFailure,
     },
 }
 
@@ -586,6 +838,10 @@ pub(crate) fn take_update_result() -> Option<UpdateResult> {
 
 enum UpdateCommand {
     Download(ReleaseInfo),
+    InstallDeb {
+        release: ReleaseInfo,
+        artifact: PathBuf,
+    },
     Stop,
 }
 
@@ -623,6 +879,27 @@ impl UpdateService {
     pub(crate) fn download(&self, release: ReleaseInfo) {
         self.inner.cancelled.store(false, Ordering::Relaxed);
         let _ = self.inner.command_tx.send(UpdateCommand::Download(release));
+    }
+
+    /// Request the authenticated Debian transaction on the worker thread.
+    /// Calling this never blocks the GTK main loop and, unlike the legacy
+    /// deferred helper, starts PolicyKit while this process still owns the
+    /// active desktop session.
+    pub(crate) fn install_deb(
+        &self,
+        release: ReleaseInfo,
+        artifact: PathBuf,
+    ) -> Result<(), String> {
+        if release.kind != InstallerKind::Deb {
+            return Err("a non-Debian release was sent to the Debian installer".into());
+        }
+        if !artifact.is_absolute() || !artifact.is_file() {
+            return Err("the verified Debian package is no longer available".into());
+        }
+        self.inner
+            .command_tx
+            .send(UpdateCommand::InstallDeb { release, artifact })
+            .map_err(|_| "the update worker is no longer running".into())
     }
 }
 
@@ -690,6 +967,36 @@ fn update_worker(
                     }
                 }
             }
+            Some(UpdateCommand::InstallDeb { release, artifact }) => {
+                if release.kind != InstallerKind::Deb {
+                    let _ = event_tx.send(UpdateEvent::DebInstallFailed {
+                        release,
+                        error: DebInstallFailure::PackageManagerFailed {
+                            exit_code: None,
+                            diagnostic: "a non-Debian release reached the Debian installer".into(),
+                        },
+                    });
+                    continue;
+                }
+                if let Err(error) = verify_deb_artifact(&release, &artifact) {
+                    let _ = event_tx.send(UpdateEvent::DebInstallFailed {
+                        release,
+                        error: DebInstallFailure::ArtifactVerificationFailed { error },
+                    });
+                    continue;
+                }
+                let _ = event_tx.send(UpdateEvent::DebInstallStarted {
+                    version: release.version,
+                });
+                match install_deb_while_application_is_running(&release, &artifact) {
+                    Ok(()) => {
+                        let _ = event_tx.send(UpdateEvent::DebInstallSucceeded { release });
+                    }
+                    Err(error) => {
+                        let _ = event_tx.send(UpdateEvent::DebInstallFailed { release, error });
+                    }
+                }
+            }
         }
     }
 }
@@ -727,6 +1034,12 @@ pub(crate) fn spawn_updater(
     artifact: &Path,
     installation: &Installation,
 ) -> Result<(), String> {
+    if installation.kind == InstallerKind::Deb || release.kind == InstallerKind::Deb {
+        return Err(
+            "Debian packages must be authorized before quit and restarted with the restart-only helper"
+                .into(),
+        );
+    }
     if !artifact.is_file() || !artifact.is_absolute() {
         return Err("downloaded update artifact is not an absolute file".into());
     }
@@ -754,6 +1067,37 @@ pub(crate) fn spawn_updater(
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("could not start updater helper: {error}"))
+}
+
+/// Copy and start the small post-install helper only after apt has completed.
+/// The helper's sole job in this mode is to wait for this process to finish
+/// its graceful shutdown and relaunch the Debian launcher.  It receives no
+/// artifact or digest and cannot perform a privileged installation itself.
+pub(crate) fn spawn_deb_restart_helper(
+    installation: &Installation,
+    version: &Version,
+) -> Result<(), String> {
+    if installation.kind != InstallerKind::Deb {
+        return Err("only Debian installations may use the restart-only helper".into());
+    }
+    if !installation.target_path().is_absolute() || !installation.target_path().is_file() {
+        return Err("the Debian launcher is no longer available for restart".into());
+    }
+    let helper = copy_helper_outside_installation(installation)?;
+    let pid = portable_wrapper_pid()
+        .unwrap_or_else(std::process::id)
+        .to_string();
+    Command::new(&helper)
+        .arg("--restart-only")
+        .arg("--target")
+        .arg(installation.target_path())
+        .arg("--version")
+        .arg(version.to_string())
+        .arg("--pid")
+        .arg(pid)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not start restart helper: {error}"))
 }
 
 fn copy_helper_outside_installation(installation: &Installation) -> Result<PathBuf, String> {
@@ -799,6 +1143,20 @@ mod tests {
         format!(
             r#"{{"tag_name":"v{version}","name":"TerminalTiler {version}","body":"notes","draft":false,"prerelease":false,"assets":[{{"name":"{name}","size":42,"browser_download_url":"{RELEASE_DOWNLOAD_ROOT}v{version}/{name}","url":"https://api.github.com/repos/Zethrus/TerminalTiler/releases/assets/1","digest":"{digest}"}}]}}"#
         )
+    }
+
+    fn release(kind: InstallerKind) -> ReleaseInfo {
+        ReleaseInfo {
+            version: Version::parse("1.2.3").unwrap(),
+            tag: "v1.2.3".into(),
+            title: "TerminalTiler 1.2.3".into(),
+            notes: String::new(),
+            asset_name: kind.asset_name(&Version::parse("1.2.3").unwrap()),
+            download_url: "https://example.invalid/fixture".into(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            size: 1,
+            kind,
+        }
     }
 
     #[test]
@@ -917,6 +1275,124 @@ mod tests {
             InstallerKind::PortableExe.asset_name(&version),
             "TerminalTiler-1.2.3-portable-x86_64.exe"
         );
+    }
+
+    #[test]
+    fn debian_installer_uses_a_root_owned_helper_with_bound_metadata() {
+        let artifact = Path::new("/tmp/terminaltiler_1.2.3_amd64.deb");
+        let mut release = release(InstallerKind::Deb);
+        release.size = 42;
+        release.digest = format!("sha256:{}", "a".repeat(64));
+        let command = deb_install_command(&release, artifact);
+        assert_eq!(command.get_program(), std::ffi::OsStr::new(PKEXEC_PATH));
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            vec![
+                DEBIAN_PRIVILEGED_UPDATER_PATH.to_string(),
+                "--install-deb".to_string(),
+                "--artifact".to_string(),
+                artifact.display().to_string(),
+                "--version".to_string(),
+                "1.2.3".to_string(),
+                "--size".to_string(),
+                "42".to_string(),
+                "--digest".to_string(),
+                "a".repeat(64),
+            ]
+        );
+    }
+
+    #[test]
+    fn classifies_polkit_exit_codes_separately_from_apt_failures() {
+        assert!(matches!(
+            classify_deb_install_failure(Some(126), "dismissed".into()),
+            DebInstallFailure::AuthorizationPromptUnavailableOrDismissed { .. }
+        ));
+        assert!(matches!(
+            classify_deb_install_failure(Some(127), "denied".into()),
+            DebInstallFailure::AuthorizationFailed { .. }
+        ));
+        assert!(matches!(
+            classify_deb_install_failure(Some(100), "apt failed".into()),
+            DebInstallFailure::PackageManagerFailed {
+                exit_code: Some(100),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bounds_but_drains_package_manager_diagnostics() {
+        let diagnostic = bounded_diagnostic(Cursor::new(b"0123456789"), 4).unwrap();
+        assert_eq!(diagnostic, "0123\n[diagnostic output truncated]");
+
+        let empty = bounded_diagnostic(Cursor::new(b""), 4).unwrap();
+        assert_eq!(empty, "no diagnostic output was provided");
+    }
+
+    #[test]
+    fn rechecks_the_debian_payload_before_requesting_privilege() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-update-deb-recheck-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut release = release(InstallerKind::Deb);
+        let artifact = root.join(&release.asset_name);
+        let payload = b"verified Debian payload";
+        fs::write(&artifact, payload).unwrap();
+        release.size = payload.len() as u64;
+        release.digest = format!("sha256:{:x}", Sha256::digest(payload));
+
+        verify_deb_artifact(&release, &artifact).expect("the original payload verifies");
+        fs::write(&artifact, b"tampered Debian payload").unwrap();
+        assert!(verify_deb_artifact(&release, &artifact).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn debian_install_request_is_queued_without_a_shutdown_command() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-update-install-request-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("terminaltiler_1.2.3_amd64.deb");
+        fs::write(&artifact, b"verified fixture").unwrap();
+
+        let (command_tx, command_rx) = mpsc::channel();
+        let service = UpdateService {
+            inner: Arc::new(UpdateServiceInner {
+                command_tx,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            }),
+        };
+        service
+            .install_deb(release(InstallerKind::Deb), artifact.clone())
+            .expect("the verified package should be queued asynchronously");
+        match command_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(UpdateCommand::InstallDeb {
+                release,
+                artifact: queued,
+            }) => {
+                assert_eq!(release.kind, InstallerKind::Deb);
+                assert_eq!(queued, artifact);
+            }
+            _ => panic!("expected an in-session Debian install command"),
+        }
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        drop(service);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1041,17 +1517,7 @@ mod tests {
         ));
         assert!(!cancelled.load(Ordering::Relaxed));
 
-        service.download(ReleaseInfo {
-            version: Version::parse("1.2.3").unwrap(),
-            tag: "v1.2.3".into(),
-            title: "TerminalTiler 1.2.3".into(),
-            notes: String::new(),
-            asset_name: "fixture".into(),
-            download_url: "https://example.invalid/fixture".into(),
-            digest: format!("sha256:{}", "0".repeat(64)),
-            size: 1,
-            kind: InstallerKind::AppImage,
-        });
+        service.download(release(InstallerKind::AppImage));
         assert!(matches!(
             command_rx.recv_timeout(Duration::from_secs(1)),
             Ok(UpdateCommand::Download(_))
