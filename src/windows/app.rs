@@ -219,7 +219,6 @@ mod imp {
     }
 
     fn run_with_options_and_updates(options: RuntimeOptions, enable_updates: bool) -> ExitCode {
-        crate::extension::attach_supplied_runtime_control(&options);
         logging::init();
         logging::info("windows GUI shell startup");
 

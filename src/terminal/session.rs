@@ -324,14 +324,6 @@ impl TerminalSession {
         self.state.borrow().termination_requested
     }
 
-    pub fn child_pid(&self) -> Option<u32> {
-        self.state.borrow().child_pid.map(|pid| pid as u32)
-    }
-
-    pub fn last_exit_status(&self) -> Option<i32> {
-        self.state.borrow().last_exit_status
-    }
-
     pub fn has_active_process(&self) -> bool {
         let state = self.state.borrow();
         !state.exited && !state.termination_requested
