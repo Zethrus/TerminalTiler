@@ -263,9 +263,16 @@ fn build_headless_review_args(
             args.push("exec".to_string());
             args
         }
+        AgentKind::Opencode => vec!["run".to_string()],
+        AgentKind::Copilot | AgentKind::Grok => Vec::new(),
     };
-    if yolo {
-        args.push(agent.yolo_flag().to_string());
+    if yolo && let Some(flag) = agent.yolo_flag() {
+        args.push(flag.to_string());
+    }
+    match agent {
+        AgentKind::Copilot => args.push("--prompt".to_string()),
+        AgentKind::Grok => args.push("--single".to_string()),
+        AgentKind::Claude | AgentKind::Codex | AgentKind::Opencode => {}
     }
     args.push(prompt);
     args
@@ -533,5 +540,42 @@ mod tests {
         let prompt = codex.last().unwrap();
         assert!(prompt.contains("codex-reviewer"));
         assert!(prompt.contains("get_my_work"));
+
+        let grok = build_headless_review_args(
+            Path::new("/tmp/project"),
+            AgentKind::Grok,
+            false,
+            build_headless_review_prompt(AgentKind::Grok, &task),
+        );
+        assert_eq!(grok[0], "--single");
+        assert!(grok[1].contains("grok-reviewer"));
+        assert!(grok[1].contains("get_my_work"));
+    }
+
+    #[test]
+    fn headless_review_places_no_approval_flags_before_prompt_options() {
+        let mut board = Board::default();
+        let task =
+            create_task(&mut board, "Review target", "details", TaskStatus::InReview).clone();
+
+        let copilot = build_headless_review_args(
+            Path::new("/tmp/project"),
+            AgentKind::Copilot,
+            true,
+            build_headless_review_prompt(AgentKind::Copilot, &task),
+        );
+        assert_eq!(copilot[0], "--yolo");
+        assert_eq!(copilot[1], "--prompt");
+        assert!(copilot[2].contains("copilot-reviewer"));
+
+        let grok = build_headless_review_args(
+            Path::new("/tmp/project"),
+            AgentKind::Grok,
+            true,
+            build_headless_review_prompt(AgentKind::Grok, &task),
+        );
+        assert_eq!(grok[0], "--always-approve");
+        assert_eq!(grok[1], "--single");
+        assert!(grok[2].contains("grok-reviewer"));
     }
 }

@@ -4,6 +4,8 @@ mod process;
 mod wsl_paths;
 
 pub use process::terminal_agent_candidates;
+#[cfg(any(target_os = "linux", test))]
+pub use process::{ForegroundProcess, terminal_foreground_process};
 
 #[cfg(test)]
 pub use common::canonicalize_existing_dir;

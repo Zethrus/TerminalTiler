@@ -18,7 +18,7 @@ pub type WorkspaceId = String;
 pub type TileId = String;
 pub type ActionId = String;
 
-pub const RUNTIME_SCHEMA_VERSION: u32 = 2;
+pub const RUNTIME_SCHEMA_VERSION: u32 = 3;
 pub const MAX_OUTPUT_LINES: usize = 40;
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 pub const EVENT_JOURNAL_CAPACITY: usize = 4_096;
@@ -110,6 +110,12 @@ pub struct TileSnapshot {
     pub agent_label: Option<String>,
     pub kind: TileKind,
     pub focused: bool,
+    /// Whether the tile has been excluded from companion observation.
+    #[serde(default)]
+    pub private: bool,
+    /// Time at which the terminal state represented by this tile was read.
+    #[serde(default)]
+    pub observed_at_unix_ms: u128,
     pub working_directory: Option<String>,
     pub process: ProcessSnapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +136,28 @@ pub struct ProcessSnapshot {
     pub child_pid: Option<u32>,
     pub foreground_command: Option<String>,
     pub exit_code: Option<i32>,
+    /// Stable process identity fields used to reject stale control requests.
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u128>,
+    #[serde(default)]
+    pub tty: Option<String>,
+    #[serde(default)]
+    pub executable: Option<String>,
+    #[serde(default)]
+    pub identity: Option<ProcessIdentity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProcessIdentity {
+    pub pid: u32,
+    /// Platform process-start discriminator. Linux reports /proc start ticks;
+    /// Windows reports creation-time ticks. Missing values cannot authorize
+    /// destructive process controls.
+    #[serde(default)]
+    pub started_at_ticks: Option<u64>,
+    #[serde(default)]
+    pub tty: Option<String>,
+    pub executable: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,6 +184,52 @@ pub struct AgentSnapshot {
     pub provider: String,
     pub status: String,
     pub tile_id: Option<TileId>,
+    #[serde(default)]
+    pub ownership: AgentOwnership,
+    #[serde(default)]
+    pub state: AgentRunState,
+    #[serde(default)]
+    pub project_root: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub process: ProcessSnapshot,
+    #[serde(default)]
+    pub capabilities: AgentControlCapabilities,
+    #[serde(default)]
+    pub queue_depth: usize,
+    #[serde(default)]
+    pub last_activity_at_unix_ms: u128,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOwnership {
+    Managed,
+    #[default]
+    Detected,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunState {
+    Starting,
+    Working,
+    WaitingForInput,
+    WaitingForApproval,
+    Interrupted,
+    Stopping,
+    Exited,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AgentControlCapabilities {
+    pub enqueue_prompt: bool,
+    pub interrupt_turn: bool,
+    pub graceful_stop: bool,
+    pub terminate: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1009,6 +1083,11 @@ pub fn sanitize_output(input: &str, max_lines: usize, max_bytes: usize) -> Outpu
     let start = input_lines.len().saturating_sub(max_lines);
     let mut lines = Vec::new();
     for line in input_lines.into_iter().skip(start) {
+        if line_contains_sensitive_material(line) {
+            lines.push("[REDACTED CREDENTIAL]".to_string());
+            redacted = true;
+            continue;
+        }
         let mut sanitized = line.to_string();
         for prefix in [
             "OPENAI_API_KEY=",
@@ -1039,6 +1118,31 @@ pub fn sanitize_output(input: &str, max_lines: usize, max_bytes: usize) -> Outpu
         truncated,
         redacted,
     }
+}
+
+fn line_contains_sensitive_material(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    [
+        "api_key=",
+        "api-key=",
+        "access_token=",
+        "refresh_token=",
+        "authorization:",
+        "bearer ",
+        "password=",
+        "passwd=",
+        "client_secret=",
+        "private_key=",
+        "-----begin ",
+        "sk-proj-",
+        "sk-live-",
+        "ghp_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn truncate_utf8(input: &str, max_bytes: usize) -> String {
@@ -1291,8 +1395,18 @@ mod tests {
             80,
         );
         assert!(output.redacted);
-        assert!(output.text.contains("[REDACTED]"));
+        assert!(output.text.contains("[REDACTED"));
         assert!(!output.text.contains("secret"));
+
+        let output = sanitize_output(
+            "Authorization: Bearer abc123\nexport GITHUB_TOKEN=github_pat_example\nready",
+            3,
+            200,
+        );
+        assert!(output.redacted);
+        assert_eq!(output.text.matches("[REDACTED CREDENTIAL]").count(), 2);
+        assert!(!output.text.contains("abc123"));
+        assert!(!output.text.contains("github_pat_example"));
     }
 
     #[test]
@@ -1309,11 +1423,28 @@ mod tests {
             SnapshotRequest::default().output_policy,
             OutputPolicy::MetadataOnly
         );
-        assert_eq!(RUNTIME_SCHEMA_VERSION, 2);
+        assert_eq!(RUNTIME_SCHEMA_VERSION, 3);
         assert_eq!(
             WorkspaceSnapshot::new("workspace:test".into(), 0).workspace_revision,
             1
         );
+    }
+
+    #[test]
+    fn v3_agent_observation_defaults_keep_older_snapshots_readable() {
+        let agent: AgentSnapshot = serde_json::from_value(json!({
+            "agent_run_id": "detected:tile-1:42",
+            "provider": "codex",
+            "status": "working",
+            "tile_id": "tile-1"
+        }))
+        .unwrap();
+
+        assert_eq!(agent.ownership, AgentOwnership::Detected);
+        assert_eq!(agent.state, AgentRunState::Unknown);
+        assert_eq!(agent.queue_depth, 0);
+        assert!(!agent.capabilities.enqueue_prompt);
+        assert_eq!(agent.process, ProcessSnapshot::default());
     }
 
     #[test]

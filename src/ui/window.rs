@@ -13,7 +13,10 @@ use glib::value::ToValue;
 use gtk::{gdk, gio, glib, pango};
 use sha2::{Digest, Sha256};
 
-use crate::extension::RuntimeOptions;
+use crate::extension::{
+    CompanionVoiceController, RuntimeOptions, VoiceActivationRequest, VoiceControllerStatus,
+    VoiceUiEvent as CompanionVoiceUiEvent,
+};
 use crate::gtk_shell;
 use crate::logging;
 use crate::model::assets::RestoreLaunchMode;
@@ -741,6 +744,55 @@ enum VoiceGlobalHotkeyRegistration {
     },
 }
 
+struct CompanionVoiceSession {
+    controller: Arc<dyn CompanionVoiceController>,
+    pressed: bool,
+}
+
+impl CompanionVoiceSession {
+    fn new(controller: Arc<dyn CompanionVoiceController>) -> Self {
+        Self {
+            controller,
+            pressed: false,
+        }
+    }
+
+    fn press(&mut self) -> Result<(), String> {
+        if self.pressed {
+            return Ok(());
+        }
+        self.controller
+            .activate(VoiceActivationRequest::PushToTalkPressed)?;
+        self.pressed = true;
+        Ok(())
+    }
+
+    fn release(&mut self) -> Result<(), String> {
+        if !self.pressed {
+            return Ok(());
+        }
+        self.pressed = false;
+        self.controller.release_push_to_talk()
+    }
+
+    fn toggle_on_screen(&mut self) -> Result<bool, String> {
+        if self.pressed {
+            self.release()?;
+            Ok(false)
+        } else {
+            self.controller
+                .activate(VoiceActivationRequest::OnScreenPressed)?;
+            self.pressed = true;
+            Ok(true)
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.pressed = false;
+        self.controller.cancel();
+    }
+}
+
 impl VoiceGlobalHotkeyRegistration {
     fn shortcut(&self) -> &str {
         match self {
@@ -981,6 +1033,17 @@ fn dispatch_runtime_operation(
                     "command must contain 1-4096 non-whitespace bytes".into(),
                 ));
             }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let mut prepared_actions = prepared.borrow_mut();
+            prepared_actions.retain(|_, action| action.expires_at_unix_ms > now);
+            if prepared_actions.len() >= 64 {
+                return Err(RuntimeControlError::InvalidRequest(
+                    "too many terminal actions are awaiting approval".into(),
+                ));
+            }
             let risk = classify_command(&request.command);
             let command_hash = format!("{:x}", Sha256::digest(request.command.as_bytes()));
             let action = PreparedAction::new(
@@ -991,16 +1054,10 @@ fn dispatch_runtime_operation(
                 request.command,
                 risk,
                 confirmation_for(risk),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-                    + 30_000,
+                now.saturating_add(30_000),
                 runtime.workspace_revision(),
             );
-            prepared
-                .borrow_mut()
-                .insert(action.action_id.clone(), action.clone());
+            prepared_actions.insert(action.action_id.clone(), action.clone());
             serde_json::to_value(action)
                 .map_err(|error| RuntimeControlError::Internal(error.to_string()))
         }
@@ -1673,6 +1730,15 @@ fn present_with_initial_workspace(
         voice_warm_error.clone(),
         voice_event_tx.clone(),
     );
+
+    if let Some(controller) = options.voice_controller.clone() {
+        install_companion_voice_controller(
+            &window,
+            controller,
+            voice_hud.clone(),
+            toast_overlay.clone(),
+        );
+    }
 
     {
         let preference_store = preference_store.clone();
@@ -5530,6 +5596,176 @@ fn sync_linux_voice_global_hotkey(
 fn should_register_linux_voice_global_hotkey(voice: &crate::voice::VoicePreferences) -> bool {
     voice.enabled
         && (voice.prefer_global_hotkey || voice.activation_mode == VoiceActivationMode::PushToTalk)
+}
+
+fn install_companion_voice_controller(
+    window: &adw::ApplicationWindow,
+    controller: Arc<dyn CompanionVoiceController>,
+    voice_hud: VoiceHud,
+    toast_overlay: adw::ToastOverlay,
+) {
+    const COMPANION_VOICE_HOTKEY: &str = "<Control>grave";
+    let session = Rc::new(RefCell::new(CompanionVoiceSession::new(controller.clone())));
+    let key_pressed = Rc::new(Cell::new(false));
+    voice_hud.set_controls_visible(true);
+    {
+        let session = session.clone();
+        let voice_hud_for_click = voice_hud.clone();
+        let toast_overlay = toast_overlay.clone();
+        voice_hud.connect_mic_clicked(move || match session.borrow_mut().toggle_on_screen() {
+            Ok(active) => {
+                voice_hud_for_click.set_mic_active(active);
+                voice_hud_for_click.set_status(if active {
+                    "Listening…"
+                } else {
+                    "Thinking…"
+                });
+            }
+            Err(error) => {
+                voice_hud_for_click.show_activity("Voice unavailable", &error);
+                show_toast(&toast_overlay, &error);
+            }
+        });
+    }
+    {
+        let session = session.clone();
+        let voice_hud_for_click = voice_hud.clone();
+        voice_hud.connect_end_clicked(move || {
+            session.borrow_mut().cancel();
+            voice_hud_for_click.set_mic_active(false);
+            voice_hud_for_click.hide();
+        });
+    }
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let session = session.clone();
+        let key_pressed = key_pressed.clone();
+        let voice_hud = voice_hud.clone();
+        let toast_overlay = toast_overlay.clone();
+        key_controller.connect_key_pressed(move |_, key, _, state| {
+            if !voice_key_event_matches(COMPANION_VOICE_HOTKEY, key, state) {
+                return glib::Propagation::Proceed;
+            }
+            if key_pressed.replace(true) {
+                return glib::Propagation::Stop;
+            }
+            match session.borrow_mut().press() {
+                Ok(()) => {
+                    voice_hud.set_mic_active(true);
+                    voice_hud.set_status("Listening…");
+                }
+                Err(error) => {
+                    voice_hud.show_activity("Voice unavailable", &error);
+                    show_toast(&toast_overlay, &error);
+                    key_pressed.set(false);
+                }
+            }
+            glib::Propagation::Stop
+        });
+    }
+    {
+        let session = session.clone();
+        let key_pressed = key_pressed.clone();
+        let voice_hud = voice_hud.clone();
+        let toast_overlay = toast_overlay.clone();
+        key_controller.connect_key_released(move |_, key, _, _| {
+            if !voice_key_matches_accelerator_key(COMPANION_VOICE_HOTKEY, key)
+                || !key_pressed.replace(false)
+            {
+                return;
+            }
+            voice_hud.set_mic_active(false);
+            if let Err(error) = session.borrow_mut().release() {
+                voice_hud.show_activity("Voice error", &error);
+                show_toast(&toast_overlay, &error);
+            }
+        });
+    }
+    window.add_controller(key_controller);
+
+    let (global_tx, global_rx) = mpsc::channel();
+    let global_handle =
+        LinuxGlobalHotkeyHandle::start(COMPANION_VOICE_HOTKEY.into(), global_tx).ok();
+    let global_handle = Rc::new(global_handle);
+
+    glib::timeout_add_local(Duration::from_millis(40), move || {
+        let _keep_global_hotkey_alive = &global_handle;
+        while let Ok(event) = global_rx.try_recv() {
+            match event {
+                LinuxGlobalHotkeyEvent::Pressed if !key_pressed.replace(true) => {
+                    match session.borrow_mut().press() {
+                        Ok(()) => {
+                            voice_hud.set_mic_active(true);
+                            voice_hud.set_status("Listening…");
+                        }
+                        Err(error) => {
+                            voice_hud.show_activity("Voice unavailable", &error);
+                            show_toast(&toast_overlay, &error);
+                            key_pressed.set(false);
+                        }
+                    }
+                }
+                LinuxGlobalHotkeyEvent::Released if key_pressed.replace(false) => {
+                    voice_hud.set_mic_active(false);
+                    if let Err(error) = session.borrow_mut().release() {
+                        voice_hud.show_activity("Voice error", &error);
+                        show_toast(&toast_overlay, &error);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for event in controller.drain_ui_events(32) {
+            match event {
+                CompanionVoiceUiEvent::PartialTranscript(text) => {
+                    if let Some(status) = text.strip_prefix("STATUS ") {
+                        voice_hud.show_activity(
+                            companion_voice_status_label(controller.status()),
+                            status,
+                        );
+                    } else {
+                        let text = text.strip_prefix("YOU ").unwrap_or(&text);
+                        voice_hud.show_user("Listening…", text);
+                    }
+                }
+                CompanionVoiceUiEvent::FinalTranscript(text) => {
+                    if let Some(text) = text.strip_prefix("BRIDGE ") {
+                        voice_hud.show_assistant("Orchestrator", text);
+                    } else {
+                        let text = text.strip_prefix("YOU ").unwrap_or(&text);
+                        voice_hud.show_user("You", text);
+                    }
+                }
+                CompanionVoiceUiEvent::Status(status) => {
+                    voice_hud.set_status(companion_voice_status_label(status));
+                }
+                CompanionVoiceUiEvent::Error(error) => {
+                    voice_hud.show_activity("Voice error", &error);
+                    show_toast(&toast_overlay, &error);
+                }
+                CompanionVoiceUiEvent::ConfirmationRequested {
+                    redacted_preview, ..
+                } => voice_hud.show_activity("Approval required", &redacted_preview),
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
+fn companion_voice_status_label(status: VoiceControllerStatus) -> &'static str {
+    match status {
+        VoiceControllerStatus::Disabled => "Voice disabled",
+        VoiceControllerStatus::Ready => "Voice ready",
+        VoiceControllerStatus::Connecting => "Connecting…",
+        VoiceControllerStatus::Listening => "Listening…",
+        VoiceControllerStatus::Thinking => "Thinking…",
+        VoiceControllerStatus::Speaking => "Speaking…",
+        VoiceControllerStatus::AwaitingConfirmation => "Approval required",
+        VoiceControllerStatus::Fallback => "Voice fallback",
+        VoiceControllerStatus::Error => "Voice error",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

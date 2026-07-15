@@ -83,26 +83,13 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
             .build(),
     );
 
-    let default_agent_claude = gtk::CheckButton::builder().label("Claude").build();
-    let default_agent_codex = gtk::CheckButton::builder().label("Codex").build();
-    default_agent_codex.set_group(Some(&default_agent_claude));
-    default_agent_claude.set_active(default_agent == AgentKind::Claude);
-    default_agent_codex.set_active(default_agent == AgentKind::Codex);
-    automation_panel.append(&choice_row(
-        "Default task agent",
-        &default_agent_claude,
-        &default_agent_codex,
-    ));
+    let default_agent_dropdown = agent_dropdown(default_agent);
+    automation_panel.append(&dropdown_row("Default task agent", &default_agent_dropdown));
 
-    let default_reviewer_claude = gtk::CheckButton::builder().label("Claude").build();
-    let default_reviewer_codex = gtk::CheckButton::builder().label("Codex").build();
-    default_reviewer_codex.set_group(Some(&default_reviewer_claude));
-    default_reviewer_claude.set_active(default_reviewer == AgentKind::Claude);
-    default_reviewer_codex.set_active(default_reviewer == AgentKind::Codex);
-    automation_panel.append(&choice_row(
+    let default_reviewer_dropdown = agent_dropdown(default_reviewer);
+    automation_panel.append(&dropdown_row(
         "Default reviewer",
-        &default_reviewer_claude,
-        &default_reviewer_codex,
+        &default_reviewer_dropdown,
     ));
 
     let yolo_switch = gtk::Switch::builder()
@@ -140,20 +127,12 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
     let save_automation: Rc<dyn Fn()> = Rc::new({
         let project_root = project_root.clone();
         let status_label = status_label.clone();
-        let default_agent_codex = default_agent_codex.clone();
-        let default_reviewer_codex = default_reviewer_codex.clone();
+        let default_agent_dropdown = default_agent_dropdown.clone();
+        let default_reviewer_dropdown = default_reviewer_dropdown.clone();
         let yolo_switch = yolo_switch.clone();
         move || {
-            let default_agent = if default_agent_codex.is_active() {
-                AgentKind::Codex
-            } else {
-                AgentKind::Claude
-            };
-            let default_reviewer = if default_reviewer_codex.is_active() {
-                AgentKind::Codex
-            } else {
-                AgentKind::Claude
-            };
+            let default_agent = selected_agent(&default_agent_dropdown);
+            let default_reviewer = selected_agent(&default_reviewer_dropdown);
             let yolo_default = yolo_switch.is_active();
             status_label.set_visible(true);
             match board_store::update(&project_root, |board| {
@@ -236,7 +215,28 @@ pub(crate) fn present(window: &adw::ApplicationWindow, project_root: PathBuf) {
     dialog.present(Some(window));
 }
 
-fn choice_row(title: &str, first: &gtk::CheckButton, second: &gtk::CheckButton) -> gtk::Box {
+fn agent_dropdown(selected: AgentKind) -> gtk::DropDown {
+    let labels: Vec<&str> = AgentKind::ALL.iter().map(|agent| agent.label()).collect();
+    let model = gtk::StringList::new(&labels);
+    let selected = AgentKind::ALL
+        .iter()
+        .position(|agent| *agent == selected)
+        .unwrap_or(0) as u32;
+    gtk::DropDown::builder()
+        .model(&model)
+        .selected(selected)
+        .css_classes(["dialog-select"])
+        .build()
+}
+
+fn selected_agent(dropdown: &gtk::DropDown) -> AgentKind {
+    AgentKind::ALL
+        .get(dropdown.selected() as usize)
+        .copied()
+        .unwrap_or(AgentKind::Claude)
+}
+
+fn dropdown_row(title: &str, dropdown: &gtk::DropDown) -> gtk::Box {
     let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
@@ -249,7 +249,6 @@ fn choice_row(title: &str, first: &gtk::CheckButton, second: &gtk::CheckButton) 
             .css_classes(["settings-shortcut-title"])
             .build(),
     );
-    row.append(first);
-    row.append(second);
+    row.append(dropdown);
     row
 }

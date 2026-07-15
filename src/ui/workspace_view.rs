@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,10 +14,12 @@ use crate::logging;
 use crate::model::assets::{Runbook, TemplateVariableValues, WorkspaceAssets};
 use crate::model::layout::{DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, normalize_web_url};
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
+use crate::platform::terminal_foreground_process;
 use crate::runtime_control::{
-    AgentSnapshot, EventRequest, EventResponse, LayoutSnapshot, OutputPolicy, ProcessSnapshot,
-    ProcessState, SnapshotRequest, TileKind as RuntimeTileKind, TileSnapshot,
-    WorkspaceEventJournal, WorkspaceEventType, WorkspaceSnapshot, sanitize_output,
+    AgentControlCapabilities, AgentOwnership, AgentRunState, AgentSnapshot, EventRequest,
+    EventResponse, LayoutSnapshot, OutputPolicy, ProcessIdentity, ProcessSnapshot, ProcessState,
+    SnapshotRequest, TileKind as RuntimeTileKind, TileSnapshot, WorkspaceEventJournal,
+    WorkspaceEventType, WorkspaceSnapshot, sanitize_output,
 };
 use crate::services::agent_resume::{RestoreStartupOverrideMap, saved_resume_command_for_tile};
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
@@ -29,6 +32,7 @@ use crate::services::layout_editor::{
 };
 use crate::services::output_helpers::{CompiledOutputHelpers, helper_summary_text};
 use crate::services::runbooks::{ResolvedRunbook, resolve_runbook};
+use crate::services::session_title::AgentKind as DetectedAgentKind;
 use crate::services::stats::StatsRecorder;
 use crate::services::tile_navigation::{TileDirection, neighbor_tile_id};
 use crate::storage::session_store::SavedTerminalHistory;
@@ -93,6 +97,104 @@ struct WorkspaceRuntimeInner {
 #[derive(Clone)]
 pub struct WorkspaceRuntime {
     inner: Rc<WorkspaceRuntimeInner>,
+}
+
+fn command_executable(command: &str) -> Option<String> {
+    command
+        .split_whitespace()
+        .next()
+        .and_then(|argument| argument.rsplit(['/', '\\']).next())
+        .map(str::trim)
+        .filter(|argument| !argument.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Snapshot metadata must never contain the full process argument vector. It
+/// routinely carries prompts, tokens, and other values that are not safe to
+/// cross the runtime-control boundary. The executable is sufficient for agent
+/// detection and display on both observed and configured processes.
+fn snapshot_foreground_command(
+    observed_process: Option<&crate::platform::ForegroundProcess>,
+    startup_command: Option<&str>,
+) -> Option<String> {
+    observed_process
+        .map(|process| process.executable.clone())
+        .or_else(|| startup_command.and_then(command_executable))
+}
+
+fn snapshot_agent_label(
+    observed_process: Option<&crate::platform::ForegroundProcess>,
+    configured_label: &str,
+) -> Option<String> {
+    if let Some(process) = observed_process {
+        return DetectedAgentKind::from_command(&process.command)
+            .map(|agent| agent.label().to_string());
+    }
+    (!configured_label.trim().is_empty()).then(|| configured_label.to_string())
+}
+
+fn detected_agent_run_id(tile: &TileSnapshot, provider: &str) -> String {
+    if let Some(identity) = tile.process.identity.as_ref() {
+        return format!(
+            "detected:{}:{}:{}",
+            tile.tile_id,
+            identity.pid,
+            identity
+                .started_at_ticks
+                .map(|ticks| ticks.to_string())
+                .unwrap_or_else(|| format!("unknown-start:{}", identity.executable))
+        );
+    }
+    tile.process
+        .child_pid
+        .map(|pid| format!("detected:{}:{pid}:unknown-start", tile.tile_id))
+        .unwrap_or_else(|| format!("detected:{}:{provider}", tile.tile_id))
+}
+
+fn is_manual_terminal_submission(key: gtk::gdk::Key) -> bool {
+    matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+}
+
+fn snapshots_to_agents(tiles: &[TileSnapshot], observed_at_unix_ms: u128) -> Vec<AgentSnapshot> {
+    tiles
+        .iter()
+        .filter_map(|tile| {
+            if tile.process.state != ProcessState::Running {
+                return None;
+            }
+            let detected = tile
+                .process
+                .foreground_command
+                .as_deref()
+                .and_then(DetectedAgentKind::from_command)
+                .or_else(|| {
+                    tile.agent_label
+                        .as_deref()
+                        .and_then(DetectedAgentKind::from_command)
+                })?;
+            let provider = detected.label().to_ascii_lowercase();
+            let run_id = detected_agent_run_id(tile, &provider);
+            Some(AgentSnapshot {
+                agent_run_id: run_id,
+                provider,
+                status: "working".into(),
+                tile_id: Some(tile.tile_id.clone()),
+                ownership: AgentOwnership::Detected,
+                state: AgentRunState::Working,
+                project_root: tile.working_directory.clone(),
+                task_id: None,
+                process: tile.process.clone(),
+                capabilities: AgentControlCapabilities {
+                    enqueue_prompt: true,
+                    interrupt_turn: true,
+                    graceful_stop: true,
+                    terminate: false,
+                },
+                queue_depth: 0,
+                last_activity_at_unix_ms: observed_at_unix_ms,
+            })
+        })
+        .collect()
 }
 
 impl WorkspaceRuntime {
@@ -275,7 +377,6 @@ impl WorkspaceRuntime {
 
     /// Journal sanitized output activity without advancing the workspace
     /// revision. Raw terminal bytes are never retained in the event ring.
-    #[allow(dead_code)]
     pub fn record_output_activity(&self, tile_id: &str, output: &str) {
         let summary = sanitize_output(output, 4, 512);
         self.record_runtime_event(
@@ -296,7 +397,6 @@ impl WorkspaceRuntime {
         );
     }
 
-    #[allow(dead_code)]
     pub fn record_process_started(&self, tile_id: &str) {
         self.record_runtime_event(
             WorkspaceEventType::ProcessStarted,
@@ -306,7 +406,6 @@ impl WorkspaceRuntime {
         );
     }
 
-    #[allow(dead_code)]
     pub fn record_process_exited(&self, tile_id: &str, exit_code: Option<i32>) {
         self.record_runtime_event(
             WorkspaceEventType::ProcessExited,
@@ -316,7 +415,6 @@ impl WorkspaceRuntime {
         );
     }
 
-    #[allow(dead_code)]
     pub fn record_manual_input(&self, tile_id: &str) {
         self.record_runtime_event(
             WorkspaceEventType::ManualInput,
@@ -327,6 +425,10 @@ impl WorkspaceRuntime {
     }
 
     pub fn runtime_snapshot(&self, request: SnapshotRequest) -> WorkspaceSnapshot {
+        let observed_at_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
         let visual_order = self
             .inner
             .layout
@@ -337,7 +439,7 @@ impl WorkspaceRuntime {
             .collect::<Vec<_>>();
         let focused_tile_id = self.focused_tile_id();
         let tiles = self.inner.tiles.borrow();
-        let snapshots = visual_order
+        let snapshots: Vec<TileSnapshot> = visual_order
             .iter()
             .enumerate()
             .filter_map(|(index, tile_id)| {
@@ -347,6 +449,20 @@ impl WorkspaceRuntime {
                     TileKind::WebView => RuntimeTileKind::Web,
                 };
                 let session = tile.session.as_ref();
+                let observed_process = session.and_then(|session| {
+                    let terminal = session.widget();
+                    let pty_fd = terminal.pty().map(|pty| pty.fd().as_raw_fd());
+                    terminal_foreground_process(
+                        pty_fd,
+                        session.child_pid().and_then(|pid| i32::try_from(pid).ok()),
+                    )
+                });
+                let foreground_command = snapshot_foreground_command(
+                    observed_process.as_ref(),
+                    tile.tile.startup_command.as_deref(),
+                );
+                let agent_label =
+                    snapshot_agent_label(observed_process.as_ref(), &tile.tile.agent_label);
                 let process = session
                     .map(|session| ProcessSnapshot {
                         state: if session.has_active_process() {
@@ -357,8 +473,20 @@ impl WorkspaceRuntime {
                             ProcessState::Idle
                         },
                         child_pid: session.child_pid(),
-                        foreground_command: None,
+                        foreground_command: foreground_command.clone(),
                         exit_code: session.last_exit_status(),
+                        started_at_unix_ms: None,
+                        tty: None,
+                        executable: observed_process
+                            .as_ref()
+                            .map(|process| process.executable.clone())
+                            .or_else(|| foreground_command.as_deref().and_then(command_executable)),
+                        identity: observed_process.as_ref().map(|process| ProcessIdentity {
+                            pid: process.pid,
+                            started_at_ticks: process.started_at_ticks,
+                            tty: process.tty.clone(),
+                            executable: process.executable.clone(),
+                        }),
                     })
                     .unwrap_or_default();
                 let recent_output = (request.output_policy == OutputPolicy::Sanitized)
@@ -376,29 +504,34 @@ impl WorkspaceRuntime {
                     tile_id: tile.tile.id.clone(),
                     visual_ordinal: index + 1,
                     title: tile.tile.title.clone(),
-                    agent_label: (!tile.tile.agent_label.trim().is_empty())
-                        .then(|| tile.tile.agent_label.clone()),
+                    agent_label,
                     kind,
                     focused: focused_tile_id.as_deref() == Some(tile.tile.id.as_str()),
-                    working_directory: Some(tile.tile.working_directory.short_label()),
+                    private: false,
+                    observed_at_unix_ms,
+                    working_directory: Some(
+                        tile.tile
+                            .working_directory
+                            .resolve(&self.inner.workspace_root)
+                            .display()
+                            .to_string(),
+                    ),
                     process,
                     recent_output,
                 })
             })
             .collect();
+        let active_agents = snapshots_to_agents(&snapshots, observed_at_unix_ms);
         WorkspaceSnapshot {
             schema_version: crate::runtime_control::RUNTIME_SCHEMA_VERSION,
             workspace_id: self.workspace_id(),
             workspace_revision: self.workspace_revision(),
             latest_event_cursor: self.inner.event_journal.borrow().latest_cursor(),
-            generated_at_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis(),
+            generated_at_unix_ms: observed_at_unix_ms,
             focused_tile_id,
             layout: LayoutSnapshot { visual_order },
             tiles: snapshots,
-            active_agents: Vec::<AgentSnapshot>::new(),
+            active_agents,
         }
     }
 
@@ -1137,6 +1270,36 @@ impl WorkspaceRuntime {
                         runtime.record_web_tile_uri(&tile_id, uri.as_str());
                     }
                 });
+            }
+
+            if let Some(session) = &tile.session {
+                let terminal = session.widget();
+                let runtime = self.clone();
+                let tile_id = tile.tile.id.clone();
+                let input_session = session.clone();
+                let input_controller = gtk::EventControllerKey::new();
+                input_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+                input_controller.connect_key_pressed(move |_, key, _, _| {
+                    if is_manual_terminal_submission(key) && input_session.has_active_process() {
+                        runtime.record_manual_input(&tile_id);
+                    }
+                    glib::Propagation::Proceed
+                });
+                terminal.add_controller(input_controller);
+
+                let runtime = self.clone();
+                let tile_id = tile.tile.id.clone();
+                let observed_session = session.clone();
+                terminal.connect_contents_changed(move |_| {
+                    runtime.record_output_activity(&tile_id, &observed_session.recent_output(4));
+                });
+
+                let runtime = self.clone();
+                let tile_id = tile.tile.id.clone();
+                terminal.connect_child_exited(move |_, status| {
+                    runtime.record_process_exited(&tile_id, Some(status));
+                });
+                self.record_process_started(&tile.tile.id);
             }
 
             tile.handlers_bound = true;
@@ -1963,5 +2126,118 @@ where
                 parent_paned.set_end_child(Option::<&gtk::Widget>::None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        detected_agent_run_id, is_manual_terminal_submission, snapshot_agent_label,
+        snapshot_foreground_command,
+    };
+    use crate::platform::ForegroundProcess;
+    use crate::runtime_control::{
+        ProcessIdentity, ProcessSnapshot, ProcessState, TileKind, TileSnapshot,
+    };
+
+    fn tile_with_identity(started_at_ticks: u64) -> TileSnapshot {
+        TileSnapshot {
+            tile_id: "tile-1".into(),
+            visual_ordinal: 1,
+            title: "Agent".into(),
+            agent_label: None,
+            kind: TileKind::Terminal,
+            focused: true,
+            private: false,
+            observed_at_unix_ms: 1,
+            working_directory: None,
+            process: ProcessSnapshot {
+                state: ProcessState::Running,
+                child_pid: Some(7),
+                foreground_command: Some("codex".into()),
+                exit_code: None,
+                started_at_unix_ms: None,
+                tty: None,
+                executable: Some("codex".into()),
+                identity: Some(ProcessIdentity {
+                    pid: 42,
+                    started_at_ticks: Some(started_at_ticks),
+                    tty: Some("/dev/pts/1".into()),
+                    executable: "codex".into(),
+                }),
+            },
+            recent_output: None,
+        }
+    }
+
+    #[test]
+    fn snapshot_command_exposes_only_observed_executable() {
+        let observed = ForegroundProcess {
+            pid: 42,
+            started_at_ticks: Some(99),
+            tty: Some("/dev/pts/1".into()),
+            executable: "codex".into(),
+            command: "codex --header 'Authorization: Bearer secret' review".into(),
+        };
+
+        assert_eq!(
+            snapshot_foreground_command(Some(&observed), None).as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            snapshot_agent_label(Some(&observed), "").as_deref(),
+            Some("Codex")
+        );
+    }
+
+    #[test]
+    fn snapshot_command_exposes_only_configured_executable() {
+        assert_eq!(
+            snapshot_foreground_command(
+                None,
+                Some("/usr/local/bin/grok --single 'private task prompt'")
+            )
+            .as_deref(),
+            Some("grok")
+        );
+    }
+
+    #[test]
+    fn detected_run_id_uses_foreground_identity_and_start_discriminator() {
+        let first = tile_with_identity(100);
+        let restarted = tile_with_identity(200);
+
+        assert_eq!(
+            detected_agent_run_id(&first, "codex"),
+            "detected:tile-1:42:100"
+        );
+        assert_ne!(
+            detected_agent_run_id(&first, "codex"),
+            detected_agent_run_id(&restarted, "codex")
+        );
+    }
+
+    #[test]
+    fn observed_non_agent_does_not_inherit_stale_configured_agent_label() {
+        let shell = ForegroundProcess {
+            pid: 42,
+            started_at_ticks: Some(99),
+            tty: Some("/dev/pts/1".into()),
+            executable: "bash".into(),
+            command: "bash".into(),
+        };
+
+        assert_eq!(snapshot_agent_label(Some(&shell), "Codex"), None);
+        assert_eq!(
+            snapshot_agent_label(None, "Codex").as_deref(),
+            Some("Codex")
+        );
+    }
+
+    #[test]
+    fn only_real_terminal_submit_keys_are_manual_input_events() {
+        assert!(is_manual_terminal_submission(gtk::gdk::Key::Return));
+        assert!(is_manual_terminal_submission(gtk::gdk::Key::KP_Enter));
+        assert!(!is_manual_terminal_submission(gtk::gdk::Key::a));
     }
 }

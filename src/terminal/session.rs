@@ -119,6 +119,7 @@ impl TerminalSession {
         restored_history_lines: &[String],
         restore_startup_command: Option<&str>,
         stats: StatsRecorder,
+        configured_argv_override: Option<Vec<String>>,
     ) -> Self {
         let terminal = vte4::Terminal::new();
         terminal.set_hexpand(true);
@@ -172,6 +173,16 @@ impl TerminalSession {
                 Rc::new(TerminalLaunchSpec {
                     working_directory: working_dir.display().to_string(),
                     configured_argv: Vec::new(),
+                    local_shell_argv: build_local_shell_argv(&shell),
+                    envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
+                }),
+                None,
+            )
+        } else if let Some(configured_argv) = configured_argv_override {
+            (
+                Rc::new(TerminalLaunchSpec {
+                    working_directory: working_dir.display().to_string(),
+                    configured_argv,
                     local_shell_argv: build_local_shell_argv(&shell),
                     envv: vec!["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()],
                 }),

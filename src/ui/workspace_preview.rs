@@ -12,6 +12,11 @@ use crate::model::layout::{
     DEFAULT_WEB_URL, LayoutNode, SplitAxis, TileKind, TileSpec, normalize_web_url,
 };
 use crate::model::preset::ApplicationDensity;
+use crate::runtime_control::{
+    AgentControlCapabilities, AgentOwnership, AgentRunState, AgentSnapshot, OutputPolicy,
+    ProcessSnapshot, ProcessState, SnapshotRequest, TileKind as RuntimeTileKind, TileSnapshot,
+    WorkspaceSnapshot, sanitize_output,
+};
 use crate::services::agent_resume::saved_resume_command_for_tile;
 use crate::services::alerts::{AlertEventInput, AlertSeverity, AlertSourceKind, AlertStore};
 use crate::services::broadcast::{
@@ -60,6 +65,11 @@ pub struct TileRuntimeSurface {
     pub web_settings_applier: Option<Rc<dyn Fn(&str, Option<u32>)>>,
     pub shutdown: Option<Rc<dyn Fn(&str)>>,
     pub active_process_checker: Option<Rc<dyn Fn() -> bool>>,
+    /// Monotonic identity for the terminal process occupying this surface.
+    /// This distinguishes a restarted process even when both observations see
+    /// an active runtime.
+    pub process_generation_provider: Option<Rc<dyn Fn() -> u64>>,
+    pub interrupt: Option<Rc<dyn Fn() -> bool>>,
     pub terminal_history_provider: Option<Rc<dyn Fn(usize) -> Vec<String>>>,
     pub recovery_binder: Option<TileRuntimeRecoveryBinder>,
 }
@@ -82,6 +92,8 @@ impl TileRuntimeSurface {
             web_settings_applier: None,
             shutdown: None,
             active_process_checker: None,
+            process_generation_provider: None,
+            interrupt: None,
             terminal_history_provider: None,
             recovery_binder: None,
         }
@@ -120,11 +132,70 @@ pub struct SessionPreview {
     assets: Rc<WorkspaceAssets>,
     active_index: Rc<Cell<usize>>,
     focused_tile_id: Rc<RefCell<Option<String>>>,
+    runtime_revision: Rc<Cell<u64>>,
+    last_runtime_snapshot_state: Rc<RefCell<Option<WindowsRuntimeSnapshotState>>>,
     show_inline_tab_strip: bool,
     runtime_factory: Option<TileRuntimeFactory>,
     runtime_surfaces: Rc<RefCell<HashMap<String, TileRuntimeSurface>>>,
     on_session_changed: Option<SessionChangeHandler>,
     alert_store: AlertStore,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WindowsRuntimeSnapshotState {
+    active_index: usize,
+    layout: Vec<u8>,
+    focused_tile_id: Option<String>,
+    running_tiles: Vec<(String, bool, u64)>,
+}
+
+fn observe_windows_runtime_state(
+    revision: &Cell<u64>,
+    previous: &RefCell<Option<WindowsRuntimeSnapshotState>>,
+    next: WindowsRuntimeSnapshotState,
+) -> u64 {
+    let changed = previous
+        .borrow()
+        .as_ref()
+        .is_some_and(|previous| previous != &next);
+    previous.replace(Some(next));
+    if changed {
+        revision.set(revision.get().saturating_add(1));
+    }
+    revision.get().max(1)
+}
+
+fn startup_command_executable(command: &str) -> Option<String> {
+    let command = command.trim_start();
+    let argument = match command.chars().next()? {
+        quote @ ('\'' | '"') => command[quote.len_utf8()..].split(quote).next()?,
+        _ => command.split_whitespace().next()?,
+    };
+    argument
+        .rsplit(['/', '\\'])
+        .next()
+        .map(str::trim)
+        // A leading shell assignment is metadata, not an executable, and its
+        // value may itself be a credential.
+        .filter(|argument| !argument.is_empty() && !argument.contains('='))
+        .map(ToOwned::to_owned)
+}
+
+fn running_agent_kind(
+    startup_command: Option<&str>,
+    running: bool,
+) -> Option<crate::services::session_title::AgentKind> {
+    running
+        .then(|| startup_command.and_then(crate::services::session_title::AgentKind::from_command))
+        .flatten()
+}
+
+fn windows_agent_run_id(tile_id: &str, process_generation: u64) -> String {
+    format!("detected:{tile_id}:generation:{process_generation}")
+}
+
+fn windows_visual_ordinal(index: usize) -> usize {
+    index.saturating_add(1)
 }
 
 #[derive(Clone)]
@@ -245,6 +316,8 @@ impl SessionPreview {
             assets,
             active_index,
             focused_tile_id,
+            runtime_revision: Rc::new(Cell::new(1)),
+            last_runtime_snapshot_state: Rc::new(RefCell::new(None)),
             show_inline_tab_strip,
             runtime_factory,
             runtime_surfaces,
@@ -499,6 +572,36 @@ impl SessionPreview {
         }
     }
 
+    /// Split a specific tile and focus the new terminal. This is the
+    /// workspace-control counterpart to the toolbar's default split action;
+    /// keeping it on `SessionPreview` ensures Windows voice control follows
+    /// the same layout mutation and rerender path as direct UI actions.
+    pub fn add_runtime_terminal_tile_at(
+        &self,
+        target_tile_id: &str,
+        axis: SplitAxis,
+    ) -> Option<String> {
+        let new_tile_id = {
+            let mut session = self.session.borrow_mut();
+            let tab_index = active_tab_index(&session, self.active_index.get())?;
+            let tab = session.tabs.get_mut(tab_index)?;
+            let (next_layout, new_tile_id) = split_tile_with_kind(
+                &tab.preset.layout,
+                target_tile_id,
+                axis,
+                false,
+                TileKind::Terminal,
+            )?;
+            tab.preset.layout = next_layout;
+            new_tile_id
+        };
+        *self.focused_tile_id.borrow_mut() = Some(new_tile_id.clone());
+        self.prune_runtime_surfaces("workspace runtime terminal tile added");
+        self.notify_session_changed("workspace runtime terminal tile added");
+        self.render();
+        Some(new_tile_id)
+    }
+
     pub fn run_runbook(&self, runbook: &Runbook) -> bool {
         let tile_specs = active_tab_tile_specs(&self.session, &self.active_index);
         match resolve_runbook(runbook, &TemplateVariableValues::new(), &tile_specs) {
@@ -577,6 +680,214 @@ impl SessionPreview {
                 }
             })
             .is_some_and(|(_, send)| send(text))
+    }
+
+    pub fn runtime_workspace_snapshot(&self, request: SnapshotRequest) -> WorkspaceSnapshot {
+        use std::hash::{Hash, Hasher};
+
+        let session = self.session.borrow();
+        let active_index = self
+            .active_index
+            .get()
+            .min(session.tabs.len().saturating_sub(1));
+        let Some(tab) = session.tabs.get(active_index) else {
+            let workspace_revision = observe_windows_runtime_state(
+                &self.runtime_revision,
+                &self.last_runtime_snapshot_state,
+                WindowsRuntimeSnapshotState {
+                    active_index,
+                    layout: Vec::new(),
+                    focused_tile_id: self.focused_tile_id.borrow().clone(),
+                    running_tiles: Vec::new(),
+                },
+            );
+            return WorkspaceSnapshot::new("workspace:windows-empty".into(), workspace_revision);
+        };
+        let mut workspace_hasher = std::collections::hash_map::DefaultHasher::new();
+        tab.workspace_root.hash(&mut workspace_hasher);
+        tab.preset.id.hash(&mut workspace_hasher);
+        let workspace_id = format!("workspace:windows:{:016x}", workspace_hasher.finish());
+        let focused_tile_id = self.focused_tile_id.borrow().clone();
+        let observed_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let surfaces = self.runtime_surfaces.borrow();
+        let specs = tab.preset.layout.tile_specs();
+        let mut tiles = Vec::with_capacity(specs.len());
+        let mut active_agents = Vec::new();
+        let mut running_tiles = Vec::with_capacity(specs.len());
+        for (index, tile) in specs.iter().enumerate() {
+            let key = runtime_surface_key(active_index, tab, tile);
+            let surface = surfaces.get(&key);
+            let running = surface
+                .and_then(|surface| surface.active_process_checker.as_ref())
+                .is_some_and(|is_active| is_active());
+            let process_generation = surface
+                .and_then(|surface| surface.process_generation_provider.as_ref())
+                .map_or(0, |generation| generation());
+            running_tiles.push((tile.id.clone(), running, process_generation));
+            let executable = tile
+                .startup_command
+                .as_deref()
+                .and_then(startup_command_executable);
+            let process = ProcessSnapshot {
+                state: if running {
+                    ProcessState::Running
+                } else {
+                    ProcessState::Idle
+                },
+                child_pid: None,
+                // Startup commands can contain credentials or complete agent prompts. The
+                // Windows adapter cannot inspect the live foreground process yet, so expose
+                // only the executable rather than copying raw argv into a metadata snapshot.
+                foreground_command: executable.clone(),
+                exit_code: None,
+                started_at_unix_ms: None,
+                tty: None,
+                executable,
+                identity: None,
+            };
+            let recent_output = if request.output_policy == OutputPolicy::Sanitized {
+                surface
+                    .and_then(|surface| surface.terminal_history_provider.as_ref())
+                    .map(|provider| provider(request.max_lines.clamp(1, 40)).join("\n"))
+                    .filter(|output| !output.is_empty())
+                    .map(|output| sanitize_output(&output, request.max_lines, request.max_bytes))
+            } else {
+                None
+            };
+            let agent = tile
+                .startup_command
+                .as_deref()
+                .and_then(crate::services::session_title::AgentKind::from_command);
+            tiles.push(TileSnapshot {
+                tile_id: tile.id.clone(),
+                visual_ordinal: windows_visual_ordinal(index),
+                title: tile.title.clone(),
+                agent_label: agent.map(|agent| agent.label().to_string()).or_else(|| {
+                    (!tile.agent_label.trim().is_empty()).then(|| tile.agent_label.clone())
+                }),
+                kind: match tile.tile_kind {
+                    TileKind::Terminal => RuntimeTileKind::Terminal,
+                    TileKind::WebView => RuntimeTileKind::Web,
+                },
+                focused: focused_tile_id.as_deref() == Some(tile.id.as_str()),
+                private: false,
+                observed_at_unix_ms,
+                working_directory: Some(
+                    tile.working_directory
+                        .resolve(&tab.workspace_root)
+                        .display()
+                        .to_string(),
+                ),
+                process: process.clone(),
+                recent_output,
+            });
+            if let Some(agent) = running_agent_kind(tile.startup_command.as_deref(), running) {
+                active_agents.push(AgentSnapshot {
+                    agent_run_id: windows_agent_run_id(&tile.id, process_generation),
+                    provider: agent.label().to_ascii_lowercase(),
+                    status: "working".into(),
+                    tile_id: Some(tile.id.clone()),
+                    ownership: AgentOwnership::Detected,
+                    state: AgentRunState::Working,
+                    project_root: Some(tab.workspace_root.display().to_string()),
+                    task_id: None,
+                    process,
+                    capabilities: AgentControlCapabilities {
+                        enqueue_prompt: true,
+                        interrupt_turn: true,
+                        graceful_stop: true,
+                        terminate: false,
+                    },
+                    queue_depth: 0,
+                    last_activity_at_unix_ms: observed_at_unix_ms,
+                });
+            }
+        }
+        let workspace_revision = observe_windows_runtime_state(
+            &self.runtime_revision,
+            &self.last_runtime_snapshot_state,
+            WindowsRuntimeSnapshotState {
+                active_index,
+                layout: serde_json::to_vec(&tab.preset.layout).unwrap_or_default(),
+                focused_tile_id: focused_tile_id.clone(),
+                running_tiles,
+            },
+        );
+        let mut snapshot = WorkspaceSnapshot::new(workspace_id, workspace_revision);
+        snapshot.focused_tile_id = focused_tile_id;
+        snapshot.layout.visual_order = specs.into_iter().map(|tile| tile.id).collect();
+        snapshot.tiles = tiles;
+        snapshot.active_agents = active_agents;
+        snapshot
+    }
+
+    pub fn focus_runtime_tile(&self, tile_id: &str) -> bool {
+        self.focus_tile(tile_id)
+    }
+
+    pub fn send_text_to_runtime_tile(&self, tile_id: &str, text: &str, submit: bool) -> bool {
+        let session = self.session.borrow();
+        let Some(tab_index) = active_tab_index(&session, self.active_index.get()) else {
+            return false;
+        };
+        let Some(tab) = session.tabs.get(tab_index) else {
+            return false;
+        };
+        let Some(tile) = tab
+            .preset
+            .layout
+            .tile_specs()
+            .into_iter()
+            .find(|tile| tile.id == tile_id && tile.tile_kind == TileKind::Terminal)
+        else {
+            return false;
+        };
+        let key = runtime_surface_key(tab_index, tab, &tile);
+        let sent = self
+            .runtime_surfaces
+            .borrow()
+            .get(&key)
+            .and_then(|surface| surface.command_sender.as_ref())
+            .is_some_and(|send| send(&format!("{}{}", text, if submit { "\r" } else { "" })));
+        if sent {
+            self.runtime_revision
+                .set(self.runtime_revision.get().saturating_add(1));
+        }
+        sent
+    }
+
+    pub fn interrupt_runtime_tile(&self, tile_id: &str) -> bool {
+        let session = self.session.borrow();
+        let Some(tab_index) = active_tab_index(&session, self.active_index.get()) else {
+            return false;
+        };
+        let Some(tab) = session.tabs.get(tab_index) else {
+            return false;
+        };
+        let Some(tile) = tab
+            .preset
+            .layout
+            .tile_specs()
+            .into_iter()
+            .find(|tile| tile.id == tile_id)
+        else {
+            return false;
+        };
+        let key = runtime_surface_key(tab_index, tab, &tile);
+        let interrupted = self
+            .runtime_surfaces
+            .borrow()
+            .get(&key)
+            .and_then(|surface| surface.interrupt.as_ref())
+            .is_some_and(|interrupt| interrupt());
+        if interrupted {
+            self.runtime_revision
+                .set(self.runtime_revision.get().saturating_add(1));
+        }
+        interrupted
     }
 
     pub fn focused_terminal_available(&self) -> bool {
@@ -2697,7 +3008,11 @@ fn build_empty_state() -> gtk::Widget {
 
 #[cfg(test)]
 mod tests {
-    use super::{detach_tab_in_preview_state, runtime_surface_keys_for_tab};
+    use super::{
+        WindowsRuntimeSnapshotState, detach_tab_in_preview_state, observe_windows_runtime_state,
+        running_agent_kind, runtime_surface_keys_for_tab, startup_command_executable,
+        windows_agent_run_id, windows_visual_ordinal,
+    };
     use crate::model::layout::{SplitAxis, WorkingDirectory, split, tile};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use crate::storage::session_store::{SavedSession, SavedTab};
@@ -2816,5 +3131,82 @@ mod tests {
         assert_eq!(session.borrow().tabs[0].preset.id, "only");
         assert_eq!(session.borrow().active_tab_index, 0);
         assert_eq!(active_index.get(), 0);
+    }
+
+    #[test]
+    fn windows_metadata_command_exposes_only_executable() {
+        assert_eq!(
+            startup_command_executable(
+                r#""C:\Program Files\Grok\grok.exe" --authorization super-secret"#
+            )
+            .as_deref(),
+            Some("grok.exe")
+        );
+        assert_eq!(
+            startup_command_executable("codex exec full private prompt").as_deref(),
+            Some("codex")
+        );
+        assert!(startup_command_executable("OPENAI_API_KEY=super-secret codex").is_none());
+    }
+
+    #[test]
+    fn windows_runtime_revision_advances_for_observed_state_changes() {
+        let revision = Cell::new(1);
+        let previous = RefCell::new(None);
+        let state = WindowsRuntimeSnapshotState {
+            active_index: 0,
+            layout: vec![1],
+            focused_tile_id: Some("a".into()),
+            running_tiles: vec![("a".into(), true, 1)],
+        };
+
+        assert_eq!(
+            observe_windows_runtime_state(&revision, &previous, state.clone()),
+            1
+        );
+        assert_eq!(
+            observe_windows_runtime_state(&revision, &previous, state.clone()),
+            1
+        );
+
+        let mut exited = state.clone();
+        exited.running_tiles[0].1 = false;
+        assert_eq!(
+            observe_windows_runtime_state(&revision, &previous, exited.clone()),
+            2
+        );
+
+        exited.focused_tile_id = Some("b".into());
+        assert_eq!(
+            observe_windows_runtime_state(&revision, &previous, exited),
+            3
+        );
+
+        let restarted = WindowsRuntimeSnapshotState {
+            active_index: 0,
+            layout: vec![1],
+            focused_tile_id: Some("b".into()),
+            running_tiles: vec![("a".into(), true, 2)],
+        };
+        assert_eq!(
+            observe_windows_runtime_state(&revision, &previous, restarted),
+            4
+        );
+    }
+
+    #[test]
+    fn exited_windows_agents_are_not_reported_as_active() {
+        assert!(running_agent_kind(Some("codex"), false).is_none());
+        assert!(running_agent_kind(Some("codex"), true).is_some());
+        assert_ne!(
+            windows_agent_run_id("terminal-1", 1),
+            windows_agent_run_id("terminal-1", 2)
+        );
+    }
+
+    #[test]
+    fn windows_visual_ordinals_are_one_based() {
+        assert_eq!(windows_visual_ordinal(0), 1);
+        assert_eq!(windows_visual_ordinal(2), 3);
     }
 }

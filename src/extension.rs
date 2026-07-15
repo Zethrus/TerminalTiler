@@ -12,7 +12,7 @@ use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 3;
+pub const CORE_EXTENSION_API_VERSION: u32 = 4;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -705,10 +705,10 @@ mod additive_api_tests {
     }
 
     #[test]
-    fn runtime_probe_reports_the_unchanged_extension_api() {
+    fn runtime_probe_reports_extension_api_v4() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 3);
+        assert_eq!(capabilities.extension_api_version, 4);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -716,7 +716,7 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":3"));
+        assert!(json.contains("\"extension_api_version\":4"));
     }
 
     #[test]

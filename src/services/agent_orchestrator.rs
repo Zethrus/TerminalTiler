@@ -12,7 +12,9 @@ use std::rc::Rc;
 
 use uuid::Uuid;
 
-use crate::model::agent_run::{AgentKind, AgentRun, AgentRunKind, AgentRunOptions, AgentRunState};
+use crate::model::agent_run::{
+    AgentKind, AgentLaunchSpec, AgentRun, AgentRunKind, AgentRunOptions, AgentRunState,
+};
 use crate::model::assets::WorkspaceAssets;
 use crate::model::board::Task;
 use crate::model::layout::{WorkingDirectory, default_tile_spec};
@@ -69,7 +71,10 @@ impl AgentOrchestrator {
         };
         spec.accent_class = "accent-amber".into();
         spec.working_directory = WorkingDirectory::Absolute(project_root.to_path_buf());
-        spec.startup_command = Some(build_agent_command(project_root, agent, task, options));
+        let launch_spec = build_agent_launch_spec(project_root, agent, task, options);
+        // Managed agent processes are spawned from a structured argv. Keeping the
+        // prompt out of a shell command prevents quoting bugs and command injection.
+        spec.startup_command = None;
 
         let assets = WorkspaceAssets::default();
         let session = TerminalSession::spawn(
@@ -82,6 +87,7 @@ impl AgentOrchestrator {
             &[],
             None,
             StatsRecorder::default(),
+            Some(launch_spec.argv()),
         );
         let terminal = session.widget();
 
@@ -92,7 +98,7 @@ impl AgentOrchestrator {
             agent_kind: agent,
             run_kind: options.kind,
             yolo: options.yolo,
-            state: AgentRunState::Running,
+            state: AgentRunState::Starting,
         };
 
         self.runs.borrow_mut().push(ActiveRun {
@@ -128,6 +134,58 @@ impl AgentOrchestrator {
         }
     }
 
+    /// Queue text for one managed agent. The caller controls whether a trailing
+    /// newline is included, making this usable for both draft text and submitted
+    /// prompts without routing through a command shell.
+    #[allow(dead_code)]
+    pub fn queue_prompt(&self, run_id: &str, text: &str) -> bool {
+        let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
+        let Some(active) = runs.iter_mut().find(|active| active.run.id == run_id) else {
+            return false;
+        };
+        active.run.state = AgentRunState::WaitingForInput;
+        let sent = active.session.send_text(text);
+        active.run.state = if sent {
+            AgentRunState::Running
+        } else {
+            AgentRunState::Failed
+        };
+        sent
+    }
+
+    /// Send the terminal interrupt control character to one managed run.
+    #[allow(dead_code)]
+    pub fn interrupt(&self, run_id: &str) -> bool {
+        let mut runs = self.runs.borrow_mut();
+        refresh_completed_runs(&mut runs);
+        let Some(active) = runs.iter_mut().find(|active| active.run.id == run_id) else {
+            return false;
+        };
+        let sent = active.session.send_text("\u{3}");
+        active.run.state = if sent {
+            AgentRunState::Interrupted
+        } else {
+            AgentRunState::Failed
+        };
+        sent
+    }
+
+    /// Reflect that a provider is paused on a permission/approval gate.
+    #[allow(dead_code)]
+    pub fn mark_waiting_for_approval(&self, run_id: &str) -> bool {
+        let mut runs = self.runs.borrow_mut();
+        let Some(active) = runs.iter_mut().find(|active| active.run.id == run_id) else {
+            return false;
+        };
+        if active.run.state.is_active() {
+            active.run.state = AgentRunState::WaitingForApproval;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Stop every live run for a specific board task.
     pub fn stop_task(&self, task_id: &str, reason: &str) {
         let mut runs = self.runs.borrow_mut();
@@ -152,43 +210,50 @@ impl AgentOrchestrator {
 
 fn refresh_completed_runs(runs: &mut [ActiveRun]) {
     for active in runs {
-        if active.run.state.is_active() && !active.session.has_active_process() {
-            active.run.state = AgentRunState::Completed;
+        if active.run.state == AgentRunState::Starting && active.session.has_active_process() {
+            active.run.state = AgentRunState::Running;
+        } else if active.run.state.is_active() && !active.session.has_active_process() {
+            active.run.state = match active.session.last_exit_status() {
+                Some(0) | None => AgentRunState::Completed,
+                Some(_) => AgentRunState::Failed,
+            };
         }
     }
 }
 
 fn terminate_active_run_immediately(active: &mut ActiveRun, reason: &str) {
     if active.run.state.is_active() {
+        active.run.state = AgentRunState::Stopping;
         active.session.terminate_immediately(reason);
         active.run.state = AgentRunState::Cancelled;
     }
 }
 
-fn build_agent_command(
+fn build_agent_launch_spec(
     project_root: &Path,
     agent: AgentKind,
     task: &Task,
     options: AgentRunOptions,
-) -> String {
+) -> AgentLaunchSpec {
     let prompt = match options.kind {
         AgentRunKind::Implementation => build_implementation_prompt(project_root, agent, task),
         AgentRunKind::Review => build_review_prompt(project_root, agent, task),
     };
 
-    let mut parts = vec![agent.binary().to_string()];
+    let mut args = Vec::new();
     if agent == AgentKind::Codex {
-        parts.extend(
-            agent_config::codex_project_mcp_overrides(project_root)
-                .into_iter()
-                .map(|arg| shell_quote(&arg)),
-        );
+        args.extend(agent_config::codex_project_mcp_overrides(project_root));
     }
-    if options.yolo {
-        parts.push(agent.yolo_flag().to_string());
+    if options.yolo
+        && let Some(flag) = agent.yolo_flag()
+    {
+        args.push(flag.to_string());
     }
-    parts.push(shell_quote(&prompt));
-    parts.join(" ")
+    args.extend(agent.interactive_args(prompt));
+    AgentLaunchSpec {
+        program: agent.binary().to_string(),
+        args,
+    }
 }
 
 fn build_implementation_prompt(project_root: &Path, agent: AgentKind, task: &Task) -> String {
@@ -267,11 +332,6 @@ fn append_task_context(prompt: &mut String, project_root: &Path, task: &Task) {
     }
 }
 
-/// POSIX single-quote escaping so the prompt survives the shell as one argument.
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,28 +339,30 @@ mod tests {
     use crate::services::board::create_task;
 
     #[test]
-    fn agent_command_quotes_prompt_and_targets_binary() {
+    fn agent_launch_keeps_prompt_as_a_single_argument() {
         let mut board = crate::model::board::Board::default();
         let task =
             create_task(&mut board, "Fix it's bug", "do the thing", TaskStatus::Todo).clone();
 
-        let command = build_agent_command(
+        let launch = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Claude,
             &task,
             AgentRunOptions::implementation(false),
         );
-        assert!(command.starts_with("claude '"));
-        assert!(command.contains("Fix it'\\''s bug"));
-        assert!(command.contains("get_my_work with assignee \"claude\""));
-        assert!(command.contains("start_work"));
-        assert!(command.contains("start_work with assignee \"claude\""));
-        assert!(command.contains("heartbeat_task with assignee \"claude\""));
-        assert!(command.contains("ready_for_review"));
-        assert!(command.contains("ready_for_review with author \"claude\""));
-        assert!(command.contains("Do not mark the task Complete"));
+        assert_eq!(launch.program, "claude");
+        assert_eq!(launch.args.len(), 1);
+        let prompt = &launch.args[0];
+        assert!(prompt.contains("Fix it's bug"));
+        assert!(prompt.contains("get_my_work with assignee \"claude\""));
+        assert!(prompt.contains("start_work"));
+        assert!(prompt.contains("start_work with assignee \"claude\""));
+        assert!(prompt.contains("heartbeat_task with assignee \"claude\""));
+        assert!(prompt.contains("ready_for_review"));
+        assert!(prompt.contains("ready_for_review with author \"claude\""));
+        assert!(prompt.contains("Do not mark the task Complete"));
         // Auto-gather directive is always present on implementation runs.
-        assert!(command.contains("add_task_knowledge"));
+        assert!(prompt.contains("add_task_knowledge"));
     }
 
     #[test]
@@ -308,17 +370,18 @@ mod tests {
         let mut board = crate::model::board::Board::default();
         let task = create_task(&mut board, "Lease-safe work", "", TaskStatus::Todo).clone();
 
-        let command = build_agent_command(
+        let launch = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Codex,
             &task,
             AgentRunOptions::implementation(false),
         );
-        assert!(command.contains("launched-agent assignee \"codex\""));
-        assert!(command.contains("get_my_work with assignee \"codex\""));
-        assert!(command.contains("start_work with assignee \"codex\""));
-        assert!(command.contains("heartbeat_task with assignee \"codex\""));
-        assert!(command.contains("ready_for_review with author \"codex\""));
+        let prompt = launch.args.last().unwrap();
+        assert!(prompt.contains("launched-agent assignee \"codex\""));
+        assert!(prompt.contains("get_my_work with assignee \"codex\""));
+        assert!(prompt.contains("start_work with assignee \"codex\""));
+        assert!(prompt.contains("heartbeat_task with assignee \"codex\""));
+        assert!(prompt.contains("ready_for_review with author \"codex\""));
     }
 
     #[test]
@@ -345,15 +408,16 @@ mod tests {
             .unwrap()
             .clone();
 
-        let command = build_agent_command(
+        let launch = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Claude,
             &task,
             AgentRunOptions::implementation(false),
         );
-        assert!(command.contains("Additional instructions: use bunny CDN."));
-        assert!(command.contains("/tmp/project/.terminaltiler/attachments/"));
-        assert!(command.contains("shot.png"));
+        let prompt = launch.args.last().unwrap();
+        assert!(prompt.contains("Additional instructions: use bunny CDN."));
+        assert!(prompt.contains("/tmp/project/.terminaltiler/attachments/"));
+        assert!(prompt.contains("shot.png"));
     }
 
     #[test]
@@ -361,24 +425,66 @@ mod tests {
         let mut board = crate::model::board::Board::default();
         let task = create_task(&mut board, "Task", "", TaskStatus::Todo).clone();
 
-        let codex = build_agent_command(
+        let codex = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Codex,
             &task,
             AgentRunOptions::implementation(true),
         );
-        assert!(codex.starts_with("codex '-C' '/tmp/project' '-c' "));
-        assert!(codex.contains("mcp_servers.terminaltiler.command"));
-        assert!(codex.contains("mcp_servers.terminaltiler.args"));
-        assert!(codex.contains("--dangerously-bypass-approvals-and-sandbox"));
+        assert_eq!(codex.program, "codex");
+        assert!(codex.args.iter().any(|arg| arg == "-C"));
+        assert!(codex.args.iter().any(|arg| arg == "/tmp/project"));
+        assert!(
+            codex
+                .args
+                .iter()
+                .any(|arg| arg.contains("mcp_servers.terminaltiler.command"))
+        );
+        assert!(
+            codex
+                .args
+                .iter()
+                .any(|arg| arg.contains("mcp_servers.terminaltiler.args"))
+        );
+        assert!(
+            codex
+                .args
+                .iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+        );
 
-        let claude = build_agent_command(
+        let claude = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Claude,
             &task,
             AgentRunOptions::implementation(true),
         );
-        assert!(claude.starts_with("claude --dangerously-skip-permissions "));
+        assert_eq!(claude.program, "claude");
+        assert_eq!(claude.args[0], "--dangerously-skip-permissions");
+
+        let opencode = build_agent_launch_spec(
+            Path::new("/tmp/project"),
+            AgentKind::Opencode,
+            &task,
+            AgentRunOptions::implementation(true),
+        );
+        assert!(opencode.args.iter().all(|arg| !arg.contains("approve")));
+
+        let copilot = build_agent_launch_spec(
+            Path::new("/tmp/project"),
+            AgentKind::Copilot,
+            &task,
+            AgentRunOptions::implementation(true),
+        );
+        assert_eq!(copilot.args[0], "--yolo");
+
+        let grok = build_agent_launch_spec(
+            Path::new("/tmp/project"),
+            AgentKind::Grok,
+            &task,
+            AgentRunOptions::implementation(true),
+        );
+        assert_eq!(grok.args[0], "--always-approve");
     }
 
     #[test]
@@ -386,18 +492,43 @@ mod tests {
         let mut board = crate::model::board::Board::default();
         let task = create_task(&mut board, "Review target", "", TaskStatus::InReview).clone();
 
-        let command = build_agent_command(
+        let launch = build_agent_launch_spec(
             Path::new("/tmp/project"),
             AgentKind::Codex,
             &task,
             AgentRunOptions::review(false),
         );
-        assert!(command.starts_with("codex '-C' '/tmp/project' '-c' "));
-        assert!(command.contains("Run a code review"));
-        assert!(command.contains("get_my_work"));
-        assert!(command.contains("submit_review"));
-        assert!(command.contains("codex-reviewer"));
-        assert!(command.contains("Leave the task in In Review"));
-        assert!(command.contains("do not call complete_task"));
+        assert_eq!(launch.program, "codex");
+        let prompt = launch.args.last().unwrap();
+        assert!(prompt.contains("Run a code review"));
+        assert!(prompt.contains("get_my_work"));
+        assert!(prompt.contains("submit_review"));
+        assert!(prompt.contains("codex-reviewer"));
+        assert!(prompt.contains("Leave the task in In Review"));
+        assert!(prompt.contains("do not call complete_task"));
+    }
+
+    #[test]
+    fn all_supported_agents_build_provider_specific_interactive_argv() {
+        let mut board = crate::model::board::Board::default();
+        let task = create_task(&mut board, "Task", "", TaskStatus::Todo).clone();
+
+        for agent in AgentKind::ALL {
+            let launch = build_agent_launch_spec(
+                Path::new("/tmp/project"),
+                agent,
+                &task,
+                AgentRunOptions::implementation(false),
+            );
+            assert_eq!(launch.program, agent.binary());
+            assert!(!launch.args.is_empty());
+            assert!(
+                launch
+                    .args
+                    .last()
+                    .unwrap()
+                    .contains("TerminalTiler Kanban task")
+            );
+        }
     }
 }

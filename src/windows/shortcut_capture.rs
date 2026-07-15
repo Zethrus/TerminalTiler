@@ -7,6 +7,7 @@ mod imp {
 
     const VK_OEM_PLUS: u32 = 0xBB;
     const VK_OEM_MINUS: u32 = 0xBD;
+    const VK_OEM_3: u32 = 0xC0;
     const VK_F24: u32 = 0x87;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +108,7 @@ mod imp {
             "equal" => "=",
             "minus" => "-",
             "space" => "Space",
+            "grave" | "backquote" => "`",
             "KP_Add" => "Num +",
             "KP_Subtract" => "Num -",
             "KP_Multiply" => "Num *",
@@ -183,6 +185,7 @@ mod imp {
             "plus" | "equal" => Some(VK_OEM_PLUS),
             "minus" => Some(VK_OEM_MINUS),
             "space" => Some(u32::from(VK_SPACE)),
+            "grave" | "backquote" => Some(VK_OEM_3),
             "kp_add" => Some(u32::from(VK_ADD)),
             "kp_subtract" => Some(u32::from(VK_SUBTRACT)),
             "kp_multiply" => Some(u32::from(VK_MULTIPLY)),
@@ -198,6 +201,7 @@ mod imp {
             0x30..=0x39 | 0x41..=0x5A => Some(char::from_u32(virtual_key)?.to_string()),
             VK_OEM_PLUS => Some(if shift { "plus" } else { "equal" }.into()),
             VK_OEM_MINUS => Some("minus".into()),
+            VK_OEM_3 => Some("grave".into()),
             key if key == u32::from(VK_SPACE) => Some("space".into()),
             key if key == u32::from(VK_ADD) => Some("KP_Add".into()),
             key if key == u32::from(VK_SUBTRACT) => Some("KP_Subtract".into()),
@@ -221,6 +225,7 @@ mod imp {
             assert!(parse_shortcut("<Alt><Super>D").is_some());
             assert!(parse_shortcut("<Ctrl>P").is_some());
             assert!(parse_shortcut("<Ctrl><Shift>space").is_some());
+            assert!(parse_shortcut("<Control>grave").is_some());
         }
 
         #[test]

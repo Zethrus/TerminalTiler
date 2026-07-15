@@ -49,6 +49,7 @@ const TRANSCRIPT_DIALOG_RS: &str = include_str!("../src/ui/transcript_dialog.rs"
 const TRAY_RS: &str = include_str!("../src/tray.rs");
 const TILE_VIEW_RS: &str = include_str!("../src/ui/tile_view.rs");
 const UI_MOD_RS: &str = include_str!("../src/ui/mod.rs");
+const VOICE_HUD_RS: &str = include_str!("../src/ui/voice_hud.rs");
 const WEB_CONTEXT_MENU_RS: &str = include_str!("../src/ui/web_context_menu.rs");
 const WEB_TILE_RS: &str = include_str!("../src/ui/web_tile.rs");
 const WINDOW_RS: &str = include_str!("../src/ui/window.rs");
@@ -89,8 +90,6 @@ const WORKSPACE_ALERTS_RS: &str = include_str!("../src/ui/workspace_alerts.rs");
 const WORKSPACE_PREVIEW_RS: &str = include_str!("../src/ui/workspace_preview.rs");
 const WORKSPACE_VIEW_RS: &str = include_str!("../src/ui/workspace_view.rs");
 const VOICE_ENGINE_RS: &str = include_str!("../src/voice/engine.rs");
-const VOICE_HUD_RS: &str = include_str!("../src/ui/voice_hud.rs");
-
 #[test]
 fn runtime_product_identity_reaches_tray_restore_detached_windows_and_about() {
     assert!(
@@ -4124,4 +4123,41 @@ fn launch_deck_can_create_and_reopen_kanban_boards() {
             && STYLE_CSS.contains(".saved-board-card"),
         "Kanban board entry points should be discoverable through dashboard, command palette, shortcuts, and CSS hooks"
     );
+}
+
+#[test]
+fn companion_voice_hud_keeps_live_roles_controls_and_default_hotkey_visible() {
+    assert!(
+        VOICE_HUD_RS.contains("show_user")
+            && VOICE_HUD_RS.contains("show_assistant")
+            && VOICE_HUD_RS.contains("show_activity")
+            && VOICE_HUD_RS.contains("connect_mic_clicked")
+            && VOICE_HUD_RS.contains("connect_end_clicked"),
+        "the voice HUD should separate user, orchestrator, and live activity while exposing local controls"
+    );
+    assert!(
+        WINDOW_RS.contains("const COMPANION_VOICE_HOTKEY: &str = \"<Control>grave\"")
+            && WINDOW_RS.contains("VoiceActivationRequest::OnScreenPressed")
+            && WINDOW_RS.contains("controller.cancel()")
+            && WINDOWS_GTK_APP_RS
+                .contains("const COMPANION_VOICE_HOTKEY: &str = \"<Control>grave\"")
+            && WINDOWS_GTK_APP_RS.contains("install_windows_runtime_control")
+            && WINDOWS_GTK_APP_RS.contains("confirm_windows_runtime_action")
+            && WINDOWS_GTK_APP_RS.contains("action.confirmation_nonce()"),
+        "companion voice should support Ctrl+grave, on-screen capture, immediate local hang-up, and trusted Windows runtime approval"
+    );
+    for class in [
+        ".voice-hud-orb",
+        ".voice-hud-chip",
+        ".voice-hud-user",
+        ".voice-hud-assistant",
+        ".voice-hud-activity",
+        ".voice-hud-mic.active",
+        ".voice-hud-end",
+    ] {
+        assert!(
+            STYLE_CSS.contains(class),
+            "voice HUD styling should include {class}"
+        );
+    }
 }

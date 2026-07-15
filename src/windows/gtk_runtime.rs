@@ -427,6 +427,14 @@ mod imp {
                 state.active || state.process_handle.is_some()
             }
         });
+        let process_generation_provider = Rc::new({
+            let state = state.clone();
+            move || state.borrow().active_generation
+        });
+        let interrupt = Rc::new({
+            let state = state.clone();
+            move || send_terminal_runtime_payload(&state, "\u{3}".to_string())
+        });
 
         let appearance_applier = Rc::new({
             let appearance_provider = appearance_provider.clone();
@@ -465,6 +473,8 @@ mod imp {
             web_settings_applier: None,
             shutdown: Some(shutdown),
             active_process_checker: Some(active_process_checker),
+            process_generation_provider: Some(process_generation_provider),
+            interrupt: Some(interrupt),
             terminal_history_provider: Some(terminal_history_provider),
             recovery_binder: Some(TileRuntimeRecoveryBinder {
                 bind: Rc::new({
@@ -1632,6 +1642,8 @@ mod imp {
             web_settings_applier: Some(web_settings_applier),
             shutdown: Some(shutdown),
             active_process_checker: None,
+            process_generation_provider: None,
+            interrupt: None,
             terminal_history_provider: None,
             recovery_binder: None,
         }

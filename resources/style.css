@@ -5234,15 +5234,26 @@ window.theme-light .assets-manager-window .asset-nested-card {
 }
 
 .voice-hud {
-  min-width: 360px;
-  max-width: 760px;
-  padding: 12px 16px;
-  border-radius: 18px;
+  min-width: 520px;
+  max-width: 860px;
+  padding: 11px 14px;
+  border-radius: 22px;
   background:
-    linear-gradient(135deg, rgba(83, 109, 254, 0.22), rgba(45, 212, 191, 0.13)),
-    rgba(9, 14, 24, 0.88);
-  border: 1px solid rgba(125, 211, 252, 0.22);
-  box-shadow: 0 18px 48px alpha(@tt_shadow, 0.34), inset 0 1px alpha(@tt_white, 0.10);
+    linear-gradient(135deg, rgba(84, 135, 116, 0.18), rgba(30, 84, 66, 0.08)),
+    rgba(5, 22, 17, 0.96);
+  border: 1px solid rgba(122, 206, 172, 0.24);
+  box-shadow: 0 20px 56px alpha(@tt_shadow, 0.42), inset 0 1px alpha(@tt_white, 0.08);
+}
+
+.voice-hud-orb {
+  min-width: 54px;
+  min-height: 54px;
+  border-radius: 30px;
+  color: rgba(220, 255, 243, 0.94);
+  font-size: 36px;
+  background: radial-gradient(circle, rgba(205, 246, 230, 0.78), rgba(92, 151, 130, 0.42) 52%, rgba(26, 57, 47, 0.72));
+  border: 1px solid rgba(211, 255, 239, 0.28);
+  box-shadow: 0 0 24px rgba(157, 230, 203, 0.32), inset 0 0 16px rgba(238, 255, 249, 0.28);
 }
 
 .voice-hud-status {
@@ -5251,8 +5262,64 @@ window.theme-light .assets-manager-window .asset-nested-card {
   letter-spacing: 0.04em;
 }
 
+.voice-hud-status-dot {
+  color: rgba(132, 240, 151, 0.92);
+  font-size: 10px;
+}
+
+.voice-hud-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: rgba(194, 226, 214, 0.84);
+  background: rgba(145, 203, 181, 0.09);
+  border: 1px solid rgba(145, 203, 181, 0.16);
+  font-size: 11px;
+}
+
+.voice-hud-prefix {
+  min-width: 50px;
+  color: rgba(164, 207, 190, 0.66);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .voice-hud-transcript {
   color: rgba(207, 250, 254, 0.86);
+}
+
+.voice-hud-user {
+  color: rgba(226, 245, 238, 0.88);
+}
+
+.voice-hud-assistant {
+  color: rgba(184, 228, 211, 0.86);
+}
+
+.voice-hud-activity {
+  color: rgba(160, 195, 182, 0.72);
+  font-size: 12px;
+}
+
+.voice-hud-button {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  background: rgba(120, 178, 156, 0.08);
+  border: 1px solid rgba(149, 208, 185, 0.18);
+}
+
+.voice-hud-mic.active {
+  color: rgba(255, 222, 117, 0.98);
+  background: rgba(161, 123, 16, 0.22);
+  border-color: rgba(236, 190, 54, 0.42);
+}
+
+.voice-hud-end {
+  color: rgba(255, 132, 145, 0.96);
+  background: rgba(140, 30, 45, 0.22);
+  border-color: rgba(233, 77, 96, 0.38);
 }
 
 window.theme-light .voice-hud {
@@ -5269,6 +5336,12 @@ window.theme-light .voice-hud-status {
 
 window.theme-light .voice-hud-transcript {
   color: rgba(17, 94, 89, 0.86);
+}
+
+window.theme-light .voice-hud-chip,
+window.theme-light .voice-hud-prefix,
+window.theme-light .voice-hud-activity {
+  color: rgba(39, 86, 70, 0.76);
 }
 
 /* Kanban board — per-project task board (shares config-panel + card chrome) */

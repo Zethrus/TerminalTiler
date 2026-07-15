@@ -1,6 +1,7 @@
 #[cfg(all(target_os = "windows", feature = "windows-gtk-shell"))]
 mod imp {
     use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::process::ExitCode;
     use std::rc::{Rc, Weak};
@@ -10,11 +11,20 @@ mod imp {
     use adw::prelude::*;
     use glib::value::ToValue;
     use gtk::{gdk, gio, glib};
+    use sha2::{Digest, Sha256};
 
-    use crate::extension::{ProductIdentity, RuntimeOptions};
+    use crate::extension::{
+        CompanionVoiceController, ProductIdentity, RuntimeOptions, VoiceActivationRequest,
+        VoiceControllerStatus, VoiceUiEvent as CompanionVoiceUiEvent,
+    };
     use crate::logging;
     use crate::model::assets::RestoreLaunchMode;
     use crate::model::layout::DEFAULT_WEB_URL;
+    use crate::runtime_control::{
+        ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation, SnapshotRequest,
+        SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue, WorkspaceEventJournal,
+        WorkspaceEventType, WorkspaceSnapshot, classify_command, confirmation_for,
+    };
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_override_for_tab_tile,
         restore_startup_overrides_for_saved_session,
@@ -52,6 +62,53 @@ mod imp {
     use crate::windows::win32_helpers::open_path_with_shell;
 
     const VOICE_AUDIO_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+    const COMPANION_VOICE_HOTKEY: &str = "<Control>grave";
+
+    struct CompanionVoiceSession {
+        controller: std::sync::Arc<dyn CompanionVoiceController>,
+        capturing: bool,
+    }
+
+    impl CompanionVoiceSession {
+        fn new(controller: std::sync::Arc<dyn CompanionVoiceController>) -> Self {
+            Self {
+                controller,
+                capturing: false,
+            }
+        }
+
+        fn press(&mut self, request: VoiceActivationRequest) -> Result<(), String> {
+            if self.capturing {
+                return Ok(());
+            }
+            self.controller.activate(request)?;
+            self.capturing = true;
+            Ok(())
+        }
+
+        fn release(&mut self) -> Result<(), String> {
+            if !self.capturing {
+                return Ok(());
+            }
+            self.capturing = false;
+            self.controller.release_push_to_talk()
+        }
+
+        fn toggle(&mut self) -> Result<bool, String> {
+            if self.capturing {
+                self.release()?;
+                Ok(false)
+            } else {
+                self.press(VoiceActivationRequest::OnScreenPressed)?;
+                Ok(true)
+            }
+        }
+
+        fn cancel(&mut self) {
+            self.capturing = false;
+            self.controller.cancel();
+        }
+    }
 
     pub fn run() -> ExitCode {
         run_with_options_and_updates(RuntimeOptions::default(), true)
@@ -590,6 +647,7 @@ mod imp {
         sync_windows_fullscreen_chrome(&window, title.root.upcast_ref(), &fullscreen_button, false);
 
         let shell_state = WindowsGtkShellState::new(session_store.clone(), options.product.clone());
+        install_windows_runtime_control(&window, &shell_state, options);
         {
             let shell_state = shell_state.clone();
             window.connect_is_active_notify(move |window| {
@@ -955,6 +1013,14 @@ mod imp {
             voice_local_key_pressed.clone(),
             voice_event_tx.clone(),
         );
+        if let Some(controller) = options.voice_controller.clone() {
+            install_windows_companion_voice_controller(
+                &window,
+                controller,
+                voice_hud.clone(),
+                overlay.clone(),
+            );
+        }
 
         gtk::glib::timeout_add_seconds_local(30, || {
             crate::stats_hub::flush();
@@ -1913,6 +1979,684 @@ mod imp {
             return false;
         };
         key == expected_key
+    }
+
+    /// Attach the shared runtime-control protocol to the active Windows GTK
+    /// preview. Provider workers call the thread-safe port while every GTK and
+    /// terminal mutation is serialized back onto this main-loop queue.
+    fn install_windows_runtime_control(
+        window: &adw::ApplicationWindow,
+        shell_state: &WindowsGtkShellState,
+        options: &RuntimeOptions,
+    ) {
+        let (queue, port) = WorkspaceControlQueue::new();
+        crate::extension::attach_runtime_control(options, port);
+
+        let prepared = Rc::new(RefCell::new(HashMap::<String, PreparedAction>::new()));
+        let journals = Rc::new(RefCell::new(HashMap::<String, WorkspaceEventJournal>::new()));
+        let last_snapshots = Rc::new(RefCell::new(HashMap::<String, WorkspaceSnapshot>::new()));
+        {
+            let window = window.clone();
+            let shell_state = shell_state.clone();
+            let prepared = prepared.clone();
+            let journals = journals.clone();
+            let last_snapshots = last_snapshots.clone();
+            glib::timeout_add_local(Duration::from_millis(40), move || {
+                queue.drain(16, |operation| {
+                    dispatch_windows_runtime_operation(
+                        &window,
+                        &shell_state,
+                        &prepared,
+                        &journals,
+                        &last_snapshots,
+                        operation,
+                    )
+                });
+                glib::ControlFlow::Continue
+            });
+        }
+        {
+            let shell_state = shell_state.clone();
+            glib::timeout_add_local(Duration::from_secs(1), move || {
+                let Some(preview) = shell_state.voice_target() else {
+                    return glib::ControlFlow::Continue;
+                };
+                let snapshot = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                let previous = last_snapshots
+                    .borrow_mut()
+                    .insert(snapshot.workspace_id.clone(), snapshot.clone());
+                if let Some(previous) = previous {
+                    record_windows_runtime_changes(&journals, &previous, &snapshot);
+                }
+                glib::ControlFlow::Continue
+            });
+        }
+    }
+
+    fn dispatch_windows_runtime_operation(
+        window: &adw::ApplicationWindow,
+        shell_state: &WindowsGtkShellState,
+        prepared: &Rc<RefCell<HashMap<String, PreparedAction>>>,
+        journals: &Rc<RefCell<HashMap<String, WorkspaceEventJournal>>>,
+        last_snapshots: &Rc<RefCell<HashMap<String, WorkspaceSnapshot>>>,
+        operation: RuntimeOperation,
+    ) -> Result<serde_json::Value, RuntimeControlError> {
+        let preview = shell_state
+            .voice_target()
+            .ok_or_else(|| RuntimeControlError::NotFound("no focused workspace".into()))?;
+        match operation {
+            RuntimeOperation::Snapshot(request) => {
+                let mut snapshot = preview.runtime_workspace_snapshot(request.clone());
+                if let Some(workspace_id) = request.workspace_id.as_deref()
+                    && workspace_id != snapshot.workspace_id
+                {
+                    return Err(RuntimeControlError::NotFound(workspace_id.to_string()));
+                }
+                snapshot.latest_event_cursor = journals
+                    .borrow()
+                    .get(&snapshot.workspace_id)
+                    .map_or(0, WorkspaceEventJournal::latest_cursor);
+                serde_json::to_value(snapshot)
+                    .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+            }
+            RuntimeOperation::Events(request) => {
+                let snapshot = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                if request.workspace_id != snapshot.workspace_id {
+                    return Err(RuntimeControlError::NotFound(request.workspace_id));
+                }
+                let response = journals
+                    .borrow_mut()
+                    .entry(snapshot.workspace_id.clone())
+                    .or_default()
+                    .response(
+                        snapshot.workspace_id,
+                        request.after_cursor,
+                        request.limit,
+                        snapshot.workspace_revision,
+                    );
+                serde_json::to_value(response)
+                    .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+            }
+            RuntimeOperation::Focus(request) => {
+                let before = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                ensure_windows_runtime_revision(
+                    request.expected_revision,
+                    before.workspace_revision,
+                )?;
+                if request.workspace_id != before.workspace_id
+                    || !preview.focus_runtime_tile(&request.tile_id)
+                {
+                    return Err(RuntimeControlError::NotFound(request.tile_id));
+                }
+                let after = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                append_windows_runtime_event(
+                    journals,
+                    &after,
+                    WorkspaceEventType::FocusChanged,
+                    Some(request.tile_id.clone()),
+                    "terminal tile focused",
+                );
+                remember_windows_runtime_snapshot(last_snapshots, &after);
+                serialize_windows_action_result(ActionResult {
+                    workspace_revision: after.workspace_revision,
+                    message: format!("Focused tile {}.", request.tile_id),
+                })
+            }
+            RuntimeOperation::Create(request) => {
+                let before = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                ensure_windows_runtime_revision(
+                    request.expected_revision,
+                    before.workspace_revision,
+                )?;
+                if request.workspace_id != before.workspace_id {
+                    return Err(RuntimeControlError::NotFound(request.workspace_id));
+                }
+                let target = request
+                    .split_target
+                    .or_else(|| before.focused_tile_id.clone())
+                    .or_else(|| before.layout.visual_order.first().cloned())
+                    .ok_or_else(|| RuntimeControlError::NotFound("no split target".into()))?;
+                let axis = match request.axis {
+                    RuntimeSplitAxis::Horizontal => crate::model::layout::SplitAxis::Horizontal,
+                    RuntimeSplitAxis::Vertical => crate::model::layout::SplitAxis::Vertical,
+                };
+                let tile_id = preview
+                    .add_runtime_terminal_tile_at(&target, axis)
+                    .ok_or_else(|| {
+                        RuntimeControlError::Internal("could not create a terminal tile".into())
+                    })?;
+                let after = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                append_windows_runtime_event(
+                    journals,
+                    &after,
+                    WorkspaceEventType::TileCreated,
+                    Some(tile_id.clone()),
+                    "terminal tile created",
+                );
+                append_windows_runtime_event(
+                    journals,
+                    &after,
+                    WorkspaceEventType::LayoutChanged,
+                    Some(tile_id.clone()),
+                    "workspace layout changed",
+                );
+                remember_windows_runtime_snapshot(last_snapshots, &after);
+                serialize_windows_action_result(ActionResult {
+                    workspace_revision: after.workspace_revision,
+                    message: format!("Created and focused tile {tile_id}."),
+                })
+            }
+            RuntimeOperation::Prepare(request) => {
+                let snapshot = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                ensure_windows_runtime_revision(
+                    request.expected_revision,
+                    snapshot.workspace_revision,
+                )?;
+                if request.workspace_id != snapshot.workspace_id
+                    || !snapshot.tiles.iter().any(|tile| {
+                        tile.tile_id == request.tile_id
+                            && tile.kind == crate::runtime_control::TileKind::Terminal
+                    })
+                {
+                    return Err(RuntimeControlError::NotFound(request.tile_id));
+                }
+                let command = request.command.trim();
+                if command.is_empty() || command.len() > 4096 {
+                    return Err(RuntimeControlError::InvalidRequest(
+                        "command must contain 1-4096 non-whitespace bytes".into(),
+                    ));
+                }
+                let now = current_windows_runtime_time_ms();
+                let mut prepared_actions = prepared.borrow_mut();
+                prepared_actions.retain(|_, action| action.expires_at_unix_ms > now);
+                if prepared_actions.len() >= 64 {
+                    return Err(RuntimeControlError::InvalidRequest(
+                        "too many terminal actions are awaiting approval".into(),
+                    ));
+                }
+                let risk = classify_command(&request.command);
+                let action = PreparedAction::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    request.workspace_id,
+                    request.tile_id,
+                    format!("{:x}", Sha256::digest(request.command.as_bytes())),
+                    request.command,
+                    risk,
+                    confirmation_for(risk),
+                    now.saturating_add(30_000),
+                    snapshot.workspace_revision,
+                );
+                prepared_actions.insert(action.action_id.clone(), action.clone());
+                serde_json::to_value(action)
+                    .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+            }
+            RuntimeOperation::Execute(request) => {
+                let Some(action) = prepared.borrow_mut().remove(&request.action_id) else {
+                    return Err(RuntimeControlError::NotFound(request.action_id));
+                };
+                if current_windows_runtime_time_ms() >= action.expires_at_unix_ms {
+                    return Err(RuntimeControlError::ExpiredAction);
+                }
+                let before = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                ensure_windows_runtime_revision(
+                    Some(action.prepared_revision),
+                    before.workspace_revision,
+                )?;
+                if action.workspace_id != before.workspace_id {
+                    return Err(RuntimeControlError::NotFound(action.workspace_id));
+                }
+                // Remote/provider values never satisfy local consent. The
+                // trusted desktop reveals a fresh one-time nonce directly to
+                // the user and validates it without returning it to the model.
+                let confirmation = (!matches!(
+                    action.confirmation,
+                    crate::runtime_control::ConfirmationRequirement::None
+                ))
+                .then(|| confirm_windows_runtime_action(window, &action))
+                .flatten();
+                if !action.confirmation_matches(confirmation.as_deref()) {
+                    return Err(RuntimeControlError::ConfirmationRequired);
+                }
+                if !preview.send_text_to_runtime_tile(&action.tile_id, action.command(), true) {
+                    return Err(RuntimeControlError::NotFound(action.tile_id));
+                }
+                let after = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                append_windows_runtime_event(
+                    journals,
+                    &after,
+                    WorkspaceEventType::ActionSubmitted,
+                    Some(action.tile_id),
+                    "terminal action submitted",
+                );
+                remember_windows_runtime_snapshot(last_snapshots, &after);
+                serialize_windows_action_result(ActionResult {
+                    workspace_revision: after.workspace_revision,
+                    message: "Terminal action submitted.".into(),
+                })
+            }
+            RuntimeOperation::Interrupt(request) => {
+                let before = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                ensure_windows_runtime_revision(
+                    request.expected_revision,
+                    before.workspace_revision,
+                )?;
+                if request.workspace_id != before.workspace_id
+                    || !preview.interrupt_runtime_tile(&request.tile_id)
+                {
+                    return Err(RuntimeControlError::NotFound(request.tile_id));
+                }
+                let after = preview.runtime_workspace_snapshot(SnapshotRequest::default());
+                append_windows_runtime_event(
+                    journals,
+                    &after,
+                    WorkspaceEventType::ActionInterrupted,
+                    Some(request.tile_id),
+                    "interrupt sent to terminal tile",
+                );
+                remember_windows_runtime_snapshot(last_snapshots, &after);
+                serialize_windows_action_result(ActionResult {
+                    workspace_revision: after.workspace_revision,
+                    message: "Interrupt sent to tile.".into(),
+                })
+            }
+        }
+    }
+
+    fn serialize_windows_action_result(
+        result: ActionResult,
+    ) -> Result<serde_json::Value, RuntimeControlError> {
+        serde_json::to_value(result)
+            .map_err(|error| RuntimeControlError::Internal(error.to_string()))
+    }
+
+    fn current_windows_runtime_time_ms() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }
+
+    fn ensure_windows_runtime_revision(
+        expected: Option<u64>,
+        actual: u64,
+    ) -> Result<(), RuntimeControlError> {
+        if let Some(expected) = expected
+            && expected != actual
+        {
+            return Err(RuntimeControlError::RevisionConflict { expected, actual });
+        }
+        Ok(())
+    }
+
+    fn remember_windows_runtime_snapshot(
+        snapshots: &Rc<RefCell<HashMap<String, WorkspaceSnapshot>>>,
+        snapshot: &WorkspaceSnapshot,
+    ) {
+        snapshots
+            .borrow_mut()
+            .insert(snapshot.workspace_id.clone(), snapshot.clone());
+    }
+
+    fn append_windows_runtime_event(
+        journals: &Rc<RefCell<HashMap<String, WorkspaceEventJournal>>>,
+        snapshot: &WorkspaceSnapshot,
+        event_type: WorkspaceEventType,
+        tile_id: Option<String>,
+        summary: &str,
+    ) {
+        journals
+            .borrow_mut()
+            .entry(snapshot.workspace_id.clone())
+            .or_default()
+            .append(snapshot.workspace_revision, event_type, tile_id, summary);
+    }
+
+    fn record_windows_runtime_changes(
+        journals: &Rc<RefCell<HashMap<String, WorkspaceEventJournal>>>,
+        previous: &WorkspaceSnapshot,
+        current: &WorkspaceSnapshot,
+    ) {
+        if previous.workspace_id != current.workspace_id {
+            return;
+        }
+        let previous_tiles = previous
+            .tiles
+            .iter()
+            .map(|tile| (tile.tile_id.as_str(), tile))
+            .collect::<HashMap<_, _>>();
+        let current_tiles = current
+            .tiles
+            .iter()
+            .map(|tile| (tile.tile_id.as_str(), tile))
+            .collect::<HashMap<_, _>>();
+        for tile in &current.tiles {
+            let Some(old) = previous_tiles.get(tile.tile_id.as_str()) else {
+                append_windows_runtime_event(
+                    journals,
+                    current,
+                    WorkspaceEventType::TileCreated,
+                    Some(tile.tile_id.clone()),
+                    "terminal tile added",
+                );
+                continue;
+            };
+            if old.process.state != tile.process.state {
+                let (event_type, summary) = match tile.process.state {
+                    crate::runtime_control::ProcessState::Running => (
+                        WorkspaceEventType::ProcessStarted,
+                        "terminal process started",
+                    ),
+                    crate::runtime_control::ProcessState::Exited
+                    | crate::runtime_control::ProcessState::Idle => (
+                        WorkspaceEventType::ProcessExited,
+                        "terminal process stopped",
+                    ),
+                    crate::runtime_control::ProcessState::Unknown => continue,
+                };
+                append_windows_runtime_event(
+                    journals,
+                    current,
+                    event_type,
+                    Some(tile.tile_id.clone()),
+                    summary,
+                );
+            }
+        }
+        for tile in &previous.tiles {
+            if !current_tiles.contains_key(tile.tile_id.as_str()) {
+                append_windows_runtime_event(
+                    journals,
+                    current,
+                    WorkspaceEventType::TileRemoved,
+                    Some(tile.tile_id.clone()),
+                    "terminal tile removed",
+                );
+            }
+        }
+        if previous.layout.visual_order != current.layout.visual_order {
+            append_windows_runtime_event(
+                journals,
+                current,
+                WorkspaceEventType::LayoutChanged,
+                None,
+                "workspace layout changed",
+            );
+        }
+        if previous.focused_tile_id != current.focused_tile_id {
+            append_windows_runtime_event(
+                journals,
+                current,
+                WorkspaceEventType::FocusChanged,
+                current.focused_tile_id.clone(),
+                "focused terminal tile changed",
+            );
+        }
+        let previous_agents = previous
+            .active_agents
+            .iter()
+            .map(|agent| (agent.agent_run_id.as_str(), agent))
+            .collect::<HashMap<_, _>>();
+        for agent in &current.active_agents {
+            let changed = previous_agents
+                .get(agent.agent_run_id.as_str())
+                .is_none_or(|old| old.state != agent.state || old.status != agent.status);
+            if changed {
+                append_windows_runtime_event(
+                    journals,
+                    current,
+                    WorkspaceEventType::AgentChanged,
+                    agent.tile_id.clone(),
+                    "terminal agent state changed",
+                );
+            }
+        }
+        if previous.active_agents.iter().any(|old| {
+            !current
+                .active_agents
+                .iter()
+                .any(|agent| agent.agent_run_id == old.agent_run_id)
+        }) {
+            append_windows_runtime_event(
+                journals,
+                current,
+                WorkspaceEventType::AgentChanged,
+                None,
+                "terminal agent stopped",
+            );
+        }
+    }
+
+    fn confirm_windows_runtime_action(
+        window: &adw::ApplicationWindow,
+        action: &PreparedAction,
+    ) -> Option<String> {
+        let dialog = gtk::Dialog::builder()
+            .transient_for(window)
+            .modal(true)
+            .title("Confirm terminal action")
+            .build();
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        dialog.add_button("Execute", gtk::ResponseType::Accept);
+        let content = dialog.content_area();
+        content.set_spacing(12);
+        content.set_margin_top(18);
+        content.set_margin_bottom(18);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+        content.append(
+            &gtk::Label::builder()
+                .label("The voice orchestrator requested this terminal action:")
+                .xalign(0.0)
+                .wrap(true)
+                .build(),
+        );
+        content.append(
+            &gtk::Label::builder()
+                .label(&action.redacted_preview)
+                .xalign(0.0)
+                .wrap(true)
+                .selectable(true)
+                .css_classes(["monospace"])
+                .build(),
+        );
+        content.append(
+            &gtk::Label::builder()
+                .label(format!(
+                    "Type this one-time confirmation nonce to execute: {}",
+                    action.confirmation_nonce()
+                ))
+                .xalign(0.0)
+                .wrap(true)
+                .build(),
+        );
+        let entry = gtk::Entry::builder()
+            .placeholder_text("Confirmation nonce")
+            .hexpand(true)
+            .build();
+        content.append(&entry);
+        let response = Rc::new(RefCell::new(None::<String>));
+        let response_for_signal = response.clone();
+        let entry_for_signal = entry.clone();
+        let nested_loop = glib::MainLoop::new(None, false);
+        let nested_loop_for_signal = nested_loop.clone();
+        dialog.connect_response(move |dialog, response_id| {
+            if response_id == gtk::ResponseType::Accept {
+                *response_for_signal.borrow_mut() = Some(entry_for_signal.text().to_string());
+            }
+            dialog.close();
+            nested_loop_for_signal.quit();
+        });
+        dialog.present();
+        entry.grab_focus();
+        nested_loop.run();
+        response.borrow_mut().take()
+    }
+
+    fn install_windows_companion_voice_controller(
+        window: &adw::ApplicationWindow,
+        controller: std::sync::Arc<dyn CompanionVoiceController>,
+        voice_hud: VoiceHud,
+        overlay: adw::ToastOverlay,
+    ) {
+        let session = Rc::new(RefCell::new(CompanionVoiceSession::new(controller.clone())));
+        let local_pressed = Rc::new(Cell::new(false));
+        voice_hud.set_controls_visible(true);
+        {
+            let session = session.clone();
+            let voice_hud_for_click = voice_hud.clone();
+            let overlay = overlay.clone();
+            voice_hud.connect_mic_clicked(move || match session.borrow_mut().toggle() {
+                Ok(active) => {
+                    voice_hud_for_click.set_mic_active(active);
+                    voice_hud_for_click.set_status(if active {
+                        "Listening…"
+                    } else {
+                        "Thinking…"
+                    });
+                }
+                Err(error) => {
+                    voice_hud_for_click.show_activity("Voice unavailable", &error);
+                    overlay.add_toast(adw::Toast::new(&error));
+                }
+            });
+        }
+        {
+            let session = session.clone();
+            let voice_hud_for_click = voice_hud.clone();
+            voice_hud.connect_end_clicked(move || {
+                session.borrow_mut().cancel();
+                voice_hud_for_click.set_mic_active(false);
+                voice_hud_for_click.hide();
+            });
+        }
+
+        let key_controller = gtk::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let session = session.clone();
+            let local_pressed = local_pressed.clone();
+            let voice_hud = voice_hud.clone();
+            let overlay = overlay.clone();
+            key_controller.connect_key_pressed(move |_, key, _, state| {
+                if !windows_voice_key_event_matches(COMPANION_VOICE_HOTKEY, key, state) {
+                    return glib::Propagation::Proceed;
+                }
+                if local_pressed.replace(true) {
+                    return glib::Propagation::Stop;
+                }
+                match session
+                    .borrow_mut()
+                    .press(VoiceActivationRequest::PushToTalkPressed)
+                {
+                    Ok(()) => {
+                        voice_hud.set_mic_active(true);
+                        voice_hud.set_status("Listening…");
+                    }
+                    Err(error) => {
+                        local_pressed.set(false);
+                        voice_hud.show_activity("Voice unavailable", &error);
+                        overlay.add_toast(adw::Toast::new(&error));
+                    }
+                }
+                glib::Propagation::Stop
+            });
+        }
+        {
+            let session = session.clone();
+            let local_pressed = local_pressed.clone();
+            let voice_hud = voice_hud.clone();
+            let overlay = overlay.clone();
+            key_controller.connect_key_released(move |_, key, _, _| {
+                if !windows_voice_key_matches_accelerator_key(COMPANION_VOICE_HOTKEY, key)
+                    || !local_pressed.replace(false)
+                {
+                    return;
+                }
+                voice_hud.set_mic_active(false);
+                if let Err(error) = session.borrow_mut().release() {
+                    voice_hud.show_activity("Voice error", &error);
+                    overlay.add_toast(adw::Toast::new(&error));
+                }
+            });
+        }
+        window.add_controller(key_controller);
+
+        // RegisterHotKey emits activation only, not key release. Global
+        // Ctrl+grave therefore uses a predictable start/commit toggle while
+        // the in-window shortcut retains true push-to-talk semantics.
+        let (global_tx, global_rx) = mpsc::channel();
+        let global_handle =
+            WindowsGlobalHotkeyHandle::start(COMPANION_VOICE_HOTKEY.into(), global_tx).ok();
+        let global_handle = Rc::new(global_handle);
+        glib::timeout_add_local(Duration::from_millis(40), move || {
+            let _keep_global_hotkey_alive = &global_handle;
+            while let Ok(WindowsGlobalHotkeyEvent::Activated) = global_rx.try_recv() {
+                match session.borrow_mut().toggle() {
+                    Ok(active) => {
+                        voice_hud.set_mic_active(active);
+                        voice_hud.set_status(if active {
+                            "Listening…"
+                        } else {
+                            "Thinking…"
+                        });
+                    }
+                    Err(error) => {
+                        voice_hud.show_activity("Voice unavailable", &error);
+                        overlay.add_toast(adw::Toast::new(&error));
+                    }
+                }
+            }
+
+            for event in controller.drain_ui_events(32) {
+                match event {
+                    CompanionVoiceUiEvent::PartialTranscript(text) => {
+                        if let Some(status) = text.strip_prefix("STATUS ") {
+                            voice_hud.show_activity(
+                                companion_voice_status_label(controller.status()),
+                                status,
+                            );
+                        } else {
+                            voice_hud.show_user(
+                                "Listening…",
+                                text.strip_prefix("YOU ").unwrap_or(&text),
+                            );
+                        }
+                    }
+                    CompanionVoiceUiEvent::FinalTranscript(text) => {
+                        if let Some(text) = text.strip_prefix("BRIDGE ") {
+                            voice_hud.show_assistant("Orchestrator", text);
+                        } else {
+                            voice_hud.show_user("You", text.strip_prefix("YOU ").unwrap_or(&text));
+                        }
+                    }
+                    CompanionVoiceUiEvent::Status(status) => {
+                        voice_hud.set_status(companion_voice_status_label(status));
+                    }
+                    CompanionVoiceUiEvent::Error(error) => {
+                        voice_hud.show_activity("Voice error", &error);
+                        overlay.add_toast(adw::Toast::new(&error));
+                    }
+                    CompanionVoiceUiEvent::ConfirmationRequested {
+                        redacted_preview, ..
+                    } => voice_hud.show_activity("Approval required", &redacted_preview),
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn companion_voice_status_label(status: VoiceControllerStatus) -> &'static str {
+        match status {
+            VoiceControllerStatus::Disabled => "Voice disabled",
+            VoiceControllerStatus::Ready => "Voice ready",
+            VoiceControllerStatus::Connecting => "Connecting…",
+            VoiceControllerStatus::Listening => "Listening…",
+            VoiceControllerStatus::Thinking => "Thinking…",
+            VoiceControllerStatus::Speaking => "Speaking…",
+            VoiceControllerStatus::AwaitingConfirmation => "Approval required",
+            VoiceControllerStatus::Fallback => "Voice fallback",
+            VoiceControllerStatus::Error => "Voice error",
+        }
     }
 
     fn install_windows_voice_pack(

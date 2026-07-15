@@ -16,30 +16,94 @@ pub fn terminal_agent_candidates(pty_fd: Option<i32>, child_pid: Option<i32>) ->
     imp::terminal_agent_candidates(pty_fd, child_pid)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForegroundProcess {
+    pub pid: u32,
+    pub started_at_ticks: Option<u64>,
+    pub tty: Option<String>,
+    pub executable: String,
+    pub command: String,
+}
+
+/// Best-effort identity of the process currently associated with a terminal.
+/// Callers must require a start discriminator before destructive control.
+pub fn terminal_foreground_process(
+    pty_fd: Option<i32>,
+    child_pid: Option<i32>,
+) -> Option<ForegroundProcess> {
+    imp::terminal_foreground_process(pty_fd, child_pid)
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use std::fs;
 
+    use super::ForegroundProcess;
+
     pub fn terminal_agent_candidates(pty_fd: Option<i32>, _child_pid: Option<i32>) -> Vec<String> {
-        let Some(fd) = pty_fd else {
-            return Vec::new();
-        };
-        // The foreground process group leader is the program currently reading the terminal.
-        let fpgid = unsafe { libc::tcgetpgrp(fd) };
-        if fpgid <= 0 {
-            return Vec::new();
+        terminal_foreground_process(pty_fd, None)
+            .map(|process| vec![process.command])
+            .unwrap_or_default()
+    }
+
+    pub fn terminal_foreground_process(
+        pty_fd: Option<i32>,
+        _child_pid: Option<i32>,
+    ) -> Option<ForegroundProcess> {
+        let fd = pty_fd?;
+        let pid = unsafe { libc::tcgetpgrp(fd) };
+        if pid <= 0 {
+            return None;
         }
-        match fs::read(format!("/proc/{fpgid}/cmdline")) {
-            Ok(bytes) => {
-                let cmdline = String::from_utf8_lossy(&bytes).replace('\0', " ");
-                let cmdline = cmdline.trim();
-                if cmdline.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![cmdline.to_string()]
-                }
-            }
-            Err(_) => Vec::new(),
+        let pid = u32::try_from(pid).ok()?;
+        let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let arguments = bytes
+            .split(|byte| *byte == 0)
+            .filter(|argument| !argument.is_empty())
+            .map(|argument| String::from_utf8_lossy(argument).into_owned())
+            .collect::<Vec<_>>();
+        let command = arguments.join(" ");
+        let executable = arguments
+            .first()
+            .and_then(|argument| argument.rsplit('/').next())
+            .filter(|argument| !argument.is_empty())?
+            .to_string();
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+        let started_at_ticks = stat.as_deref().and_then(parse_start_ticks);
+        let tty = fs::read_link(format!("/proc/{pid}/fd/0"))
+            .ok()
+            .map(|path| path.display().to_string());
+        Some(ForegroundProcess {
+            pid,
+            started_at_ticks,
+            tty,
+            executable,
+            command,
+        })
+    }
+
+    fn parse_start_ticks(stat: &str) -> Option<u64> {
+        let close = stat.rfind(')')?;
+        // Remaining fields begin at proc field 3 (state). Start time is field
+        // 22, therefore index 19 in this tail.
+        stat.get(close + 1..)?
+            .split_whitespace()
+            .nth(19)?
+            .parse()
+            .ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::parse_start_ticks;
+
+        #[test]
+        fn parses_start_ticks_with_spaces_and_parentheses_in_comm() {
+            let mut fields = vec!["S".to_string()];
+            fields.extend((4..=21).map(|value| value.to_string()));
+            fields.push("424242".into());
+            let stat = format!("99 (agent worker (nested)) {}", fields.join(" "));
+            assert_eq!(parse_start_ticks(&stat), Some(424242));
         }
     }
 }
@@ -53,6 +117,8 @@ mod imp {
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
+
+    use super::ForegroundProcess;
 
     pub fn terminal_agent_candidates(_pty_fd: Option<i32>, child_pid: Option<i32>) -> Vec<String> {
         let Some(root) = child_pid.map(|pid| pid as u32) else {
@@ -85,6 +151,22 @@ mod imp {
         candidates
     }
 
+    pub fn terminal_foreground_process(
+        _pty_fd: Option<i32>,
+        child_pid: Option<i32>,
+    ) -> Option<ForegroundProcess> {
+        let pid = u32::try_from(child_pid?).ok()?;
+        let processes = snapshot_processes();
+        let (_, executable) = processes.get(&pid)?.clone();
+        Some(ForegroundProcess {
+            pid,
+            started_at_ticks: None,
+            tty: None,
+            command: executable.clone(),
+            executable,
+        })
+    }
+
     fn snapshot_processes() -> HashMap<u32, (u32, String)> {
         let mut map = HashMap::new();
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
@@ -111,7 +193,16 @@ mod imp {
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod imp {
+    use super::ForegroundProcess;
+
     pub fn terminal_agent_candidates(_pty_fd: Option<i32>, _child_pid: Option<i32>) -> Vec<String> {
         Vec::new()
+    }
+
+    pub fn terminal_foreground_process(
+        _pty_fd: Option<i32>,
+        _child_pid: Option<i32>,
+    ) -> Option<ForegroundProcess> {
+        None
     }
 }

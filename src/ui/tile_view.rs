@@ -64,6 +64,7 @@ pub fn build(
         restored_history_lines,
         restore_startup_command,
         stats,
+        None,
     );
 
     let output_helpers = CompiledOutputHelpers::new(&tile.output_helpers);
