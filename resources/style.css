@@ -5233,71 +5233,82 @@ window.theme-light .assets-manager-window .asset-nested-card {
   border-color: rgba(25, 35, 50, 0.08);
 }
 
+/* Voice HUD — streamlined translucent panel on the app's dark command-center
+   identity. The orb gradient is drawn by VoiceOrb (cairo); CSS supplies only
+   its frame, glow, and the state-tinted status dot. */
 .voice-hud {
   min-width: 520px;
   max-width: 860px;
-  padding: 11px 14px;
-  border-radius: 22px;
-  background:
-    linear-gradient(135deg, rgba(84, 135, 116, 0.18), rgba(30, 84, 66, 0.08)),
-    rgba(5, 22, 17, 0.96);
-  border: 1px solid rgba(122, 206, 172, 0.24);
-  box-shadow: 0 20px 56px alpha(@tt_shadow, 0.42), inset 0 1px alpha(@tt_white, 0.08);
+  padding: 9px 12px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(18, 19, 24, 0.88), rgba(10, 11, 15, 0.86));
+  border: 1px solid alpha(@tt_white, 0.08);
+  box-shadow: 0 20px 40px alpha(@tt_shadow, 0.30), inset 0 1px alpha(@tt_white, 0.05);
 }
 
 .voice-hud-orb {
   min-width: 54px;
   min-height: 54px;
   border-radius: 30px;
-  color: rgba(220, 255, 243, 0.94);
-  font-size: 36px;
-  background: radial-gradient(circle, rgba(205, 246, 230, 0.78), rgba(92, 151, 130, 0.42) 52%, rgba(26, 57, 47, 0.72));
-  border: 1px solid rgba(211, 255, 239, 0.28);
-  box-shadow: 0 0 24px rgba(157, 230, 203, 0.32), inset 0 0 16px rgba(238, 255, 249, 0.28);
+  border: 1px solid alpha(@tt_amber, 0.30);
+  box-shadow: 0 0 24px alpha(@tt_amber, 0.25);
 }
 
 .voice-hud-status {
-  color: rgba(226, 244, 255, 0.96);
+  color: @tt_text;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
 
 .voice-hud-status-dot {
-  color: rgba(132, 240, 151, 0.92);
+  color: alpha(@tt_amber, 0.60);
   font-size: 10px;
 }
 
+.voice-hud-status-dot.is-listening {
+  color: @tt_amber;
+}
+
+.voice-hud-status-dot.is-success {
+  color: @tt_success;
+}
+
+.voice-hud-status-dot.is-error {
+  color: @tt_danger;
+}
+
 .voice-hud-chip {
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 999px;
-  color: rgba(194, 226, 214, 0.84);
-  background: rgba(145, 203, 181, 0.09);
-  border: 1px solid rgba(145, 203, 181, 0.16);
-  font-size: 11px;
+  color: alpha(@tt_white, 0.56);
+  background: alpha(@tt_white, 0.04);
+  border: 1px solid alpha(@tt_white, 0.1);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .voice-hud-prefix {
   min-width: 50px;
-  color: rgba(164, 207, 190, 0.66);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  color: alpha(@tt_white, 0.40);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
 }
 
 .voice-hud-transcript {
-  color: rgba(207, 250, 254, 0.86);
+  color: alpha(@tt_text, 0.86);
 }
 
 .voice-hud-user {
-  color: rgba(226, 245, 238, 0.88);
+  color: alpha(@tt_text, 0.92);
 }
 
 .voice-hud-assistant {
-  color: rgba(184, 228, 211, 0.86);
+  color: rgba(255, 224, 163, 0.78);
 }
 
 .voice-hud-activity {
-  color: rgba(160, 195, 182, 0.72);
+  color: alpha(@tt_white, 0.56);
   font-size: 12px;
 }
 
@@ -5306,27 +5317,27 @@ window.theme-light .assets-manager-window .asset-nested-card {
   min-height: 34px;
   padding: 0;
   border-radius: 999px;
-  background: rgba(120, 178, 156, 0.08);
-  border: 1px solid rgba(149, 208, 185, 0.18);
+  background: alpha(@tt_white, 0.04);
+  border: 1px solid alpha(@tt_white, 0.10);
 }
 
 .voice-hud-mic.active {
-  color: rgba(255, 222, 117, 0.98);
-  background: rgba(161, 123, 16, 0.22);
-  border-color: rgba(236, 190, 54, 0.42);
+  color: @tt_amber;
+  background: alpha(@tt_amber, 0.16);
+  border-color: alpha(@tt_amber, 0.42);
 }
 
 .voice-hud-end {
-  color: rgba(255, 132, 145, 0.96);
-  background: rgba(140, 30, 45, 0.22);
-  border-color: rgba(233, 77, 96, 0.38);
+  color: alpha(@tt_danger, 0.96);
+  background: alpha(@tt_danger, 0.14);
+  border-color: alpha(@tt_danger, 0.38);
 }
 
 window.theme-light .voice-hud {
   background:
-    linear-gradient(135deg, rgba(79, 70, 229, 0.14), rgba(13, 148, 136, 0.10)),
+    linear-gradient(135deg, alpha(@tt_amber, 0.10), transparent),
     alpha(@tt_white, 0.92);
-  border-color: rgba(14, 116, 144, 0.18);
+  border-color: rgba(25, 35, 50, 0.12);
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18), inset 0 1px alpha(@tt_white, 0.82);
 }
 
@@ -5334,14 +5345,34 @@ window.theme-light .voice-hud-status {
   color: rgba(15, 23, 42, 0.92);
 }
 
-window.theme-light .voice-hud-transcript {
-  color: rgba(17, 94, 89, 0.86);
+window.theme-light .voice-hud-orb {
+  border-color: alpha(@tt_amber, 0.38);
+  box-shadow: 0 0 18px alpha(@tt_amber, 0.18);
 }
 
-window.theme-light .voice-hud-chip,
+window.theme-light .voice-hud-transcript,
+window.theme-light .voice-hud-user {
+  color: rgba(25, 35, 50, 0.86);
+}
+
+window.theme-light .voice-hud-assistant {
+  color: rgba(150, 96, 16, 0.88);
+}
+
+window.theme-light .voice-hud-chip {
+  color: rgba(25, 35, 50, 0.60);
+  background: rgba(25, 35, 50, 0.05);
+  border-color: rgba(25, 35, 50, 0.12);
+}
+
 window.theme-light .voice-hud-prefix,
 window.theme-light .voice-hud-activity {
-  color: rgba(39, 86, 70, 0.76);
+  color: rgba(25, 35, 50, 0.60);
+}
+
+window.theme-light .voice-hud-button {
+  background: rgba(25, 35, 50, 0.05);
+  border-color: rgba(25, 35, 50, 0.14);
 }
 
 /* Kanban board — per-project task board (shares config-panel + card chrome) */

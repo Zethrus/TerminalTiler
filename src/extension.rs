@@ -109,6 +109,14 @@ pub trait CompanionVoiceController: Send + Sync {
     fn cancel(&self);
     fn status(&self) -> VoiceControllerStatus;
     fn drain_ui_events(&self, limit: usize) -> Vec<VoiceUiEvent>;
+
+    /// Live microphone loudness in `0.0..=1.0`, polled by Core UI while the
+    /// controller reports `Listening`. Additive with a default so existing
+    /// companions remain source-compatible; implementations that expose no
+    /// meter keep returning `0.0`.
+    fn input_level(&self) -> f32 {
+        0.0
+    }
 }
 
 /// Connect a companion to a host's live runtime control surface.

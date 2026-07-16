@@ -1507,10 +1507,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
     assert!(
         UI_MOD_RS.contains("pub mod voice_hud;")
             && VOICE_HUD_RS.contains("pub struct VoiceHud")
-            && WINDOW_RS.contains("voice_hud::VoiceHud")
-            && WINDOWS_GTK_APP_RS.contains("voice_hud::VoiceHud")
+            && WINDOW_RS.contains("voice_hud::{VoiceHud, VoiceHudTone}")
+            && WINDOWS_GTK_APP_RS.contains("voice_hud::{VoiceHud, VoiceHudTone}")
             && WINDOWS_GTK_APP_RS.contains("install_windows_voice_hotkey_controller")
-            && WINDOWS_GTK_APP_RS.contains("WindowsVoiceTranscriberHandle::start()")
+            && WINDOWS_GTK_APP_RS.contains("WindowsVoiceTranscriberHandle::start(")
             && WINDOWS_GTK_APP_RS.contains("ParakeetTranscriber::launch")
             && WINDOWS_GTK_APP_RS.contains("preview.focused_terminal_available()")
             && WINDOWS_GTK_APP_RS.contains("preview.send_text_to_focused_terminal(&text)")
@@ -4154,6 +4154,9 @@ fn companion_voice_hud_keeps_live_roles_controls_and_default_hotkey_visible() {
         ".voice-hud-activity",
         ".voice-hud-mic.active",
         ".voice-hud-end",
+        ".voice-hud-status-dot.is-listening",
+        ".voice-hud-status-dot.is-success",
+        ".voice-hud-status-dot.is-error",
     ] {
         assert!(
             STYLE_CSS.contains(class),

@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::voice::audio::{AudioCapture, AudioCaptureError};
+use crate::voice::audio::{AudioCapture, AudioCaptureError, InputLevelHandle};
 use crate::voice::engine::{
     VoiceEngineCapabilities, VoiceEngineEvent, VoiceEngineProcess, VoiceEngineRequest,
 };
@@ -136,7 +136,17 @@ impl ParakeetTranscriber {
         &mut self,
         microphone_id: Option<&str>,
     ) -> Result<(), ParakeetTranscriberError> {
-        self.capture = Some(AudioCapture::start(microphone_id)?);
+        self.start_capture_with_meter(microphone_id, InputLevelHandle::default())
+    }
+
+    /// Starts capture while publishing live mic loudness into `meter` for
+    /// UI consumers such as the voice HUD orb.
+    pub fn start_capture_with_meter(
+        &mut self,
+        microphone_id: Option<&str>,
+        meter: InputLevelHandle,
+    ) -> Result<(), ParakeetTranscriberError> {
+        self.capture = Some(AudioCapture::start_with_level(microphone_id, meter)?);
         self.engine
             .send(&VoiceEngineRequest::Start {
                 sample_rate_hz: 16_000,

@@ -60,10 +60,10 @@ use crate::ui::{
     title_chrome::{
         TitleTabChrome, TitleTabInput, apply_title_tab_state, build_interactive_title_tab,
     },
-    voice_hud::VoiceHud,
+    voice_hud::{VoiceHud, VoiceHudTone},
     workspace_view,
 };
-use crate::voice::audio::AudioCapture;
+use crate::voice::audio::{AudioCapture, InputLevelHandle};
 use crate::voice::engine::{self, VoiceEngineEvent};
 use crate::voice::linux_global_hotkey::{LinuxGlobalHotkeyEvent, LinuxGlobalHotkeyHandle};
 use crate::voice::pack::{self, VoicePackHealth};
@@ -426,9 +426,10 @@ struct VoiceTranscriberHandle {
 }
 
 impl VoiceTranscriberHandle {
-    fn start() -> Self {
+    /// `meter` receives live mic loudness for every capture this worker runs.
+    fn start(meter: InputLevelHandle) -> Self {
         let (tx, rx) = mpsc::channel::<VoiceTranscriberCommand>();
-        std::thread::spawn(move || run_voice_transcriber_worker(rx));
+        std::thread::spawn(move || run_voice_transcriber_worker(rx, meter));
         Self { tx }
     }
 
@@ -491,7 +492,10 @@ impl VoiceTranscriberHandle {
     }
 }
 
-fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
+fn run_voice_transcriber_worker(
+    rx: mpsc::Receiver<VoiceTranscriberCommand>,
+    meter: InputLevelHandle,
+) {
     let mut transcriber = None::<ParakeetTranscriber>;
     let mut current_engine_mode = None::<VoiceEngineMode>;
     let mut model_warmed = false;
@@ -567,7 +571,7 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                     transcriber
                         .as_mut()
                         .ok_or_else(|| "voice transcriber unavailable".to_string())?
-                        .start_capture(microphone_id.as_deref())
+                        .start_capture_with_meter(microphone_id.as_deref(), meter.clone())
                         .map_err(|error| format!("{error:?}"))
                 }) {
                     Ok(()) => {
@@ -666,11 +670,13 @@ fn run_voice_transcriber_worker(rx: mpsc::Receiver<VoiceTranscriberCommand>) {
                 }
                 current_engine_mode = None;
                 model_warmed = false;
+                meter.set(0.0);
             }
             VoiceTranscriberCommand::Shutdown => {
                 if let Some(transcriber) = transcriber.take() {
                     let _ = transcriber.shutdown();
                 }
+                meter.set(0.0);
                 break;
             }
         }
@@ -1222,6 +1228,11 @@ fn present_with_initial_workspace(
     let title = app_header.title;
 
     let voice_hud = VoiceHud::new();
+    let voice_input_level = InputLevelHandle::default();
+    {
+        let level = voice_input_level.clone();
+        voice_hud.set_level_source(Some(Rc::new(move || level.get())));
+    }
     let workspace_overlay = gtk::Overlay::new();
     workspace_overlay.set_child(Some(&tab_view));
     workspace_overlay.add_overlay(&voice_hud.widget());
@@ -1354,7 +1365,7 @@ fn present_with_initial_workspace(
         current_shortcuts.command_palette_shortcut.clone(),
     ));
     let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
-    let voice_transcriber = Rc::new(VoiceTranscriberHandle::start());
+    let voice_transcriber = Rc::new(VoiceTranscriberHandle::start(voice_input_level.clone()));
     let voice_listening = Rc::new(Cell::new(false));
     let voice_starting = Rc::new(Cell::new(false));
     let voice_stopping = Rc::new(Cell::new(false));
@@ -1518,6 +1529,7 @@ fn present_with_initial_workspace(
                             &voice_stopping,
                         );
                         voice_capture_started_at.replace(Some(Instant::now()));
+                        voice_hud.set_tone(VoiceHudTone::Listening);
                     }
                     VoiceUiEvent::ListeningCancelled {
                         session_id,
@@ -1531,6 +1543,7 @@ fn present_with_initial_workspace(
                         voice_stopping.set(false);
                         voice_flush_pending.set(false);
                         voice_capture_started_at.replace(None);
+                        voice_hud.set_tone(VoiceHudTone::Idle);
                         voice_hud.show(&message, None);
                     }
                     VoiceUiEvent::Final { session_id, text } => {
@@ -1543,6 +1556,7 @@ fn present_with_initial_workspace(
                         voice_flush_pending.set(false);
                         voice_capture_started_at.replace(None);
                         if text.trim().is_empty() {
+                            voice_hud.set_tone(VoiceHudTone::Idle);
                             voice_hud.show("No speech detected", None);
                             voice_hud.hide_later();
                             continue;
@@ -1551,9 +1565,11 @@ fn present_with_initial_workspace(
                             .map(|runtime| runtime.send_text_to_focused_terminal(&text))
                             .unwrap_or(false);
                         if inserted {
+                            voice_hud.set_tone(VoiceHudTone::Success);
                             voice_hud.show("Voice inserted", Some(&text));
                             voice_hud.hide_later();
                         } else {
+                            voice_hud.set_tone(VoiceHudTone::Error);
                             voice_hud.show("No focused terminal target", Some(&text));
                             show_toast(
                                 &toast_overlay,
@@ -1574,6 +1590,7 @@ fn present_with_initial_workspace(
                         voice_flush_pending.set(false);
                         voice_capture_started_at.replace(None);
                         logging::error(format!("voice transcription failed: {message}"));
+                        voice_hud.set_tone(VoiceHudTone::Error);
                         voice_hud.show("Voice error", Some(&message));
                         show_toast(&toast_overlay, "Voice transcription failed");
                     }
@@ -1595,6 +1612,9 @@ fn present_with_initial_workspace(
                         }
                         if voice_stopping.get() && message == "Listening…" {
                             continue;
+                        }
+                        if message == "Listening…" {
+                            voice_hud.set_tone(VoiceHudTone::Listening);
                         }
                         voice_hud.show(&message, None);
                     }
@@ -1737,6 +1757,7 @@ fn present_with_initial_workspace(
             controller,
             voice_hud.clone(),
             toast_overlay.clone(),
+            voice_input_level.clone(),
         );
     }
 
@@ -5603,11 +5624,20 @@ fn install_companion_voice_controller(
     controller: Arc<dyn CompanionVoiceController>,
     voice_hud: VoiceHud,
     toast_overlay: adw::ToastOverlay,
+    dictation_level: InputLevelHandle,
 ) {
     const COMPANION_VOICE_HOTKEY: &str = "<Control>grave";
     let session = Rc::new(RefCell::new(CompanionVoiceSession::new(controller.clone())));
     let key_pressed = Rc::new(Cell::new(false));
     voice_hud.set_controls_visible(true);
+    {
+        // One HUD serves local dictation and companion voice; the orb follows
+        // whichever source is currently louder.
+        let controller = controller.clone();
+        voice_hud.set_level_source(Some(Rc::new(move || {
+            dictation_level.get().max(controller.input_level())
+        })));
+    }
     {
         let session = session.clone();
         let voice_hud_for_click = voice_hud.clone();
@@ -5615,6 +5645,11 @@ fn install_companion_voice_controller(
         voice_hud.connect_mic_clicked(move || match session.borrow_mut().toggle_on_screen() {
             Ok(active) => {
                 voice_hud_for_click.set_mic_active(active);
+                voice_hud_for_click.set_tone(if active {
+                    VoiceHudTone::Listening
+                } else {
+                    VoiceHudTone::Idle
+                });
                 voice_hud_for_click.set_status(if active {
                     "Listening…"
                 } else {
@@ -5622,6 +5657,7 @@ fn install_companion_voice_controller(
                 });
             }
             Err(error) => {
+                voice_hud_for_click.set_tone(VoiceHudTone::Error);
                 voice_hud_for_click.show_activity("Voice unavailable", &error);
                 show_toast(&toast_overlay, &error);
             }
@@ -5653,9 +5689,11 @@ fn install_companion_voice_controller(
             match session.borrow_mut().press() {
                 Ok(()) => {
                     voice_hud.set_mic_active(true);
+                    voice_hud.set_tone(VoiceHudTone::Listening);
                     voice_hud.set_status("Listening…");
                 }
                 Err(error) => {
+                    voice_hud.set_tone(VoiceHudTone::Error);
                     voice_hud.show_activity("Voice unavailable", &error);
                     show_toast(&toast_overlay, &error);
                     key_pressed.set(false);
@@ -5676,7 +5714,9 @@ fn install_companion_voice_controller(
                 return;
             }
             voice_hud.set_mic_active(false);
+            voice_hud.set_tone(VoiceHudTone::Idle);
             if let Err(error) = session.borrow_mut().release() {
+                voice_hud.set_tone(VoiceHudTone::Error);
                 voice_hud.show_activity("Voice error", &error);
                 show_toast(&toast_overlay, &error);
             }
@@ -5697,9 +5737,11 @@ fn install_companion_voice_controller(
                     match session.borrow_mut().press() {
                         Ok(()) => {
                             voice_hud.set_mic_active(true);
+                            voice_hud.set_tone(VoiceHudTone::Listening);
                             voice_hud.set_status("Listening…");
                         }
                         Err(error) => {
+                            voice_hud.set_tone(VoiceHudTone::Error);
                             voice_hud.show_activity("Voice unavailable", &error);
                             show_toast(&toast_overlay, &error);
                             key_pressed.set(false);
@@ -5708,7 +5750,9 @@ fn install_companion_voice_controller(
                 }
                 LinuxGlobalHotkeyEvent::Released if key_pressed.replace(false) => {
                     voice_hud.set_mic_active(false);
+                    voice_hud.set_tone(VoiceHudTone::Idle);
                     if let Err(error) = session.borrow_mut().release() {
+                        voice_hud.set_tone(VoiceHudTone::Error);
                         voice_hud.show_activity("Voice error", &error);
                         show_toast(&toast_overlay, &error);
                     }
@@ -5739,9 +5783,11 @@ fn install_companion_voice_controller(
                     }
                 }
                 CompanionVoiceUiEvent::Status(status) => {
+                    voice_hud.set_tone(companion_voice_status_tone(status));
                     voice_hud.set_status(companion_voice_status_label(status));
                 }
                 CompanionVoiceUiEvent::Error(error) => {
+                    voice_hud.set_tone(VoiceHudTone::Error);
                     voice_hud.show_activity("Voice error", &error);
                     show_toast(&toast_overlay, &error);
                 }
@@ -5765,6 +5811,14 @@ fn companion_voice_status_label(status: VoiceControllerStatus) -> &'static str {
         VoiceControllerStatus::AwaitingConfirmation => "Approval required",
         VoiceControllerStatus::Fallback => "Voice fallback",
         VoiceControllerStatus::Error => "Voice error",
+    }
+}
+
+fn companion_voice_status_tone(status: VoiceControllerStatus) -> VoiceHudTone {
+    match status {
+        VoiceControllerStatus::Listening => VoiceHudTone::Listening,
+        VoiceControllerStatus::Error | VoiceControllerStatus::Fallback => VoiceHudTone::Error,
+        _ => VoiceHudTone::Idle,
     }
 }
 

@@ -2,9 +2,36 @@ use gtk::glib;
 use gtk::pango;
 use gtk::prelude::*;
 
+use super::voice_orb::{LevelSource, VoiceOrb};
+
+/// Semantic state reflected by the status dot and orb activity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VoiceHudTone {
+    #[default]
+    Idle,
+    Listening,
+    Success,
+    Error,
+}
+
+impl VoiceHudTone {
+    fn css_class(self) -> Option<&'static str> {
+        match self {
+            Self::Idle => None,
+            Self::Listening => Some("is-listening"),
+            Self::Success => Some("is-success"),
+            Self::Error => Some("is-error"),
+        }
+    }
+}
+
+const TONE_CLASSES: [&str; 3] = ["is-listening", "is-success", "is-error"];
+
 #[derive(Clone)]
 pub struct VoiceHud {
     revealer: gtk::Revealer,
+    orb: VoiceOrb,
+    status_dot: gtk::Label,
     status_label: gtk::Label,
     user_row: gtk::Box,
     user_label: gtk::Label,
@@ -33,13 +60,11 @@ impl VoiceHud {
             .css_classes(["voice-hud"])
             .build();
 
-        let orb = gtk::Label::builder()
-            .label("●")
-            .valign(gtk::Align::Center)
-            .tooltip_text("TerminalTiler workspace orchestrator")
-            .css_classes(["voice-hud-orb"])
-            .build();
-        shell.append(&orb);
+        let orb = VoiceOrb::new();
+        let orb_widget = orb.widget();
+        orb_widget.set_tooltip_text(Some("TerminalTiler workspace orchestrator"));
+        orb_widget.add_css_class("voice-hud-orb");
+        shell.append(&orb_widget);
 
         let content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -102,6 +127,8 @@ impl VoiceHud {
 
         Self {
             revealer,
+            orb,
+            status_dot,
             status_label,
             user_row,
             user_label,
@@ -119,6 +146,23 @@ impl VoiceHud {
         self.revealer.clone().upcast()
     }
 
+    /// Reflects semantic state on the status dot and orb. `Listening` marks
+    /// the orb active so its fog reacts to the live level source.
+    pub fn set_tone(&self, tone: VoiceHudTone) {
+        for class in TONE_CLASSES {
+            self.status_dot.remove_css_class(class);
+        }
+        if let Some(class) = tone.css_class() {
+            self.status_dot.add_css_class(class);
+        }
+        self.orb.set_active(tone == VoiceHudTone::Listening);
+    }
+
+    /// Installs (or clears) the mic loudness supplier polled by the orb.
+    pub fn set_level_source(&self, source: Option<LevelSource>) {
+        self.orb.set_level_source(source);
+    }
+
     /// Compatibility surface for local dictation. Companion voice should use
     /// the role-specific methods below so user, assistant, and activity text
     /// remain visually distinct.
@@ -129,29 +173,34 @@ impl VoiceHud {
             &self.activity_label,
             compatibility_transcript_text(transcript),
         );
-        self.revealer.set_reveal_child(true);
+        self.reveal();
     }
 
     pub fn show_user(&self, status: &str, transcript: &str) {
         self.set_status(status);
         set_row_text(&self.user_row, &self.user_label, transcript);
-        self.revealer.set_reveal_child(true);
+        self.reveal();
     }
 
     pub fn show_assistant(&self, status: &str, transcript: &str) {
         self.set_status(status);
         set_row_text(&self.assistant_row, &self.assistant_label, transcript);
-        self.revealer.set_reveal_child(true);
+        self.reveal();
     }
 
     pub fn show_activity(&self, status: &str, activity: &str) {
         self.set_status(status);
         set_row_text(&self.activity_row, &self.activity_label, activity);
-        self.revealer.set_reveal_child(true);
+        self.reveal();
     }
 
     pub fn set_status(&self, status: &str) {
         self.status_label.set_label(status);
+        self.reveal();
+    }
+
+    fn reveal(&self) {
+        self.orb.start_animation();
         self.revealer.set_reveal_child(true);
     }
 
@@ -184,13 +233,14 @@ impl VoiceHud {
     }
 
     pub fn hide(&self) {
+        self.orb.stop_animation();
         self.revealer.set_reveal_child(false);
     }
 
     pub fn hide_later(&self) {
-        let revealer = self.revealer.clone();
+        let hud = self.clone();
         glib::timeout_add_seconds_local_once(3, move || {
-            revealer.set_reveal_child(false);
+            hud.hide();
         });
     }
 }

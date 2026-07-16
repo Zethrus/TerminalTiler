@@ -4,11 +4,12 @@ mod imp {
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-    use super::{AudioCaptureError, MicrophoneDevice};
+    use super::{AudioCaptureError, InputLevelHandle, MicrophoneDevice};
 
     pub struct AudioCapture {
         _stream: cpal::Stream,
         captured_samples: Arc<Mutex<Vec<i16>>>,
+        level: InputLevelHandle,
     }
 
     impl AudioCapture {
@@ -43,6 +44,15 @@ mod imp {
         }
 
         pub fn start(microphone_id: Option<&str>) -> Result<Self, AudioCaptureError> {
+            Self::start_with_level(microphone_id, InputLevelHandle::default())
+        }
+
+        /// Starts capture publishing live loudness into the supplied handle,
+        /// so UI meters can share a handle created before capture exists.
+        pub fn start_with_level(
+            microphone_id: Option<&str>,
+            level: InputLevelHandle,
+        ) -> Result<Self, AudioCaptureError> {
             let host = cpal::default_host();
             let device = select_input_device(&host, microphone_id)?;
             let supported_config = device
@@ -52,35 +62,65 @@ mod imp {
             let channels = usize::from(supported_config.channels()).max(1);
             let stream_config: cpal::StreamConfig = supported_config.clone().into();
             let captured_samples = Arc::new(Mutex::new(Vec::new()));
-            let sink = captured_samples.clone();
+            level.set(0.0);
             let error_callback =
                 |error| eprintln!("TerminalTiler voice input stream error: {error}");
 
             let stream = match supported_config.sample_format() {
-                cpal::SampleFormat::F32 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _| {
-                        append_resampled_frames(&sink, data, channels, input_sample_rate)
-                    },
-                    error_callback,
-                    None,
-                ),
-                cpal::SampleFormat::I16 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _| {
-                        append_resampled_frames(&sink, data, channels, input_sample_rate)
-                    },
-                    error_callback,
-                    None,
-                ),
-                cpal::SampleFormat::U16 => device.build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _| {
-                        append_resampled_frames(&sink, data, channels, input_sample_rate)
-                    },
-                    error_callback,
-                    None,
-                ),
+                cpal::SampleFormat::F32 => {
+                    let sink = captured_samples.clone();
+                    let level = level.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[f32], _| {
+                            append_resampled_frames(
+                                &sink,
+                                &level,
+                                data,
+                                channels,
+                                input_sample_rate,
+                            )
+                        },
+                        error_callback,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::I16 => {
+                    let sink = captured_samples.clone();
+                    let level = level.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[i16], _| {
+                            append_resampled_frames(
+                                &sink,
+                                &level,
+                                data,
+                                channels,
+                                input_sample_rate,
+                            )
+                        },
+                        error_callback,
+                        None,
+                    )
+                }
+                cpal::SampleFormat::U16 => {
+                    let sink = captured_samples.clone();
+                    let level = level.clone();
+                    device.build_input_stream(
+                        &stream_config,
+                        move |data: &[u16], _| {
+                            append_resampled_frames(
+                                &sink,
+                                &level,
+                                data,
+                                channels,
+                                input_sample_rate,
+                            )
+                        },
+                        error_callback,
+                        None,
+                    )
+                }
                 other => {
                     return Err(AudioCaptureError::UnsupportedFormat(format!(
                         "unsupported input sample format {other:?}"
@@ -96,6 +136,7 @@ mod imp {
             Ok(Self {
                 _stream: stream,
                 captured_samples,
+                level,
             })
         }
 
@@ -104,6 +145,10 @@ mod imp {
                 .lock()
                 .map(|mut captured| std::mem::take(&mut *captured))
                 .unwrap_or_default()
+        }
+
+        pub fn level_handle(&self) -> InputLevelHandle {
+            self.level.clone()
         }
     }
 
@@ -137,6 +182,7 @@ mod imp {
 
     fn append_resampled_frames<T>(
         sink: &Arc<Mutex<Vec<i16>>>,
+        level: &InputLevelHandle,
         data: &[T],
         channels: usize,
         input_sample_rate: u32,
@@ -145,6 +191,7 @@ mod imp {
     {
         let pcm = data.iter().map(PcmSample::to_i16).collect::<Vec<_>>();
         let mono = super::normalize_to_mono_16khz(&pcm, channels);
+        level.set(super::rms_level(&mono));
         let resampled = super::resample_mono_to_16khz(&mono, input_sample_rate);
         if let Ok(mut captured) = sink.try_lock() {
             captured.extend(resampled);
@@ -176,7 +223,7 @@ mod imp {
 
 #[cfg(not(feature = "voice-cpal"))]
 mod imp {
-    use super::{AudioCaptureError, MicrophoneDevice};
+    use super::{AudioCaptureError, InputLevelHandle, MicrophoneDevice};
 
     pub struct AudioCapture;
 
@@ -191,13 +238,62 @@ mod imp {
             ))
         }
 
+        pub fn start_with_level(
+            _microphone_id: Option<&str>,
+            _level: InputLevelHandle,
+        ) -> Result<Self, AudioCaptureError> {
+            Err(AudioCaptureError::BackendUnavailable(
+                "built without voice-cpal feature".into(),
+            ))
+        }
+
         pub fn take_pcm16_mono_16khz(&self) -> Vec<i16> {
             Vec::new()
+        }
+
+        pub fn level_handle(&self) -> InputLevelHandle {
+            InputLevelHandle::default()
         }
     }
 }
 
 pub use imp::AudioCapture;
+
+/// Cloneable live microphone loudness shared between the capture stream and
+/// UI consumers. Stores the latest chunk RMS in `0.0..=1.0`; smoothing is the
+/// reader's responsibility so capture never depends on render cadence.
+#[derive(Clone, Default)]
+pub struct InputLevelHandle {
+    bits: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl InputLevelHandle {
+    pub fn set(&self, level: f32) {
+        self.bits.store(
+            level.clamp(0.0, 1.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.bits.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// Root-mean-square loudness of a PCM16 chunk, normalized to `0.0..=1.0`.
+pub fn rms_level(samples: &[i16]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_squares: f64 = samples
+        .iter()
+        .map(|sample| {
+            let value = f64::from(*sample) / f64::from(i16::MAX);
+            value * value
+        })
+        .sum();
+    ((sum_squares / samples.len() as f64).sqrt() as f32).clamp(0.0, 1.0)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MicrophoneDevice {
@@ -261,7 +357,29 @@ impl AudioCapture {
 
 #[cfg(test)]
 mod tests {
-    use super::AudioCapture;
+    use super::{AudioCapture, InputLevelHandle, rms_level};
+
+    #[test]
+    fn rms_level_reports_silence_and_full_scale() {
+        assert_eq!(rms_level(&[]), 0.0);
+        assert_eq!(rms_level(&[0, 0, 0]), 0.0);
+        let full_scale = rms_level(&[i16::MAX, -i16::MAX, i16::MAX, -i16::MAX]);
+        assert!((full_scale - 1.0).abs() < 1e-6);
+        let half_scale = rms_level(&[i16::MAX / 2; 128]);
+        assert!((half_scale - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn input_level_handle_round_trips_and_clamps() {
+        let handle = InputLevelHandle::default();
+        assert_eq!(handle.get(), 0.0);
+        handle.set(0.42);
+        assert!((handle.get() - 0.42).abs() < 1e-6);
+        handle.set(7.0);
+        assert_eq!(handle.get(), 1.0);
+        handle.set(-1.0);
+        assert_eq!(handle.get(), 0.0);
+    }
 
     #[test]
     fn downmixes_interleaved_stereo_to_mono() {

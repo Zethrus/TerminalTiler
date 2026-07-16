@@ -47,11 +47,11 @@ mod imp {
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
         dialog_chrome, dialog_smoke, mcp_health_panel, settings_dialog, tab_rename_dialog,
-        voice_hud::VoiceHud,
+        voice_hud::{VoiceHud, VoiceHudTone},
     };
     // Source-contract anchor: dialog_smoke, settings_dialog, tab_rename_dialog.
     use crate::update::{self, ReleaseInfo, UpdateEvent, UpdateService};
-    use crate::voice::audio::AudioCapture;
+    use crate::voice::audio::{AudioCapture, InputLevelHandle};
     use crate::voice::engine::{self, VoiceEngineEvent};
     use crate::voice::pack::{self, VoicePackHealth};
     use crate::voice::{
@@ -403,9 +403,10 @@ mod imp {
     }
 
     impl WindowsVoiceTranscriberHandle {
-        fn start() -> Self {
+        /// `meter` receives live mic loudness for every capture this worker runs.
+        fn start(meter: InputLevelHandle) -> Self {
             let (tx, rx) = mpsc::channel::<WindowsVoiceTranscriberCommand>();
-            std::thread::spawn(move || run_windows_voice_transcriber_worker(rx));
+            std::thread::spawn(move || run_windows_voice_transcriber_worker(rx, meter));
             Self { tx }
         }
 
@@ -443,7 +444,10 @@ mod imp {
         }
     }
 
-    fn run_windows_voice_transcriber_worker(rx: mpsc::Receiver<WindowsVoiceTranscriberCommand>) {
+    fn run_windows_voice_transcriber_worker(
+        rx: mpsc::Receiver<WindowsVoiceTranscriberCommand>,
+        meter: InputLevelHandle,
+    ) {
         let mut transcriber: Option<ParakeetTranscriber> = None;
         for command in rx {
             match command {
@@ -457,9 +461,13 @@ mod imp {
                     if let Some(previous) = transcriber.take() {
                         let _ = previous.shutdown();
                     }
+                    let capture_meter = meter.clone();
                     match ParakeetTranscriber::launch(&manifest, health, engine_mode).and_then(
                         |mut transcriber| {
-                            transcriber.start_capture(microphone_id.as_deref())?;
+                            transcriber.start_capture_with_meter(
+                                microphone_id.as_deref(),
+                                capture_meter,
+                            )?;
                             Ok(transcriber)
                         },
                     ) {
@@ -488,6 +496,7 @@ mod imp {
                     }
                 }
                 WindowsVoiceTranscriberCommand::Stop { ui_tx } => {
+                    meter.set(0.0);
                     let Some(mut transcriber) = transcriber.take() else {
                         let _ = ui_tx.send(WindowsVoiceUiEvent::Final(String::new()));
                         continue;
@@ -510,6 +519,7 @@ mod imp {
                     if let Some(transcriber) = transcriber.take() {
                         let _ = transcriber.shutdown();
                     }
+                    meter.set(0.0);
                     break;
                 }
             }
@@ -544,6 +554,11 @@ mod imp {
 
         let overlay = adw::ToastOverlay::new();
         let voice_hud = VoiceHud::new();
+        let voice_input_level = InputLevelHandle::default();
+        {
+            let level = voice_input_level.clone();
+            voice_hud.set_level_source(Some(Rc::new(move || level.get())));
+        }
         let content_overlay = gtk::Overlay::new();
         content_overlay.set_child(Some(&overlay));
         content_overlay.add_overlay(&voice_hud.widget());
@@ -657,7 +672,9 @@ mod imp {
             });
         }
         let voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
-        let voice_transcriber = Rc::new(WindowsVoiceTranscriberHandle::start());
+        let voice_transcriber = Rc::new(WindowsVoiceTranscriberHandle::start(
+            voice_input_level.clone(),
+        ));
         let voice_listening = Rc::new(Cell::new(false));
         let voice_starting = Rc::new(Cell::new(false));
         let voice_stopping = Rc::new(Cell::new(false));
@@ -675,6 +692,7 @@ mod imp {
             voice_listening: voice_listening.clone(),
             voice_starting: voice_starting.clone(),
             voice_stopping: voice_stopping.clone(),
+            voice_input_level: voice_input_level.clone(),
         });
         let tray_controller = WindowsGtkTrayController::new(
             &window,
@@ -1019,6 +1037,7 @@ mod imp {
                 controller,
                 voice_hud.clone(),
                 overlay.clone(),
+                voice_input_level.clone(),
             );
         }
 
@@ -1062,12 +1081,14 @@ mod imp {
                         WindowsVoiceUiEvent::ListeningStarted => {
                             voice_starting.set(false);
                             voice_listening.set(!voice_stopping.get());
+                            voice_hud.set_tone(VoiceHudTone::Listening);
                         }
                         WindowsVoiceUiEvent::Final(text) => {
                             voice_starting.set(false);
                             voice_listening.set(false);
                             voice_stopping.set(false);
                             if text.trim().is_empty() {
+                                voice_hud.set_tone(VoiceHudTone::Idle);
                                 voice_hud.show("No speech detected", None);
                                 voice_hud.hide_later();
                                 continue;
@@ -1077,9 +1098,11 @@ mod imp {
                                 .map(|preview| preview.send_text_to_focused_terminal(&text))
                                 .unwrap_or(false);
                             if inserted {
+                                voice_hud.set_tone(VoiceHudTone::Success);
                                 voice_hud.show("Voice inserted", Some(&text));
                                 voice_hud.hide_later();
                             } else {
+                                voice_hud.set_tone(VoiceHudTone::Error);
                                 voice_hud.show("No focused terminal target", Some(&text));
                                 overlay.add_toast(adw::Toast::new(
                                     "Voice text was not inserted: no focused terminal pane",
@@ -1093,6 +1116,9 @@ mod imp {
                             if voice_stopping.get() && message == "Listening…" {
                                 continue;
                             }
+                            if message == "Listening…" {
+                                voice_hud.set_tone(VoiceHudTone::Listening);
+                            }
                             voice_hud.show(&message, None);
                         }
                         WindowsVoiceUiEvent::Error(message) => {
@@ -1102,6 +1128,7 @@ mod imp {
                             logging::error(format!(
                                 "Windows GTK voice transcription failed: {message}"
                             ));
+                            voice_hud.set_tone(VoiceHudTone::Error);
                             voice_hud.show("Voice error", Some(&message));
                             overlay.add_toast(adw::Toast::new("Voice transcription failed"));
                         }
@@ -2497,10 +2524,19 @@ mod imp {
         controller: std::sync::Arc<dyn CompanionVoiceController>,
         voice_hud: VoiceHud,
         overlay: adw::ToastOverlay,
+        dictation_level: InputLevelHandle,
     ) {
         let session = Rc::new(RefCell::new(CompanionVoiceSession::new(controller.clone())));
         let local_pressed = Rc::new(Cell::new(false));
         voice_hud.set_controls_visible(true);
+        {
+            // One HUD serves local dictation and companion voice; the orb
+            // follows whichever source is currently louder.
+            let controller = controller.clone();
+            voice_hud.set_level_source(Some(Rc::new(move || {
+                dictation_level.get().max(controller.input_level())
+            })));
+        }
         {
             let session = session.clone();
             let voice_hud_for_click = voice_hud.clone();
@@ -2508,6 +2544,11 @@ mod imp {
             voice_hud.connect_mic_clicked(move || match session.borrow_mut().toggle() {
                 Ok(active) => {
                     voice_hud_for_click.set_mic_active(active);
+                    voice_hud_for_click.set_tone(if active {
+                        VoiceHudTone::Listening
+                    } else {
+                        VoiceHudTone::Idle
+                    });
                     voice_hud_for_click.set_status(if active {
                         "Listening…"
                     } else {
@@ -2515,6 +2556,7 @@ mod imp {
                     });
                 }
                 Err(error) => {
+                    voice_hud_for_click.set_tone(VoiceHudTone::Error);
                     voice_hud_for_click.show_activity("Voice unavailable", &error);
                     overlay.add_toast(adw::Toast::new(&error));
                 }
@@ -2550,10 +2592,12 @@ mod imp {
                 {
                     Ok(()) => {
                         voice_hud.set_mic_active(true);
+                        voice_hud.set_tone(VoiceHudTone::Listening);
                         voice_hud.set_status("Listening…");
                     }
                     Err(error) => {
                         local_pressed.set(false);
+                        voice_hud.set_tone(VoiceHudTone::Error);
                         voice_hud.show_activity("Voice unavailable", &error);
                         overlay.add_toast(adw::Toast::new(&error));
                     }
@@ -2573,7 +2617,9 @@ mod imp {
                     return;
                 }
                 voice_hud.set_mic_active(false);
+                voice_hud.set_tone(VoiceHudTone::Idle);
                 if let Err(error) = session.borrow_mut().release() {
+                    voice_hud.set_tone(VoiceHudTone::Error);
                     voice_hud.show_activity("Voice error", &error);
                     overlay.add_toast(adw::Toast::new(&error));
                 }
@@ -2594,6 +2640,11 @@ mod imp {
                 match session.borrow_mut().toggle() {
                     Ok(active) => {
                         voice_hud.set_mic_active(active);
+                        voice_hud.set_tone(if active {
+                            VoiceHudTone::Listening
+                        } else {
+                            VoiceHudTone::Idle
+                        });
                         voice_hud.set_status(if active {
                             "Listening…"
                         } else {
@@ -2601,6 +2652,7 @@ mod imp {
                         });
                     }
                     Err(error) => {
+                        voice_hud.set_tone(VoiceHudTone::Error);
                         voice_hud.show_activity("Voice unavailable", &error);
                         overlay.add_toast(adw::Toast::new(&error));
                     }
@@ -2630,9 +2682,11 @@ mod imp {
                         }
                     }
                     CompanionVoiceUiEvent::Status(status) => {
+                        voice_hud.set_tone(companion_voice_status_tone(status));
                         voice_hud.set_status(companion_voice_status_label(status));
                     }
                     CompanionVoiceUiEvent::Error(error) => {
+                        voice_hud.set_tone(VoiceHudTone::Error);
                         voice_hud.show_activity("Voice error", &error);
                         overlay.add_toast(adw::Toast::new(&error));
                     }
@@ -2656,6 +2710,14 @@ mod imp {
             VoiceControllerStatus::AwaitingConfirmation => "Approval required",
             VoiceControllerStatus::Fallback => "Voice fallback",
             VoiceControllerStatus::Error => "Voice error",
+        }
+    }
+
+    fn companion_voice_status_tone(status: VoiceControllerStatus) -> VoiceHudTone {
+        match status {
+            VoiceControllerStatus::Listening => VoiceHudTone::Listening,
+            VoiceControllerStatus::Error | VoiceControllerStatus::Fallback => VoiceHudTone::Error,
+            _ => VoiceHudTone::Idle,
         }
     }
 
@@ -3101,6 +3163,7 @@ mod imp {
         voice_listening: Rc<Cell<bool>>,
         voice_starting: Rc<Cell<bool>>,
         voice_stopping: Rc<Cell<bool>>,
+        voice_input_level: InputLevelHandle,
     }
 
     impl WindowsGtkShellState {
@@ -4010,6 +4073,11 @@ mod imp {
             return;
         };
 
+        {
+            let level = runtime.voice_input_level.clone();
+            detached_voice_hud.set_level_source(Some(Rc::new(move || level.get())));
+        }
+
         let detached_voice_key_controller: VoiceKeyControllerHandle = Rc::new(RefCell::new(None));
         let detached_voice_local_key_pressed = Rc::new(Cell::new(false));
         let (detached_voice_event_tx, detached_voice_event_rx) =
@@ -4047,20 +4115,24 @@ mod imp {
                         WindowsVoiceUiEvent::ListeningStarted => {
                             voice_starting.set(false);
                             voice_listening.set(!voice_stopping.get());
+                            detached_voice_hud.set_tone(VoiceHudTone::Listening);
                         }
                         WindowsVoiceUiEvent::Final(text) => {
                             voice_starting.set(false);
                             voice_listening.set(false);
                             voice_stopping.set(false);
                             if text.trim().is_empty() {
+                                detached_voice_hud.set_tone(VoiceHudTone::Idle);
                                 detached_voice_hud.show("No speech detected", None);
                                 detached_voice_hud.hide_later();
                                 continue;
                             }
                             if detached_preview.send_text_to_focused_terminal(&text) {
+                                detached_voice_hud.set_tone(VoiceHudTone::Success);
                                 detached_voice_hud.show("Voice inserted", Some(&text));
                                 detached_voice_hud.hide_later();
                             } else {
+                                detached_voice_hud.set_tone(VoiceHudTone::Error);
                                 detached_voice_hud.show("No focused terminal target", Some(&text));
                                 detached_overlay.add_toast(adw::Toast::new(
                                     "Voice text was not inserted: no focused terminal pane",
@@ -4074,6 +4146,9 @@ mod imp {
                             if voice_stopping.get() && message == "Listening…" {
                                 continue;
                             }
+                            if message == "Listening…" {
+                                detached_voice_hud.set_tone(VoiceHudTone::Listening);
+                            }
                             detached_voice_hud.show(&message, None);
                         }
                         WindowsVoiceUiEvent::Error(message) => {
@@ -4083,6 +4158,7 @@ mod imp {
                             logging::error(format!(
                                 "Windows GTK detached voice transcription failed: {message}"
                             ));
+                            detached_voice_hud.set_tone(VoiceHudTone::Error);
                             detached_voice_hud.show("Voice error", Some(&message));
                             detached_overlay
                                 .add_toast(adw::Toast::new("Voice transcription failed"));
