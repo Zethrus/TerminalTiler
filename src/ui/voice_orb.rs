@@ -275,7 +275,7 @@ mod tests {
         for _ in 0..200 {
             level = smooth_level(level, 0.0, 0.016);
         }
-        assert!(level < 0.01 && level >= 0.0);
+        assert!((0.0..0.01).contains(&level));
         assert_eq!(smooth_level(0.3, 2.0, 0.0), 1.0);
     }
 
