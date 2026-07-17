@@ -38,6 +38,9 @@
        chips     one family: radius 999, padding 3px 8px, 10px/600; micro
                  tier 9px; tones neutral (ink 0.82) / muted (0.56) /
                  accent (amber tint) / semantic. Kanban chips stay squared.
+       top bar   slim 32px bar; ghost actions 24px (transparent rest,
+                 amber-tint hover/press, 10px/600 uppercase); tabs 26px
+                 keep copper + amber underline; density 38/32/28.
    ============================================================ */
 
 /* Neutrals (theme-agnostic structural colors) */
@@ -124,8 +127,8 @@ window.window-shell {
 }
 
 window.window-shell headerbar.app-headerbar {
-  min-height: 38px;
-  padding: 2px 8px;
+  min-height: 32px;
+  padding: 1px 8px;
   background:
     linear-gradient(180deg, rgba(16, 16, 20, 0.96), rgba(10, 10, 13, 0.94)),
     radial-gradient(circle at top, alpha(@tt_amber, 0.05), transparent 32%);
@@ -135,22 +138,30 @@ window.window-shell headerbar.app-headerbar {
     0 6px 16px alpha(@tt_shadow, 0.1);
 }
 
+/* Adwaita pads the header's inner windowhandle boxes vertically, which
+   inflates the bar ~15px past min-height; the slim bar owns that space. */
+window.window-shell headerbar.app-headerbar windowhandle box {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 window.window-shell headerbar.app-headerbar button.titlebar-action-button,
 window.window-shell headerbar.app-headerbar button.app-tab-add {
-  min-height: 26px;
-  min-width: 26px;
+  min-height: 24px;
+  min-width: 24px;
   border-radius: 8px;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button {
-  padding: 3px 10px;
+  padding: 2px 8px;
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.045em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: alpha(@tt_white, 0.86);
-  background: alpha(@tt_white, 0.05);
-  border: 1px solid alpha(@tt_white, 0.12);
+  color: alpha(@tt_white, 0.72);
+  background: transparent;
+  /* Transparent (not none) border keeps the border-box stable on hover. */
+  border: 1px solid transparent;
   box-shadow: none;
   transition:
     background 140ms ease,
@@ -164,20 +175,40 @@ window.window-shell headerbar.app-headerbar button.titlebar-action-button .butto
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-icon-button {
-  min-width: 30px;
+  min-width: 26px;
   padding: 0;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:hover {
-  color: rgba(255, 251, 242, 0.96);
-  background: alpha(@tt_white, 0.08);
-  border-color: alpha(@tt_amber, 0.22);
+  color: rgba(255, 250, 238, 0.95);
+  background: alpha(@tt_white, 0.06);
+  border-color: alpha(@tt_amber, 0.20);
   box-shadow: none;
 }
 
 window.window-shell headerbar.app-headerbar button.titlebar-action-button:active {
-  background: alpha(@tt_amber, 0.14);
-  border-color: alpha(@tt_amber, 0.32);
+  background: alpha(@tt_amber, 0.12);
+  border-color: alpha(@tt_amber, 0.30);
+  color: rgba(255, 224, 163, 0.95);
+}
+
+/* The theme colors bare button labels directly — restate ghost role colors. */
+window.window-shell headerbar.app-headerbar button.titlebar-action-button label {
+  color: alpha(@tt_white, 0.72);
+}
+
+window.window-shell headerbar.app-headerbar button.titlebar-action-button:hover label {
+  color: rgba(255, 250, 238, 0.95);
+}
+
+window.window-shell headerbar.app-headerbar button.titlebar-action-button:active label {
+  color: rgba(255, 224, 163, 0.95);
+}
+
+window.window-shell headerbar.app-headerbar button.titlebar-action-button:focus-visible,
+window.window-shell headerbar.app-headerbar button.app-tab-add:focus-visible {
+  outline: 2px solid alpha(@tt_amber, 0.58);
+  outline-offset: 1px;
 }
 
 .button-icon-label-content {
@@ -197,19 +228,19 @@ button.destructive-button .button-leading-icon {
 }
 
 window.profile-comfortable headerbar.app-headerbar {
-  min-height: 44px;
-  padding: 4px 12px;
+  min-height: 38px;
+  padding: 2px 10px;
 }
 
 window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button,
 window.profile-comfortable headerbar.app-headerbar button.app-tab-add {
-  min-height: 34px;
-  min-width: 34px;
-  border-radius: 10px;
+  min-height: 28px;
+  min-width: 28px;
+  border-radius: 9px;
 }
 
 window.profile-comfortable headerbar.app-headerbar button.titlebar-action-button {
-  padding: 4px 14px;
+  padding: 3px 10px;
   font-size: 11px;
 }
 
@@ -218,14 +249,14 @@ window.profile-comfortable .app-tab-strip {
 }
 
 window.profile-comfortable .app-tab-shell {
-  min-width: 160px;
-  min-height: 34px;
+  min-width: 152px;
+  min-height: 30px;
   border-radius: 12px 12px 0 0 / 8px 8px 0 0;
 }
 
 window.profile-comfortable button.app-tab-select {
-  min-height: 34px;
-  padding: 3px 8px 3px 12px;
+  min-height: 30px;
+  padding: 2px 8px 2px 12px;
   border-radius: 12px 12px 0 0 / 8px 8px 0 0;
 }
 
@@ -345,19 +376,19 @@ window.profile-comfortable .split-pane separator {
 }
 
 window.profile-compact headerbar.app-headerbar {
-  min-height: 32px;
+  min-height: 28px;
   padding: 1px 6px;
 }
 
 window.profile-compact headerbar.app-headerbar button.titlebar-action-button,
 window.profile-compact headerbar.app-headerbar button.app-tab-add {
-  min-height: 24px;
-  min-width: 24px;
-  border-radius: 7px;
+  min-height: 22px;
+  min-width: 22px;
+  border-radius: 6px;
 }
 
 window.profile-compact headerbar.app-headerbar button.titlebar-action-button {
-  padding: 2px 8px;
+  padding: 1px 6px;
   font-size: 9px;
 }
 
@@ -366,13 +397,13 @@ window.profile-compact .app-tab-strip {
 }
 
 window.profile-compact .app-tab-shell {
-  min-width: 124px;
-  min-height: 24px;
+  min-width: 118px;
+  min-height: 22px;
   border-radius: 8px 8px 0 0 / 6px 6px 0 0;
 }
 
 window.profile-compact button.app-tab-select {
-  min-height: 24px;
+  min-height: 22px;
   padding: 1px 5px 1px 8px;
   border-radius: 8px 8px 0 0 / 6px 6px 0 0;
 }
@@ -394,8 +425,8 @@ window.profile-compact button.app-tab-close {
 }
 
 window.profile-compact button.app-tab-add {
-  min-width: 22px;
-  min-height: 22px;
+  min-width: 20px;
+  min-height: 20px;
   border-radius: 6px;
 }
 
@@ -556,28 +587,23 @@ window.profile-compact .split-pane separator {
 }
 
 window.profile-standard headerbar.app-headerbar {
-  min-height: 42px;
-  padding: 4px 10px;
+  min-height: 32px;
+  padding: 1px 8px;
 }
 
-window.profile-standard headerbar.app-headerbar button {
-  min-height: 30px;
-  min-width: 30px;
-  border-radius: 9px;
+window.profile-standard headerbar.app-headerbar button.titlebar-action-button,
+window.profile-standard headerbar.app-headerbar button.app-tab-add {
+  min-height: 24px;
+  min-width: 24px;
+  border-radius: 8px;
 }
 
 window.profile-standard headerbar.app-headerbar button.titlebar-action-button {
-  padding: 3px 12px;
+  padding: 2px 10px;
 }
 
 window.profile-standard .app-tab-strip {
   margin: 0 6px;
-}
-
-window.profile-standard .app-tab-shell {
-  min-width: 148px;
-  min-height: 32px;
-  border-radius: 11px 11px 0 0 / 7px 7px 0 0;
 }
 
 .app-tab-strip {
@@ -691,9 +717,9 @@ tabbar.app-tab-strip tabbox tab button.close:hover {
 }
 
 .app-tab-shell {
-  min-width: 142px;
-  min-height: 30px;
-  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
+  min-width: 136px;
+  min-height: 26px;
+  border-radius: 10px 10px 0 0 / 7px 7px 0 0;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -761,25 +787,25 @@ window.window-shell .app-tab-shell.is-preview-slot .app-tab-close {
 
 button.app-tab-select {
   min-width: 0;
-  min-height: 30px;
+  min-height: 26px;
   margin: 0;
-  padding: 2px 8px 2px 12px;
+  padding: 1px 8px 1px 10px;
   background: transparent;
   border: none;
   box-shadow: none;
-  border-radius: 12px 12px 0 0 / 8px 8px 0 0;
+  border-radius: 10px 10px 0 0 / 7px 7px 0 0;
 }
 
 .app-tab-icon {
-  -gtk-icon-size: 13px;
+  -gtk-icon-size: 12px;
   color: alpha(@tt_white, 0.72);
 }
 
 .app-tab-title {
   color: #ffffff;
-  font-size: 12px;
-  font-weight: 700;
-  min-width: 72px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 64px;
   transition: color 140ms ease;
 }
 
@@ -800,15 +826,15 @@ button.app-tab-select {
 }
 
 button.app-tab-close {
-  min-width: 20px;
-  min-height: 20px;
+  min-width: 18px;
+  min-height: 18px;
   padding: 0;
-  margin: 0 3px 0 0;
-  border-radius: 7px;
+  margin: 0 2px 0 0;
+  border-radius: 6px;
   border: 1px solid transparent;
   background: alpha(@tt_white, 0.03);
   color: alpha(@tt_white, 0.64);
-  -gtk-icon-size: 12px;
+  -gtk-icon-size: 11px;
   opacity: 0;
   transition:
     opacity 140ms ease,
@@ -829,13 +855,13 @@ button.app-tab-close:hover {
 }
 
 button.app-tab-add {
-  min-width: 26px;
-  min-height: 26px;
+  min-width: 24px;
+  min-height: 24px;
   margin-top: 1px;
   border-radius: 8px;
-  background: alpha(@tt_white, 0.05);
+  background: alpha(@tt_white, 0.03);
   color: alpha(@tt_white, 0.82);
-  border: 1px solid alpha(@tt_white, 0.09);
+  border: 1px solid alpha(@tt_white, 0.07);
   box-shadow: none;
   transition:
     background 140ms ease,
@@ -3958,26 +3984,32 @@ window.stats-dialog-window.theme-light headerbar {
 }
 
 window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button {
-  color: rgba(25, 35, 50, 0.84);
-  background: linear-gradient(180deg, rgba(25, 35, 50, 0.06), rgba(25, 35, 50, 0.03));
-  border: 1px solid rgba(25, 35, 50, 0.10);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.60),
-    0 2px 6px rgba(15, 23, 42, 0.04);
+  color: rgba(25, 35, 50, 0.72);
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
 }
 
 window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button:hover {
   background: linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(239, 243, 247, 0.94));
-  border-color: rgba(25, 35, 50, 0.16);
+  border-color: rgba(196, 112, 54, 0.30);
   color: rgba(25, 35, 50, 0.92);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.68),
-    0 6px 14px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
 }
 
 window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button:active {
-  background: linear-gradient(180deg, rgba(244, 247, 250, 0.96), rgba(232, 237, 242, 0.96));
-  border-color: rgba(25, 35, 50, 0.20);
+  background: linear-gradient(180deg, rgba(196, 112, 54, 0.14), rgba(196, 112, 54, 0.10));
+  border-color: rgba(196, 112, 54, 0.40);
+}
+
+/* Light theme restates ghost label colors as well. */
+window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button label {
+  color: rgba(25, 35, 50, 0.72);
+}
+
+window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button:hover label,
+window.window-shell.theme-light headerbar.app-headerbar button.titlebar-action-button:active label {
+  color: rgba(25, 35, 50, 0.92);
 }
 
 window.window-shell.theme-light tabbar.app-tab-strip tabbox tab,
