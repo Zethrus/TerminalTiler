@@ -1736,13 +1736,11 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                     &preset_store,
                     &on_presets_changed,
                     {
-                        let open_workspace_from_dashboard =
-                            open_workspace_from_dashboard.clone();
+                        let open_workspace_from_dashboard = open_workspace_from_dashboard.clone();
                         move |idx| open_workspace_from_dashboard(idx)
                     },
                     {
-                        let edit_workspace_from_dashboard =
-                            edit_workspace_from_dashboard.clone();
+                        let edit_workspace_from_dashboard = edit_workspace_from_dashboard.clone();
                         move |idx| edit_workspace_from_dashboard(idx)
                     },
                 ));
@@ -1912,10 +1910,7 @@ where
     card.upcast()
 }
 
-fn build_new_menu_button<F>(
-    on_new_workspace: F,
-    on_new_board: Option<Rc<dyn Fn()>>,
-) -> gtk::Widget
+fn build_new_menu_button<F>(on_new_workspace: F, on_new_board: Option<Rc<dyn Fn()>>) -> gtk::Widget
 where
     F: Fn() + 'static,
 {
