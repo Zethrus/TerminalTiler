@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 . "$ROOT_DIR/packaging/render-icons.sh"
 . "$ROOT_DIR/packaging/validate-metadata.sh"
-export PACKAGE_VERSION
+export PACKAGE_VERSION RELEASE_TAG
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 TARGET_BIN="$TARGET_DIR/release/terminaltiler"

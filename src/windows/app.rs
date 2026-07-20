@@ -53,6 +53,7 @@ mod imp {
         ApplicationDensity, ThemeMode, WorkspacePreset, is_builtin_preset_id,
     };
     use crate::platform::{home_dir, resolve_workspace_root};
+    use crate::product;
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_overrides_for_saved_session,
     };
@@ -162,6 +163,7 @@ mod imp {
     const ID_SETTINGS_SUMMARY_COPY: isize = 2042;
     const ID_SETTINGS_META_AUTOSAVE: isize = 2043;
     const ID_SETTINGS_META_LIVE: isize = 2044;
+    const ID_SETTINGS_BUILD_IDENTITY: isize = 2065;
     const ID_SETTINGS_RESET_BUILTIN_PRESETS: isize = 2045;
     const ID_SETTINGS_LABEL_VOICE: isize = 2046;
     const ID_SETTINGS_VOICE_ENABLED: isize = 2047;
@@ -2809,6 +2811,14 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         let _ = create_child_window(
             hwnd,
             "STATIC",
+            &product::installed_build_label(&state.product_info.version),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            ID_SETTINGS_BUILD_IDENTITY,
+        );
+        let _ = create_child_window(
+            hwnd,
+            "STATIC",
             "MIT core",
             WS_CHILD | WS_VISIBLE,
             0,
@@ -3291,6 +3301,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         for control in [
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_TITLE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_SUMMARY_COPY as i32) },
+            unsafe { GetDlgItem(hwnd, ID_SETTINGS_BUILD_IDENTITY as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_META_AUTOSAVE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_META_LIVE as i32) },
             unsafe { GetDlgItem(hwnd, ID_SETTINGS_LABEL_THEME as i32) },
@@ -3447,9 +3458,18 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                 SWP_NOZORDER,
             );
             SetWindowPos(
-                GetDlgItem(hwnd, ID_SETTINGS_META_AUTOSAVE as i32),
+                GetDlgItem(hwnd, ID_SETTINGS_BUILD_IDENTITY as i32),
                 ptr::null_mut(),
                 MARGIN,
+                summary_meta_y,
+                132,
+                LABEL_HEIGHT,
+                SWP_NOZORDER,
+            );
+            SetWindowPos(
+                GetDlgItem(hwnd, ID_SETTINGS_META_AUTOSAVE as i32),
+                ptr::null_mut(),
+                MARGIN + 140,
                 summary_meta_y,
                 120,
                 LABEL_HEIGHT,
@@ -3458,7 +3478,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             SetWindowPos(
                 GetDlgItem(hwnd, ID_SETTINGS_META_LIVE as i32),
                 ptr::null_mut(),
-                MARGIN + 128,
+                MARGIN + 268,
                 summary_meta_y,
                 96,
                 LABEL_HEIGHT,

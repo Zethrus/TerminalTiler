@@ -1286,6 +1286,7 @@ mod imp {
                 voice: preferences.voice,
                 microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
                 product_display_name: options.product.display_name.clone(),
+                build_label: crate::product::installed_build_label(&options.product.version),
                 settings_title: options.product.settings_title.clone(),
                 settings_summary: options.product.settings_summary.clone(),
             },

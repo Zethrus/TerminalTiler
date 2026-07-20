@@ -2838,6 +2838,9 @@ fn present_with_initial_workspace(
                     voice: preferences.voice.clone(),
                     microphone_devices: AudioCapture::enumerate_microphones().unwrap_or_default(),
                     product_display_name: options_for_settings.product.display_name.clone(),
+                    build_label: crate::product::installed_build_label(
+                        &options_for_settings.product.version,
+                    ),
                     settings_title: options_for_settings.product.settings_title.clone(),
                     settings_summary: options_for_settings.product.settings_summary.clone(),
                 },

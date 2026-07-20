@@ -66,6 +66,7 @@ pub struct SettingsDialogInput {
     pub voice: VoicePreferences,
     pub microphone_devices: Vec<MicrophoneDevice>,
     pub product_display_name: String,
+    pub build_label: String,
     pub settings_title: String,
     pub settings_summary: String,
 }
@@ -387,6 +388,7 @@ pub fn present(
         voice,
         microphone_devices,
         product_display_name,
+        build_label,
         settings_title,
         settings_summary,
     } = input;
@@ -540,6 +542,7 @@ pub fn present(
 
     content.append(&build_settings_summary(
         &product_display_name,
+        &build_label,
         &settings_summary,
     ));
 
@@ -1602,7 +1605,7 @@ fn build_section_header(title: &str, meta: &str, body: &str) -> gtk::Widget {
             .css_classes(["eyebrow", "settings-section-heading"])
             .build(),
     );
-    top.append(&build_meta_chip(meta));
+    top.append(&build_meta_chip(meta, false));
     shell.append(&top);
 
     shell.append(
@@ -1788,7 +1791,11 @@ where
     shell.upcast()
 }
 
-fn build_settings_summary(product_display_name: &str, settings_summary: &str) -> gtk::Widget {
+fn build_settings_summary(
+    product_display_name: &str,
+    build_label: &str,
+    settings_summary: &str,
+) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(14)
@@ -1812,13 +1819,20 @@ fn build_settings_summary(product_display_name: &str, settings_summary: &str) ->
         .hexpand(true)
         .css_classes(["settings-summary-body"])
         .build();
-    body.append(
+    let title_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::Start)
+        .build();
+    title_row.append(
         &gtk::Label::builder()
             .label(product_display_name)
             .halign(gtk::Align::Start)
             .css_classes(["section-title", "settings-title", "settings-summary-title"])
             .build(),
     );
+    title_row.append(&build_meta_chip(build_label, true));
+    body.append(&title_row);
     body.append(
         &gtk::Label::builder()
             .label(settings_summary)
@@ -1835,20 +1849,23 @@ fn build_settings_summary(product_display_name: &str, settings_summary: &str) ->
         .valign(gtk::Align::Center)
         .css_classes(["settings-summary-actions"])
         .build();
-    actions.append(&build_meta_chip("MIT core"));
-    actions.append(&build_meta_chip("Public source"));
+    actions.append(&build_meta_chip("MIT core", false));
+    actions.append(&build_meta_chip("Public source", false));
     shell.append(&actions);
 
     shell.upcast()
 }
 
-fn build_meta_chip(label: &str) -> gtk::Widget {
-    gtk::Label::builder()
+fn build_meta_chip(label: &str, is_build_identity: bool) -> gtk::Widget {
+    let chip = gtk::Label::builder()
         .label(label)
         .halign(gtk::Align::End)
         .css_classes(["status-chip", "settings-meta-chip"])
-        .build()
-        .upcast()
+        .build();
+    if is_build_identity {
+        chip.add_css_class("settings-build-chip");
+    }
+    chip.upcast()
 }
 
 fn sync_theme_strip_active(strip: &gtk::Box, active_theme: ThemeMode) {

@@ -1,5 +1,6 @@
 pub const PRODUCT_DISPLAY_NAME: &str = "TerminalTiler Core";
 pub const PRODUCT_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
+pub const PRODUCT_RELEASE_TAG: Option<&str> = option_env!("TERMINALTILER_RELEASE_TAG");
 pub const PRODUCT_HOMEPAGE: &str = "https://terminaltiler.app";
 pub const PRODUCT_ACCOUNT_URL: &str = "https://terminaltiler.app/account/";
 pub const PRODUCT_SUPPORT_URL: &str = "https://terminaltiler.app/support/";
@@ -29,6 +30,18 @@ pub fn display_name_with_version() -> String {
     format!("{PRODUCT_DISPLAY_NAME} v{PRODUCT_VERSION}")
 }
 
+pub fn installed_build_label(version: &str) -> String {
+    build_label_for(version, PRODUCT_RELEASE_TAG)
+}
+
+fn build_label_for(version: &str, release_tag: Option<&str>) -> String {
+    let expected_tag = format!("v{version}");
+    match release_tag {
+        Some(tag) if tag == expected_tag => format!("Release {tag}"),
+        _ => format!("Build v{version}"),
+    }
+}
+
 #[allow(dead_code)]
 pub fn about_title() -> String {
     format!("About {PRODUCT_DISPLAY_NAME}")
@@ -46,4 +59,20 @@ pub fn about_body() -> String {
         PRODUCT_SOURCE_URL,
         PRODUCT_ISSUES_URL
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_label_for;
+
+    #[test]
+    fn build_label_uses_an_exact_release_tag_only() {
+        assert_eq!(build_label_for("0.3.2", Some("v0.3.2")), "Release v0.3.2");
+        assert_eq!(build_label_for("0.3.2", None), "Build v0.3.2");
+        assert_eq!(build_label_for("0.3.2", Some("v0.3.1")), "Build v0.3.2");
+        assert_eq!(
+            build_label_for("0.3.2", Some("release-0.3.2")),
+            "Build v0.3.2"
+        );
+    }
 }

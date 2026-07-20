@@ -2513,6 +2513,13 @@ button.tile-header-action:disabled {
   letter-spacing: 0.04em;
 }
 
+.settings-build-chip {
+  background: linear-gradient(180deg, alpha(@tt_amber, 0.16), rgba(190, 97, 45, 0.08));
+  border-color: alpha(@tt_amber, 0.26);
+  color: rgba(255, 239, 205, 0.94);
+  font-weight: 600;
+}
+
 .settings-reset-button {
   min-height: 34px;
   padding: 0 16px;
@@ -4168,6 +4175,12 @@ window.theme-light .settings-dialog-content .settings-help-button,
 window.theme-light .settings-dialog-content .settings-meta-chip,
 window.theme-light .settings-dialog-content .launch-meta-chip {
   color: rgba(25, 35, 50, 0.82);
+}
+
+window.theme-light .settings-dialog-content .settings-build-chip {
+  background: linear-gradient(180deg, rgba(250, 228, 186, 0.64), rgba(244, 211, 153, 0.36));
+  border-color: rgba(174, 107, 34, 0.24);
+  color: rgba(91, 53, 17, 0.92);
 }
 
 window.window-shell.theme-light button.breadcrumb-hint {

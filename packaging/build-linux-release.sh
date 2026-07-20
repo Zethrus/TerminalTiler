@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/versioning.sh"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
-export PACKAGE_VERSION BUILD_DATE
+export PACKAGE_VERSION BUILD_DATE RELEASE_TAG
 
 if [[ "${SKIP_DEPENDENCY_CHECK:-0}" != "1" ]]; then
   cargo_dependency_check=1

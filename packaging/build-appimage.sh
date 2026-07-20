@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT_DIR/packaging/linux-build-prereqs.sh"
 . "$ROOT_DIR/packaging/render-icons.sh"
 . "$ROOT_DIR/packaging/validate-metadata.sh"
-export PACKAGE_VERSION
+export PACKAGE_VERSION RELEASE_TAG
 
 APPDIR="$ROOT_DIR/packaging/.build/appimage/TerminalTiler-x86_64.AppDir"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
