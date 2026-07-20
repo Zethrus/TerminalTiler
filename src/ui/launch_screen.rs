@@ -1674,7 +1674,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         {
             let boards_panel = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
-                .spacing(12)
+                .spacing(6)
                 .css_classes(["config-panel", "saved-boards-panel"])
                 .build();
             boards_panel.append(&build_section_header(
@@ -1685,8 +1685,8 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
 
             let board_cards = gtk::FlowBox::builder()
                 .selection_mode(gtk::SelectionMode::None)
-                .row_spacing(12)
-                .column_spacing(12)
+                .row_spacing(10)
+                .column_spacing(10)
                 .min_children_per_line(1)
                 .max_children_per_line(4)
                 .homogeneous(true)
@@ -1715,7 +1715,7 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
         if !presets.is_empty() {
             let saved_panel = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
-                .spacing(12)
+                .spacing(6)
                 .css_classes(["config-panel", "saved-workspaces-panel"])
                 .build();
             saved_panel.append(&build_section_header(
@@ -1724,38 +1724,30 @@ pub fn build(input: LaunchScreenInput, actions: LaunchScreenActions) -> gtk::Wid
                 "Open a saved layout immediately, or edit it in the wizard before launching.",
             ));
 
-            let cards = gtk::FlowBox::builder()
-                .selection_mode(gtk::SelectionMode::None)
-                .row_spacing(12)
-                .column_spacing(12)
-                .min_children_per_line(1)
-                .max_children_per_line(4)
-                .homogeneous(true)
+            let rows = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
                 .hexpand(true)
-                .css_classes(["saved-workspace-grid"])
+                .css_classes(["saved-workspace-list"])
                 .build();
             for (index, preset) in presets.iter().enumerate() {
-                cards.insert(
-                    &build_saved_workspace_card(
-                        preset,
-                        index,
-                        &preset_store,
-                        &on_presets_changed,
-                        {
-                            let open_workspace_from_dashboard =
-                                open_workspace_from_dashboard.clone();
-                            move |idx| open_workspace_from_dashboard(idx)
-                        },
-                        {
-                            let edit_workspace_from_dashboard =
-                                edit_workspace_from_dashboard.clone();
-                            move |idx| edit_workspace_from_dashboard(idx)
-                        },
-                    ),
-                    -1,
-                );
+                rows.append(&build_saved_workspace_card(
+                    preset,
+                    index,
+                    &preset_store,
+                    &on_presets_changed,
+                    {
+                        let open_workspace_from_dashboard =
+                            open_workspace_from_dashboard.clone();
+                        move |idx| open_workspace_from_dashboard(idx)
+                    },
+                    {
+                        let edit_workspace_from_dashboard =
+                            edit_workspace_from_dashboard.clone();
+                        move |idx| edit_workspace_from_dashboard(idx)
+                    },
+                ));
             }
-            saved_panel.append(&cards);
+            saved_panel.append(&rows);
             dashboard.append(&saved_panel);
         }
     }
@@ -1880,13 +1872,13 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(10)
         .css_classes(["config-panel", "launch-dashboard-hero"])
         .build();
 
     let copy = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(5)
+        .spacing(2)
         .hexpand(true)
         .build();
     copy.append(
@@ -1904,18 +1896,6 @@ where
             .css_classes(["hero-title", "launch-dashboard-title"])
             .build(),
     );
-    copy.append(
-        &gtk::Label::builder()
-            .label(if saved_count == 0 && saved_board_count == 0 {
-                "No saved workspaces yet. Use the workspace wizard to choose a folder and layout, or create a Kanban board directly from a project directory."
-            } else {
-                "Open a known workspace or Kanban board immediately, edit a saved setup, or start fresh."
-            })
-            .halign(gtk::Align::Start)
-            .wrap(true)
-            .css_classes(["hero-body", "launch-dashboard-copy"])
-            .build(),
-    );
     let meta = gtk::Label::builder()
         .label(format!(
             "{} workspaces • {} boards",
@@ -1927,33 +1907,148 @@ where
     copy.append(&meta);
     card.append(&copy);
 
-    let new_button = icons::labeled_button(
-        "New Workspace Layout",
-        icon_name::LAYOUT,
-        &[
+    card.append(&build_new_menu_button(on_new_workspace, on_new_board));
+
+    card.upcast()
+}
+
+fn build_new_menu_button<F>(
+    on_new_workspace: F,
+    on_new_board: Option<Rc<dyn Fn()>>,
+) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
+    let new_button = gtk::MenuButton::builder()
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Center)
+        // Custom icon+label child carries the affordance; hide the default arrow.
+        .direction(gtk::ArrowType::None)
+        .css_classes([
             "pill-button",
             "primary-cta-button",
             "new-workspace-layout-button",
-        ],
-    );
-    new_button.set_halign(gtk::Align::End);
-    new_button.set_valign(gtk::Align::Center);
-    new_button.connect_clicked(move |_| on_new_workspace());
-    card.append(&new_button);
+        ])
+        .build();
+    new_button.set_child(Some(&{
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .valign(gtk::Align::Center)
+            .css_classes(["button-icon-label-content"])
+            .build();
+        let icon = icons::image(icon_name::ADD);
+        icon.set_pixel_size(13);
+        icon.set_valign(gtk::Align::Center);
+        icon.add_css_class("button-leading-icon");
+        content.append(&icon);
+        content.append(
+            &gtk::Label::builder()
+                .label("New")
+                .halign(gtk::Align::Start)
+                .valign(gtk::Align::Center)
+                .single_line_mode(true)
+                .css_classes(["button-text-label"])
+                .build(),
+        );
+        content
+    }));
+
+    let popover = gtk::Popover::builder()
+        .has_arrow(true)
+        .position(gtk::PositionType::Bottom)
+        .css_classes(["new-menu-popover"])
+        .build();
+
+    let list = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["new-menu-list"])
+        .build();
+
+    list.append(&build_new_menu_item(
+        "New Workspace Layout",
+        "Guided terminal layout wizard",
+        icon_name::LAYOUT,
+        {
+            let popover = popover.clone();
+            move || {
+                popover.popdown();
+                on_new_workspace();
+            }
+        },
+    ));
 
     if let Some(on_new_board) = on_new_board {
-        let board_button = icons::labeled_button(
+        list.append(&build_new_menu_item(
             "New Kanban Board",
+            "Per-project task board for humans and agents",
             icon_name::TERMINAL,
-            &["pill-button", "secondary-button", "new-kanban-board-button"],
-        );
-        board_button.set_halign(gtk::Align::End);
-        board_button.set_valign(gtk::Align::Center);
-        board_button.connect_clicked(move |_| on_new_board());
-        card.append(&board_button);
+            {
+                let popover = popover.clone();
+                move || {
+                    popover.popdown();
+                    on_new_board();
+                }
+            },
+        ));
     }
 
-    card.upcast()
+    popover.set_child(Some(&list));
+    new_button.set_popover(Some(&popover));
+    new_button.upcast()
+}
+
+fn build_new_menu_item<F>(
+    title: &str,
+    description: &str,
+    item_icon: &str,
+    on_activate: F,
+) -> gtk::Widget
+where
+    F: Fn() + 'static,
+{
+    let button = gtk::Button::builder()
+        .css_classes(["new-menu-item"])
+        .build();
+
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(10)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let icon = icons::image(item_icon);
+    icon.set_pixel_size(16);
+    icon.set_valign(gtk::Align::Start);
+    icon.set_margin_top(1);
+    icon.add_css_class("new-menu-item-icon");
+    row.append(&icon);
+
+    let copy = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(1)
+        .build();
+    copy.append(
+        &gtk::Label::builder()
+            .label(title)
+            .halign(gtk::Align::Start)
+            .css_classes(["new-menu-item-title"])
+            .build(),
+    );
+    copy.append(
+        &gtk::Label::builder()
+            .label(description)
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .css_classes(["new-menu-item-description"])
+            .build(),
+    );
+    row.append(&copy);
+    button.set_child(Some(&row));
+
+    button.connect_clicked(move |_| on_activate());
+    button.upcast()
 }
 
 fn build_dashboard_empty_state() -> gtk::Widget {
@@ -1992,111 +2087,77 @@ where
     FOpen: Fn(usize) + 'static,
     FEdit: Fn(usize) + 'static,
 {
-    let card = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .hexpand(false)
-        // Fills the homogeneous FlowBox cell so every card in a row shares the
-        // tallest card's height and the footer rows align across the row.
-        .vexpand(true)
-        .css_classes(["preset-card-compact", "saved-workspace-card"])
-        .build();
-
-    let header = gtk::Box::builder()
+    // Single-line row: name + path + tile count, actions reveal on hover/focus.
+    let row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(10)
+        .hexpand(true)
+        .css_classes(["workspace-list-row"])
         .build();
 
     let name = gtk::Label::builder()
         .label(&preset.name)
         .halign(gtk::Align::Start)
-        .hexpand(true)
+        .valign(gtk::Align::Center)
         .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(28)
         .css_classes(["card-title"])
         .build();
-    header.append(&name);
-
-    let tile_count = gtk::Label::builder()
-        .label(format!("{} tiles", preset.tile_count()))
-        .halign(gtk::Align::End)
-        .css_classes(["status-chip", "saved-workspace-tile-chip"])
-        .build();
-    header.append(&tile_count);
-    card.append(&header);
-
-    // The tile-count chip already states the count, so the description line
-    // carries only the human summary (and stays hidden when there is none)
-    // rather than redundantly repeating "{N} tiles •".
-    let detail = gtk::Label::builder()
-        .label(&preset.description)
-        .halign(gtk::Align::Start)
-        .valign(gtk::Align::Start)
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .max_width_chars(48)
-        .css_classes(["card-meta"])
-        .build();
-    detail.set_visible(!preset.description.trim().is_empty());
-    card.append(&detail);
-
-    // Absorbs slack so the footer (path + actions) pins to the card bottom,
-    // keeping action rows aligned across a row of varying-length descriptions.
-    let footer_spacer = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .vexpand(true)
-        .build();
-    card.append(&footer_spacer);
+    if !preset.description.trim().is_empty() {
+        name.set_tooltip_text(Some(preset.description.trim()));
+    }
+    row.append(&name);
 
     let root_label = preset
         .workspace_root
         .as_ref()
         .map(|root| root.display().to_string())
         .unwrap_or_else(|| "Uses current folder when opened".into());
-    let footer = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
-        .css_classes(["saved-workspace-footer"])
-        .build();
-
     let root = gtk::Label::builder()
         .label(root_label)
         .halign(gtk::Align::Start)
         .valign(gtk::Align::Center)
         .hexpand(true)
         .ellipsize(gtk::pango::EllipsizeMode::Middle)
-        .max_width_chars(36)
-        .css_classes(["field-hint", "saved-workspace-root"])
+        .css_classes(["workspace-row-path"])
         .build();
-    footer.append(&root);
+    row.append(&root);
+
+    let tile_count = gtk::Label::builder()
+        .label(format!("{} tiles", preset.tile_count()))
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Center)
+        .css_classes(["status-chip", "workspace-row-tile-chip"])
+        .build();
+    row.append(&tile_count);
 
     let actions = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(6)
+        .spacing(4)
         .halign(gtk::Align::End)
         .valign(gtk::Align::Center)
-        .css_classes(["saved-workspace-actions"])
+        .css_classes(["workspace-row-actions"])
         .build();
-    let open_button = icons::labeled_button(
-        "Open",
+    let open_button = icons::icon_button(
         icon_name::OPEN,
+        "Open workspace",
         &[
             "pill-button",
             "primary-cta-button",
-            "compact-action-button",
+            "compact-icon-button",
             "saved-workspace-open-button",
         ],
     );
     open_button.connect_clicked(move |_| on_open(index));
     actions.append(&open_button);
 
-    let edit_button = icons::labeled_button(
-        "Edit",
+    let edit_button = icons::icon_button(
         icon_name::EDIT,
+        "Edit workspace",
         &[
             "pill-button",
             "secondary-button",
-            "compact-action-button",
+            "compact-icon-button",
             "saved-workspace-edit-button",
         ],
     );
@@ -2116,10 +2177,9 @@ where
     connect_delete_preset_button(&delete_button, preset, preset_store, on_presets_changed);
     actions.append(&delete_button);
 
-    footer.append(&actions);
-    card.append(&footer);
+    row.append(&actions);
 
-    card.upcast()
+    row.upcast()
 }
 
 fn build_saved_board_card<FOpen, FEdit>(
@@ -2136,9 +2196,8 @@ where
 {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
+        .spacing(8)
         .hexpand(false)
-        // Same row-height contract as build_saved_workspace_card above.
         .vexpand(true)
         .css_classes([
             "preset-card-compact",

@@ -1260,7 +1260,7 @@ fn launch_buttons_use_premium_role_contract() {
             "\"primary-cta-button\",\n            \"new-workspace-layout-button\"",
         ) && source_contains(
             LAUNCH_SCREEN_RS,
-            "\"primary-cta-button\",\n            \"compact-action-button\"",
+            "\"primary-cta-button\",\n            \"compact-icon-button\"",
         ) && LAUNCH_SCREEN_RS.contains("\"ghost-link-button\"")
             && source_contains(
                 LAUNCH_SCREEN_RS,
@@ -1320,8 +1320,8 @@ fn launch_buttons_use_premium_role_contract() {
     );
     assert_css_block_contains(
         "window.window-shell button.primary-cta-button.compact-action-button",
-        "0 10px 20px alpha(@tt_shadow, 0.26)",
-        "compact primary CTAs should keep dimensional premium shadow after compact sizing overrides",
+        "0 3px 10px alpha(@tt_shadow, 0.2)",
+        "compact primary CTAs should keep a subtle premium shadow after compact sizing overrides",
     );
     assert_css_block_contains(
         "window.theme-light button.pill-button",

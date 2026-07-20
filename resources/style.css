@@ -284,7 +284,7 @@ window.profile-comfortable .launch-stage {
 }
 
 window.profile-comfortable .hero-title {
-  font-size: 24px;
+  font-size: 19px;
 }
 
 window.profile-comfortable .config-panel,
@@ -317,7 +317,7 @@ window.profile-comfortable .control-strip {
 }
 
 window.profile-comfortable button.pill-button {
-  padding: 10px 20px;
+  padding: 7px 17px;
 }
 
 window.profile-comfortable .selection-summary {
@@ -435,7 +435,7 @@ window.profile-compact .launch-header {
 }
 
 window.profile-compact .hero-title {
-  font-size: 20px;
+  font-size: 15px;
 }
 
 window.profile-compact .launch-stage {
@@ -484,7 +484,7 @@ window.profile-compact .control-strip {
 }
 
 window.profile-compact button.pill-button {
-  padding: 8px 14px;
+  padding: 4px 12px;
 }
 
 window.profile-compact button.preset-card {
@@ -925,11 +925,9 @@ button.app-tab-add:hover {
 .workspace-summary {
   border: 1px solid alpha(@tt_white, 0.07);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(11, 11, 13, 0.98), rgba(7, 7, 9, 0.98));
-  /* e1 resting elevation + 1px lit top edge (hairline does primary separation) */
-  box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.12),
-    inset 0 1px alpha(@tt_white, 0.04);
+  background: alpha(@tt_white, 0.025);
+  /* hairline border does primary separation; single soft shadow */
+  box-shadow: 0 4px 12px alpha(@tt_shadow, 0.1);
 }
 
 .terminal-card {
@@ -964,7 +962,7 @@ button.app-tab-add:hover {
 }
 
 .hero-title {
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 700;
   color: #f8f7f2;
 }
@@ -1057,18 +1055,14 @@ button.workspace-browse-button {
 }
 
 button.pill-button {
-  min-height: 36px;
+  min-height: 30px;
   border-radius: 999px;
-  padding: 8px 18px;
-  font-weight: 700;
+  padding: 5px 14px;
+  font-weight: 600;
   color: alpha(@tt_white, 0.86);
-  background:
-    linear-gradient(180deg, rgba(26, 27, 32, 0.96), rgba(12, 13, 17, 0.96)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.055), transparent 48%);
-  border: 1px solid alpha(@tt_white, 0.1);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.06),
-    0 5px 12px alpha(@tt_shadow, 0.12);
+  background: alpha(@tt_white, 0.055);
+  border: 1px solid alpha(@tt_white, 0.09);
+  box-shadow: none;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -1076,23 +1070,22 @@ button.pill-button {
     color 140ms ease;
 }
 
+button.pill-button:hover {
+  background: alpha(@tt_white, 0.09);
+  border-color: alpha(@tt_white, 0.14);
+}
+
 button.pill-button.flat {
-  background:
-    linear-gradient(180deg, rgba(24, 25, 30, 0.72), rgba(12, 13, 17, 0.74)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.035), transparent 50%);
-  border-color: alpha(@tt_white, 0.075);
-  color: rgba(255, 251, 242, 0.74);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.045),
-    0 5px 12px alpha(@tt_shadow, 0.12);
+  background: alpha(@tt_white, 0.03);
+  border-color: alpha(@tt_white, 0.07);
+  color: rgba(255, 251, 242, 0.72);
+  box-shadow: none;
 }
 
 button.pill-button.flat:hover {
-  background:
-    linear-gradient(180deg, rgba(31, 32, 38, 0.86), rgba(14, 15, 20, 0.88)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.055), transparent 52%);
-  border-color: alpha(@tt_amber, 0.16);
-  color: rgba(255, 250, 238, 0.88);
+  background: alpha(@tt_amber, 0.08);
+  border-color: alpha(@tt_amber, 0.18);
+  color: rgba(255, 250, 238, 0.9);
 }
 
 button:hover {
@@ -1430,86 +1423,67 @@ button.surface-button:focus {
 }
 
 button.secondary-button {
-  background:
-    linear-gradient(180deg, rgba(37, 38, 45, 0.96), rgba(13, 14, 18, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.04), transparent 52%);
-  border: 1px solid alpha(@tt_amber, 0.12);
+  background: alpha(@tt_amber, 0.07);
+  border: 1px solid alpha(@tt_amber, 0.14);
   color: rgba(255, 251, 242, 0.9);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.06),
-    0 6px 14px alpha(@tt_shadow, 0.14);
+  box-shadow: none;
 }
 
 button.secondary-button:hover {
-  background:
-    linear-gradient(180deg, rgba(40, 40, 47, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.07), transparent 52%);
-  border-color: alpha(@tt_amber, 0.2);
+  background: alpha(@tt_amber, 0.12);
+  border-color: alpha(@tt_amber, 0.22);
   color: rgba(255, 250, 238, 0.96);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.07),
-    0 8px 18px alpha(@tt_shadow, 0.16);
+  box-shadow: none;
 }
 
 button.secondary-button:active {
-  background:
-    linear-gradient(180deg, rgba(19, 20, 25, 0.98), rgba(10, 10, 14, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.14), transparent 52%);
-  border-color: alpha(@tt_amber, 0.34);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.04),
-    0 4px 10px alpha(@tt_shadow, 0.18);
+  background: alpha(@tt_amber, 0.16);
+  border-color: alpha(@tt_amber, 0.3);
+  box-shadow: none;
 }
 
 button.ghost-link-button {
-  background:
-    linear-gradient(180deg, rgba(24, 25, 30, 0.42), rgba(12, 13, 17, 0.46));
-  border-color: alpha(@tt_white, 0.045);
+  background: alpha(@tt_white, 0.03);
+  border-color: alpha(@tt_white, 0.05);
   color: rgba(255, 251, 242, 0.60);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.025),
-    0 4px 10px alpha(@tt_shadow, 0.08);
+  box-shadow: none;
 }
 
 button.ghost-link-button:hover {
-  background:
-    linear-gradient(180deg, rgba(31, 32, 38, 0.58), rgba(14, 15, 20, 0.62));
+  background: alpha(@tt_amber, 0.07);
   border-color: alpha(@tt_amber, 0.14);
   color: rgba(255, 250, 238, 0.82);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.04),
-    0 6px 14px alpha(@tt_shadow, 0.12);
 }
 
 button.ghost-link-button:active {
-  background:
-    linear-gradient(180deg, rgba(18, 19, 23, 0.66), rgba(10, 11, 15, 0.70));
+  background: alpha(@tt_amber, 0.1);
   border-color: alpha(@tt_amber, 0.18);
   color: rgba(255, 250, 238, 0.76);
 }
 
 button.primary-cta-button,
-button.suggested-action {
-  min-height: 36px;
+button.suggested-action,
+menubutton.primary-cta-button > button {
+  min-height: 30px;
   border-radius: 999px;
-  padding-left: 18px;
-  padding-right: 18px;
+  padding-left: 16px;
+  padding-right: 16px;
   background:
     linear-gradient(180deg, #fffdf7 0%, #f7efd9 48%, #eadcbd 100%),
     radial-gradient(circle at top, alpha(@tt_white, 0.76), transparent 56%);
   color: #111216;
   border: 1px solid rgba(255, 246, 221, 0.98);
   box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.2),
-    0 0 0 1px alpha(@tt_amber, 0.18),
-    inset 0 1px alpha(@tt_white, 0.86),
-    inset 0 -1px rgba(145, 94, 28, 0.12);
+    0 4px 12px alpha(@tt_shadow, 0.18),
+    0 0 0 1px alpha(@tt_amber, 0.16),
+    inset 0 1px alpha(@tt_white, 0.86);
 }
 
 /* The theme colors bare button labels directly, which beats the role color
    inherited from the button node — restate the contract colors on the label. */
 button.primary-cta-button label,
-button.suggested-action label {
+button.suggested-action label,
+menubutton.primary-cta-button > button label {
   color: #111216;
 }
 
@@ -1563,7 +1537,9 @@ button.destructive-action:disabled label {
 button.primary-cta-button .button-leading-icon,
 button.primary-cta-button .button-text-label,
 button.suggested-action .button-leading-icon,
-button.suggested-action .button-text-label {
+button.suggested-action .button-text-label,
+menubutton.primary-cta-button > button .button-leading-icon,
+menubutton.primary-cta-button > button .button-text-label {
   color: #111216;
 }
 
@@ -1573,39 +1549,35 @@ button.suggested-action .button-leading-icon {
 }
 
 button.primary-cta-button:hover,
-button.suggested-action:hover {
+button.suggested-action:hover,
+menubutton.primary-cta-button > button:hover {
   background:
     linear-gradient(180deg, #ffffff 0%, #fbf3df 46%, #efe0bf 100%),
     radial-gradient(circle at top, alpha(@tt_white, 0.82), transparent 56%);
   border-color: rgba(255, 250, 236, 1);
   box-shadow:
-    0 12px 24px alpha(@tt_shadow, 0.24),
+    0 6px 16px alpha(@tt_shadow, 0.22),
     0 0 0 1px alpha(@tt_amber, 0.24),
-    inset 0 1px alpha(@tt_white, 0.9),
-    inset 0 -1px rgba(145, 94, 28, 0.15);
+    inset 0 1px alpha(@tt_white, 0.9);
 }
 
 button.primary-cta-button:active,
-button.suggested-action:active {
+button.suggested-action:active,
+menubutton.primary-cta-button > button:active {
   background:
     linear-gradient(180deg, #eadfca 0%, #e1d3b7 100%);
   box-shadow:
-    0 6px 14px alpha(@tt_shadow, 0.22),
+    0 3px 8px alpha(@tt_shadow, 0.2),
     0 0 0 1px alpha(@tt_amber, 0.22),
-    inset 0 1px alpha(@tt_white, 0.48),
-    inset 0 2px rgba(96, 62, 18, 0.10);
+    inset 0 1px alpha(@tt_white, 0.48);
 }
 
 button.destructive-button,
 button.destructive-action {
-  background:
-    linear-gradient(180deg, rgba(95, 28, 28, 0.36), rgba(41, 16, 18, 0.52)),
-    radial-gradient(circle at top, alpha(@tt_danger, 0.10), transparent 52%);
+  background: alpha(@tt_danger, 0.1);
   color: #ff8a8a;
-  border: 1px solid alpha(@tt_danger, 0.28);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.05),
-    0 7px 16px alpha(@tt_shadow, 0.16);
+  border: 1px solid alpha(@tt_danger, 0.24);
+  box-shadow: none;
 }
 
 .preset-delete-button {
@@ -1617,18 +1589,14 @@ button.destructive-action {
 
 button.destructive-button:hover,
 button.destructive-action:hover {
-  background:
-    linear-gradient(180deg, rgba(118, 34, 34, 0.46), rgba(54, 18, 20, 0.62)),
-    radial-gradient(circle at top, alpha(@tt_danger, 0.16), transparent 52%);
+  background: alpha(@tt_danger, 0.18);
   border-color: alpha(@tt_danger, 0.38);
   color: #ffd0d0;
 }
 
 button.destructive-button:active,
 button.destructive-action:active {
-  background:
-    linear-gradient(180deg, rgba(70, 22, 22, 0.58), rgba(35, 13, 15, 0.70)),
-    radial-gradient(circle at top, alpha(@tt_danger, 0.12), transparent 52%);
+  background: alpha(@tt_danger, 0.24);
   border-color: alpha(@tt_danger, 0.34);
   color: #ffc1c1;
 }
@@ -1641,12 +1609,10 @@ button.new-preset-button:disabled,
 button.primary-cta-button:disabled,
 button.destructive-button:disabled,
 button.destructive-action:disabled {
-  background:
-    linear-gradient(180deg, rgba(31, 32, 37, 0.54), rgba(15, 16, 20, 0.58)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.026), transparent 52%);
+  background: alpha(@tt_white, 0.04);
   border-color: alpha(@tt_white, 0.055);
   color: alpha(@tt_white, 0.36);
-  box-shadow: inset 0 1px alpha(@tt_white, 0.025);
+  box-shadow: none;
 }
 
 button.primary-cta-button:disabled,
@@ -1655,23 +1621,17 @@ button.suggested-action:disabled {
   background:
     linear-gradient(180deg, rgba(236, 230, 216, 0.66), rgba(198, 190, 174, 0.56));
   border-color: rgba(255, 246, 221, 0.32);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.32),
-    0 0 0 1px alpha(@tt_amber, 0.06);
+  box-shadow: inset 0 1px alpha(@tt_white, 0.32);
 }
 
 button.surface-button {
-  min-height: 30px;
-  padding: 0 12px;
+  min-height: 28px;
+  padding: 0 11px;
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(31, 32, 38, 0.94), rgba(13, 14, 18, 0.96)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.045), transparent 52%);
-  border: 1px solid alpha(@tt_white, 0.09);
+  background: alpha(@tt_white, 0.05);
+  border: 1px solid alpha(@tt_white, 0.08);
   color: rgba(255, 251, 242, 0.78);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.05),
-    0 5px 12px alpha(@tt_shadow, 0.12);
+  box-shadow: none;
   transition:
     background 140ms ease,
     border-color 140ms ease,
@@ -1680,14 +1640,10 @@ button.surface-button {
 }
 
 button.surface-button:hover {
-  background:
-    linear-gradient(180deg, rgba(38, 39, 46, 0.98), rgba(16, 17, 22, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_amber, 0.06), transparent 52%);
+  background: alpha(@tt_amber, 0.08);
   border-color: alpha(@tt_amber, 0.16);
   color: rgba(255, 250, 238, 0.94);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.07),
-    0 7px 16px alpha(@tt_shadow, 0.16);
+  box-shadow: none;
 }
 
 button.surface-button:active {
@@ -2348,19 +2304,15 @@ button.tile-header-action:disabled {
 .launch-config-stage .preset-card,
 .launch-config-stage .preset-card-compact,
 .settings-dialog-content .config-panel {
-  border-color: alpha(@tt_white, 0.08);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, rgba(19, 19, 24, 0.98), rgba(10, 10, 14, 0.98)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.06), transparent 42%);
-  box-shadow:
-    0 22px 48px alpha(@tt_shadow, 0.26),
-    inset 0 1px alpha(@tt_white, 0.04);
+  border-color: alpha(@tt_white, 0.07);
+  border-radius: 16px;
+  background: alpha(@tt_white, 0.025);
+  box-shadow: 0 4px 14px alpha(@tt_shadow, 0.12);
 }
 
 .launch-config-stage .config-panel,
 .settings-dialog-content .config-panel {
-  padding: 18px;
+  padding: 14px;
 }
 
 .launch-config-stage .field-hint,
@@ -2391,7 +2343,7 @@ button.tile-header-action:disabled {
 }
 
 .launch-config-stage .section-title {
-  font-size: 17px;
+  font-size: 14px;
 }
 
 .launch-config-stage .workspace-path entry,
@@ -3116,15 +3068,12 @@ window.companion-dialog-window.theme-light .settings-dialog-content .companion-r
   min-width: 0;
 }
 
+/* Slim hero toolbar: borderless row, no card chrome */
 .launch-dashboard-hero {
-  padding: 14px 16px;
-  border-color: alpha(@tt_white, 0.06);
-  background:
-    linear-gradient(180deg, rgba(13, 13, 16, 0.96), rgba(8, 8, 11, 0.96)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.04), transparent 38%);
-  box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.12),
-    inset 0 1px alpha(@tt_white, 0.03);
+  padding: 2px 4px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .launch-dashboard-kicker {
@@ -3132,54 +3081,48 @@ window.companion-dialog-window.theme-light .settings-dialog-content .companion-r
 }
 
 .launch-dashboard-title {
-  font-size: 21px;
+  font-size: 16px;
 }
 
 .launch-dashboard-copy {
   max-width: 760px;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
 .launch-dashboard-count {
-  font-size: 11px;
+  font-size: 10px;
 }
 
 button.new-workspace-layout-button {
-  min-height: 38px;
-  padding-left: 17px;
-  padding-right: 17px;
+  min-height: 30px;
+  padding-left: 15px;
+  padding-right: 15px;
 }
 
 button.new-kanban-board-button {
-  min-height: 38px;
-  padding-left: 17px;
-  padding-right: 17px;
+  min-height: 30px;
+  padding-left: 15px;
+  padding-right: 15px;
 }
 
 .saved-workspaces-panel {
   min-width: 0;
-  padding: 12px;
-  box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.12),
-    inset 0 1px alpha(@tt_white, 0.03);
+  padding: 10px 12px;
 }
 
 .saved-workspaces-panel .section-title {
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .saved-workspaces-panel .section-header .field-hint {
-  font-size: 11px;
-  color: alpha(@tt_white, 0.68);
+  font-size: 10px;
+  color: alpha(@tt_white, 0.56);
 }
 
 .saved-boards-panel {
   min-width: 0;
-  padding: 12px;
-  box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.12),
-    inset 0 1px alpha(@tt_white, 0.03);
+  padding: 10px 12px;
 }
 
 .saved-board-card {
@@ -3311,34 +3254,85 @@ button.pill-button.mcp-health-fix-button {
   margin-top: 4px;
 }
 
+/* Saved workspace list rows: hairline-separated, actions reveal on hover/focus */
+.saved-workspace-list {
+  min-width: 0;
+}
+
+.workspace-list-row {
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  border-bottom-color: alpha(@tt_white, 0.05);
+  background: transparent;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.workspace-list-row:last-child {
+  border-bottom-color: transparent;
+}
+
+.workspace-list-row:hover,
+.workspace-list-row:focus-within {
+  background: alpha(@tt_white, 0.04);
+  border-color: alpha(@tt_white, 0.07);
+}
+
+.workspace-list-row .card-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workspace-list-row .workspace-row-path {
+  font-size: 11px;
+  color: alpha(@tt_white, 0.48);
+}
+
+.workspace-row-tile-chip {
+  padding: 2px 7px;
+  font-size: 9px;
+  color: alpha(@tt_white, 0.52);
+  background: alpha(@tt_white, 0.04);
+  border-color: alpha(@tt_white, 0.08);
+}
+
+.workspace-row-actions {
+  min-width: 0;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.workspace-list-row:hover .workspace-row-actions,
+.workspace-list-row:focus-within .workspace-row-actions {
+  opacity: 1;
+}
+
 .saved-workspace-card {
-  min-width: 340px;
-  min-height: 120px;
-  padding: 12px;
+  min-width: 260px;
+  min-height: 0;
+  padding: 10px 12px;
   border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(15, 15, 18, 0.98), rgba(8, 8, 11, 0.98)),
-    radial-gradient(circle at top left, alpha(@tt_white, 0.035), transparent 42%);
-  box-shadow:
-    0 8px 18px alpha(@tt_shadow, 0.12),
-    inset 0 1px alpha(@tt_white, 0.025);
+  background: alpha(@tt_white, 0.03);
+  box-shadow: none;
 }
 
 .saved-workspace-card:hover {
-  border-color: alpha(@tt_amber, 0.16);
-  background:
-    linear-gradient(180deg, rgba(18, 18, 22, 1), rgba(10, 10, 13, 1)),
-    radial-gradient(circle at top left, alpha(@tt_amber, 0.045), transparent 42%);
+  border-color: alpha(@tt_amber, 0.18);
+  background: alpha(@tt_white, 0.05);
 }
 
 .saved-workspace-card .card-title {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .saved-workspace-card .card-meta {
-  font-size: 12px;
-  line-height: 1.48;
-  color: alpha(@tt_white, 0.66);
+  font-size: 11px;
+  line-height: 1.4;
+  color: alpha(@tt_white, 0.6);
 }
 
 .saved-workspace-tile-chip {
@@ -3357,8 +3351,8 @@ button.pill-button.mcp-health-fix-button {
 
 .saved-workspace-root {
   min-width: 0;
-  font-size: 12px;
-  color: alpha(@tt_white, 0.58);
+  font-size: 11px;
+  color: alpha(@tt_white, 0.5);
 }
 
 .saved-workspace-actions {
@@ -3366,43 +3360,39 @@ button.pill-button.mcp-health-fix-button {
 }
 
 window.window-shell button.pill-button.compact-action-button {
-  min-height: 32px;
-  padding: 6px 13px;
-  font-size: 12px;
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.06),
-    0 6px 14px alpha(@tt_shadow, 0.16);
+  min-height: 26px;
+  padding: 3px 11px;
+  font-size: 11px;
+  box-shadow: none;
 }
 
 window.window-shell button.primary-cta-button.compact-action-button,
 window.window-shell button.suggested-action.compact-action-button {
   box-shadow:
-    0 10px 20px alpha(@tt_shadow, 0.26),
-    0 0 0 1px alpha(@tt_amber, 0.18),
-    inset 0 1px alpha(@tt_white, 0.84),
-    inset 0 -1px rgba(145, 94, 28, 0.12);
+    0 3px 10px alpha(@tt_shadow, 0.2),
+    0 0 0 1px alpha(@tt_amber, 0.16),
+    inset 0 1px alpha(@tt_white, 0.84);
 }
 
 window.window-shell button.primary-cta-button.compact-action-button:hover,
 window.window-shell button.suggested-action.compact-action-button:hover {
   box-shadow:
-    0 12px 24px alpha(@tt_shadow, 0.30),
+    0 5px 14px alpha(@tt_shadow, 0.24),
     0 0 0 1px alpha(@tt_amber, 0.26),
-    inset 0 1px alpha(@tt_white, 0.88),
-    inset 0 -1px rgba(145, 94, 28, 0.15);
+    inset 0 1px alpha(@tt_white, 0.88);
 }
 
 window.window-shell button.primary-cta-button.compact-action-button:active,
 window.window-shell button.suggested-action.compact-action-button:active {
   box-shadow:
-    0 5px 12px alpha(@tt_shadow, 0.22),
+    0 2px 6px alpha(@tt_shadow, 0.2),
     0 0 0 1px alpha(@tt_amber, 0.22),
     inset 0 1px alpha(@tt_white, 0.48);
 }
 
 window.window-shell button.pill-button.compact-icon-button {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 26px;
+  min-height: 26px;
   padding: 0;
   border-radius: 999px;
 }
@@ -3432,6 +3422,76 @@ window.window-shell:not(.theme-light) button.saved-workspace-delete-button:hover
 
 .saved-workspaces-empty {
   border-style: dashed;
+}
+
+/* "New" creation menu: rich items, hover tint + icon nudge */
+popover.new-menu-popover contents {
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(17, 17, 21, 0.98);
+  border: 1px solid alpha(@tt_white, 0.1);
+  box-shadow: 0 14px 34px alpha(@tt_shadow, 0.34);
+}
+
+.new-menu-list {
+  min-width: 250px;
+}
+
+button.new-menu-item {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+button.new-menu-item:hover,
+button.new-menu-item:focus {
+  background: alpha(@tt_amber, 0.08);
+  border-color: alpha(@tt_amber, 0.14);
+  box-shadow: none;
+}
+
+button.new-menu-item .new-menu-item-icon {
+  color: alpha(@tt_amber, 0.78);
+  transition:
+    color 140ms ease,
+    margin-left 140ms ease;
+}
+
+button.new-menu-item:hover .new-menu-item-icon,
+button.new-menu-item:focus .new-menu-item-icon {
+  color: alpha(@tt_amber, 0.96);
+  margin-left: 2px;
+}
+
+button.new-menu-item .new-menu-item-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f5f5f1;
+}
+
+button.new-menu-item .new-menu-item-description {
+  font-size: 10px;
+  color: alpha(@tt_white, 0.52);
+}
+
+window.theme-light popover.new-menu-popover contents {
+  background: rgba(252, 250, 246, 0.99);
+  border-color: rgba(25, 35, 50, 0.14);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+}
+
+window.theme-light button.new-menu-item .new-menu-item-title {
+  color: rgba(25, 35, 50, 0.92);
+}
+
+window.theme-light button.new-menu-item .new-menu-item-description {
+  color: rgba(25, 35, 50, 0.55);
 }
 
 .wizard-stepper {
@@ -4154,12 +4214,8 @@ window.theme-light .settings-dialog-content .config-panel,
 window.theme-light .settings-dialog-content .settings-shortcut-card,
 window.theme-light .settings-dialog-content .settings-toggle-row {
   border-color: rgba(25, 35, 50, 0.14);
-  background:
-    linear-gradient(180deg, rgba(250, 247, 241, 0.98), rgba(238, 243, 249, 0.98)),
-    radial-gradient(circle at top left, rgba(196, 112, 54, 0.05), transparent 42%);
-  box-shadow:
-    0 14px 30px rgba(15, 23, 42, 0.07),
-    inset 0 1px alpha(@tt_white, 0.62);
+  background: rgba(250, 247, 241, 0.72);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
 }
 
 window.theme-light .microphone-select-shell {
@@ -4360,10 +4416,14 @@ window.window-shell.theme-light .launch-dashboard-hero,
 window.window-shell.theme-light .saved-workspaces-panel,
 window.window-shell.theme-light .saved-workspaces-empty,
 window.window-shell.theme-light .wizard-stepper {
-  background:
-    linear-gradient(180deg, alpha(@tt_white, 0.82), rgba(244, 248, 252, 0.92)),
-    radial-gradient(circle at top left, rgba(196, 112, 54, 0.07), transparent 40%);
+  background: rgba(255, 255, 255, 0.55);
   border-color: rgba(101, 119, 151, 0.14);
+}
+
+window.window-shell.theme-light .launch-dashboard-hero {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 window.window-shell.theme-light .saved-workspace-tile-chip {
@@ -4550,44 +4610,32 @@ window.window-shell.theme-light entry.path-valid {
 }
 
 window.theme-light button.pill-button {
-  background:
-    linear-gradient(180deg, alpha(@tt_white, 0.92), rgba(239, 244, 250, 0.95)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.52), transparent 52%);
-  border-color: rgba(101, 119, 151, 0.16);
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(101, 119, 151, 0.18);
   color: rgba(25, 35, 50, 0.86);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.84),
-    0 6px 14px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 window.theme-light button.pill-button:hover {
-  border-color: rgba(101, 119, 151, 0.20);
-  background:
-    linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(239, 242, 246, 0.98)),
-    radial-gradient(circle at top, alpha(@tt_white, 0.58), transparent 52%);
+  border-color: rgba(101, 119, 151, 0.24);
+  background: rgba(255, 255, 255, 0.85);
 }
 
 window.theme-light button.pill-button.flat {
-  background:
-    linear-gradient(180deg, alpha(@tt_white, 0.70), rgba(238, 243, 249, 0.76));
-  border-color: rgba(101, 119, 151, 0.13);
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(101, 119, 151, 0.14);
   color: rgba(25, 35, 50, 0.68);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.72),
-    0 4px 10px rgba(15, 23, 42, 0.025);
+  box-shadow: none;
 }
 
 window.theme-light button.pill-button.flat:hover {
-  background:
-    linear-gradient(180deg, alpha(@tt_white, 0.88), rgba(239, 243, 248, 0.92));
+  background: rgba(196, 112, 54, 0.08);
   border-color: rgba(196, 112, 54, 0.18);
   color: rgba(25, 35, 50, 0.84);
 }
 
 window.theme-light button.pill-button:active {
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.74),
-    0 2px 8px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 window.theme-light button.pill-button:focus,
@@ -4607,46 +4655,40 @@ window.theme-light button.surface-button:focus {
 }
 
 window.theme-light button.secondary-button {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(240, 244, 249, 0.96));
-  border-color: rgba(101, 119, 151, 0.18);
+  background: rgba(196, 112, 54, 0.07);
+  border-color: rgba(196, 112, 54, 0.16);
   color: rgba(25, 35, 50, 0.92);
 }
 
 window.theme-light button.secondary-button:hover {
-  background: linear-gradient(180deg, rgba(252, 253, 254, 0.98), rgba(239, 242, 246, 0.98));
-  border-color: rgba(25, 35, 50, 0.18);
+  background: rgba(196, 112, 54, 0.12);
+  border-color: rgba(196, 112, 54, 0.24);
   color: #192332;
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.88),
-    0 8px 18px rgba(15, 23, 42, 0.05);
+  box-shadow: none;
 }
 
 window.theme-light button.secondary-button:active {
-  background: linear-gradient(180deg, rgba(243, 246, 249, 0.98), rgba(232, 236, 241, 0.98));
-  border-color: rgba(25, 35, 50, 0.20);
+  background: rgba(196, 112, 54, 0.16);
+  border-color: rgba(196, 112, 54, 0.28);
 }
 
 window.theme-light button.ghost-link-button {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.90), rgba(244, 247, 250, 0.92));
-  border-color: rgba(25, 35, 50, 0.12);
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(25, 35, 50, 0.1);
   color: rgba(25, 35, 50, 0.78);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.84),
-    0 4px 12px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 window.theme-light button.ghost-link-button:hover {
-  background: linear-gradient(180deg, alpha(@tt_white, 0.98), rgba(238, 242, 246, 0.98));
-  border-color: rgba(25, 35, 50, 0.16);
+  background: rgba(196, 112, 54, 0.07);
+  border-color: rgba(25, 35, 50, 0.14);
   color: #192332;
 }
 
 window.theme-light button.ghost-link-button:active {
-  background: linear-gradient(180deg, rgba(244, 247, 250, 0.98), rgba(232, 236, 241, 0.98));
+  background: rgba(196, 112, 54, 0.1);
   border-color: rgba(25, 35, 50, 0.18);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.74),
-    0 2px 8px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 window.window-shell.theme-light spinbutton.tile-count-input text,
@@ -4740,29 +4782,25 @@ window.theme-light combobox.surface-select-control window.popup row:selected {
 }
 
 window.theme-light button.surface-button {
-  min-height: 30px;
-  padding: 0 12px;
+  min-height: 28px;
+  padding: 0 11px;
   border-radius: 10px;
-  background: linear-gradient(180deg, alpha(@tt_white, 0.94), rgba(239, 244, 250, 0.96));
+  background: rgba(255, 255, 255, 0.62);
   border: 1px solid rgba(101, 119, 151, 0.18);
   color: rgba(25, 35, 50, 0.88);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.86),
-    0 4px 12px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 window.theme-light button.surface-button:hover {
-  background: linear-gradient(180deg, rgba(252, 253, 254, 0.98), rgba(239, 242, 246, 0.98));
-  border-color: rgba(25, 35, 50, 0.18);
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(25, 35, 50, 0.2);
   color: #192332;
 }
 
 window.theme-light button.surface-button:active {
-  background: linear-gradient(180deg, rgba(243, 246, 249, 0.98), rgba(232, 236, 241, 0.98));
-  border-color: rgba(25, 35, 50, 0.20);
-  box-shadow:
-    inset 0 1px alpha(@tt_white, 0.74),
-    0 2px 8px rgba(15, 23, 42, 0.03);
+  background: rgba(196, 112, 54, 0.1);
+  border-color: rgba(25, 35, 50, 0.22);
+  box-shadow: none;
 }
 
 window.theme-light button.surface-button image {
