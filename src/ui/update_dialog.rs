@@ -152,6 +152,27 @@ impl UpdateDialogController {
         );
     }
 
+    /// Remove the final atomic modal before handing control to the normal quit
+    /// action. Waiting for `closed` keeps any active-session confirmation in
+    /// front, while the once-only continuation prevents duplicate quit requests.
+    pub(crate) fn close_for_restart_handoff<F>(&self, continuation: F)
+    where
+        F: FnOnce() + 'static,
+    {
+        let Some(dialog) = self.take_current() else {
+            continuation();
+            return;
+        };
+        let continuation = Rc::new(RefCell::new(Some(continuation)));
+        let continuation_after_close = continuation.clone();
+        dialog.connect_closed(move |_| {
+            if let Some(continuation) = continuation_after_close.borrow_mut().take() {
+                continuation();
+            }
+        });
+        dialog.force_close();
+    }
+
     fn start_download(self: &Rc<Self>) {
         self.show_downloading();
         if let Err(error) = self.service.download(self.release.clone()) {
@@ -353,10 +374,16 @@ impl UpdateDialogController {
     }
 
     fn close_current(&self) {
-        *self.progress.borrow_mut() = None;
-        if let Some(dialog) = self.dialog.borrow_mut().take() {
-            dialog.close();
+        if let Some(dialog) = self.take_current() {
+            // Atomic phases remain non-dismissible to the user, but internal
+            // phase changes must always be able to replace their modal.
+            dialog.force_close();
         }
+    }
+
+    fn take_current(&self) -> Option<adw::Dialog> {
+        *self.progress.borrow_mut() = None;
+        self.dialog.borrow_mut().take()
     }
 }
 

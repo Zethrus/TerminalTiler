@@ -281,24 +281,24 @@ mod imp {
             let app_for_handoff = app_for_handoff.clone();
             glib::idle_add_local_once(move || {
                 match update::spawn_updater(&release, &artifact, &installation) {
-                    Ok(()) => {
-                        if let Some(window) = primary_window(&app_for_handoff)
-                            && gtk::prelude::WidgetExt::activate_action(
-                                &window,
-                                "win.quit-app",
-                                None,
-                            )
-                            .is_err()
-                        {
-                            app_for_handoff.quit();
-                        }
-                    }
+                    Ok(()) => controller
+                        .close_for_restart_handoff(move || quit_after_update(&app_for_handoff)),
                     Err(error) => controller.show_install_request_failure(&error),
                 }
             });
         }));
         *active_update.borrow_mut() = Some(controller.clone());
         controller.present_release();
+    }
+
+    fn quit_after_update(app: &adw::Application) {
+        if let Some(window) = primary_window(app) {
+            if gtk::prelude::WidgetExt::activate_action(&window, "win.quit-app", None).is_err() {
+                app.quit();
+            }
+        } else {
+            app.quit();
+        }
     }
 
     fn glib_exit_to_process_exit(code: gtk::glib::ExitCode) -> ExitCode {

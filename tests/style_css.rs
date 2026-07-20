@@ -1220,6 +1220,36 @@ fn update_pumps_drain_progress_and_preserve_controller_ownership() {
 }
 
 #[test]
+fn gtk_update_restart_handoffs_close_the_atomic_modal_before_quit() {
+    assert!(
+        UPDATE_DIALOG_RS.contains("fn take_current(&self) -> Option<adw::Dialog>")
+            && UPDATE_DIALOG_RS.contains("dialog.force_close();")
+            && !UPDATE_DIALOG_RS.contains("dialog.close();")
+            && UPDATE_DIALOG_RS.contains("pub(crate) fn close_for_restart_handoff")
+            && UPDATE_DIALOG_RS.contains("dialog.connect_closed")
+            && UPDATE_DIALOG_RS.contains("borrow_mut().take()"),
+        "non-dismissible updater phases must use forced internal closure and a once-only closed-signal handoff"
+    );
+    assert_eq!(
+        APP_RS.matches("close_for_restart_handoff").count(),
+        2,
+        "both Debian and AppImage-style Linux restart paths must wait for the modal to close"
+    );
+    assert_eq!(
+        WINDOWS_GTK_APP_RS
+            .matches("close_for_restart_handoff")
+            .count(),
+        1,
+        "the Windows GTK restart path must wait for the modal to close"
+    );
+    assert!(
+        APP_RS.contains("close_for_restart_handoff(move || quit_after_update")
+            && WINDOWS_GTK_APP_RS.contains("close_for_restart_handoff(move || quit_after_update"),
+        "GTK shells must request the normal quit action only from the modal-closed continuation"
+    );
+}
+
+#[test]
 fn launch_buttons_use_premium_role_contract() {
     for role in [
         "primary = warm cream CTA",

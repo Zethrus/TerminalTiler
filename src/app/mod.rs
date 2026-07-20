@@ -169,7 +169,16 @@ fn install_update_pump(
                                         "TerminalTiler {} installed; delayed restart helper started",
                                         release.version
                                     ));
-                                    quit_after_update(&app_for_handoff);
+                                    if let Some(controller) =
+                                        active_for_handoff.borrow().as_ref().cloned()
+                                    {
+                                        let app_for_quit = app_for_handoff.clone();
+                                        controller.close_for_restart_handoff(move || {
+                                            quit_after_update(&app_for_quit)
+                                        });
+                                    } else {
+                                        quit_after_update(&app_for_handoff);
+                                    }
                                 }
                                 Err(error) => {
                                     logging::error(format!(
@@ -281,9 +290,12 @@ fn present_update_dialog(
         }
         controller.show_restarting();
         let app_for_handoff = app_for_handoff.clone();
-        gtk::glib::idle_add_local_once(move || match update::spawn_updater(&release, &artifact, &installation) {
-            Ok(()) => quit_after_update(&app_for_handoff),
-            Err(error) => controller.show_install_request_failure(&error),
+        gtk::glib::idle_add_local_once(move || {
+            match update::spawn_updater(&release, &artifact, &installation) {
+                Ok(()) => controller
+                    .close_for_restart_handoff(move || quit_after_update(&app_for_handoff)),
+                Err(error) => controller.show_install_request_failure(&error),
+            }
         });
     }));
     *active_update.borrow_mut() = Some(controller.clone());
