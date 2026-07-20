@@ -548,105 +548,125 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
     }
 
     fn pump_updates(hwnd: HWND) {
-        let Some(event) = (unsafe { state_mut(hwnd) }).and_then(|state| {
+        // Progress is throttled by percentage but can still queue 101 events
+        // before `Downloaded`. GetMessageW blocks when the desktop is idle, so
+        // drain the updater channel instead of relying on another UI message.
+        while let Some(event) = (unsafe { state_mut(hwnd) }).and_then(|state| {
             state
                 .update_receiver
                 .as_ref()
                 .and_then(|receiver| receiver.try_recv().ok())
-        }) else {
-            return;
-        };
-
-        match event {
-            UpdateEvent::Available(release) => {
-                let notes = if release.notes.trim().is_empty() {
-                    "This release contains improvements and fixes.".to_string()
-                } else {
-                    release.notes.chars().take(900).collect::<String>()
-                };
-                let message = format!(
-                    "TerminalTiler {} is available.\r\n\r\n{}\r\n\r\nYes: Install and Restart\r\nNo: View Release\r\nCancel: Later",
-                    release.version, notes
-                );
-                let response = unsafe {
-                    MessageBoxW(
-                        hwnd,
-                        wide(&message).as_ptr(),
-                        wide("TerminalTiler update").as_ptr(),
-                        MB_YESNOCANCEL | MB_ICONWARNING,
-                    )
-                };
-                if response == IDNO {
-                    let url = format!(
-                        "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
-                        release.tag
+        }) {
+            match event {
+                UpdateEvent::Available(release) => {
+                    let notes = if release.notes.trim().is_empty() {
+                        "This release contains improvements and fixes.".to_string()
+                    } else {
+                        release.notes.chars().take(900).collect::<String>()
+                    };
+                    let message = format!(
+                        "TerminalTiler {} is available.\r\n\r\n{}\r\n\r\nYes: Install and Restart\r\nNo: View Release\r\nCancel: Later",
+                        release.version, notes
                     );
-                    let _ = open_path_with_shell(hwnd, Path::new(&url));
-                } else if response == IDYES
-                    && let Some(state) = unsafe { state_mut(hwnd) }
-                    && let Some(service) = state.update_service.as_ref()
-                {
-                    service.download(release);
-                }
-            }
-            UpdateEvent::Downloaded { release, artifact } => {
-                let Some(state) = (unsafe { state_mut(hwnd) }) else {
-                    return;
-                };
-                let Some(installation) = update::detect_installation() else {
-                    unsafe {
+                    let response = unsafe {
                         MessageBoxW(
+                            hwnd,
+                            wide(&message).as_ptr(),
+                            wide("TerminalTiler update").as_ptr(),
+                            MB_YESNOCANCEL | MB_ICONWARNING,
+                        )
+                    };
+                    if response == IDNO {
+                        let url = format!(
+                            "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
+                            release.tag
+                        );
+                        let _ = open_path_with_shell(hwnd, Path::new(&url));
+                    } else if response == IDYES
+                        && let Some(state) = unsafe { state_mut(hwnd) }
+                        && let Some(service) = state.update_service.as_ref()
+                    {
+                        if let Err(error) = service.download(release) {
+                            unsafe {
+                                MessageBoxW(
+                                    hwnd,
+                                    wide(&format!("Could not start the update download: {error}"))
+                                        .as_ptr(),
+                                    wide("TerminalTiler update").as_ptr(),
+                                    MB_ICONWARNING | MB_OK,
+                                );
+                            }
+                        }
+                    }
+                }
+                UpdateEvent::Downloaded { release, artifact } => {
+                    let Some(state) = (unsafe { state_mut(hwnd) }) else {
+                        return;
+                    };
+                    let Some(installation) = update::detect_installation() else {
+                        unsafe {
+                            MessageBoxW(
                             hwnd,
                             wide("The installation provenance changed, so the current installation was left untouched.").as_ptr(),
                             wide("TerminalTiler update").as_ptr(),
                             MB_ICONWARNING | MB_OK,
                         );
+                        }
+                        return;
+                    };
+                    match update::spawn_updater(&release, &artifact, &installation) {
+                        Ok(()) => {
+                            state.quit_requested = true;
+                            unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
+                        }
+                        Err(error) => unsafe {
+                            MessageBoxW(
+                                hwnd,
+                                wide(&format!("Could not start the update helper: {error}"))
+                                    .as_ptr(),
+                                wide("TerminalTiler update").as_ptr(),
+                                MB_ICONWARNING | MB_OK,
+                            );
+                        },
                     }
-                    return;
-                };
-                match update::spawn_updater(&release, &artifact, &installation) {
-                    Ok(()) => {
-                        state.quit_requested = true;
-                        unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
-                    }
-                    Err(error) => unsafe {
-                        MessageBoxW(
-                            hwnd,
-                            wide(&format!("Could not start the update helper: {error}")).as_ptr(),
-                            wide("TerminalTiler update").as_ptr(),
-                            MB_ICONWARNING | MB_OK,
-                        );
-                    },
                 }
+                UpdateEvent::DownloadFailed { release, error } => unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&format!(
+                            "Could not install TerminalTiler {}: {error}",
+                            release.version
+                        ))
+                        .as_ptr(),
+                        wide("TerminalTiler update").as_ptr(),
+                        MB_ICONWARNING | MB_OK,
+                    );
+                },
+                // The legacy Win32 shell intentionally keeps its established modal
+                // behavior. Progress events are drained but not rendered here.
+                UpdateEvent::DownloadStarted { .. }
+                | UpdateEvent::DownloadProgress { .. }
+                | UpdateEvent::Verifying { .. }
+                | UpdateEvent::DownloadCancelled { .. } => {}
+                // Debian authorization is an in-session Linux-only flow. These
+                // variants are retained here solely so the shared updater event
+                // contract remains exhaustive; they must never request a Windows
+                // shutdown.
+                UpdateEvent::DebInstallStarted { .. } | UpdateEvent::DebInstallSucceeded { .. } => {
+                }
+                UpdateEvent::DebInstallFailed { release, error } => unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        wide(&format!(
+                            "Could not install TerminalTiler {}:\r\n\r\n{error}",
+                            release.version
+                        ))
+                        .as_ptr(),
+                        wide("TerminalTiler update").as_ptr(),
+                        MB_ICONWARNING | MB_OK,
+                    );
+                },
             }
-            UpdateEvent::DownloadFailed { version, error } => unsafe {
-                MessageBoxW(
-                    hwnd,
-                    wide(&format!(
-                        "Could not install TerminalTiler {version}: {error}"
-                    ))
-                    .as_ptr(),
-                    wide("TerminalTiler update").as_ptr(),
-                    MB_ICONWARNING | MB_OK,
-                );
-            },
-            // Debian authorization is an in-session Linux-only flow. These
-            // variants are retained here solely so the shared updater event
-            // contract remains exhaustive; they must never request a Windows
-            // shutdown.
-            UpdateEvent::DebInstallStarted { .. } | UpdateEvent::DebInstallSucceeded { .. } => {}
-            UpdateEvent::DebInstallFailed { release, error } => unsafe {
-                MessageBoxW(
-                    hwnd,
-                    wide(&format!(
-                        "Could not install TerminalTiler {}:\r\n\r\n{error}",
-                        release.version
-                    ))
-                    .as_ptr(),
-                    wide("TerminalTiler update").as_ptr(),
-                    MB_ICONWARNING | MB_OK,
-                );
-            },
         }
     }
 

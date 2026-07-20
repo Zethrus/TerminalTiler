@@ -153,6 +153,11 @@ pub(crate) mod transcript_dialog;
     target_os = "linux",
     all(target_os = "windows", feature = "windows-gtk-shell")
 ))]
+pub(crate) mod update_dialog;
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", feature = "windows-gtk-shell")
+))]
 pub mod voice_hud;
 #[cfg(any(
     target_os = "linux",

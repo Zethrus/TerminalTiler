@@ -440,6 +440,8 @@ pub(crate) fn download_release(
     release: &ReleaseInfo,
     installation: &Installation,
     cancelled: &AtomicBool,
+    on_verifying: impl FnOnce(),
+    on_progress: impl FnMut(u64, u64),
 ) -> Result<PathBuf, DownloadError> {
     let directory = installation
         .update_dir()
@@ -468,13 +470,17 @@ pub(crate) fn download_release(
         .header("User-Agent", "TerminalTiler-Core-Updater")
         .call()
         .map_err(|error| DownloadError::Http(error.to_string()))?;
-    let result = write_verified_stream(
+    let result = write_verified_stream_with_progress(
         response.body_mut().as_reader(),
-        &part_path,
-        &final_path,
-        release.size,
-        &release.digest,
-        cancelled,
+        VerifiedStreamTarget {
+            part_path: &part_path,
+            final_path: &final_path,
+            expected_size: release.size,
+            expected_digest: &release.digest,
+            cancelled,
+        },
+        on_verifying,
+        on_progress,
     );
     if result.is_err() {
         let _ = fs::remove_file(&part_path);
@@ -486,24 +492,57 @@ pub(crate) fn download_release(
 /// intentionally generic over `Read` so tests can exercise truncation,
 /// cancellation, retry cleanup, and digest failures without a live GitHub
 /// connection.
+#[cfg(test)]
 fn write_verified_stream<R: Read>(
-    mut reader: R,
+    reader: R,
     part_path: &Path,
     final_path: &Path,
     expected_size: u64,
     expected_digest: &str,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf, DownloadError> {
+    write_verified_stream_with_progress(
+        reader,
+        VerifiedStreamTarget {
+            part_path,
+            final_path,
+            expected_size,
+            expected_digest,
+            cancelled,
+        },
+        || {},
+        |_, _| {},
+    )
+}
+
+struct VerifiedStreamTarget<'a> {
+    part_path: &'a Path,
+    final_path: &'a Path,
+    expected_size: u64,
+    expected_digest: &'a str,
+    cancelled: &'a AtomicBool,
+}
+
+/// The progress callback is deliberately invoked only after a successful file
+/// write and only when the integer percentage advances. This makes progress
+/// both truthful and cheap enough for GTK's main-loop event pump.
+fn write_verified_stream_with_progress<R: Read>(
+    mut reader: R,
+    target: VerifiedStreamTarget<'_>,
+    on_verifying: impl FnOnce(),
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<PathBuf, DownloadError> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(part_path)?;
+        .open(target.part_path)?;
     let mut hash = Sha256::new();
     let mut total = 0u64;
+    let mut last_percent = None;
     let mut buffer = vec![0u8; MAX_READ_CHUNK];
     let result = (|| {
         loop {
-            if cancelled.load(Ordering::Relaxed) {
+            if target.cancelled.load(Ordering::Relaxed) {
                 return Err(DownloadError::Cancelled);
             }
             let read = reader.read(&mut buffer)?;
@@ -511,29 +550,44 @@ fn write_verified_stream<R: Read>(
                 break;
             }
             total = total.saturating_add(read as u64);
-            if total > expected_size || total >= MAX_ASSET_BYTES {
+            if total > target.expected_size || total >= MAX_ASSET_BYTES {
                 return Err(DownloadError::TooLarge);
             }
             file.write_all(&buffer[..read])?;
             hash.update(&buffer[..read]);
+            let percent = total.saturating_mul(100) / target.expected_size.max(1);
+            if last_percent != Some(percent) {
+                last_percent = Some(percent);
+                on_progress(total, target.expected_size);
+            }
         }
-        if total != expected_size {
+        if total != target.expected_size {
             return Err(DownloadError::TooLarge);
         }
+        on_verifying();
+        // No cancellation is accepted after this point unless it arrives
+        // before the atomic promotion.  That keeps the verified artifact from
+        // becoming installable after a user has requested cancellation.
+        if target.cancelled.load(Ordering::Relaxed) {
+            return Err(DownloadError::Cancelled);
+        }
         let actual = format!("sha256:{:x}", hash.finalize());
-        if actual != expected_digest {
+        if actual != target.expected_digest {
             return Err(DownloadError::DigestMismatch);
         }
         file.sync_all()?;
         drop(file);
-        atomic_promote(part_path, final_path)?;
-        if let Some(parent) = final_path.parent() {
+        if target.cancelled.load(Ordering::Relaxed) {
+            return Err(DownloadError::Cancelled);
+        }
+        atomic_promote(target.part_path, target.final_path)?;
+        if let Some(parent) = target.final_path.parent() {
             sync_directory(parent)?;
         }
-        Ok(final_path.to_path_buf())
+        Ok(target.final_path.to_path_buf())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(part_path);
+        let _ = fs::remove_file(target.part_path);
     }
     result
 }
@@ -797,12 +851,26 @@ fn install_deb_while_application_is_running(
 #[derive(Debug)]
 pub(crate) enum UpdateEvent {
     Available(ReleaseInfo),
+    DownloadStarted {
+        release: ReleaseInfo,
+    },
+    DownloadProgress {
+        release: ReleaseInfo,
+        downloaded: u64,
+        total: u64,
+    },
+    Verifying {
+        release: ReleaseInfo,
+    },
     Downloaded {
         release: ReleaseInfo,
         artifact: PathBuf,
     },
+    DownloadCancelled {
+        release: ReleaseInfo,
+    },
     DownloadFailed {
-        version: Version,
+        release: ReleaseInfo,
         error: String,
     },
     DebInstallStarted {
@@ -876,9 +944,20 @@ impl UpdateService {
         )
     }
 
-    pub(crate) fn download(&self, release: ReleaseInfo) {
+    pub(crate) fn download(&self, release: ReleaseInfo) -> Result<(), String> {
         self.inner.cancelled.store(false, Ordering::Relaxed);
-        let _ = self.inner.command_tx.send(UpdateCommand::Download(release));
+        self.inner
+            .command_tx
+            .send(UpdateCommand::Download(release))
+            .map_err(|_| "the update worker is no longer running".into())
+    }
+
+    /// Cancellation is intentionally limited to the streaming phase. The
+    /// worker acknowledges it with `DownloadCancelled` after deleting its
+    /// partial artifact; callers keep the progress window open until then.
+    pub(crate) fn cancel_download(&self) -> Result<(), String> {
+        self.inner.cancelled.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Request the authenticated Debian transaction on the worker thread.
@@ -955,13 +1034,39 @@ fn update_worker(
                     continue;
                 };
                 cancelled.store(false, Ordering::Relaxed);
-                match download_release(&release, installation, &cancelled) {
+                let _ = event_tx.send(UpdateEvent::DownloadStarted {
+                    release: release.clone(),
+                });
+                let verifying_release = release.clone();
+                let verifying_tx = event_tx.clone();
+                let progress_release = release.clone();
+                let progress_tx = event_tx.clone();
+                match download_release(
+                    &release,
+                    installation,
+                    &cancelled,
+                    move || {
+                        let _ = verifying_tx.send(UpdateEvent::Verifying {
+                            release: verifying_release,
+                        });
+                    },
+                    move |downloaded, total| {
+                        let _ = progress_tx.send(UpdateEvent::DownloadProgress {
+                            release: progress_release.clone(),
+                            downloaded,
+                            total,
+                        });
+                    },
+                ) {
                     Ok(artifact) => {
                         let _ = event_tx.send(UpdateEvent::Downloaded { release, artifact });
                     }
+                    Err(DownloadError::Cancelled) => {
+                        let _ = event_tx.send(UpdateEvent::DownloadCancelled { release });
+                    }
                     Err(error) => {
                         let _ = event_tx.send(UpdateEvent::DownloadFailed {
-                            version: release.version,
+                            release,
                             error: error.to_string(),
                         });
                     }
@@ -1461,6 +1566,58 @@ mod tests {
     }
 
     #[test]
+    fn streamed_progress_is_bounded_monotonic_and_percentage_throttled() {
+        let root = std::env::temp_dir().join(format!(
+            "terminaltiler-update-progress-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bytes = vec![7u8; MAX_READ_CHUNK + 10];
+        let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let events = std::cell::RefCell::new(Vec::new());
+        let part = root.join("artifact.part");
+        let destination = root.join("artifact");
+        let cancelled = AtomicBool::new(false);
+        write_verified_stream_with_progress(
+            Cursor::new(&bytes),
+            VerifiedStreamTarget {
+                part_path: &part,
+                final_path: &destination,
+                expected_size: bytes.len() as u64,
+                expected_digest: &digest,
+                cancelled: &cancelled,
+            },
+            || events.borrow_mut().push(None),
+            |downloaded, total| events.borrow_mut().push(Some((downloaded, total))),
+        )
+        .unwrap();
+        let events = events.into_inner();
+        assert_eq!(
+            events.last(),
+            Some(&None),
+            "verification follows streaming writes"
+        );
+        let events = events.into_iter().flatten().collect::<Vec<_>>();
+        assert!(!events.is_empty());
+        assert!(events.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        assert!(
+            events
+                .iter()
+                .all(|(downloaded, total)| *downloaded <= *total)
+        );
+        assert_eq!(
+            events.last(),
+            Some(&(bytes.len() as u64, bytes.len() as u64))
+        );
+        assert!(
+            events.len() <= 101,
+            "percentage throttling bounds event volume"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn streamed_download_rejects_digest_mismatch_and_cleans_up() {
         let root = std::env::temp_dir().join(format!(
             "terminaltiler-update-digest-{}",
@@ -1517,7 +1674,9 @@ mod tests {
         ));
         assert!(!cancelled.load(Ordering::Relaxed));
 
-        service.download(release(InstallerKind::AppImage));
+        service
+            .download(release(InstallerKind::AppImage))
+            .expect("the update worker should accept a download command");
         assert!(matches!(
             command_rx.recv_timeout(Duration::from_secs(1)),
             Ok(UpdateCommand::Download(_))

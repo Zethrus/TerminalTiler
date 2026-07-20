@@ -10,6 +10,7 @@ const COMPANION_DIALOG_RS: &str = include_str!("../src/ui/companion_dialog.rs");
 const CONTEXT_MENU_RS: &str = include_str!("../src/ui/context_menu.rs");
 const DIALOG_CHROME_RS: &str = include_str!("../src/ui/dialog_chrome.rs");
 const DIALOG_SMOKE_RS: &str = include_str!("../src/ui/dialog_smoke.rs");
+const UPDATE_DIALOG_RS: &str = include_str!("../src/ui/update_dialog.rs");
 const CARGO_TOML: &str = include_str!("../Cargo.toml");
 const CARGO_LOCK: &str = include_str!("../Cargo.lock");
 const GITIGNORE: &str = include_str!("../.gitignore");
@@ -1173,6 +1174,48 @@ fn premium_modal_dialogs_share_premium_surface_contract() {
             && !DIALOG_CHROME_RS.contains("MessageDialog")
             && !LAUNCH_SCREEN_RS.contains("MessageDialog"),
         "alert-style dialogs should be built on the shared PremiumModal scaffold instead of stock adw::MessageDialog"
+    );
+}
+
+#[test]
+fn gtk_update_flow_uses_one_shared_observable_controller() {
+    for hook in [
+        "update-progress-content",
+        "update-progress-heading",
+        "update-progress-detail",
+        "update-progress-bar",
+    ] {
+        assert!(STYLE_CSS.contains(hook), "missing updater CSS hook: {hook}");
+    }
+    assert!(
+        APP_RS.contains("UpdateDialogController")
+            && WINDOWS_GTK_APP_RS.contains("UpdateDialogController")
+            && UPDATE_DIALOG_RS.contains("DownloadCancelled")
+            && UPDATE_DIALOG_RS.contains("show_verifying")
+            && UPDATE_DIALOG_RS.contains("dismissible(false)")
+            && UPDATE_DIALOG_RS.contains("Retry install"),
+        "both GTK shells should share the non-dismissible update progress controller"
+    );
+}
+
+#[test]
+fn update_pumps_drain_progress_and_preserve_controller_ownership() {
+    assert!(
+        WINDOWS_APP_RS.contains("while let Some(event)")
+            && WINDOWS_APP_RS.contains("drain the updater channel")
+            && WINDOWS_APP_RS.contains("Could not start the update download"),
+        "the idle Win32 shell must drain ignored progress events before waiting for another message"
+    );
+    assert!(
+        APP_RS.contains("if active_update.borrow().is_none()")
+            && WINDOWS_GTK_APP_RS.contains("if active_update.borrow().is_none()"),
+        "a newer release must wait until the current GTK update controller closes"
+    );
+    assert!(
+        UPDATE_DIALOG_RS.contains("show_restart_handoff_failure")
+            && UPDATE_DIALOG_RS.contains("update is already installed")
+            && APP_RS.contains("show_restart_handoff_failure"),
+        "a failed post-install restart must not offer a second privileged installation"
     );
 }
 

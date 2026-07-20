@@ -2,7 +2,7 @@
 mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::ExitCode;
     use std::rc::{Rc, Weak};
     use std::sync::mpsc;
@@ -47,6 +47,7 @@ mod imp {
     use crate::ui::{
         about_dialog, assets_manager, command_palette, companion_dialog, context_menu,
         dialog_chrome, dialog_smoke, mcp_health_panel, settings_dialog, tab_rename_dialog,
+        update_dialog::UpdateDialogController,
         voice_hud::{VoiceHud, VoiceHudTone},
     };
     // Source-contract anchor: dialog_smoke, settings_dialog, tab_rename_dialog.
@@ -176,6 +177,7 @@ mod imp {
         let app = app.clone();
         let pending = Rc::new(RefCell::new(None::<ReleaseInfo>));
         let pending_failure = Rc::new(RefCell::new(None::<update::UpdateResult>));
+        let active_update = Rc::new(RefCell::new(None::<Rc<UpdateDialogController>>));
         glib::timeout_add_local(Duration::from_millis(250), move || {
             if let Some(result) = update::take_update_result()
                 && !result.success
@@ -184,49 +186,21 @@ mod imp {
             }
             if let Some(receiver) = receiver.borrow_mut().as_mut() {
                 while let Ok(event) = receiver.try_recv() {
+                    if let Some(controller) = active_update.borrow().as_ref() {
+                        controller.handle_event(&event);
+                    }
                     match event {
                         UpdateEvent::Available(release) => *pending.borrow_mut() = Some(release),
                         UpdateEvent::Downloaded { release, artifact } => {
-                            if let Some(installation) = update::detect_installation()
-                                && let Some(window) = primary_window(&app)
-                            {
-                                if let Err(error) =
-                                    update::spawn_updater(&release, &artifact, &installation)
-                                {
-                                    dialog_chrome::present_notice(
-                                        &window,
-                                        "update-error-dialog",
-                                        "Update failed",
-                                        &error,
-                                    );
-                                } else if gtk::prelude::WidgetExt::activate_action(
-                                    &window,
-                                    "win.quit-app",
-                                    None,
-                                )
-                                .is_err()
-                                {
-                                    app.quit();
-                                }
-                            } else if let Some(window) = primary_window(&app) {
-                                dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update failed",
-                                    "The installation provenance changed, so the current installation was left untouched.",
-                                );
+                            if let Some(controller) = active_update.borrow().as_ref() {
+                                controller.install_artifact(release, artifact);
                             }
                         }
-                        UpdateEvent::DownloadFailed { version, error } => {
-                            if let Some(window) = primary_window(&app) {
-                                dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update failed",
-                                    &format!("Could not install TerminalTiler {version}: {error}"),
-                                );
-                            }
-                        }
+                        UpdateEvent::DownloadStarted { .. }
+                        | UpdateEvent::DownloadProgress { .. }
+                        | UpdateEvent::Verifying { .. }
+                        | UpdateEvent::DownloadCancelled { .. }
+                        | UpdateEvent::DownloadFailed { .. } => {}
                         // Debian installation is handled only by the Linux
                         // shell while its PolicyKit desktop session is alive.
                         // Windows never emits these events for a supported
@@ -235,66 +209,26 @@ mod imp {
                         UpdateEvent::DebInstallStarted { .. }
                         | UpdateEvent::DebInstallSucceeded { .. } => {}
                         UpdateEvent::DebInstallFailed { release, error } => {
-                            if let Some(window) = primary_window(&app) {
-                                dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update failed",
-                                    &format!(
-                                        "Could not install TerminalTiler {}: {error}",
-                                        release.version
-                                    ),
-                                );
-                            }
+                            logging::error(format!(
+                                "unexpected Debian update event for {}: {error}",
+                                release.version
+                            ));
                         }
                     }
                 }
             }
-            if pending.borrow().is_some()
+            if active_update.borrow().is_none()
+                && pending.borrow().is_some()
                 && let Some(window) = primary_window(&app)
                 && let Some(release) = pending.borrow_mut().take()
             {
-                let version = release.version.to_string();
-                let notes = if release.notes.trim().is_empty() {
-                    "This release contains improvements and fixes.".to_string()
-                } else {
-                    release.notes.chars().take(1200).collect()
-                };
-                let download_release = release.clone();
-                let tag = release.tag.clone();
-                let service = service.clone();
-                dialog_chrome::PremiumModal::new(
-                    "update-dialog",
-                    &format!("TerminalTiler {version} is available"),
-                )
-                .icon(
-                    crate::ui::icons::name::DIALOG_INFO,
-                    dialog_chrome::ModalAccent::Amber,
-                )
-                .body(&notes)
-                .action(
-                    "Later",
-                    dialog_chrome::ModalActionRole::Secondary,
-                    true,
-                    || {},
-                )
-                .action(
-                    "View Release",
-                    dialog_chrome::ModalActionRole::Ghost,
-                    false,
-                    move || {
-                        let url =
-                            format!("https://github.com/Zethrus/TerminalTiler/releases/tag/{tag}");
-                        let _ = open_path_with_shell(std::ptr::null_mut(), Path::new(&url));
-                    },
-                )
-                .action(
-                    "Install and Restart",
-                    dialog_chrome::ModalActionRole::Primary,
-                    false,
-                    move || service.download(download_release.clone()),
-                )
-                .present(Some(&window));
+                present_update_dialog(
+                    &app,
+                    &window,
+                    service.clone(),
+                    release,
+                    active_update.clone(),
+                );
             }
             if pending_failure.borrow().is_some()
                 && let Some(window) = primary_window(&app)
@@ -315,6 +249,56 @@ mod imp {
             }
             glib::ControlFlow::Continue
         });
+    }
+
+    fn present_update_dialog(
+        app: &adw::Application,
+        window: &adw::ApplicationWindow,
+        service: UpdateService,
+        release: ReleaseInfo,
+        active_update: Rc<RefCell<Option<Rc<UpdateDialogController>>>>,
+    ) {
+        let later_active = active_update.clone();
+        let controller = UpdateDialogController::new(
+            window,
+            service.clone(),
+            release,
+            Rc::new(move || *later_active.borrow_mut() = None),
+        );
+        let weak_controller = Rc::downgrade(&controller);
+        let app_for_handoff = app.clone();
+        controller.set_artifact_handler(Rc::new(move |release, artifact| {
+            let Some(controller) = weak_controller.upgrade() else {
+                return;
+            };
+            let Some(installation) = update::detect_installation() else {
+                controller.show_install_request_failure(
+                    "the installation provenance changed, so the current installation was left untouched",
+                );
+                return;
+            };
+            controller.show_restarting();
+            let app_for_handoff = app_for_handoff.clone();
+            glib::idle_add_local_once(move || {
+                match update::spawn_updater(&release, &artifact, &installation) {
+                    Ok(()) => {
+                        if let Some(window) = primary_window(&app_for_handoff)
+                            && gtk::prelude::WidgetExt::activate_action(
+                                &window,
+                                "win.quit-app",
+                                None,
+                            )
+                            .is_err()
+                        {
+                            app_for_handoff.quit();
+                        }
+                    }
+                    Err(error) => controller.show_install_request_failure(&error),
+                }
+            });
+        }));
+        *active_update.borrow_mut() = Some(controller.clone());
+        controller.present_release();
     }
 
     fn glib_exit_to_process_exit(code: gtk::glib::ExitCode) -> ExitCode {

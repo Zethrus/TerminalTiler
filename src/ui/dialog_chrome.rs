@@ -210,6 +210,31 @@ impl PremiumModal {
         self
     }
 
+    /// Add arbitrary, caller-owned content while retaining the shared modal
+    /// chrome. Long-running flows use this for progress UI without teaching
+    /// the generic dialog builder about a product-specific operation.
+    pub(crate) fn custom_content(self, widget: &impl IsA<gtk::Widget>) -> Self {
+        self.content.append(widget);
+        self
+    }
+
+    /// Add a caller-owned action whose lifetime and close behavior are
+    /// externally controlled. This is useful for cancellable work where the
+    /// button must remain visible until the worker acknowledges cancellation.
+    pub(crate) fn external_action(self, button: &gtk::Button) -> Self {
+        button.add_css_class("premium-modal-action");
+        button.set_hexpand(true);
+        button.set_halign(gtk::Align::Fill);
+        self.actions.append(button);
+        self
+    }
+
+    /// Disable incidental Escape/close dismissal for atomic operation phases.
+    pub(crate) fn dismissible(self, dismissible: bool) -> Self {
+        self.dialog.set_can_close(dismissible);
+        self
+    }
+
     pub(crate) fn entry(&self, initial: &str) -> gtk::Entry {
         let entry = gtk::Entry::builder()
             .hexpand(true)

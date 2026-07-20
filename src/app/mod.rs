@@ -1,5 +1,5 @@
 use adw::prelude::*;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use crate::storage::preference_store::PreferenceStore;
 use crate::storage::preset_store::PresetStore;
 use crate::storage::session_store::SessionStore;
 use crate::tray;
+use crate::ui::update_dialog::UpdateDialogController;
 use crate::ui::window;
 use crate::update::{self, ReleaseInfo, UpdateEvent, UpdateService};
 
@@ -45,8 +46,7 @@ fn run_with_options_and_updates(
     let update_receiver = Rc::new(RefCell::new(update_runtime.map(|(_, receiver)| receiver)));
     let pending_update = Rc::new(RefCell::new(None::<ReleaseInfo>));
     let pending_update_failure = Rc::new(RefCell::new(None::<update::UpdateResult>));
-    let deb_install_in_progress = Rc::new(Cell::new(false));
-    let deb_install_progress = Rc::new(RefCell::new(None::<adw::Dialog>));
+    let active_update = Rc::new(RefCell::new(None::<Rc<UpdateDialogController>>));
 
     let (tray_tx, tray_rx) = mpsc::channel();
     let tray_rx = Rc::new(RefCell::new(Some(tray_rx)));
@@ -62,8 +62,7 @@ fn run_with_options_and_updates(
         let update_receiver = update_receiver.clone();
         let pending_update = pending_update.clone();
         let pending_update_failure = pending_update_failure.clone();
-        let deb_install_in_progress = deb_install_in_progress.clone();
-        let deb_install_progress = deb_install_progress.clone();
+        let active_update = active_update.clone();
         app.connect_startup(move |app| {
             crate::gtk_shell::load_css_for_default_display();
             crate::gtk_shell::configure_application_icons_for(&options.product.icon_name);
@@ -77,8 +76,7 @@ fn run_with_options_and_updates(
                     service,
                     pending_update.clone(),
                     pending_update_failure.clone(),
-                    deb_install_in_progress.clone(),
-                    deb_install_progress.clone(),
+                    active_update.clone(),
                 );
             }
         });
@@ -108,8 +106,7 @@ fn install_update_pump(
     service: UpdateService,
     pending_update: Rc<RefCell<Option<ReleaseInfo>>>,
     pending_update_failure: Rc<RefCell<Option<update::UpdateResult>>>,
-    deb_install_in_progress: Rc<Cell<bool>>,
-    deb_install_progress: Rc<RefCell<Option<adw::Dialog>>>,
+    active_update: Rc<RefCell<Option<Rc<UpdateDialogController>>>>,
 ) {
     let app = app.clone();
     let mut startup_result_checked = false;
@@ -125,6 +122,9 @@ fn install_update_pump(
         let mut downloaded = None;
         if let Some(receiver) = receiver.borrow_mut().as_mut() {
             while let Ok(event) = receiver.try_recv() {
+                if let Some(controller) = active_update.borrow().as_ref() {
+                    controller.handle_event(&event);
+                }
                 match event {
                     UpdateEvent::Available(release) => {
                         *pending_update.borrow_mut() = Some(release);
@@ -132,91 +132,82 @@ fn install_update_pump(
                     UpdateEvent::Downloaded { release, artifact } => {
                         downloaded = Some((release, artifact));
                     }
-                    UpdateEvent::DownloadFailed { version, error } => {
-                        if let Some(window) = primary_window(&app) {
-                            crate::ui::dialog_chrome::present_notice(
-                                &window,
-                                "update-error-dialog",
-                                "Update failed",
-                                &format!("TerminalTiler could not install {version}: {error}"),
-                            );
-                        }
-                    }
+                    UpdateEvent::DownloadStarted { .. }
+                    | UpdateEvent::DownloadProgress { .. }
+                    | UpdateEvent::Verifying { .. }
+                    | UpdateEvent::DownloadCancelled { .. }
+                    | UpdateEvent::DownloadFailed { .. } => {}
                     UpdateEvent::DebInstallStarted { version } => {
                         logging::info(format!(
                             "requesting PolicyKit authorization for TerminalTiler {version}"
                         ));
                     }
                     UpdateEvent::DebInstallSucceeded { release } => {
-                        deb_install_in_progress.set(false);
-                        close_deb_install_progress(&deb_install_progress);
                         let Some(installation) = update::detect_installation() else {
-                            if let Some(window) = primary_window(&app) {
-                                crate::ui::dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update installed, but restart failed",
-                                    "TerminalTiler remains open because its Debian launcher could no longer be verified. Close and reopen TerminalTiler manually.",
+                            if let Some(controller) = active_update.borrow().as_ref() {
+                                controller.show_restart_handoff_failure(
+                                    "The Debian launcher could no longer be verified.",
                                 );
                             }
                             continue;
                         };
                         if installation.kind != update::InstallerKind::Deb {
-                            if let Some(window) = primary_window(&app) {
-                                crate::ui::dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update installed, but restart failed",
-                                    "TerminalTiler remains open because its Debian installation provenance changed. Close and reopen it manually.",
+                            if let Some(controller) = active_update.borrow().as_ref() {
+                                controller.show_restart_handoff_failure(
+                                    "The Debian installation provenance changed.",
                                 );
                             }
                             continue;
                         }
-                        match update::spawn_deb_restart_helper(&installation, &release.version) {
-                            Ok(()) => {
-                                logging::info(format!(
-                                    "TerminalTiler {} installed; delayed restart helper started",
-                                    release.version
-                                ));
-                                quit_after_update(&app);
-                            }
-                            Err(error) => {
-                                logging::error(format!(
-                                    "could not prepare Debian restart helper: {error}"
-                                ));
-                                if let Some(window) = primary_window(&app) {
-                                    crate::ui::dialog_chrome::present_notice(
-                                        &window,
-                                        "update-error-dialog",
-                                        "Update installed, but restart failed",
-                                        &format!(
-                                            "TerminalTiler remains open because it could not prepare a safe restart: {error}. Close and reopen it manually."
-                                        ),
-                                    );
+                        let app_for_handoff = app.clone();
+                        let active_for_handoff = active_update.clone();
+                        gtk::glib::idle_add_local_once(move || {
+                            match update::spawn_deb_restart_helper(&installation, &release.version)
+                            {
+                                Ok(()) => {
+                                    logging::info(format!(
+                                        "TerminalTiler {} installed; delayed restart helper started",
+                                        release.version
+                                    ));
+                                    quit_after_update(&app_for_handoff);
+                                }
+                                Err(error) => {
+                                    logging::error(format!(
+                                        "could not prepare Debian restart helper: {error}"
+                                    ));
+                                    if let Some(controller) = active_for_handoff.borrow().as_ref() {
+                                        controller.show_restart_handoff_failure(&format!(
+                                            "A safe restart helper could not be prepared: {error}"
+                                        ));
+                                    }
                                 }
                             }
-                        }
+                        });
                     }
                     UpdateEvent::DebInstallFailed { release, error } => {
-                        deb_install_in_progress.set(false);
-                        close_deb_install_progress(&deb_install_progress);
                         logging::error(format!(
                             "could not install Debian update {}: {error}",
                             release.version
                         ));
-                        if let Some(window) = primary_window(&app) {
-                            present_deb_install_failure(&window, &release, &error);
-                        }
                     }
                 }
             }
         }
 
-        if pending_update.borrow().is_some()
+        // Keep newer availability events pending while the current release
+        // owns the dialog. Replacing that controller would orphan its UI.
+        if active_update.borrow().is_none()
+            && pending_update.borrow().is_some()
             && let Some(window) = primary_window(&app)
             && let Some(release) = pending_update.borrow_mut().take()
         {
-            present_update_dialog(&app, &window, service.clone(), release);
+            present_update_dialog(
+                &app,
+                &window,
+                service.clone(),
+                release,
+                active_update.clone(),
+            );
         }
 
         if pending_update_failure.borrow().is_some()
@@ -237,148 +228,13 @@ fn install_update_pump(
             );
         }
 
-        if let Some((release, artifact)) = downloaded {
-            if let Some(installation) = update::detect_installation() {
-                if installation.kind == update::InstallerKind::Deb {
-                    if deb_install_in_progress.replace(true) {
-                        logging::info("ignored duplicate Debian update install request");
-                        if let Some(window) = primary_window(&app) {
-                            crate::ui::dialog_chrome::present_notice(
-                                &window,
-                                "update-error-dialog",
-                                "Update already in progress",
-                                "TerminalTiler is already waiting for system authorization or package installation to finish.",
-                            );
-                        }
-                    } else {
-                        if let Some(window) = primary_window(&app) {
-                            *deb_install_progress.borrow_mut() =
-                                Some(present_deb_install_progress(&window, &release));
-                        }
-                        if let Err(error) = service.install_deb(release.clone(), artifact.clone()) {
-                            deb_install_in_progress.set(false);
-                            close_deb_install_progress(&deb_install_progress);
-                            logging::error(format!(
-                                "could not request Debian update install: {error}"
-                            ));
-                            if let Some(window) = primary_window(&app) {
-                                present_deb_install_request_failure(&window, &release, &error);
-                            }
-                        }
-                    }
-                } else {
-                    match update::spawn_updater(&release, &artifact, &installation) {
-                        Ok(()) => {
-                            logging::info(format!(
-                                "update helper started for TerminalTiler {}",
-                                release.version
-                            ));
-                            quit_after_update(&app);
-                        }
-                        Err(error) => {
-                            logging::error(format!("could not start update helper: {error}"));
-                            if let Some(window) = primary_window(&app) {
-                                crate::ui::dialog_chrome::present_notice(
-                                    &window,
-                                    "update-error-dialog",
-                                    "Update failed",
-                                    &format!(
-                                        "Could not restart TerminalTiler for the update: {error}"
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                }
-            } else if let Some(window) = primary_window(&app) {
-                crate::ui::dialog_chrome::present_notice(
-                    &window,
-                    "update-error-dialog",
-                    "Update failed",
-                    "The installation provenance changed, so TerminalTiler left the current installation untouched.",
-                );
-            }
+        if let Some((release, artifact)) = downloaded
+            && let Some(controller) = active_update.borrow().as_ref()
+        {
+            controller.install_artifact(release, artifact);
         }
         gtk::glib::ControlFlow::Continue
     });
-}
-
-/// Keep the authorization/install progress visible only once per transaction.
-/// The actual work runs on the update worker, so this visual state never
-/// blocks GTK while PolicyKit owns its desktop prompt.
-fn present_deb_install_progress(
-    window: &adw::ApplicationWindow,
-    release: &ReleaseInfo,
-) -> adw::Dialog {
-    crate::ui::dialog_chrome::PremiumModal::new(
-        "update-install-progress-dialog",
-        "Installing update",
-    )
-    .icon(
-        crate::ui::icons::name::DIALOG_INFO,
-        crate::ui::dialog_chrome::ModalAccent::Amber,
-    )
-    .body(&format!(
-        "TerminalTiler is requesting system authorization to install {}. Keep this window open while your desktop shows the password prompt.",
-        release.version
-    ))
-    .present_with_handle(Some(window))
-}
-
-fn close_deb_install_progress(progress: &RefCell<Option<adw::Dialog>>) {
-    if let Some(dialog) = progress.borrow_mut().take() {
-        dialog.close();
-    }
-}
-
-fn present_deb_install_failure(
-    window: &adw::ApplicationWindow,
-    release: &ReleaseInfo,
-    error: &update::DebInstallFailure,
-) {
-    let release_url = format!(
-        "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
-        release.tag
-    );
-    crate::ui::dialog_chrome::PremiumModal::new("update-error-dialog", "Update not installed")
-        .icon(
-            crate::ui::icons::name::DIALOG_INFO,
-            crate::ui::dialog_chrome::ModalAccent::Amber,
-        )
-        .body(&format!(
-            "{}\n\nTerminalTiler is still running. You can retry the update or download {} manually.",
-            error.actionable_message(),
-            release.version
-        ))
-        .action(
-            "View Release",
-            crate::ui::dialog_chrome::ModalActionRole::Ghost,
-            false,
-            move || open_release_url(&release_url),
-        )
-        .action(
-            "OK",
-            crate::ui::dialog_chrome::ModalActionRole::Secondary,
-            true,
-            || {},
-        )
-        .present(Some(window));
-}
-
-fn present_deb_install_request_failure(
-    window: &adw::ApplicationWindow,
-    release: &ReleaseInfo,
-    error: &str,
-) {
-    crate::ui::dialog_chrome::present_notice(
-        window,
-        "update-error-dialog",
-        "Update not installed",
-        &format!(
-            "TerminalTiler remains open because it could not request system authorization: {error}. Retry the update or download {} manually from the release page.",
-            release.version
-        ),
-    );
 }
 
 fn quit_after_update(app: &adw::Application) {
@@ -392,59 +248,46 @@ fn quit_after_update(app: &adw::Application) {
 }
 
 fn present_update_dialog(
-    _app: &adw::Application,
+    app: &adw::Application,
     window: &adw::ApplicationWindow,
     service: UpdateService,
     release: ReleaseInfo,
+    active_update: Rc<RefCell<Option<Rc<UpdateDialogController>>>>,
 ) {
-    let notes = release.notes.trim();
-    let notes = if notes.is_empty() {
-        "This release contains improvements and fixes.".to_string()
-    } else {
-        notes.chars().take(1200).collect::<String>()
-    };
-    let version = release.version.to_string();
-    let download_release = release.clone();
-    let release_url = format!(
-        "https://github.com/Zethrus/TerminalTiler/releases/tag/{}",
-        release.tag
+    let later_active = active_update.clone();
+    let controller = UpdateDialogController::new(
+        window,
+        service.clone(),
+        release,
+        Rc::new(move || *later_active.borrow_mut() = None),
     );
-    let modal = crate::ui::dialog_chrome::PremiumModal::new(
-        "update-dialog",
-        &format!("TerminalTiler {version} is available"),
-    )
-    .icon(
-        crate::ui::icons::name::DIALOG_INFO,
-        crate::ui::dialog_chrome::ModalAccent::Amber,
-    )
-    .body(&notes)
-    .action(
-        "Later",
-        crate::ui::dialog_chrome::ModalActionRole::Secondary,
-        true,
-        || {},
-    )
-    .action(
-        "View Release",
-        crate::ui::dialog_chrome::ModalActionRole::Ghost,
-        false,
-        move || open_release_url(&release_url),
-    )
-    .action(
-        "Install and Restart",
-        crate::ui::dialog_chrome::ModalActionRole::Primary,
-        false,
-        move || service.download(download_release.clone()),
-    );
-    modal.present(Some(window));
-}
-
-fn open_release_url(url: &str) {
-    if !url.starts_with("https://github.com/Zethrus/TerminalTiler/") {
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    let weak_controller = Rc::downgrade(&controller);
+    let app_for_handoff = app.clone();
+    controller.set_artifact_handler(Rc::new(move |release, artifact| {
+        let Some(controller) = weak_controller.upgrade() else {
+            return;
+        };
+        let Some(installation) = update::detect_installation() else {
+            controller.show_install_request_failure(
+                "the installation provenance changed, so the current installation was left untouched",
+            );
+            return;
+        };
+        if installation.kind == update::InstallerKind::Deb {
+            if let Err(error) = service.install_deb(release, artifact) {
+                controller.show_install_request_failure(&error);
+            }
+            return;
+        }
+        controller.show_restarting();
+        let app_for_handoff = app_for_handoff.clone();
+        gtk::glib::idle_add_local_once(move || match update::spawn_updater(&release, &artifact, &installation) {
+            Ok(()) => quit_after_update(&app_for_handoff),
+            Err(error) => controller.show_install_request_failure(&error),
+        });
+    }));
+    *active_update.borrow_mut() = Some(controller.clone());
+    controller.present_release();
 }
 
 fn install_tray_command_pump(
