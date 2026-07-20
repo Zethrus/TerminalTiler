@@ -43,9 +43,11 @@ impl ParsedStartup {
 
     fn wrap_resume_command(&self, resume_command: &str) -> String {
         if let Some(wrapper_prefix) = &self.wrapper_prefix {
-            let mut wrapper = wrapper_prefix.clone();
-            wrapper.push(shell_quote(resume_command));
-            wrapper.join(" ")
+            format!(
+                "{} {}",
+                shell_join_owned_tokens(wrapper_prefix),
+                shell_quote(resume_command)
+            )
         } else {
             resume_command.to_string()
         }
@@ -205,18 +207,17 @@ fn restore_resolution_from_parts(
     terminal_history_lines: &[String],
     duplicate_agent_pane: bool,
 ) -> Option<ResumeResolution> {
-    if let Some(command) = saved_resume_command.filter(|command| !command.trim().is_empty())
-        && let Some(agent) = agent_from_tokens(&parsed.direct_tokens)
+    let agent = agent_from_tokens(&parsed.direct_tokens)?;
+    if let Some(resolution) = saved_resume_command
+        .filter(|command| !command.trim().is_empty())
+        .and_then(|command| exact_saved_resume_command(command, agent))
     {
-        return Some(ResumeResolution {
-            agent,
-            command: command.trim().to_string(),
-            exact: true,
-        });
+        return Some(resolution);
     }
 
-    let agent = agent_from_tokens(&parsed.direct_tokens)?;
-    if let Some(resolution) = resume_from_history(terminal_history_lines, agent) {
+    if let Some(resolution) =
+        resume_from_history(terminal_history_lines, agent, &parsed.direct_tokens)
+    {
         return Some(resolution);
     }
 
@@ -233,6 +234,11 @@ fn restore_resolution_from_parts(
         command,
         exact: false,
     })
+}
+
+fn exact_saved_resume_command(command: &str, expected_agent: AgentCli) -> Option<ResumeResolution> {
+    let tokens = split_shell_words(command.trim())?;
+    exact_resume_from_startup(&tokens).filter(|resolution| resolution.agent == expected_agent)
 }
 
 fn initial_identity_resolution(
@@ -294,8 +300,12 @@ fn exact_resume_from_startup(tokens: &[String]) -> Option<ResumeResolution> {
                 })
             }),
         AgentCli::Omx => {
-            if tokens.get(1).map(String::as_str) == Some("resume") {
-                first_positional_after(tokens, 2)?;
+            let command_index = first_omx_positional_index(tokens)?;
+            if tokens.get(command_index).map(String::as_str) == Some("resume") {
+                let target = first_positional_after(tokens, command_index + 1)?;
+                if !looks_like_uuid(target) {
+                    return None;
+                }
                 return Some(ResumeResolution {
                     agent: AgentCli::Omx,
                     command: shell_join_owned_tokens(tokens),
@@ -332,7 +342,15 @@ fn most_recent_fallback(tokens: &[String]) -> Option<String> {
     None
 }
 
-fn resume_from_history(lines: &[String], agent: AgentCli) -> Option<ResumeResolution> {
+fn resume_from_history(
+    lines: &[String],
+    agent: AgentCli,
+    startup_tokens: &[String],
+) -> Option<ResumeResolution> {
+    if agent == AgentCli::Omx && !is_plain_interactive_omx(startup_tokens) {
+        return None;
+    }
+
     lines.iter().rev().find_map(|line| {
         if let Some(resolution) =
             resume_command_in_line(line).filter(|resolution| resolution.agent == agent)
@@ -344,9 +362,111 @@ fn resume_from_history(lines: &[String], agent: AgentCli) -> Option<ResumeResolu
             AgentCli::Codex => codex_session_id_line(line),
             AgentCli::Claude => claude_session_id_line(line),
             AgentCli::Hermes => hermes_session_line(line),
-            AgentCli::Omx | AgentCli::OpenClaw => None,
+            AgentCli::Omx => codex_resume_uuid_in_line(line).map(|id| ResumeResolution {
+                agent: AgentCli::Omx,
+                command: omx_resume_command(startup_tokens, id.as_str()),
+                exact: true,
+            }),
+            AgentCli::OpenClaw => None,
         }
     })
+}
+
+fn codex_resume_uuid_in_line(line: &str) -> Option<String> {
+    let index = line.find("codex resume")?;
+    let tokens = split_shell_words(line[index..].trim())?;
+    if agent_from_tokens(&tokens) != Some(AgentCli::Codex)
+        || tokens.get(1).map(String::as_str) != Some("resume")
+    {
+        return None;
+    }
+    let target = first_positional_after(&tokens, 2)?;
+    looks_like_uuid(target).then(|| target.to_string())
+}
+
+fn is_plain_interactive_omx(tokens: &[String]) -> bool {
+    agent_from_tokens(tokens) == Some(AgentCli::Omx) && first_omx_positional_index(tokens).is_none()
+}
+
+fn omx_resume_command(tokens: &[String], id: &str) -> String {
+    let mut output = Vec::with_capacity(tokens.len() + 2);
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        if option_takes_variadic_values(token) {
+            index += 1;
+            while let Some(value) = tokens.get(index).filter(|value| !value.starts_with('-')) {
+                output.push(format!("--image={value}"));
+                index += 1;
+            }
+            continue;
+        }
+
+        // A bare worktree flag consumes the next positional token as its
+        // optional branch name. Use its explicit empty form before appending
+        // `resume`. Variadic image values are likewise attached above so they
+        // cannot swallow the appended subcommand.
+        if is_bare_worktree_option(token)
+            && !tokens
+                .get(index + 1)
+                .is_some_and(|next| is_omx_worktree_name(next))
+        {
+            output.push(format!("{token}="));
+        } else {
+            output.push(tokens[index].clone());
+        }
+        index += 1;
+    }
+    output.push("resume".to_string());
+    output.push(id.to_string());
+    shell_join_owned_tokens(&output)
+}
+
+fn first_omx_positional_index(tokens: &[String]) -> Option<usize> {
+    let mut index = 1;
+    while index < tokens.len() {
+        let token = tokens[index].as_str();
+        if token == "--" {
+            return (index + 1 < tokens.len()).then_some(index + 1);
+        }
+        if is_bare_worktree_option(token) {
+            // OMX accepts an optional, space-separated worktree branch name;
+            // unlike ordinary value options, another flag means "detached".
+            index += if tokens
+                .get(index + 1)
+                .is_some_and(|next| is_omx_worktree_name(next))
+            {
+                2
+            } else {
+                1
+            };
+        } else if option_takes_variadic_values(token) {
+            index += 1;
+            while tokens
+                .get(index)
+                .is_some_and(|value| !value.starts_with('-'))
+            {
+                index += 1;
+            }
+        } else if token.starts_with('-') {
+            index += if option_takes_value(token) && index + 1 < tokens.len() {
+                2
+            } else {
+                1
+            };
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn is_bare_worktree_option(token: &str) -> bool {
+    matches!(token, "-w" | "--worktree")
+}
+
+fn is_omx_worktree_name(token: &str) -> bool {
+    !token.is_empty() && !token.starts_with('-') && !token.contains(':')
 }
 
 fn resume_command_in_line(line: &str) -> Option<ResumeResolution> {
@@ -480,11 +600,17 @@ fn is_bare_agent(tokens: &[String], agent: AgentCli) -> bool {
 }
 
 fn first_positional_after(tokens: &[String], start_index: usize) -> Option<&str> {
+    first_positional_index_after(tokens, start_index)
+        .and_then(|index| tokens.get(index))
+        .map(String::as_str)
+}
+
+fn first_positional_index_after(tokens: &[String], start_index: usize) -> Option<usize> {
     let mut index = start_index;
     while index < tokens.len() {
         let token = tokens[index].as_str();
         if token == "--" {
-            return tokens.get(index + 1).map(String::as_str);
+            return (index + 1 < tokens.len()).then_some(index + 1);
         }
         if token.starts_with('-') {
             index += if option_takes_value(token) && index + 1 < tokens.len() {
@@ -493,7 +619,7 @@ fn first_positional_after(tokens: &[String], start_index: usize) -> Option<&str>
                 1
             };
         } else {
-            return Some(token);
+            return Some(index);
         }
     }
     None
@@ -519,21 +645,35 @@ fn option_value<'a>(tokens: &'a [String], names: &[&str]) -> Option<&'a str> {
 fn option_takes_value(option: &str) -> bool {
     matches!(
         option,
-        "-C" | "--cd"
+        "-a" | "--ask-for-approval"
+            | "-C"
+            | "--cd"
             | "-c"
             | "--config"
             | "-m"
             | "--model"
+            | "-p"
             | "--profile"
+            | "-s"
+            | "--sandbox"
+            | "--add-dir"
+            | "--disable"
+            | "--enable"
+            | "--local-provider"
+            | "--remote"
+            | "--remote-auth-token-env"
             | "--codex-home"
-            | "--project"
-            | "--search"
             | "--resume"
             | "-r"
             | "--session-id"
             | "--name"
             | "--session"
+            | "--custom"
     )
+}
+
+fn option_takes_variadic_values(option: &str) -> bool {
+    matches!(option, "-i" | "--image")
 }
 
 fn claude_session_name(tokens: &[String]) -> Option<String> {
@@ -679,7 +819,11 @@ fn valid_resume_target(value: &str) -> bool {
 fn looks_like_uuid(value: &str) -> bool {
     value.len() == 36
         && value.chars().enumerate().all(|(index, ch)| {
-            matches!(index, 8 | 13 | 18 | 23) && ch == '-' || ch.is_ascii_hexdigit()
+            if matches!(index, 8 | 13 | 18 | 23) {
+                ch == '-'
+            } else {
+                ch.is_ascii_hexdigit()
+            }
         })
 }
 
@@ -851,8 +995,23 @@ mod tests {
             Some("hermes --resume 20260225_143052_a1b2c3")
         );
         assert_eq!(
-            restore_startup_override("omx resume --project current abc123").as_deref(),
-            Some("omx resume --project current abc123")
+            restore_startup_override("omx resume --project 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+                .as_deref(),
+            Some("omx resume --project 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+        );
+        assert_eq!(
+            restore_startup_override(
+                "omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4"
+            )
+            .as_deref(),
+            Some("omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+        );
+        assert_eq!(
+            restore_startup_override(
+                "omx --madmax resume --project 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4"
+            )
+            .as_deref(),
+            Some("omx --madmax resume --project 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
         );
     }
 
@@ -877,9 +1036,11 @@ mod tests {
             Some("hermes --resume 20260225_143052_a1b2c3 --profile prod")
         );
         assert_eq!(
-            restore_startup_override("omx resume --project current --codex-home /tmp abc123")
-                .as_deref(),
-            Some("omx resume --project current --codex-home /tmp abc123")
+            restore_startup_override(
+                "omx resume --project --codex-home /tmp 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4"
+            )
+            .as_deref(),
+            Some("omx resume --project --codex-home /tmp 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
         );
     }
 
@@ -889,6 +1050,11 @@ mod tests {
         assert_eq!(restore_startup_override("codex --model gpt-5.4"), None);
         assert_eq!(restore_startup_override("claude --model sonnet"), None);
         assert_eq!(restore_startup_override("omx ralph"), None);
+        assert_eq!(
+            restore_startup_override("omx --madmax team 3:executor"),
+            None
+        );
+        assert_eq!(restore_startup_override("omx --high exec echo"), None);
         assert_eq!(
             restore_startup_override("bash -lc 'codex exec \"summarize\"'"),
             None
@@ -908,6 +1074,15 @@ mod tests {
         assert_eq!(
             restore_startup_override("/bin/bash -lc \"codex\"").as_deref(),
             Some("/bin/bash -lc 'codex resume --last --no-alt-screen'")
+        );
+        assert_eq!(
+            restore_startup_override(
+                "bash --init-file '/tmp/a b' -ic 'omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4'"
+            )
+            .as_deref(),
+            Some(
+                "bash --init-file '/tmp/a b' -ic 'omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4'"
+            )
         );
     }
 
@@ -994,6 +1169,196 @@ mod tests {
         assert_eq!(
             overrides.get("codex").map(String::as_str),
             Some("codex resume --no-alt-screen 123e4567-e89b-12d3-a456-426614174000")
+        );
+    }
+
+    #[test]
+    fn omx_wraps_exact_codex_history_resume_with_existing_flags() {
+        let tiles = vec![terminal_tile("omx", Some("omx --madmax --high"))];
+        let history = vec![SavedTerminalHistory {
+            tile_id: "omx".into(),
+            lines: vec![
+                "To continue this session, run:".into(),
+                "  codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".into(),
+            ],
+            resume_command: None,
+        }];
+
+        let overrides =
+            restore_startup_overrides_for_saved_tab(&tiles, Path::new("/repo"), &history);
+
+        assert_eq!(
+            overrides.get("omx").map(String::as_str),
+            Some("omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+        );
+    }
+
+    #[test]
+    fn omx_history_resume_preserves_shell_wrapper() {
+        let tiles = vec![terminal_tile(
+            "omx",
+            Some("bash --init-file '/tmp/a b' -ic 'omx --madmax --high'"),
+        )];
+        let history = vec![SavedTerminalHistory {
+            tile_id: "omx".into(),
+            lines: vec!["codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".into()],
+            resume_command: None,
+        }];
+
+        let overrides =
+            restore_startup_overrides_for_saved_tab(&tiles, Path::new("/repo"), &history);
+
+        assert_eq!(
+            overrides.get("omx").map(String::as_str),
+            Some(
+                "bash --init-file '/tmp/a b' -ic 'omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4'"
+            )
+        );
+    }
+
+    #[test]
+    fn omx_history_resume_preserves_value_flags_and_worktree_modes() {
+        let id = "019f7fe2-a4b8-7012-8b6b-e45e0b55dff4";
+        for (startup, expected) in [
+            (
+                "omx --notify-temp --custom ops",
+                "omx --notify-temp --custom ops resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            ),
+            (
+                "omx --worktree feature/session-resume --high",
+                "omx --worktree feature/session-resume --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            ),
+            (
+                "omx --worktree --high",
+                "omx --worktree= --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            ),
+            (
+                "omx --sandbox workspace-write --ask-for-approval on-request --add-dir ../shared",
+                "omx --sandbox workspace-write --ask-for-approval on-request --add-dir ../shared resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            ),
+            (
+                "omx --image first.png second.png --high",
+                "omx --image=first.png --image=second.png --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            ),
+        ] {
+            let tile = terminal_tile("omx", Some(startup));
+            let lines = vec![format!("codex resume {id}")];
+            assert_eq!(
+                saved_resume_command_for_tile(&tile, Path::new("/repo"), &lines).as_deref(),
+                Some(expected),
+                "startup: {startup}"
+            );
+        }
+    }
+
+    #[test]
+    fn omx_subcommands_are_not_replaced_by_nested_codex_history() {
+        for command in [
+            "omx ralph",
+            "omx --madmax team 3:executor",
+            "omx --high exec echo",
+        ] {
+            let tiles = vec![terminal_tile("omx", Some(command))];
+            let history = vec![SavedTerminalHistory {
+                tile_id: "omx".into(),
+                lines: vec!["codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".into()],
+                resume_command: None,
+            }];
+
+            let overrides =
+                restore_startup_overrides_for_saved_tab(&tiles, Path::new("/repo"), &history);
+            assert_eq!(overrides.get("omx"), None, "command: {command}");
+        }
+    }
+
+    #[test]
+    fn omx_history_resume_rejects_malformed_or_injection_like_ids() {
+        for target in [
+            "not-a-session",
+            "019f7fe2a4b870128b6be45e0b55dff4ffff",
+            "019f7fe2-a4b8-7012-8b6b-e45e0b55dff4;touch-pwned",
+            "$(touch-pwned)",
+        ] {
+            let tile = terminal_tile("omx", Some("omx --madmax --high"));
+            let lines = vec![format!("codex resume '{target}'")];
+            assert_eq!(
+                saved_resume_command_for_tile(&tile, Path::new("/repo"), &lines),
+                None,
+                "target: {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn omx_restore_rejects_malformed_or_cross_agent_saved_commands() {
+        let tile = terminal_tile("omx", Some("omx --madmax --high"));
+        for command in [
+            "omx --madmax --high resume not-a-uuid",
+            "codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4",
+            "omx --madmax --high exec echo",
+        ] {
+            let history = vec![SavedTerminalHistory {
+                tile_id: "omx".into(),
+                lines: Vec::new(),
+                resume_command: Some(command.into()),
+            }];
+
+            let overrides = restore_startup_overrides_for_saved_tab(
+                std::slice::from_ref(&tile),
+                Path::new("/repo"),
+                &history,
+            );
+            assert_eq!(overrides.get("omx"), None, "command: {command}");
+        }
+
+        assert_eq!(restore_startup_override("omx resume not-a-uuid"), None);
+    }
+
+    #[test]
+    fn duplicate_omx_panes_only_resume_the_tile_with_an_exact_id() {
+        let tiles = vec![
+            terminal_tile("omx-a", Some("omx --madmax --high")),
+            terminal_tile("omx-b", Some("omx --madmax --high")),
+        ];
+        let history = vec![SavedTerminalHistory {
+            tile_id: "omx-b".into(),
+            lines: vec!["codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".into()],
+            resume_command: None,
+        }];
+
+        let overrides =
+            restore_startup_overrides_for_saved_tab(&tiles, Path::new("/repo"), &history);
+
+        assert_eq!(overrides.get("omx-a"), None);
+        assert_eq!(
+            overrides.get("omx-b").map(String::as_str),
+            Some("omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+        );
+    }
+
+    #[test]
+    fn captured_omx_resume_command_round_trips_through_saved_history() {
+        let tile = terminal_tile("omx", Some("omx --madmax --high"));
+        let lines = vec!["codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".into()];
+        let resume_command = saved_resume_command_for_tile(&tile, Path::new("/repo"), &lines);
+        assert_eq!(
+            resume_command.as_deref(),
+            Some("omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
+        );
+
+        let history = vec![SavedTerminalHistory {
+            tile_id: "omx".into(),
+            lines: Vec::new(),
+            resume_command,
+        }];
+        let overrides = restore_startup_overrides_for_saved_tab(
+            std::slice::from_ref(&tile),
+            Path::new("/repo"),
+            &history,
+        );
+        assert_eq!(
+            overrides.get("omx").map(String::as_str),
+            Some("omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4")
         );
     }
 

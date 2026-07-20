@@ -225,6 +225,9 @@ mod tests {
     use crate::model::layout::{WorkingDirectory, tile};
     use crate::model::preset::{ApplicationDensity, ThemeMode, WorkspacePreset};
     use crate::platform::resolve_workspace_root;
+    use crate::services::agent_resume::{
+        restore_startup_overrides_for_saved_session, saved_resume_command_for_tile,
+    };
     use std::fs;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -485,6 +488,52 @@ type = "workspace-root"
         assert_eq!(
             session.tabs[1].workspace_root,
             resolve_workspace_root(&second_root).unwrap()
+        );
+    }
+
+    #[test]
+    fn captured_omx_resume_command_survives_save_load_and_restore() {
+        let dir = temp_dir("omx-resume-round-trip");
+        let workspace_root = dir.join("workspace");
+        fs::create_dir_all(&workspace_root).unwrap();
+        let store = SessionStore::from_path(dir.join("session.toml"));
+
+        let mut preset = sample_preset();
+        preset.layout = tile(
+            "omx",
+            "OMX",
+            "OMX",
+            "accent-cyan",
+            WorkingDirectory::WorkspaceRoot,
+            Some("bash -ic 'omx --madmax --high'"),
+        );
+        let tile_spec = preset.layout.tile_specs().remove(0);
+        let lines = vec!["codex resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4".to_string()];
+        let resume_command = saved_resume_command_for_tile(&tile_spec, &workspace_root, &lines);
+
+        store.save(&super::SavedSession {
+            tabs: vec![SavedTab {
+                preset,
+                workspace_root: workspace_root.clone(),
+                custom_title: None,
+                terminal_zoom_steps: 0,
+                terminal_history: vec![SavedTerminalHistory {
+                    tile_id: "omx".into(),
+                    lines,
+                    resume_command,
+                }],
+            }],
+            active_tab_index: 0,
+        });
+
+        let loaded = store
+            .load_with_status()
+            .session
+            .expect("saved OMX session should load");
+        let overrides = restore_startup_overrides_for_saved_session(&loaded);
+        assert_eq!(
+            overrides[0].get("omx").map(String::as_str),
+            Some("bash -ic 'omx --madmax --high resume 019f7fe2-a4b8-7012-8b6b-e45e0b55dff4'")
         );
     }
 }
