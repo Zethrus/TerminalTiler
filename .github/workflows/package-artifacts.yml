@@ -28,6 +28,13 @@ jobs:
       windows_installer_path: ${{ steps.package_version.outputs.windows_installer_path }}
       windows_msi_path: ${{ steps.package_version.outputs.windows_msi_path }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      # Must run after checkout: git ls-remote needs the repository and its
+      # origin remote in the workspace.
       - name: Skip packaging for release-tagged commits
         id: release_commit
         env:
@@ -38,18 +45,12 @@ jobs:
           # v*.*.* tag points at this commit; packaging twice doubles the
           # Windows runner cost of every release.
           is_release_commit=false
-          if git ls-remote --tags origin "refs/tags/v*.*.*" \
-            | awk '{ print $1 }' \
-            | grep -qx "$HEAD_SHA"; then
+          tag_targets="$(git ls-remote --tags origin "refs/tags/v*.*.*" | awk '{ print $1 }')"
+          if grep -qx "$HEAD_SHA" <<<"$tag_targets"; then
             is_release_commit=true
             echo "Commit $HEAD_SHA is a release tag target; release.yml owns packaging"
           fi
           echo "is_release_commit=$is_release_commit" >> "$GITHUB_OUTPUT"
-
-      - name: Check out repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Resolve package version
         id: package_version

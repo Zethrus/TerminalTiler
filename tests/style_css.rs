@@ -3010,6 +3010,32 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
 }
 
 #[test]
+fn package_artifacts_detects_release_tagged_commits_after_checkout() {
+    let resolve_version = workflow_job_block(PACKAGE_ARTIFACTS_YML, "resolve-version");
+    let checkout = resolve_version
+        .find("- name: Check out repository")
+        .expect("resolve-version should check out the repository");
+    let release_commit = resolve_version
+        .find("- name: Skip packaging for release-tagged commits")
+        .expect("resolve-version should detect release-tagged commits");
+
+    assert!(
+        checkout < release_commit && resolve_version.contains("git ls-remote --tags origin"),
+        "release-tag detection reads the repository's origin remote, so it must run after checkout \
+         or it silently reports every commit as unreleased and double-packages each release"
+    );
+
+    assert!(
+        resolve_version.contains("is_release_commit=$is_release_commit\" >> \"$GITHUB_OUTPUT\"")
+            && workflow_job_block(PACKAGE_ARTIFACTS_YML, "package-linux")
+                .contains("needs.resolve-version.outputs.is_release_commit != 'true'")
+            && workflow_job_block(PACKAGE_ARTIFACTS_YML, "package-windows")
+                .contains("needs.resolve-version.outputs.is_release_commit != 'true'"),
+        "both packaging jobs should stand down when release.yml already owns the tagged build"
+    );
+}
+
+#[test]
 fn release_publishes_only_after_all_platform_artifacts_are_available() {
     let linux_release = workflow_job_block(RELEASE_YML, "release-linux");
     let windows_release = workflow_job_block(RELEASE_YML, "release-windows");
