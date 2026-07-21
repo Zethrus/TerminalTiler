@@ -18,6 +18,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     outputs:
+      is_release_commit: ${{ steps.release_commit.outputs.is_release_commit }}
       package_version: ${{ steps.package_version.outputs.package_version }}
       build_date: ${{ steps.package_version.outputs.build_date }}
       deb_path: ${{ steps.package_version.outputs.deb_path }}
@@ -27,25 +28,44 @@ jobs:
       windows_installer_path: ${{ steps.package_version.outputs.windows_installer_path }}
       windows_msi_path: ${{ steps.package_version.outputs.windows_msi_path }}
     steps:
+      - name: Skip packaging for release-tagged commits
+        id: release_commit
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # release.yml builds and publishes these same artifacts whenever a
+          # v*.*.* tag points at this commit; packaging twice doubles the
+          # Windows runner cost of every release.
+          is_release_commit=false
+          if git ls-remote --tags origin "refs/tags/v*.*.*" \
+            | awk '{ print $1 }' \
+            | grep -qx "$HEAD_SHA"; then
+            is_release_commit=true
+            echo "Commit $HEAD_SHA is a release tag target; release.yml owns packaging"
+          fi
+          echo "is_release_commit=$is_release_commit" >> "$GITHUB_OUTPUT"
+
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Resolve package version
         id: package_version
+        if: steps.release_commit.outputs.is_release_commit != 'true'
         env:
           CI_BUILD_NUMBER: ${{ github.event.workflow_run.run_number || github.run_number }}
         run: bash packaging/resolve-package-version.sh
 
   package-linux:
     needs: resolve-version
-    if: needs.resolve-version.result == 'success'
+    if: needs.resolve-version.result == 'success' && needs.resolve-version.outputs.is_release_commit != 'true'
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
@@ -67,7 +87,7 @@ jobs:
         run: bash packaging/release-smoke-test.sh
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-linux-${{ needs.resolve-version.outputs.package_version }}
           path: |
@@ -77,26 +97,26 @@ jobs:
 
   package-windows:
     needs: resolve-version
-    if: needs.resolve-version.result == 'success'
+    if: needs.resolve-version.result == 'success' && needs.resolve-version.outputs.is_release_commit != 'true'
     runs-on: windows-2022
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.92.0
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Cache gvsbuild GTK runtime
         continue-on-error: true
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: C:\gtk-build\gtk\x64\release
           key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
@@ -126,14 +146,14 @@ jobs:
 
       - name: Upload Windows smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-${{ needs.resolve-version.outputs.package_version }}
           path: artifacts/windows-smoke-diagnostics
           if-no-files-found: warn
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-windows-${{ needs.resolve-version.outputs.package_version }}
           path: |

@@ -52,7 +52,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository at release tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ steps.release_meta.outputs.tag }}
 
@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Check out repository at release tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve-release.outputs.tag }}
 
@@ -92,7 +92,7 @@ jobs:
         run: bash packaging/release-smoke-test.sh
 
       - name: Upload Linux release artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-release-linux-${{ needs.resolve-release.outputs.package_version }}
           path: |
@@ -106,21 +106,21 @@ jobs:
 
     steps:
       - name: Check out repository at release tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.resolve-release.outputs.tag }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.92.0
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Cache gvsbuild GTK runtime
         continue-on-error: true
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: C:\gtk-build\gtk\x64\release
           key: windows-gtk-runtime-gvsbuild-v4-${{ runner.os }}
@@ -151,14 +151,14 @@ jobs:
 
       - name: Upload Windows smoke diagnostics
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-windows-smoke-diagnostics-release
           path: artifacts/windows-smoke-diagnostics
           if-no-files-found: warn
 
       - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: terminaltiler-release-windows-${{ needs.resolve-release.outputs.package_version }}
           path: |
@@ -174,7 +174,7 @@ jobs:
 
     steps:
       - name: Download platform release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}
           path: dist
