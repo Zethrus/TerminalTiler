@@ -35,63 +35,9 @@ fn present_with_notice(
     dialog_chrome::sync_dialog_chrome_classes(window, &dialog, "companion-dialog-window");
     dialog_smoke::register_companion_dialog(&dialog);
 
-    let root = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .vexpand(true)
-        .build();
-
-    let scroller = gtk::ScrolledWindow::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .css_classes(["companion-dialog-scroller"])
-        .build();
-    scroller.set_has_frame(false);
-    root.append(&scroller);
-
-    let content = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(12)
-        .margin_top(16)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
-        .css_classes(["settings-dialog-content", "companion-dialog-content"])
-        .build();
-    scroller.set_child(Some(&content));
-
-    content.append(&build_companion_summary(&snapshot));
-    append_section(&content, "Account", &snapshot.account_rows);
-    append_section(&content, "Sync", &snapshot.sync_rows);
-    append_section(&content, "Devices and teams", &snapshot.device_rows);
-
-    let footer = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .margin_top(12)
-        .margin_bottom(16)
-        .margin_start(16)
-        .margin_end(16)
-        .css_classes(["companion-footer"])
-        .build();
-    let busy = Rc::new(RefCell::new(HashSet::new()));
-    let action_bar = build_action_bar(window, &dialog, companion, &snapshot, busy);
-    footer.append(&action_bar);
-
-    let close_button = icons::labeled_button(
-        "Close",
-        icon_name::CLOSE,
-        &[
-            "pill-button",
-            "ghost-link-button",
-            "settings-close-button",
-            "companion-close-button",
-        ],
-    );
-    close_button.set_halign(gtk::Align::End);
-    footer.append(&close_button);
-    root.append(&footer);
+    let view = build_companion_view(window, &dialog, companion, &snapshot);
+    let close_button = view.close_button;
+    let root = view.root;
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root));
@@ -110,10 +56,92 @@ fn present_with_notice(
     }
 }
 
+struct CompanionDialogView {
+    root: gtk::Box,
+    close_button: gtk::Button,
+}
+
+fn build_companion_view(
+    window: &adw::ApplicationWindow,
+    dialog: &adw::Dialog,
+    companion: Arc<dyn CompanionIntegration>,
+    snapshot: &CompanionPanelSnapshot,
+) -> CompanionDialogView {
+    let root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .vexpand(true)
+        .css_classes(["companion-dialog-root"])
+        .build();
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(0)
+        .propagate_natural_width(false)
+        .css_classes(["companion-dialog-scroller"])
+        .build();
+    scroller.set_has_frame(false);
+    root.append(&scroller);
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .css_classes(["settings-dialog-content", "companion-dialog-content"])
+        .build();
+    scroller.set_child(Some(&content));
+
+    content.append(&build_companion_summary(snapshot));
+    append_section(&content, "Account", &snapshot.account_rows);
+    append_section(&content, "Sync", &snapshot.sync_rows);
+    append_section(&content, "Devices and teams", &snapshot.device_rows);
+    let busy = Rc::new(RefCell::new(HashSet::new()));
+    append_actions_section(&content, window, dialog, companion, snapshot, busy);
+
+    let footer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .margin_top(12)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .css_classes(["companion-footer"])
+        .build();
+
+    let close_button = icons::labeled_button(
+        "Close",
+        icon_name::CLOSE,
+        &[
+            "pill-button",
+            "ghost-link-button",
+            "settings-close-button",
+            "companion-close-button",
+        ],
+    );
+    close_button.set_halign(gtk::Align::End);
+    footer.append(&close_button);
+    root.append(&footer);
+
+    CompanionDialogView { root, close_button }
+}
+
 fn build_companion_summary(snapshot: &CompanionPanelSnapshot) -> gtk::Widget {
     let shell = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(14)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
         .css_classes([
             "config-panel",
             "settings-section",
@@ -181,6 +209,8 @@ fn append_section(content: &gtk::Box, title: &str, rows: &[CompanionRow]) {
     let section = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
         .css_classes(["config-panel", "settings-section", "companion-section"])
         .build();
     section.append(
@@ -198,6 +228,8 @@ fn append_section(content: &gtk::Box, title: &str, rows: &[CompanionRow]) {
     let list = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
         .css_classes(["companion-row-list"])
         .build();
     for row in rows {
@@ -221,6 +253,7 @@ fn build_row(row: &CompanionRow) -> gtk::Widget {
         .spacing(12)
         .halign(gtk::Align::Fill)
         .hexpand(true)
+        .css_classes(["companion-row-primary"])
         .build();
     primary.append(
         &gtk::Label::builder()
@@ -233,9 +266,10 @@ fn build_row(row: &CompanionRow) -> gtk::Widget {
     primary.append(
         &gtk::Label::builder()
             .label(&row.value)
-            .halign(gtk::Align::End)
+            .halign(gtk::Align::Fill)
             .valign(gtk::Align::Start)
             .hexpand(true)
+            .xalign(1.0)
             .wrap(true)
             .wrap_mode(gtk::pango::WrapMode::Char)
             .selectable(true)
@@ -263,23 +297,72 @@ fn build_row(row: &CompanionRow) -> gtk::Widget {
     item.upcast()
 }
 
-fn build_action_bar(
+fn append_actions_section(
+    content: &gtk::Box,
     window: &adw::ApplicationWindow,
     dialog: &adw::Dialog,
     companion: Arc<dyn CompanionIntegration>,
     snapshot: &CompanionPanelSnapshot,
     busy: Rc<RefCell<HashSet<String>>>,
-) -> gtk::Widget {
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .halign(gtk::Align::Start)
+) {
+    if snapshot.actions.is_empty() {
+        return;
+    }
+
+    let section = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .halign(gtk::Align::Fill)
         .hexpand(true)
-        .css_classes(["companion-actions"])
+        .css_classes([
+            "config-panel",
+            "settings-section",
+            "companion-section",
+            "companion-actions-section",
+        ])
+        .build();
+    section.append(
+        &gtk::Label::builder()
+            .label("ACTIONS")
+            .halign(gtk::Align::Start)
+            .css_classes([
+                "eyebrow",
+                "settings-section-heading",
+                "companion-section-heading",
+            ])
+            .build(),
+    );
+    section.append(&build_action_grid(
+        window, dialog, companion, snapshot, busy,
+    ));
+    content.append(&section);
+}
+
+fn build_action_grid(
+    window: &adw::ApplicationWindow,
+    dialog: &adw::Dialog,
+    companion: Arc<dyn CompanionIntegration>,
+    snapshot: &CompanionPanelSnapshot,
+    busy: Rc<RefCell<HashSet<String>>>,
+) -> gtk::FlowBox {
+    let actions = gtk::FlowBox::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .selection_mode(gtk::SelectionMode::None)
+        .activate_on_single_click(false)
+        .homogeneous(true)
+        .min_children_per_line(1)
+        .max_children_per_line(3)
+        .column_spacing(8)
+        .row_spacing(8)
+        .halign(gtk::Align::Fill)
+        .hexpand(true)
+        .css_classes(["companion-action-grid"])
         .build();
     for action in &snapshot.actions {
         let button =
             icons::labeled_button(&action.label, action_icon(action), &button_classes(action));
+        button.set_halign(gtk::Align::Fill);
+        button.set_hexpand(true);
         let action = action.clone();
         let companion = companion.clone();
         let parent = window.clone();
@@ -298,7 +381,7 @@ fn build_action_bar(
         });
         actions.append(&button);
     }
-    actions.upcast()
+    actions
 }
 
 fn action_icon(action: &CompanionAction) -> &'static str {
@@ -560,4 +643,185 @@ fn dispatch_action(
         present_with_notice(&window, companion.clone(), Some(notice));
         gtk::glib::ControlFlow::Break
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct DenseCompanion {
+        snapshot: CompanionPanelSnapshot,
+    }
+
+    impl CompanionIntegration for DenseCompanion {
+        fn snapshot(&self) -> CompanionPanelSnapshot {
+            self.snapshot.clone()
+        }
+
+        fn invoke(
+            &self,
+            action_id: &str,
+            _input: CompanionActionInput,
+        ) -> Result<crate::extension::CompanionActionResult, String> {
+            Ok(crate::extension::CompanionActionResult::message(format!(
+                "invoked {action_id}"
+            )))
+        }
+    }
+
+    fn dense_snapshot() -> CompanionPanelSnapshot {
+        let long_id = "8a6b7d3e-4a56-4e90-9a7d-5c10a94ed58f";
+        let actions = (0..24)
+            .map(|index| {
+                CompanionAction::button(
+                    format!("dense_action_{index}"),
+                    format!("Action {index}: inspect a long account or synchronization setting"),
+                )
+            })
+            .collect();
+        CompanionPanelSnapshot {
+            title: "TerminalTiler Pro Account / Sync".into(),
+            subtitle: "Activation, billing, devices, voice orchestration, and Cloud Sync Preview."
+                .into(),
+            status: CompanionStatus::Ok,
+            account_rows: vec![
+                CompanionRow::new("Activation", "Active"),
+                CompanionRow::new("Plan", "individual_monthly"),
+                CompanionRow::new("Entitlement", "active"),
+                CompanionRow::new(
+                    "Output device",
+                    "alsa_output.usb-TerminalTiler_Studio_Interface-00.analog-stereo",
+                ),
+            ],
+            sync_rows: vec![
+                CompanionRow::new("Vault readiness", "Personal ready"),
+                CompanionRow::new(
+                    "Workspace root",
+                    "/home/alice/projects/a-very-long-workspace-name-that-must-wrap",
+                ),
+            ],
+            device_rows: vec![CompanionRow::new("Current device", long_id)],
+            actions,
+        }
+    }
+
+    fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
+        let mut widgets = Vec::new();
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            widgets.push(widget.clone());
+            widgets.extend(descendants(&widget));
+            child = widget.next_sibling();
+        }
+        widgets
+    }
+
+    fn settle_layout() {
+        let context = gtk::glib::MainContext::default();
+        for _ in 0..20 {
+            while context.iteration(false) {}
+        }
+    }
+
+    #[test]
+    fn dense_companion_layout_stays_bounded_and_reflows_actions() {
+        const CHILD_ENV: &str = "TERMINALTILER_COMPANION_LAYOUT_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let executable = std::env::current_exe().expect("current Core test executable");
+            let test_name = "ui::companion_dialog::tests::dense_companion_layout_stays_bounded_and_reflows_actions";
+            let mut command = if std::env::var_os("DISPLAY").is_some() {
+                let mut command = std::process::Command::new(executable);
+                command.args(["--exact", test_name, "--nocapture"]);
+                command
+            } else {
+                let mut command = std::process::Command::new("xvfb-run");
+                command
+                    .arg("-a")
+                    .arg(executable)
+                    .args(["--exact", test_name, "--nocapture"]);
+                command
+            };
+            let status = command
+                .env(CHILD_ENV, "1")
+                .status()
+                .expect("Xvfb companion layout test process must start");
+            assert!(status.success(), "Xvfb companion layout test failed");
+            return;
+        }
+
+        adw::init().expect("GTK must initialize under Xvfb");
+        let application = adw::Application::builder()
+            .application_id("app.terminaltiler.CompanionLayoutTest")
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        application
+            .register(gio::Cancellable::NONE)
+            .expect("test application must register");
+
+        for viewport_width in [480, 680] {
+            let snapshot = dense_snapshot();
+            let companion: Arc<dyn CompanionIntegration> = Arc::new(DenseCompanion {
+                snapshot: snapshot.clone(),
+            });
+            let window = adw::ApplicationWindow::new(&application);
+            let dialog = adw::Dialog::new();
+            let view = build_companion_view(&window, &dialog, companion, &snapshot);
+            let root = view.root.clone().upcast::<gtk::Widget>();
+            let (minimum_width, _, _, _) = root.measure(gtk::Orientation::Horizontal, -1);
+            assert!(
+                minimum_width <= viewport_width,
+                "root minimum width {minimum_width} exceeded {viewport_width}px viewport"
+            );
+            root.allocate(viewport_width, 620, -1, None);
+            settle_layout();
+            assert_eq!(root.allocated_width(), viewport_width);
+
+            let widgets = descendants(&root);
+            let scroller = widgets
+                .iter()
+                .find_map(|widget| widget.clone().downcast::<gtk::ScrolledWindow>().ok())
+                .expect("companion scroller");
+            assert_eq!(scroller.hscrollbar_policy(), gtk::PolicyType::Never);
+            assert_eq!(scroller.min_content_width(), 0);
+            assert!(!scroller.propagates_natural_width());
+            assert!(
+                scroller.hadjustment().upper() <= scroller.hadjustment().page_size() + 1.0,
+                "responsive companion content must not require horizontal scrolling"
+            );
+
+            let status = widgets
+                .iter()
+                .find(|widget| widget.has_css_class("companion-status-chip"))
+                .expect("status chip");
+            assert!(status.allocated_width() > 0);
+            let values = widgets
+                .iter()
+                .filter(|widget| widget.has_css_class("companion-row-value"))
+                .collect::<Vec<_>>();
+            assert_eq!(values.len(), 7);
+            assert!(values.iter().all(|value| value.allocated_width() > 0));
+
+            let action_buttons = widgets
+                .iter()
+                .filter(|widget| widget.has_css_class("companion-action-button"))
+                .collect::<Vec<_>>();
+            assert_eq!(action_buttons.len(), 24);
+            assert!(
+                action_buttons
+                    .iter()
+                    .all(|button| button.allocated_width() > 0)
+            );
+            let action_rows = action_buttons
+                .iter()
+                .filter_map(|button| button.parent())
+                .map(|child| child.allocation().y())
+                .collect::<HashSet<_>>();
+            assert!(
+                action_rows.len() > 1,
+                "dense actions must wrap into vertically reachable rows"
+            );
+            assert!(!view.close_button.is_ancestor(&scroller));
+        }
+    }
 }

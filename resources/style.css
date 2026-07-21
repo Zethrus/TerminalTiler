@@ -2844,11 +2844,15 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
 }
 
 /* ── Companion Account / Sync dialog ─────────────────────── */
+.companion-dialog-root,
+.companion-dialog-scroller,
 .companion-dialog-content {
+  min-width: 0;
   background: transparent;
 }
 
 .companion-summary {
+  min-width: 0;
   border-color: alpha(@tt_amber, 0.16);
   background:
     linear-gradient(180deg, rgba(16, 16, 21, 0.98), rgba(8, 8, 12, 0.98)),
@@ -2895,6 +2899,7 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
 }
 
 .companion-section {
+  min-width: 0;
   padding: 16px;
 }
 
@@ -2904,6 +2909,7 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
 }
 
 .companion-row-list {
+  min-width: 0;
   border-radius: 16px;
   background: alpha(@tt_white, 0.026);
   border: 1px solid alpha(@tt_white, 0.065);
@@ -2911,8 +2917,13 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
 }
 
 .companion-row {
+  min-width: 0;
   padding: 11px 12px;
   border-bottom: 1px solid alpha(@tt_white, 0.055);
+}
+
+.companion-row-primary {
+  min-width: 0;
 }
 
 .settings-dialog-content .companion-row-label {
@@ -2925,6 +2936,7 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
 }
 
 .companion-row-value {
+  min-width: 0;
   color: #fbfaf6;
   font-size: 12px;
   font-weight: 650;
@@ -2940,8 +2952,13 @@ dialog.update-progress-dialog.theme-light .update-progress-heading {
   border-top: 1px solid alpha(@tt_white, 0.055);
 }
 
-.companion-actions {
+.companion-actions-section,
+.companion-action-grid {
   min-width: 0;
+}
+
+.companion-action-grid > flowboxchild {
+  min-width: 156px;
 }
 
 button.companion-action-button,
@@ -2949,6 +2966,10 @@ button.companion-close-button {
   min-height: 34px;
   padding-left: 15px;
   padding-right: 15px;
+}
+
+button.companion-action-button {
+  min-width: 0;
 }
 
 .companion-input-panel {
@@ -2977,6 +2998,10 @@ entry.companion-input-entry {
   padding-right: 12px;
 }
 
+.companion-dialog-window.windows-gtk-shell .companion-action-grid > flowboxchild {
+  min-width: 136px;
+}
+
 .companion-dialog-window.windows-gtk-shell .companion-row {
   padding: 9px 10px;
 }
@@ -2997,6 +3022,10 @@ entry.companion-input-entry {
   background: linear-gradient(180deg, alpha(@tt_white, 0.76), rgba(245, 248, 252, 0.88));
   border-color: rgba(101, 119, 151, 0.15);
   box-shadow: inset 0 1px alpha(@tt_white, 0.72);
+}
+
+.companion-dialog-window.theme-light .companion-actions-section {
+  border-color: rgba(101, 119, 151, 0.15);
 }
 
 .companion-dialog-window.theme-light .companion-row {

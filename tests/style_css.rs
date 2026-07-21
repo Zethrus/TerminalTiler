@@ -1878,6 +1878,13 @@ fn companion_account_sync_dialog_uses_settings_quality_chrome() {
             && companion_dialog.contains("\"companion-row-list\"")
             && companion_dialog.contains("\"companion-row-label\"")
             && companion_dialog.contains("\"companion-row-value\"")
+            && companion_dialog.contains("fn build_action_grid(")
+            && companion_dialog.contains("gtk::FlowBox::builder()")
+            && companion_dialog.contains(".min_children_per_line(1)")
+            && companion_dialog.contains(".max_children_per_line(3)")
+            && companion_dialog.contains(".min_content_width(0)")
+            && companion_dialog.contains(".propagate_natural_width(false)")
+            && companion_dialog.contains("\"companion-action-grid\"")
             && companion_dialog.contains("\"companion-footer\"")
             && companion_dialog.contains("fn action_icon(action: &CompanionAction)")
             && companion_dialog.contains("icon_name::REFRESH")
@@ -1900,6 +1907,7 @@ fn companion_account_sync_dialog_uses_settings_quality_chrome() {
         ".companion-row",
         ".settings-dialog-content .companion-row-label",
         ".companion-row-value",
+        ".companion-action-grid > flowboxchild",
         ".companion-footer",
         "button.companion-action-button",
         "entry.companion-input-entry",
