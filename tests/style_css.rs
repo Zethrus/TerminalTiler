@@ -17,6 +17,7 @@ const GITIGNORE: &str = include_str!("../.gitignore");
 const BROADCAST_RS: &str = include_str!("../src/services/broadcast.rs");
 const BUILD_RS: &str = include_str!("../build.rs");
 const CI_YML: &str = include_str!("../.github/workflows/ci.yml");
+const CREATE_RELEASE_TAG_YML: &str = include_str!("../.github/workflows/create-release-tag.yml");
 const DESIGN_MD: &str = include_str!("../DESIGN.md");
 const DOC_WINDOWS_GTK_VISUAL_QA: &str = include_str!("../docs/windows-gtk-visual-qa.md");
 const GTK_SHELL_RS: &str = include_str!("../src/gtk_shell/mod.rs");
@@ -2754,9 +2755,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
         CI_YML.contains("verify-windows-gtk")
             && CI_YML.contains("setup-windows-gtk.ps1 -InstallWithGvsbuild")
             && CI_YML.contains("windows-gtk-runtime-gvsbuild-v4")
-            && CI_YML.contains("actions/cache@v5")
+            && uses_action_major(CI_YML, "actions/cache", 5)
             && !CI_YML.contains("save-always:")
-            && CI_YML.contains("actions/upload-artifact@v6")
+            && uses_action_major(CI_YML, "actions/upload-artifact", 6)
             && CI_YML.contains("cargo check --locked --target x86_64-pc-windows-msvc --features voice-cpal,windows-gtk-shell")
             && CI_YML.contains("build-windows.ps1 -UseGtkShell")
             && CI_YML.contains("windows-smoke-test.ps1 -UseGtkShell")
@@ -2959,10 +2960,9 @@ fn windows_packaging_stages_shared_gtk_resources_and_smoke_checks_payload() {
             "release/package workflows must not publish the explicit Win32 fallback path"
         );
         assert!(
-            workflow.contains("actions/cache@v5")
+            uses_action_major(workflow, "actions/cache", 5)
                 && workflow.contains("continue-on-error: true")
-                && !workflow.contains("actions/cache@v4")
-                && !workflow.contains("actions/upload-artifact@v4")
+                && uses_action_major(workflow, "actions/upload-artifact", 6)
                 && !workflow.contains("save-always:"),
             "release/package workflows should keep Windows GTK artifact publishing on Node 24-ready cache/artifact actions"
         );
@@ -3029,7 +3029,7 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
 
     assert!(
         linux_release.contains("Upload Linux release artifacts")
-            && linux_release.contains("actions/upload-artifact@v6")
+            && uses_action_major(&linux_release, "actions/upload-artifact", 6)
             && linux_release.contains(
                 "terminaltiler-release-linux-${{ needs.resolve-release.outputs.package_version }}"
             )
@@ -3042,7 +3042,7 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
 
     assert!(
         windows_release.contains("Upload Windows release artifacts")
-            && windows_release.contains("actions/upload-artifact@v6")
+            && uses_action_major(&windows_release, "actions/upload-artifact", 6)
             && windows_release.contains(
                 "terminaltiler-release-windows-${{ needs.resolve-release.outputs.package_version }}"
             )
@@ -3064,7 +3064,7 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
 
     assert!(
         publish_release.contains("needs: [resolve-release, release-linux, release-windows]")
-            && publish_release.contains("actions/download-artifact@v8")
+            && uses_action_major(&publish_release, "actions/download-artifact", 8)
             && publish_release.contains("pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}")
             && publish_release.contains("merge-multiple: true")
             && publish_release.contains("Verify release assets before publishing")
@@ -3073,10 +3073,9 @@ fn release_publishes_only_after_all_platform_artifacts_are_available() {
             && publish_release.contains("Draft release for ${RELEASE_TAG} was not discoverable after 60 seconds")
             && publish_release.contains("RELEASE_ID=$(jq -r '.id'")
             && publish_release.contains("releases/${RELEASE_ID}")
-            && publish_release.contains("softprops/action-gh-release@v3")
-            && !RELEASE_YML.contains("softprops/action-gh-release@v2")
-            && !RELEASE_YML.contains("actions/download-artifact@v4")
-            && !RELEASE_YML.contains("actions/upload-artifact@v4"),
+            && uses_action_major(&publish_release, "softprops/action-gh-release", 3)
+            && uses_action_major(RELEASE_YML, "actions/download-artifact", 8)
+            && uses_action_major(RELEASE_YML, "actions/upload-artifact", 6),
         "Release publishing should wait for both platform jobs, download merged artifacts with Node 24-ready actions, verify them, and publish once"
     );
 
@@ -3260,7 +3259,7 @@ fn windows_smoke_failures_stage_non_hidden_diagnostics_artifacts() {
     for job_name in ["verify-windows", "verify-windows-gtk"] {
         let windows_verify = workflow_job_block(CI_YML, job_name);
         assert!(
-            windows_verify.contains("actions/upload-artifact@v6")
+            uses_action_major(&windows_verify, "actions/upload-artifact", 6)
                 && windows_verify.contains("path: artifacts/windows-smoke-diagnostics")
                 && windows_verify.contains("if-no-files-found: warn")
                 && !windows_verify.contains("path: packaging/.build/windows-smoke"),
@@ -3697,6 +3696,101 @@ fn workflow_job_block(workflow: &str, job_name: &str) -> String {
 
     assert!(found, "workflow should define job {job_name}");
     block
+}
+
+/// Major versions that every `uses:` reference to `action` resolves to.
+///
+/// Workflow steps pin actions to a commit SHA and record the release in a
+/// trailing comment (`uses: actions/cache@caa29612... # v5`), so version
+/// contracts have to read that comment instead of the ref itself. Floating tag
+/// refs (`@v5`) still resolve so the contract holds under either pinning style.
+fn action_major_versions(workflow: &str, action: &str) -> Vec<u32> {
+    let marker = format!("uses: {action}@");
+    workflow
+        .replace("\r\n", "\n")
+        .lines()
+        .filter_map(|line| {
+            let step = line.trim();
+            let reference = step
+                .strip_prefix(&marker)
+                .or_else(|| step.strip_prefix("- ")?.strip_prefix(&marker))?;
+            let (git_ref, comment) = match reference.split_once('#') {
+                Some((git_ref, comment)) => (git_ref.trim(), comment.trim()),
+                None => (reference.trim(), ""),
+            };
+
+            major_version_token(git_ref).or_else(|| major_version_token(comment))
+        })
+        .collect()
+}
+
+fn major_version_token(token: &str) -> Option<u32> {
+    token.strip_prefix('v')?.split('.').next()?.parse().ok()
+}
+
+/// True when `action` is used at least once and every use resolves to `major`.
+fn uses_action_major(workflow: &str, action: &str, major: u32) -> bool {
+    let versions = action_major_versions(workflow, action);
+    !versions.is_empty() && versions.iter().all(|found| *found == major)
+}
+
+#[test]
+fn action_major_versions_reads_tag_refs_and_sha_pin_comments() {
+    let workflow = concat!(
+        "      - uses: actions/cache@v5\n",
+        "        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6\n",
+        "        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3\n",
+        "        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable\n",
+    );
+
+    assert_eq!(action_major_versions(workflow, "actions/cache"), vec![5]);
+    assert_eq!(
+        action_major_versions(workflow, "actions/upload-artifact"),
+        vec![6]
+    );
+    assert_eq!(action_major_versions(workflow, "actions/checkout"), vec![6]);
+    assert!(action_major_versions(workflow, "dtolnay/rust-toolchain").is_empty());
+    assert!(uses_action_major(workflow, "actions/cache", 5));
+    assert!(!uses_action_major(workflow, "actions/cache", 4));
+    assert!(!uses_action_major(workflow, "actions/download-artifact", 8));
+}
+
+#[test]
+fn workflow_actions_are_pinned_to_commit_shas() {
+    for (workflow_name, workflow) in [
+        ("ci.yml", CI_YML),
+        ("create-release-tag.yml", CREATE_RELEASE_TAG_YML),
+        ("package-artifacts.yml", PACKAGE_ARTIFACTS_YML),
+        ("release.yml", RELEASE_YML),
+    ] {
+        for line in workflow.replace("\r\n", "\n").lines() {
+            let step = line.trim();
+            let Some(reference) = step
+                .strip_prefix("uses: ")
+                .or_else(|| step.strip_prefix("- ")?.strip_prefix("uses: "))
+            else {
+                continue;
+            };
+            let (_, git_ref) = reference
+                .split_once('@')
+                .unwrap_or_else(|| panic!("{workflow_name} step {reference:?} should pin a ref"));
+            let (git_ref, comment) = match git_ref.split_once('#') {
+                Some((git_ref, comment)) => (git_ref.trim(), comment.trim()),
+                None => (git_ref.trim(), ""),
+            };
+
+            assert!(
+                git_ref.len() == 40 && git_ref.chars().all(|c| c.is_ascii_hexdigit()),
+                "{workflow_name} should pin third-party actions to a full commit SHA so a retagged \
+                 release cannot silently change the build: {reference:?}"
+            );
+            assert!(
+                !comment.is_empty(),
+                "{workflow_name} should record the pinned release in a trailing comment so the \
+                 version contract stays readable: {reference:?}"
+            );
+        }
+    }
 }
 
 fn declaration_value<'a>(body: &'a str, property: &str) -> Option<&'a str> {

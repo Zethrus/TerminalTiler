@@ -174,7 +174,7 @@ jobs:
 
     steps:
       - name: Download platform release artifacts
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: terminaltiler-release-*-${{ needs.resolve-release.outputs.package_version }}
           path: dist
@@ -213,7 +213,7 @@ jobs:
           fi
 
       - name: Publish release assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: ${{ needs.resolve-release.outputs.tag }}
           draft: true
