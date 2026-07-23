@@ -313,9 +313,13 @@ pub fn spawn_headless_review(
     let log = File::create(&spec.log_path).map_err(|error| error.to_string())?;
     let err_log = log.try_clone().map_err(|error| error.to_string())?;
 
-    let child = spawn_from_spec(&spec, log, err_log).map_err(|error| error.to_string())?;
+    let mut child = spawn_from_spec(&spec, log, err_log).map_err(|error| error.to_string())?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(HeadlessReviewRun {
-        pid: child.id(),
+        pid,
         log_path: spec.log_path,
     })
 }

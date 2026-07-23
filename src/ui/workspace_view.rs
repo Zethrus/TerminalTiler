@@ -375,6 +375,10 @@ impl WorkspaceRuntime {
         ))
     }
 
+    pub fn clear_runtime_event_journal(&self) {
+        self.inner.event_journal.borrow_mut().clear();
+    }
+
     /// Journal sanitized output activity without advancing the workspace
     /// revision. Raw terminal bytes are never retained in the event ring.
     pub fn record_output_activity(&self, tile_id: &str, output: &str) {

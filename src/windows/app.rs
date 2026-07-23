@@ -42,7 +42,7 @@ mod imp {
 
     use crate::extension::{
         CompanionAction, CompanionActionInput, CompanionIntegration, CompanionPanelSnapshot,
-        ProductInfo, RuntimeOptions,
+        CompanionShutdownReason, CompanionShutdownRequest, ProductInfo, RuntimeOptions,
     };
     use crate::logging;
     use crate::model::assets::{ProjectSuggestion, RestoreLaunchMode, WorkspaceAssets};
@@ -299,6 +299,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         tray_icon_added: bool,
         window_hidden_to_tray: bool,
         quit_requested: bool,
+        shutdown_started: bool,
         startup_resume_prompted: bool,
         selected_source: LaunchSelection,
         active_layout: LayoutNode,
@@ -446,6 +447,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             tray_icon_added: false,
             window_hidden_to_tray: false,
             quit_requested: false,
+            shutdown_started: false,
             startup_resume_prompted: false,
             selected_source: LaunchSelection::Template(0),
             active_layout: generate_layout(1),
@@ -963,6 +965,19 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                     }
                 }
                 if let Some(state) = unsafe { state_mut(hwnd) } {
+                    if !state.shutdown_started {
+                        state.shutdown_started = true;
+                        if let Some(companion) = state.runtime_options.companion.as_ref() {
+                            companion.shutdown(CompanionShutdownRequest {
+                                reason: if state.quit_requested {
+                                    CompanionShutdownReason::ApplicationQuit
+                                } else {
+                                    CompanionShutdownReason::WindowClosed
+                                },
+                                grace_period: std::time::Duration::from_secs(2),
+                            });
+                        }
+                    }
                     remove_tray_icon(hwnd, state);
                 }
                 if PRIMARY_SHELL_HWND.load(Ordering::Relaxed) == hwnd as isize {

@@ -4,8 +4,12 @@
 //! atomically, and returns a short text result. Tools operate on the board at
 //! `project_root` (the agent's working directory).
 
+use std::cmp::{Ordering as CmpOrdering, Reverse};
+use std::collections::BinaryHeap;
 use std::path::Path;
+use std::sync::OnceLock;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::model::board::{Board, Task, TaskStatus, now_epoch_secs};
@@ -28,7 +32,12 @@ pub struct ToolCallError {
 }
 
 /// Tool definitions advertised by `tools/list`.
-pub fn list_json() -> Vec<Value> {
+pub fn list_json() -> &'static [Value] {
+    static TOOLS: OnceLock<Vec<Value>> = OnceLock::new();
+    TOOLS.get_or_init(build_tool_definitions).as_slice()
+}
+
+fn build_tool_definitions() -> Vec<Value> {
     let status_enum: Vec<&str> = TaskStatus::ALL
         .iter()
         .map(|status| status.wire_id())
@@ -44,14 +53,22 @@ pub fn list_json() -> Vec<Value> {
                     "status": { "type": "string", "enum": status_enum, "description": "Optional column filter." },
                     "available_only": { "type": "boolean", "description": "Only tasks that are not blocked and have no active fresh assignee lease." },
                     "assignee": { "type": "string", "description": "Only tasks assigned to this id." },
-                    "blocked": { "type": "boolean", "description": "Filter blocked or unblocked tasks." }
+                    "blocked": { "type": "boolean", "description": "Filter blocked or unblocked tasks." },
+                    "detail": { "type": "string", "enum": ["full", "summary"], "default": "full" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+                    "offset": { "type": "integer", "minimum": 0 }
                 }
             }),
         ),
         tool_with_output(
             "get_board_summary",
             "Return compact board counts, lifecycle counts, and recommended next available tasks.",
-            json!({ "type": "object", "properties": {} }),
+            json!({
+                "type": "object",
+                "properties": {
+                    "detail": { "type": "string", "enum": ["full", "summary"], "default": "full" }
+                }
+            }),
             board_summary_output_schema(),
         ),
         tool_with_output(
@@ -60,10 +77,23 @@ pub fn list_json() -> Vec<Value> {
             json!({
                 "type": "object",
                 "properties": {
-                    "assignee": { "type": "string", "description": "Owner id to inspect; defaults to 'agent'." }
+                    "assignee": { "type": "string", "description": "Owner id to inspect; defaults to 'agent'." },
+                    "detail": { "type": "string", "enum": ["full", "summary"], "default": "full" },
+                    "limit_per_group": { "type": "integer", "minimum": 1, "maximum": 500 }
                 }
             }),
             my_work_output_schema(),
+        ),
+        tool(
+            "get_board_activity",
+            "Return recent board activity with bounded collection and pagination.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
+                    "offset": { "type": "integer", "minimum": 0 }
+                }
+            }),
         ),
         tool(
             "get_task",
@@ -339,6 +369,7 @@ pub fn call(
         "list_tasks" => list_tasks(arguments, project_root),
         "get_board_summary" => get_board_summary(arguments, project_root),
         "get_my_work" => get_my_work(arguments, project_root),
+        "get_board_activity" => get_board_activity(arguments, project_root),
         "get_task" => get_task(arguments, project_root),
         "get_task_brief" => get_task_brief(arguments, project_root),
         "diagnose_mcp" => diagnose_mcp(arguments, project_root),
@@ -370,6 +401,9 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
     let assignee = optional_str(arguments, "assignee");
     let blocked = optional_bool(arguments, "blocked");
     let available_only = optional_bool(arguments, "available_only").unwrap_or(false);
+    let detail = TaskDetail::parse(arguments)?;
+    let limit = optional_usize(arguments, "limit", 1, 500)?;
+    let offset = optional_usize(arguments, "offset", 0, usize::MAX)?.unwrap_or(0);
     let now = now_epoch_secs();
     let tasks: Vec<&Task> = board
         .tasks
@@ -384,6 +418,16 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
                     && (!board_service::has_fresh_active_lease(task, now)))
         })
         .collect();
+    let total = tasks.len();
+    let returned_tasks = tasks
+        .iter()
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .copied()
+        .collect::<Vec<_>>();
+    let tasks = project_tasks(&returned_tasks, detail, now)?;
+    let returned = returned_tasks.len();
+    let has_more = offset.saturating_add(returned) < total;
     let text = serde_json::to_string_pretty(&tasks).map_err(json_error)?;
     Ok(output(
         text,
@@ -392,12 +436,17 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
                 "ok": true,
                 "action": "list_tasks",
                 "tasks": tasks,
-                "count": tasks.len(),
+                "count": returned,
+                "total": total,
+                "returned": returned,
+                "offset": offset,
+                "has_more": has_more,
                 "filters": {
                     "status": status.map(|status| status.wire_id()),
                     "available_only": available_only,
                     "assignee": assignee,
                     "blocked": blocked,
+                    "detail": detail.wire_id(),
                 }
             }),
             project_root,
@@ -406,17 +455,21 @@ fn list_tasks(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, 
 }
 
 fn get_board_summary(
-    _arguments: &Value,
+    arguments: &Value,
     project_root: &Path,
 ) -> Result<ToolCallOutput, ToolCallError> {
     let board = board_store::load(project_root);
-    let structured = with_context(board_summary_value(&board), project_root);
-    let text = board_summary_text(&board);
+    let detail = TaskDetail::parse(arguments)?;
+    let summary = BoardSummaryAccumulator::new(&board);
+    let structured = with_context(summary.to_value(detail)?, project_root);
+    let text = summary.to_text();
     Ok(output(text, Some(structured)))
 }
 
 fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
     let assignee = optional_str(arguments, "assignee").unwrap_or("agent");
+    let detail = TaskDetail::parse(arguments)?;
+    let limit = optional_usize(arguments, "limit_per_group", 1, 500)?;
     let board = board_store::load(project_root);
     let now = now_epoch_secs();
     let work = board_service::get_my_work(&board, assignee, now);
@@ -428,6 +481,10 @@ fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
         "Owned work for '{assignee}': {} active, {} stale, {} paused, {} in review.",
         active_count, stale_count, paused_count, in_review_count
     );
+    let active = project_task_group(&work.active, detail, limit, now)?;
+    let stale = project_task_group(&work.stale, detail, limit, now)?;
+    let paused = project_task_group(&work.paused, detail, limit, now)?;
+    let in_review = project_task_group(&work.in_review, detail, limit, now)?;
     Ok(output(
         text,
         Some(with_context(
@@ -436,10 +493,10 @@ fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
                 "action": "get_my_work",
                 "assignee": work.assignee,
                 "groups": {
-                    "active": work.active,
-                    "stale": work.stale,
-                    "paused": work.paused,
-                    "in_review": work.in_review,
+                    "active": active.value,
+                    "stale": stale.value,
+                    "paused": paused.value,
+                    "in_review": in_review.value,
                 },
                 "counts": {
                     "active": active_count,
@@ -447,10 +504,29 @@ fn get_my_work(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput,
                     "paused": paused_count,
                     "in_review": in_review_count,
                 },
+                "detail": detail.wire_id(),
+                "pagination": {
+                    "active": active.pagination,
+                    "stale": stale.pagination,
+                    "paused": paused.pagination,
+                    "in_review": in_review.pagination,
+                }
             }),
             project_root,
         )),
     ))
+}
+
+fn get_board_activity(
+    arguments: &Value,
+    project_root: &Path,
+) -> Result<ToolCallOutput, ToolCallError> {
+    let limit = optional_usize(arguments, "limit", 1, 500)?.unwrap_or(100);
+    let offset = optional_usize(arguments, "offset", 0, usize::MAX)?.unwrap_or(0);
+    let board = board_store::load(project_root);
+    let activity = board_activity_page(&board, limit, offset);
+    let text = serde_json::to_string_pretty(&activity).map_err(json_error)?;
+    Ok(output(text, Some(with_context(activity, project_root))))
 }
 
 fn get_task(arguments: &Value, project_root: &Path) -> Result<ToolCallOutput, ToolCallError> {
@@ -1187,194 +1263,242 @@ fn mcp_diagnostics_output_schema() -> Value {
     })
 }
 
-pub fn board_summary_value(board: &Board) -> Value {
-    let now = now_epoch_secs();
-    let mut by_status = serde_json::Map::new();
-    for status in TaskStatus::ALL {
-        by_status.insert(
-            status.wire_id().to_string(),
-            json!(
-                board
-                    .tasks
-                    .iter()
-                    .filter(|task| task.status == status)
-                    .count()
-            ),
-        );
-    }
-    let active = board
-        .tasks
-        .iter()
-        .filter(|task| board_service::has_fresh_active_lease(task, now))
-        .count();
-    let stale = board
-        .tasks
-        .iter()
-        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
-        .count();
-    let blocked = board
-        .tasks
-        .iter()
-        .filter(|task| task.blocked.is_some())
-        .count();
-    let review = board
-        .tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::InReview)
-        .count();
-    let available: Vec<&Task> = board
-        .tasks
-        .iter()
-        .filter(|task| {
-            task.status == TaskStatus::Todo
-                && task.blocked.is_none()
-                && !board_service::has_fresh_active_lease(task, now)
-        })
-        .take(5)
-        .collect();
-    let stale_tasks: Vec<&Task> = board
-        .tasks
-        .iter()
-        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
-        .take(5)
-        .collect();
-    let blocked_tasks: Vec<&Task> = board
-        .tasks
-        .iter()
-        .filter(|task| task.blocked.is_some())
-        .take(5)
-        .collect();
-    let in_review_tasks: Vec<&Task> = board
-        .tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::InReview)
-        .take(5)
-        .collect();
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TaskDetail {
+    Full,
+    Summary,
+}
 
-    json!({
-        "ok": true,
-        "action": "get_board_summary",
-        "total": board.tasks.len(),
-        "by_status": by_status,
-        "lifecycle": {
-            "active": active,
-            "stale": stale,
-            "blocked": blocked,
-            "in_review": review,
-        },
-        "available": available.clone(),
-        "queues": {
-            "available": available,
-            "stale": stale_tasks,
-            "blocked": blocked_tasks,
-            "in_review": in_review_tasks,
-        },
+impl TaskDetail {
+    fn parse(arguments: &Value) -> Result<Self, ToolCallError> {
+        match optional_str(arguments, "detail").unwrap_or("full") {
+            "full" => Ok(Self::Full),
+            "summary" => Ok(Self::Summary),
+            other => Err(text_error(format!(
+                "parameter 'detail' must be 'full' or 'summary', not '{other}'"
+            ))),
+        }
+    }
+
+    fn wire_id(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Summary => "summary",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct TaskSummary<'a> {
+    id: &'a str,
+    title: &'a str,
+    status: &'static str,
+    assignee: Option<&'a str>,
+    blocked: bool,
+    paused: bool,
+    updated_at: u64,
+    lease_state: &'static str,
+}
+
+fn task_summary(task: &Task, now: u64) -> TaskSummary<'_> {
+    let lease_state = if task.paused.is_some() {
+        "paused"
+    } else if task.assignee.is_none() {
+        "unassigned"
+    } else if board_service::has_fresh_active_lease(task, now) {
+        "active"
+    } else if board_service::task_is_stale(task, now) {
+        "stale"
+    } else {
+        "assigned"
+    };
+    TaskSummary {
+        id: &task.id,
+        title: &task.title,
+        status: task.status.wire_id(),
+        assignee: task.assignee.as_deref(),
+        blocked: task.blocked.is_some(),
+        paused: task.paused.is_some(),
+        updated_at: task.updated_at,
+        lease_state,
+    }
+}
+
+fn project_tasks(tasks: &[&Task], detail: TaskDetail, now: u64) -> Result<Value, ToolCallError> {
+    match detail {
+        TaskDetail::Full => serde_json::to_value(tasks).map_err(json_error),
+        TaskDetail::Summary => serde_json::to_value(
+            tasks
+                .iter()
+                .map(|task| task_summary(task, now))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(json_error),
+    }
+}
+
+struct ProjectedTaskGroup {
+    value: Value,
+    pagination: Value,
+}
+
+fn project_task_group(
+    tasks: &[&Task],
+    detail: TaskDetail,
+    limit: Option<usize>,
+    now: u64,
+) -> Result<ProjectedTaskGroup, ToolCallError> {
+    let total = tasks.len();
+    let returned_tasks = tasks
+        .iter()
+        .take(limit.unwrap_or(usize::MAX))
+        .copied()
+        .collect::<Vec<_>>();
+    let returned = returned_tasks.len();
+    Ok(ProjectedTaskGroup {
+        value: project_tasks(&returned_tasks, detail, now)?,
+        pagination: json!({
+            "total": total,
+            "returned": returned,
+            "offset": 0,
+            "has_more": returned < total,
+        }),
     })
 }
 
-pub fn board_summary_text(board: &Board) -> String {
-    let now = now_epoch_secs();
-    let active = board
-        .tasks
-        .iter()
-        .filter(|task| board_service::has_fresh_active_lease(task, now))
-        .count();
-    let stale = board
-        .tasks
-        .iter()
-        .filter(|task| task.assignee.is_some() && board_service::task_is_stale(task, now))
-        .count();
-    let blocked = board
-        .tasks
-        .iter()
-        .filter(|task| task.blocked.is_some())
-        .count();
-    let review = board
-        .tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::InReview)
-        .count();
-    let mut lines = vec![
-        format!("Total tasks: {}", board.tasks.len()),
-        format!("Lifecycle: {active} active, {stale} stale, {blocked} blocked, {review} in review"),
-    ];
-    for status in TaskStatus::ALL {
-        let count = board
-            .tasks
-            .iter()
-            .filter(|task| task.status == status)
-            .count();
-        lines.push(format!("{}: {count}", status.column_title()));
+struct BoardSummaryAccumulator<'a> {
+    total: usize,
+    by_status: [usize; 5],
+    active: usize,
+    stale: usize,
+    blocked: usize,
+    in_review: usize,
+    available: Vec<&'a Task>,
+    stale_tasks: Vec<&'a Task>,
+    blocked_tasks: Vec<&'a Task>,
+    in_review_tasks: Vec<&'a Task>,
+    now: u64,
+    scanned_tasks: usize,
+}
+
+impl<'a> BoardSummaryAccumulator<'a> {
+    fn new(board: &'a Board) -> Self {
+        let now = now_epoch_secs();
+        let mut summary = Self {
+            total: board.tasks.len(),
+            by_status: [0; 5],
+            active: 0,
+            stale: 0,
+            blocked: 0,
+            in_review: 0,
+            available: Vec::with_capacity(5),
+            stale_tasks: Vec::with_capacity(5),
+            blocked_tasks: Vec::with_capacity(5),
+            in_review_tasks: Vec::with_capacity(5),
+            now,
+            scanned_tasks: 0,
+        };
+        for task in &board.tasks {
+            summary.scanned_tasks += 1;
+            summary.by_status[status_index(task.status)] += 1;
+            let active = board_service::has_fresh_active_lease(task, now);
+            let stale = task.assignee.is_some() && board_service::task_is_stale(task, now);
+            let blocked = task.blocked.is_some();
+            let in_review = task.status == TaskStatus::InReview;
+            summary.active += usize::from(active);
+            summary.stale += usize::from(stale);
+            summary.blocked += usize::from(blocked);
+            summary.in_review += usize::from(in_review);
+            if task.status == TaskStatus::Todo && !blocked && !active && summary.available.len() < 5
+            {
+                summary.available.push(task);
+            }
+            if stale && summary.stale_tasks.len() < 5 {
+                summary.stale_tasks.push(task);
+            }
+            if blocked && summary.blocked_tasks.len() < 5 {
+                summary.blocked_tasks.push(task);
+            }
+            if in_review && summary.in_review_tasks.len() < 5 {
+                summary.in_review_tasks.push(task);
+            }
+        }
+        summary
     }
-    lines.join("\n")
+
+    fn to_value(&self, detail: TaskDetail) -> Result<Value, ToolCallError> {
+        let mut by_status = serde_json::Map::new();
+        for status in TaskStatus::ALL {
+            by_status.insert(
+                status.wire_id().to_string(),
+                json!(self.by_status[status_index(status)]),
+            );
+        }
+        let available = project_tasks(&self.available, detail, self.now)?;
+        Ok(json!({
+            "ok": true,
+            "action": "get_board_summary",
+            "total": self.total,
+            "by_status": by_status,
+            "lifecycle": {
+                "active": self.active,
+                "stale": self.stale,
+                "blocked": self.blocked,
+                "in_review": self.in_review,
+            },
+            "available": available,
+            "queues": {
+                "available": project_tasks(&self.available, detail, self.now)?,
+                "stale": project_tasks(&self.stale_tasks, detail, self.now)?,
+                "blocked": project_tasks(&self.blocked_tasks, detail, self.now)?,
+                "in_review": project_tasks(&self.in_review_tasks, detail, self.now)?,
+            },
+            "detail": detail.wire_id(),
+        }))
+    }
+
+    fn to_text(&self) -> String {
+        let mut lines = vec![
+            format!("Total tasks: {}", self.total),
+            format!(
+                "Lifecycle: {} active, {} stale, {} blocked, {} in review",
+                self.active, self.stale, self.blocked, self.in_review
+            ),
+        ];
+        for status in TaskStatus::ALL {
+            lines.push(format!(
+                "{}: {}",
+                status.column_title(),
+                self.by_status[status_index(status)]
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+fn status_index(status: TaskStatus) -> usize {
+    match status {
+        TaskStatus::Todo => 0,
+        TaskStatus::InProgress => 1,
+        TaskStatus::InReview => 2,
+        TaskStatus::Complete => 3,
+        TaskStatus::Cancelled => 4,
+    }
+}
+
+pub fn board_summary_value(board: &Board) -> Value {
+    BoardSummaryAccumulator::new(board)
+        .to_value(TaskDetail::Full)
+        .expect("board summaries contain serializable task data")
+}
+
+pub fn board_summary_text(board: &Board) -> String {
+    BoardSummaryAccumulator::new(board).to_text()
 }
 
 pub fn board_activity_value(board: &Board) -> Value {
     let mut events = Vec::new();
-    for task in &board.tasks {
-        events.push(json!({
-            "kind": "task_status",
-            "task_id": task.id,
-            "task_title": task.title,
-            "status": task.status.wire_id(),
-            "at": task.updated_at,
-            "assignee": task.assignee,
-        }));
-        if let Some(blocked) = task.blocked.as_ref() {
-            events.push(json!({
-                "kind": "blocked",
-                "task_id": task.id,
-                "task_title": task.title,
-                "reason": blocked.reason,
-                "category": blocked.category,
-                "author": blocked.author,
-                "at": blocked.blocked_at,
-            }));
-        }
-        if let Some(paused) = task.paused.as_ref() {
-            events.push(json!({
-                "kind": "paused",
-                "task_id": task.id,
-                "task_title": task.title,
-                "reason": paused.reason,
-                "author": paused.author,
-                "at": paused.paused_at,
-            }));
-        }
-        for note in &task.notes {
-            events.push(json!({
-                "kind": "note",
-                "task_id": task.id,
-                "task_title": task.title,
-                "author": note.author,
-                "text": note.text,
-                "at": note.created_at,
-            }));
-        }
-        for entry in &task.knowledge {
-            events.push(json!({
-                "kind": "knowledge",
-                "task_id": task.id,
-                "task_title": task.title,
-                "title": entry.title,
-                "source": entry.source,
-                "category": entry.category,
-                "author": entry.author,
-                "at": entry.created_at,
-            }));
-        }
-        if let Some(started_at) = task.review.last_started_at {
-            events.push(json!({
-                "kind": "review_started",
-                "task_id": task.id,
-                "task_title": task.title,
-                "reviewer": task.review.last_reviewer,
-                "attempts": task.review.attempts,
-                "error": task.review.last_error,
-                "at": started_at,
-            }));
-        }
-    }
+    for_each_activity_event(board, |_, event| events.push(event));
     events.sort_by(|left, right| {
         right["at"]
             .as_u64()
@@ -1386,6 +1510,159 @@ pub fn board_activity_value(board: &Board) -> Value {
         "action": "board_activity",
         "events": events,
     })
+}
+
+#[derive(Debug)]
+struct RankedActivityEvent {
+    at: u64,
+    sequence: usize,
+    value: Value,
+}
+
+impl PartialEq for RankedActivityEvent {
+    fn eq(&self, other: &Self) -> bool {
+        (self.at, self.sequence) == (other.at, other.sequence)
+    }
+}
+
+impl Eq for RankedActivityEvent {}
+
+impl PartialOrd for RankedActivityEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedActivityEvent {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        (self.at, self.sequence).cmp(&(other.at, other.sequence))
+    }
+}
+
+fn board_activity_page(board: &Board, limit: usize, offset: usize) -> Value {
+    let retain = offset.saturating_add(limit);
+    let mut recent = BinaryHeap::<Reverse<RankedActivityEvent>>::new();
+    let mut total = 0usize;
+    for_each_activity_event(board, |at, value| {
+        let event = RankedActivityEvent {
+            at,
+            sequence: total,
+            value,
+        };
+        total = total.saturating_add(1);
+        if retain > 0 {
+            recent.push(Reverse(event));
+            if recent.len() > retain {
+                recent.pop();
+            }
+        }
+    });
+    let mut recent = recent
+        .into_iter()
+        .map(|Reverse(event)| event)
+        .collect::<Vec<_>>();
+    recent.sort_by(|left, right| right.cmp(left));
+    let events = recent
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|event| event.value)
+        .collect::<Vec<_>>();
+    let returned = events.len();
+    json!({
+        "ok": true,
+        "action": "get_board_activity",
+        "events": events,
+        "total": total,
+        "returned": returned,
+        "offset": offset,
+        "has_more": offset.saturating_add(returned) < total,
+    })
+}
+
+fn for_each_activity_event(board: &Board, mut emit: impl FnMut(u64, Value)) {
+    for task in &board.tasks {
+        emit(
+            task.updated_at,
+            json!({
+                "kind": "task_status",
+                "task_id": task.id,
+                "task_title": task.title,
+                "status": task.status.wire_id(),
+                "at": task.updated_at,
+                "assignee": task.assignee,
+            }),
+        );
+        if let Some(blocked) = task.blocked.as_ref() {
+            emit(
+                blocked.blocked_at,
+                json!({
+                    "kind": "blocked",
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "reason": blocked.reason,
+                    "category": blocked.category,
+                    "author": blocked.author,
+                    "at": blocked.blocked_at,
+                }),
+            );
+        }
+        if let Some(paused) = task.paused.as_ref() {
+            emit(
+                paused.paused_at,
+                json!({
+                    "kind": "paused",
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "reason": paused.reason,
+                    "author": paused.author,
+                    "at": paused.paused_at,
+                }),
+            );
+        }
+        for note in &task.notes {
+            emit(
+                note.created_at,
+                json!({
+                    "kind": "note",
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "author": note.author,
+                    "text": note.text,
+                    "at": note.created_at,
+                }),
+            );
+        }
+        for entry in &task.knowledge {
+            emit(
+                entry.created_at,
+                json!({
+                    "kind": "knowledge",
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "title": entry.title,
+                    "source": entry.source,
+                    "category": entry.category,
+                    "author": entry.author,
+                    "at": entry.created_at,
+                }),
+            );
+        }
+        if let Some(started_at) = task.review.last_started_at {
+            emit(
+                started_at,
+                json!({
+                    "kind": "review_started",
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "reviewer": task.review.last_reviewer,
+                    "attempts": task.review.attempts,
+                    "error": task.review.last_error,
+                    "at": started_at,
+                }),
+            );
+        }
+    }
 }
 
 pub fn mcp_context_value(project_root: &Path) -> Value {
@@ -1613,6 +1890,28 @@ fn optional_bool(arguments: &Value, key: &str) -> Option<bool> {
     arguments.get(key).and_then(Value::as_bool)
 }
 
+fn optional_usize(
+    arguments: &Value,
+    key: &str,
+    minimum: usize,
+    maximum: usize,
+) -> Result<Option<usize>, ToolCallError> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(None);
+    };
+    let Some(raw) = value.as_u64().and_then(|raw| usize::try_from(raw).ok()) else {
+        return Err(text_error(format!(
+            "parameter '{key}' must be a nonnegative integer"
+        )));
+    };
+    if raw < minimum || raw > maximum {
+        return Err(text_error(format!(
+            "parameter '{key}' must be between {minimum} and {maximum}"
+        )));
+    }
+    Ok(Some(raw))
+}
+
 fn optional_string_list(arguments: &Value, key: &str) -> Result<Vec<String>, ToolCallError> {
     let Some(value) = arguments.get(key) else {
         return Ok(Vec::new());
@@ -1832,6 +2131,7 @@ fn task_structured(action: &str, task: &Task, warnings: Vec<String>, project_roo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::board::{KnowledgeEntry, TaskNote};
 
     fn tool_definition<'a>(tools: &'a [Value], name: &str) -> &'a Value {
         tools
@@ -1852,7 +2152,7 @@ mod tests {
     #[test]
     fn summary_and_diagnostic_tools_advertise_matching_output_schemas() {
         let tools = list_json();
-        let summary_schema = &tool_definition(&tools, "get_board_summary")["outputSchema"];
+        let summary_schema = &tool_definition(tools, "get_board_summary")["outputSchema"];
         let summary_required = required_fields(summary_schema);
         assert!(summary_required.contains(&"total"));
         assert!(summary_required.contains(&"by_status"));
@@ -1862,31 +2162,101 @@ mod tests {
         assert!(!summary_required.contains(&"task_id"));
         assert!(!summary_required.contains(&"warnings"));
         assert_eq!(
-            tool_definition(&tools, "get_board_summary")["title"],
+            tool_definition(tools, "get_board_summary")["title"],
             "Get Board Summary"
         );
 
-        let my_work_schema = &tool_definition(&tools, "get_my_work")["outputSchema"];
+        let my_work_schema = &tool_definition(tools, "get_my_work")["outputSchema"];
         let my_work_required = required_fields(my_work_schema);
         assert!(my_work_required.contains(&"assignee"));
         assert!(my_work_required.contains(&"groups"));
         assert!(my_work_required.contains(&"counts"));
 
-        let diagnostics_schema = &tool_definition(&tools, "diagnose_mcp")["outputSchema"];
+        let diagnostics_schema = &tool_definition(tools, "diagnose_mcp")["outputSchema"];
         let diagnostics_required = required_fields(diagnostics_schema);
         assert!(diagnostics_required.contains(&"diagnostics"));
         assert!(!diagnostics_required.contains(&"task_id"));
         assert!(!diagnostics_required.contains(&"warnings"));
 
-        let lifecycle_schema = &tool_definition(&tools, "start_work")["outputSchema"];
+        let lifecycle_schema = &tool_definition(tools, "start_work")["outputSchema"];
         let lifecycle_required = required_fields(lifecycle_schema);
         assert!(lifecycle_required.contains(&"task_id"));
         assert!(lifecycle_required.contains(&"warnings"));
         assert!(lifecycle_schema["properties"]["review_error"].is_object());
 
-        let next_schema = &tool_definition(&tools, "start_next_work")["outputSchema"];
+        let next_schema = &tool_definition(tools, "start_next_work")["outputSchema"];
         let next_required = required_fields(next_schema);
         assert!(next_required.contains(&"task_id"));
         assert!(next_schema["properties"]["reason"].is_object());
+    }
+
+    fn populated_board(task_count: usize) -> Board {
+        let mut board = Board::default();
+        for index in 0..task_count {
+            board_service::create_task(
+                &mut board,
+                format!("Task {index}"),
+                "Detailed implementation context ".repeat(12),
+                TaskStatus::Todo,
+            );
+            let task = board.tasks.last_mut().expect("task was just appended");
+            task.notes.push(TaskNote {
+                text: "A substantial progress note for payload comparison. ".repeat(8),
+                author: Some("agent".into()),
+                created_at: index as u64 + 1,
+            });
+            task.knowledge.push(KnowledgeEntry {
+                title: "Reference".into(),
+                content: "Durable knowledge captured during implementation. ".repeat(8),
+                source: Some("agent".into()),
+                category: Some("api_ref".into()),
+                author: Some("agent".into()),
+                created_at: index as u64 + 2,
+            });
+        }
+        board
+    }
+
+    #[test]
+    fn immutable_tool_definitions_are_reused() {
+        let first = list_json();
+        let second = list_json();
+        assert!(std::ptr::eq(first.as_ptr(), second.as_ptr()));
+        assert_eq!(first.len(), second.len());
+    }
+
+    #[test]
+    fn board_summary_scans_each_task_once() {
+        let board = populated_board(100);
+        let summary = BoardSummaryAccumulator::new(&board);
+        assert_eq!(summary.scanned_tasks, board.tasks.len());
+        assert_eq!(summary.total, 100);
+    }
+
+    #[test]
+    fn summary_projection_is_at_least_sixty_percent_smaller() {
+        let board = populated_board(100);
+        let tasks = board.tasks.iter().collect::<Vec<_>>();
+        let full =
+            serde_json::to_vec(&project_tasks(&tasks, TaskDetail::Full, 0).unwrap()).unwrap();
+        let summary =
+            serde_json::to_vec(&project_tasks(&tasks, TaskDetail::Summary, 0).unwrap()).unwrap();
+        assert!(
+            summary.len() * 100 <= full.len() * 40,
+            "summary={} full={}",
+            summary.len(),
+            full.len()
+        );
+    }
+
+    #[test]
+    fn limited_activity_retains_only_requested_page() {
+        let board = populated_board(100);
+        let page = board_activity_page(&board, 7, 5);
+        assert_eq!(page["events"].as_array().unwrap().len(), 7);
+        assert_eq!(page["returned"], 7);
+        assert_eq!(page["offset"], 5);
+        assert_eq!(page["total"], 300);
+        assert_eq!(page["has_more"], true);
     }
 }

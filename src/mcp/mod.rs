@@ -7,15 +7,18 @@
 
 pub mod tools;
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 /// MCP protocol revision this server implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 /// Server identity reported during `initialize`.
 pub const SERVER_NAME: &str = "terminaltiler";
+pub const MAX_REQUEST_LINE_BYTES: usize = 1024 * 1024;
 
 /// Guidance returned to the agent so it knows how to work the board.
 const INSTRUCTIONS: &str = "\
@@ -47,17 +50,41 @@ pub fn run_stdio() {
     let stdout = std::io::stdout();
     let mut writer = stdout.lock();
 
-    let mut line = String::new();
+    serve_stdio(&mut reader, &mut writer, &project_root);
+}
+
+fn serve_stdio(reader: &mut impl BufRead, writer: &mut impl Write, project_root: &Path) {
+    let mut line = Vec::with_capacity(8 * 1024);
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
+        let mut limited = reader.by_ref().take((MAX_REQUEST_LINE_BYTES + 2) as u64);
+        match limited.read_until(b'\n', &mut line) {
             Ok(0) => break, // EOF — client closed stdin.
             Ok(_) => {
+                let content = line.strip_suffix(b"\n").unwrap_or(&line);
+                let content_len = content.strip_suffix(b"\r").unwrap_or(content).len();
+                if content_len > MAX_REQUEST_LINE_BYTES {
+                    let response = error_response(
+                        Value::Null,
+                        -32600,
+                        "invalid request: request line exceeds 1 MiB",
+                    );
+                    let _ = writeln!(writer, "{response}");
+                    let _ = writer.flush();
+                    break;
+                }
+                let Ok(line) = std::str::from_utf8(&line) else {
+                    let response =
+                        error_response(Value::Null, -32700, "parse error: invalid UTF-8");
+                    let _ = writeln!(writer, "{response}");
+                    let _ = writer.flush();
+                    break;
+                };
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Some(response) = handle_request(trimmed, &project_root)
+                if let Some(response) = handle_request(trimmed, project_root)
                     && (writeln!(writer, "{response}").is_err() || writer.flush().is_err())
                 {
                     break;
@@ -138,9 +165,11 @@ pub fn handle_request(line: &str, project_root: &Path) -> Option<String> {
     match method {
         Some("initialize") => Some(success_response(id_or_null(id), initialize_result())),
         Some("ping") => Some(success_response(id_or_null(id), json!({}))),
-        Some("tools/list") => Some(success_response(
+        Some("tools/list") => Some(success_response_ref(
             id_or_null(id),
-            json!({ "tools": tools::list_json() }),
+            &ToolsListResult {
+                tools: tools::list_json(),
+            },
         )),
         Some("tools/call") => Some(success_response(
             id_or_null(id),
@@ -154,7 +183,7 @@ pub fn handle_request(line: &str, project_root: &Path) -> Option<String> {
             Ok(result) => Some(success_response(id_or_null(id), result)),
             Err(message) => Some(error_response(id_or_null(id), -32602, &message)),
         },
-        Some("prompts/list") => Some(success_response(id_or_null(id), prompts_list_result())),
+        Some("prompts/list") => Some(success_response_ref(id_or_null(id), prompts_list_result())),
         Some("prompts/get") => match prompts_get_result(&params, project_root) {
             Ok(result) => Some(success_response(id_or_null(id), result)),
             Err(message) => Some(error_response(id_or_null(id), -32602, &message)),
@@ -168,6 +197,11 @@ pub fn handle_request(line: &str, project_root: &Path) -> Option<String> {
         )),
         None => Some(error_response(id_or_null(id), -32600, "invalid request")),
     }
+}
+
+#[derive(Serialize)]
+struct ToolsListResult<'a> {
+    tools: &'a [Value],
 }
 
 fn tools_call_result(params: &Value, project_root: &Path) -> Value {
@@ -285,7 +319,6 @@ fn resources_read_result(params: &Value, project_root: &Path) -> Result<Value, S
 }
 
 fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String), String> {
-    let board = crate::storage::board_store::load(project_root);
     match uri {
         "terminaltiler://project/context" => {
             serde_json::to_string_pretty(&tools::mcp_context_value(project_root))
@@ -293,6 +326,7 @@ fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String
                 .map_err(|error| error.to_string())
         }
         "terminaltiler://board/summary" => {
+            let board = crate::storage::board_store::load(project_root);
             let mut summary = tools::board_summary_value(&board);
             if let Some(object) = summary.as_object_mut() {
                 object.insert(
@@ -305,17 +339,22 @@ fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String
                 .map_err(|error| error.to_string())
         }
         "terminaltiler://board/activity" => {
+            let board = crate::storage::board_store::load(project_root);
             serde_json::to_string_pretty(&tools::board_activity_value(&board))
                 .map(|text| ("application/json", text))
                 .map_err(|error| error.to_string())
         }
-        "terminaltiler://board/tasks" => serde_json::to_string_pretty(&board.tasks)
-            .map(|text| ("application/json", text))
-            .map_err(|error| error.to_string()),
+        "terminaltiler://board/tasks" => {
+            let board = crate::storage::board_store::load(project_root);
+            serde_json::to_string_pretty(&board.tasks)
+                .map(|text| ("application/json", text))
+                .map_err(|error| error.to_string())
+        }
         _ if uri.starts_with("terminaltiler://task/") && uri.ends_with("/handoff.md") => {
             let id = uri
                 .trim_start_matches("terminaltiler://task/")
                 .trim_end_matches("/handoff.md");
+            let board = crate::storage::board_store::load(project_root);
             let task = crate::services::board::get_task(&board, id)
                 .ok_or_else(|| format!("no task with id '{id}'"))?;
             Ok(("text/markdown", tools::task_handoff_markdown(task)))
@@ -325,6 +364,7 @@ fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String
             let id = uri
                 .trim_start_matches("terminaltiler://task/")
                 .trim_end_matches(".json");
+            let board = crate::storage::board_store::load(project_root);
             let task = crate::services::board::get_task(&board, id)
                 .ok_or_else(|| format!("no task with id '{id}'"))?;
             serde_json::to_string_pretty(task)
@@ -335,6 +375,7 @@ fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String
             let id = uri
                 .trim_start_matches("terminaltiler://task/")
                 .trim_end_matches(".md");
+            let board = crate::storage::board_store::load(project_root);
             let task = crate::services::board::get_task(&board, id)
                 .ok_or_else(|| format!("no task with id '{id}'"))?;
             Ok(("text/markdown", tools::task_brief_markdown(task)))
@@ -343,8 +384,9 @@ fn read_resource(uri: &str, project_root: &Path) -> Result<(&'static str, String
     }
 }
 
-fn prompts_list_result() -> Value {
-    json!({
+fn prompts_list_result() -> &'static Value {
+    static PROMPTS: OnceLock<Value> = OnceLock::new();
+    PROMPTS.get_or_init(|| json!({
         "prompts": [
             {
                 "name": "implement_task",
@@ -367,7 +409,7 @@ fn prompts_list_result() -> Value {
                 "arguments": []
             }
         ]
-    })
+    }))
 }
 
 fn prompts_get_result(params: &Value, project_root: &Path) -> Result<Value, String> {
@@ -421,6 +463,21 @@ fn success_response(id: Value, result: Value) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
 }
 
+fn success_response_ref(id: Value, result: &impl Serialize) -> String {
+    #[derive(Serialize)]
+    struct Response<'a, T> {
+        jsonrpc: &'static str,
+        id: Value,
+        result: &'a T,
+    }
+    serde_json::to_string(&Response {
+        jsonrpc: "2.0",
+        id,
+        result,
+    })
+    .expect("JSON-RPC definitions contain serializable values")
+}
+
 fn error_response(id: Value, code: i64, message: &str) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
 }
@@ -452,7 +509,7 @@ mod tests {
 
     fn output_schema_required_fields(tool_name: &str) -> Vec<String> {
         tools::list_json()
-            .into_iter()
+            .iter()
             .find(|tool| tool["name"] == tool_name)
             .unwrap_or_else(|| panic!("missing tool definition for {tool_name}"))["outputSchema"]
             ["required"]
@@ -564,6 +621,7 @@ mod tests {
             "list_tasks",
             "get_board_summary",
             "get_my_work",
+            "get_board_activity",
             "get_task",
             "get_task_brief",
             "diagnose_mcp",
@@ -600,6 +658,64 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|tool| tool["outputSchema"].is_object())
+        );
+    }
+
+    #[test]
+    fn omitted_detail_keeps_full_tasks_and_summary_pagination_is_additive() {
+        let root = temp_root();
+        call_tool(
+            &root,
+            "create_task",
+            json!({
+                "title": "Compatibility task",
+                "description": "full-only detail"
+            }),
+        );
+        let board = crate::storage::board_store::load(&root);
+
+        let full = call_tool(&root, "list_tasks", json!({}));
+        assert_eq!(full["structuredContent"]["tasks"], json!(board.tasks));
+        assert_eq!(full["structuredContent"]["total"], 1);
+        assert_eq!(full["structuredContent"]["returned"], 1);
+        assert_eq!(full["structuredContent"]["offset"], 0);
+        assert_eq!(full["structuredContent"]["has_more"], false);
+
+        let compact = call_tool(
+            &root,
+            "list_tasks",
+            json!({ "detail": "summary", "limit": 1, "offset": 0 }),
+        );
+        let task = &compact["structuredContent"]["tasks"][0];
+        assert_eq!(task["title"], "Compatibility task");
+        assert!(task.get("description").is_none());
+        for field in [
+            "id",
+            "title",
+            "status",
+            "assignee",
+            "blocked",
+            "paused",
+            "updated_at",
+            "lease_state",
+        ] {
+            assert!(task.get(field).is_some(), "missing summary field {field}");
+        }
+    }
+
+    #[test]
+    fn oversized_stdio_request_is_rejected_and_connection_closes() {
+        let root = temp_root();
+        let mut input = std::io::Cursor::new(vec![b'x'; MAX_REQUEST_LINE_BYTES + 1]);
+        let mut output = Vec::new();
+        serve_stdio(&mut input, &mut output, &root);
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["error"]["code"], -32600);
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("1 MiB")
         );
     }
 

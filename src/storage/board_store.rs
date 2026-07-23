@@ -92,10 +92,14 @@ pub fn update<R>(project_root: &Path, mutate: impl FnOnce(&mut Board) -> R) -> s
 
 fn save_unlocked(project_root: &Path, board: &Board) -> std::io::Result<()> {
     let path = board_path(project_root);
-    let mut normalized = board.clone();
-    normalized.version = BOARD_VERSION;
-    let serialized = serde_json::to_string_pretty(&normalized)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let serialized = if board.version == BOARD_VERSION {
+        serde_json::to_string_pretty(board)
+    } else {
+        let mut normalized = board.clone();
+        normalized.version = BOARD_VERSION;
+        serde_json::to_string_pretty(&normalized)
+    }
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
     atomic_write_private(&path, &serialized)
 }
 

@@ -7,7 +7,7 @@
 //! licensing, provider clients, and conversation logic stay outside Core.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -317,6 +317,12 @@ impl WorkspaceEventJournal {
 
     pub fn latest_cursor(&self) -> u64 {
         self.next_cursor.saturating_sub(1)
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+        self.last_output.clear();
+        self.next_cursor = 1;
     }
 
     pub fn oldest_cursor(&self) -> u64 {
@@ -634,6 +640,9 @@ pub struct ActionResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeControlError {
+    Busy,
+    ShuttingDown,
+    TimedOut,
     Unauthorized,
     InvalidRequest(String),
     NotFound(String),
@@ -646,6 +655,9 @@ pub enum RuntimeControlError {
 impl std::fmt::Display for RuntimeControlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Busy => write!(f, "runtime control is busy"),
+            Self::ShuttingDown => write!(f, "runtime control is shutting down"),
+            Self::TimedOut => write!(f, "runtime control timed out"),
             Self::Unauthorized => write!(f, "runtime capability is not authorized"),
             Self::InvalidRequest(message) => write!(f, "invalid runtime request: {message}"),
             Self::NotFound(message) => write!(f, "runtime target not found: {message}"),
@@ -717,6 +729,51 @@ struct QueuedRequest {
 const REQUEST_PENDING: u8 = 0;
 const REQUEST_DISPATCHING: u8 = 1;
 const REQUEST_CANCELLED: u8 = 2;
+const REQUEST_COMMITTED: u8 = 3;
+
+/// Cancellation/commit handshake shared with the GTK dispatcher.
+///
+/// Read-only operations only need [`ensure_active`](Self::ensure_active). Mutating
+/// operations must call [`commit`](Self::commit) immediately before their first
+/// side effect. A request that loses the race with timeout or shutdown cannot
+/// subsequently commit a mutation.
+#[derive(Clone, Debug)]
+pub struct RuntimeRequestGuard {
+    lifecycle: Arc<AtomicU8>,
+}
+
+impl RuntimeRequestGuard {
+    pub fn ensure_active(&self) -> Result<(), RuntimeControlError> {
+        match self.lifecycle.load(Ordering::Acquire) {
+            REQUEST_PENDING | REQUEST_DISPATCHING | REQUEST_COMMITTED => Ok(()),
+            REQUEST_CANCELLED => Err(RuntimeControlError::TimedOut),
+            _ => Err(RuntimeControlError::Internal(
+                "invalid runtime request lifecycle".into(),
+            )),
+        }
+    }
+
+    pub fn commit(&self) -> Result<(), RuntimeControlError> {
+        match self.lifecycle.compare_exchange(
+            REQUEST_DISPATCHING,
+            REQUEST_COMMITTED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) | Err(REQUEST_COMMITTED) => Ok(()),
+            Err(REQUEST_CANCELLED) => Err(RuntimeControlError::TimedOut),
+            Err(_) => Err(RuntimeControlError::Internal(
+                "runtime request could not be committed".into(),
+            )),
+        }
+    }
+}
+
+#[derive(Default)]
+struct QueueLifecycle {
+    closed: bool,
+    reason: Option<String>,
+}
 
 /// A bounded cross-thread request queue. The desktop drains this queue from
 /// the GTK main loop and executes operations against `WorkspaceRuntime`, while
@@ -725,19 +782,65 @@ const REQUEST_CANCELLED: u8 = 2;
 pub struct WorkspaceControlQueue {
     sender: mpsc::SyncSender<QueuedRequest>,
     receiver: Mutex<mpsc::Receiver<QueuedRequest>>,
+    lifecycle: Arc<Mutex<QueueLifecycle>>,
+    pending: Arc<AtomicUsize>,
 }
 
 impl WorkspaceControlQueue {
     pub fn new() -> (Arc<Self>, Arc<dyn WorkspaceControlPort>) {
         let (sender, receiver) = mpsc::sync_channel(64);
+        let lifecycle = Arc::new(Mutex::new(QueueLifecycle::default()));
+        let pending = Arc::new(AtomicUsize::new(0));
         let queue = Arc::new(Self {
             sender,
             receiver: Mutex::new(receiver),
+            lifecycle: lifecycle.clone(),
+            pending: pending.clone(),
         });
         let port: Arc<dyn WorkspaceControlPort> = Arc::new(QueuedWorkspaceControl {
             sender: queue.sender.clone(),
+            lifecycle,
+            pending,
         });
         (queue, port)
+    }
+
+    /// Close the queue once, reject future calls, and complete queued callers.
+    pub fn close(&self, reason: impl Into<String>) -> bool {
+        let Ok(mut lifecycle) = self.lifecycle.lock() else {
+            return false;
+        };
+        if lifecycle.closed {
+            return false;
+        }
+        lifecycle.closed = true;
+        lifecycle.reason = Some(reason.into());
+
+        let Ok(receiver) = self.receiver.lock() else {
+            return true;
+        };
+        while let Ok(request) = receiver.try_recv() {
+            self.pending.fetch_sub(1, Ordering::AcqRel);
+            request
+                .lifecycle
+                .store(REQUEST_CANCELLED, Ordering::Release);
+            let _ = request
+                .response
+                .send(Err(RuntimeControlError::ShuttingDown));
+        }
+        true
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.lifecycle
+            .lock()
+            .map(|lifecycle| lifecycle.closed)
+            .unwrap_or(true)
+    }
+
+    /// Deterministic queue-depth instrumentation for diagnostics and tests.
+    pub fn pending_count(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
     }
 
     /// Drain at most `limit` requests from the main loop. The handler must be
@@ -745,7 +848,7 @@ impl WorkspaceControlQueue {
     /// are handled asynchronously by the terminal runtime.
     pub fn drain<F>(&self, limit: usize, mut handler: F) -> usize
     where
-        F: FnMut(RuntimeOperation) -> Result<Value, RuntimeControlError>,
+        F: FnMut(RuntimeOperation, &RuntimeRequestGuard) -> Result<Value, RuntimeControlError>,
     {
         let Ok(receiver) = self.receiver.lock() else {
             return 0;
@@ -755,6 +858,7 @@ impl WorkspaceControlQueue {
             let Ok(request) = receiver.try_recv() else {
                 break;
             };
+            self.pending.fetch_sub(1, Ordering::AcqRel);
             // A caller that timed out cancels while the request is still
             // pending.  Never dispatch a cancelled operation later: this is
             // especially important for terminal execution requests.
@@ -770,7 +874,10 @@ impl WorkspaceControlQueue {
             {
                 continue;
             }
-            let result = handler(request.operation);
+            let guard = RuntimeRequestGuard {
+                lifecycle: request.lifecycle.clone(),
+            };
+            let result = handler(request.operation, &guard);
             let _ = request.response.send(result);
             drained += 1;
         }
@@ -780,6 +887,8 @@ impl WorkspaceControlQueue {
 
 struct QueuedWorkspaceControl {
     sender: mpsc::SyncSender<QueuedRequest>,
+    lifecycle: Arc<Mutex<QueueLifecycle>>,
+    pending: Arc<AtomicUsize>,
 }
 
 impl QueuedWorkspaceControl {
@@ -794,39 +903,38 @@ impl QueuedWorkspaceControl {
     ) -> Result<Value, RuntimeControlError> {
         let (response_tx, response_rx) = mpsc::sync_channel(1);
         let lifecycle = Arc::new(AtomicU8::new(REQUEST_PENDING));
-        self.sender
-            .send(QueuedRequest {
-                operation,
-                response: response_tx,
-                lifecycle: lifecycle.clone(),
-            })
-            .map_err(|_| {
-                RuntimeControlError::Internal("workspace control is unavailable".into())
-            })?;
+        let lifecycle_state = self
+            .lifecycle
+            .lock()
+            .map_err(|_| RuntimeControlError::ShuttingDown)?;
+        if lifecycle_state.closed {
+            return Err(RuntimeControlError::ShuttingDown);
+        }
+        match self.sender.try_send(QueuedRequest {
+            operation,
+            response: response_tx,
+            lifecycle: lifecycle.clone(),
+        }) {
+            Ok(()) => self.pending.fetch_add(1, Ordering::AcqRel),
+            Err(mpsc::TrySendError::Full(_)) => return Err(RuntimeControlError::Busy),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(RuntimeControlError::ShuttingDown);
+            }
+        };
+        drop(lifecycle_state);
         match response_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if lifecycle
-                    .compare_exchange(
-                        REQUEST_PENDING,
+                let state = lifecycle.load(Ordering::Acquire);
+                if state == REQUEST_PENDING || state == REQUEST_DISPATCHING {
+                    let _ = lifecycle.compare_exchange(
+                        state,
                         REQUEST_CANCELLED,
                         Ordering::AcqRel,
                         Ordering::Acquire,
-                    )
-                    .is_ok()
-                {
-                    Err(RuntimeControlError::Internal(
-                        "workspace control timed out".into(),
-                    ))
-                } else {
-                    // The GTK thread acquired this request just before the
-                    // deadline.  Wait for its authoritative result rather
-                    // than telling the caller it failed and executing it
-                    // later in the background.
-                    response_rx.recv().map_err(|_| {
-                        RuntimeControlError::Internal("workspace control is unavailable".into())
-                    })?
+                    );
                 }
+                Err(RuntimeControlError::TimedOut)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(RuntimeControlError::Internal(
                 "workspace control is unavailable".into(),
@@ -1079,39 +1187,62 @@ pub fn sanitize_output(input: &str, max_lines: usize, max_bytes: usize) -> Outpu
     let max_lines = max_lines.clamp(1, MAX_OUTPUT_LINES);
     let max_bytes = max_bytes.clamp(1, MAX_OUTPUT_BYTES);
     let mut redacted = false;
-    let input_lines = input.lines().collect::<Vec<_>>();
-    let start = input_lines.len().saturating_sub(max_lines);
-    let mut lines = Vec::new();
-    for line in input_lines.into_iter().skip(start) {
-        if line_contains_sensitive_material(line) {
-            lines.push("[REDACTED CREDENTIAL]".to_string());
-            redacted = true;
-            continue;
+    let mut truncated = false;
+    let mut lines = VecDeque::<String>::with_capacity(max_lines);
+    let mut retained_bytes = 0usize;
+    for (index, line) in input.lines().enumerate() {
+        if index >= max_lines {
+            truncated = true;
         }
-        let mut sanitized = line.to_string();
-        for prefix in [
-            "OPENAI_API_KEY=",
-            "ANTHROPIC_API_KEY=",
-            "AWS_SECRET_ACCESS_KEY=",
-            "TOKEN=",
-        ] {
-            if let Some(index) = sanitized.find(prefix) {
-                sanitized.truncate(index + prefix.len());
-                sanitized.push_str("[REDACTED]");
+        let mut sanitized = if line_contains_sensitive_material(line) {
+            redacted = true;
+            "[REDACTED CREDENTIAL]".to_string()
+        } else {
+            let mut sanitized = line.to_string();
+            for prefix in [
+                "OPENAI_API_KEY=",
+                "ANTHROPIC_API_KEY=",
+                "AWS_SECRET_ACCESS_KEY=",
+                "TOKEN=",
+            ] {
+                if let Some(index) = sanitized.find(prefix) {
+                    sanitized.truncate(index + prefix.len());
+                    sanitized.push_str("[REDACTED]");
+                    redacted = true;
+                }
+            }
+            if sanitized.contains("-----BEGIN ") {
+                sanitized = "[REDACTED PRIVATE KEY]".to_string();
                 redacted = true;
             }
+            sanitized
+        };
+        if sanitized.len() > max_bytes {
+            sanitized = truncate_utf8(&sanitized, max_bytes);
+            truncated = true;
         }
-        if sanitized.contains("-----BEGIN ") {
-            sanitized = "[REDACTED PRIVATE KEY]".to_string();
-            redacted = true;
+
+        if lines.len() == max_lines
+            && let Some(removed) = lines.pop_front()
+        {
+            retained_bytes = retained_bytes.saturating_sub(removed.len());
+            if !lines.is_empty() {
+                retained_bytes = retained_bytes.saturating_sub(1);
+            }
         }
-        lines.push(sanitized);
+        if !lines.is_empty() {
+            retained_bytes = retained_bytes.saturating_add(1);
+        }
+        retained_bytes = retained_bytes.saturating_add(sanitized.len());
+        lines.push_back(sanitized);
+
+        while retained_bytes > max_bytes && lines.len() > 1 {
+            let removed = lines.pop_front().expect("length checked");
+            retained_bytes = retained_bytes.saturating_sub(removed.len() + 1);
+            truncated = true;
+        }
     }
-    let mut text = lines.join("\n");
-    let truncated = text.len() > max_bytes || input.lines().count() > max_lines;
-    if text.len() > max_bytes {
-        text = truncate_utf8(&text, max_bytes);
-    }
+    let text = lines.into_iter().collect::<Vec<_>>().join("\n");
     OutputSnapshot {
         line_count: text.lines().count(),
         text,
@@ -1150,6 +1281,9 @@ fn truncate_utf8(input: &str, max_bytes: usize) -> String {
         return input.to_string();
     }
     let suffix = "…";
+    if max_bytes < suffix.len() {
+        return String::new();
+    }
     let mut end = max_bytes.saturating_sub(suffix.len());
     while end > 0 && !input.is_char_boundary(end) {
         end -= 1;
@@ -1365,6 +1499,8 @@ mod tests {
         let (queue, _) = WorkspaceControlQueue::new();
         let control = QueuedWorkspaceControl {
             sender: queue.sender.clone(),
+            lifecycle: queue.lifecycle.clone(),
+            pending: queue.pending.clone(),
         };
         let result = thread::spawn(move || {
             control.call_with_timeout(
@@ -1375,16 +1511,100 @@ mod tests {
         .join()
         .unwrap();
 
-        assert!(
-            matches!(result, Err(RuntimeControlError::Internal(message)) if message == "workspace control timed out")
-        );
+        assert!(matches!(result, Err(RuntimeControlError::TimedOut)));
         let handled = Arc::new(AtomicUsize::new(0));
         let handled_for_drain = handled.clone();
-        queue.drain(1, move |_| {
+        queue.drain(1, move |_, _| {
             handled_for_drain.fetch_add(1, Ordering::Relaxed);
             Ok(json!({}))
         });
         assert_eq!(handled.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn saturated_queue_is_busy_and_close_rejects_and_drains_idempotently() {
+        let (queue, _) = WorkspaceControlQueue::new();
+        let control = Arc::new(QueuedWorkspaceControl {
+            sender: queue.sender.clone(),
+            lifecycle: queue.lifecycle.clone(),
+            pending: queue.pending.clone(),
+        });
+        let mut callers = Vec::new();
+        for _ in 0..64 {
+            let control = control.clone();
+            callers.push(thread::spawn(move || {
+                control.call_with_timeout(
+                    RuntimeOperation::Snapshot(SnapshotRequest::default()),
+                    Duration::from_secs(2),
+                )
+            }));
+        }
+        let started = std::time::Instant::now();
+        while queue.pending_count() < 64 && started.elapsed() < Duration::from_secs(1) {
+            thread::yield_now();
+        }
+        assert_eq!(queue.pending_count(), 64);
+        assert!(matches!(
+            control.call_with_timeout(
+                RuntimeOperation::Snapshot(SnapshotRequest::default()),
+                Duration::from_millis(10),
+            ),
+            Err(RuntimeControlError::Busy)
+        ));
+
+        assert!(queue.close("test shutdown"));
+        assert!(queue.is_closed());
+        assert_eq!(queue.pending_count(), 0);
+        assert!(!queue.close("duplicate shutdown"));
+        assert!(matches!(
+            control.call_with_timeout(
+                RuntimeOperation::Snapshot(SnapshotRequest::default()),
+                Duration::from_millis(10),
+            ),
+            Err(RuntimeControlError::ShuttingDown)
+        ));
+        for caller in callers {
+            assert!(matches!(
+                caller.join().unwrap(),
+                Err(RuntimeControlError::ShuttingDown)
+            ));
+        }
+    }
+
+    #[test]
+    fn dispatch_timeout_prevents_late_mutation_commit() {
+        let (queue, _) = WorkspaceControlQueue::new();
+        let control = QueuedWorkspaceControl {
+            sender: queue.sender.clone(),
+            lifecycle: queue.lifecycle.clone(),
+            pending: queue.pending.clone(),
+        };
+        let caller = thread::spawn(move || {
+            control.call_with_timeout(
+                RuntimeOperation::Focus(FocusTileRequest {
+                    workspace_id: "workspace:test".into(),
+                    tile_id: "tile:test".into(),
+                    expected_revision: None,
+                }),
+                Duration::from_millis(20),
+            )
+        });
+        let started = std::time::Instant::now();
+        while queue.pending_count() == 0 && started.elapsed() < Duration::from_secs(1) {
+            thread::yield_now();
+        }
+        let mutations = AtomicUsize::new(0);
+        queue.drain(1, |_, guard| {
+            thread::sleep(Duration::from_millis(40));
+            guard.commit()?;
+            mutations.fetch_add(1, Ordering::Relaxed);
+            Ok(json!({}))
+        });
+        assert!(matches!(
+            caller.join().unwrap(),
+            Err(RuntimeControlError::TimedOut)
+        ));
+        assert_eq!(mutations.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1477,6 +1697,12 @@ mod tests {
         let stale = journal.response("workspace:test".into(), 1, 100, 2);
         assert!(stale.truncated);
         assert!(stale.events.is_empty());
+
+        journal.clear();
+        let cleared = journal.response("workspace:test".into(), 0, 100, 2);
+        assert!(cleared.events.is_empty());
+        assert_eq!(cleared.oldest_cursor, 1);
+        assert_eq!(cleared.next_cursor, 1);
     }
 
     #[test]

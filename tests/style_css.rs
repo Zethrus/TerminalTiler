@@ -1492,7 +1492,10 @@ fn windows_gtk_shell_uses_linux_visual_contract_without_replacing_win32_fallback
             && WINDOWS_GTK_APP_RS.contains("let quit_requested = Rc::new(Cell::new(false))")
             && WINDOWS_GTK_APP_RS
                 .contains("let current_close_to_background = Rc::new(Cell::new(preferences.close_to_background))")
-            && WINDOWS_GTK_APP_RS.contains("!quit_requested.replace(false) && current_close_to_background.get()")
+            && WINDOWS_GTK_APP_RS
+                .contains("let application_quit = quit_requested.replace(false)")
+            && WINDOWS_GTK_APP_RS
+                .contains("!application_quit && current_close_to_background.get()")
             && WINDOWS_MOD_RS.contains("mod gtk_tray;")
             && WINDOWS_GTK_APP_RS.contains("WindowsGtkTrayController::new(")
             && WINDOWS_GTK_APP_RS.contains("tray_controller.hide_window_to_tray()")

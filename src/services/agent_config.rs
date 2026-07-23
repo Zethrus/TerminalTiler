@@ -11,6 +11,8 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use serde_json::{Value, json};
 
@@ -164,10 +166,61 @@ fn needs_refresh(source: &Path, dest: &Path) -> bool {
     if source_meta.len() != dest_meta.len() {
         return true;
     }
-    match files_equal(source, dest) {
-        Ok(equal) => !equal,
+    match files_equal_cached(source, &source_meta, dest, &dest_meta) {
+        Ok(verification) => !verification.equal,
         Err(_) => true,
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BinaryVerificationKey {
+    source: PathBuf,
+    source_len: u64,
+    source_modified: Option<SystemTime>,
+    dest: PathBuf,
+    dest_len: u64,
+    dest_modified: Option<SystemTime>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BinaryVerification {
+    equal: bool,
+    compared: bool,
+}
+
+fn files_equal_cached(
+    source: &Path,
+    source_meta: &std::fs::Metadata,
+    dest: &Path,
+    dest_meta: &std::fs::Metadata,
+) -> io::Result<BinaryVerification> {
+    static CACHE: OnceLock<Mutex<Option<(BinaryVerificationKey, bool)>>> = OnceLock::new();
+    let key = BinaryVerificationKey {
+        source: source.to_path_buf(),
+        source_len: source_meta.len(),
+        source_modified: source_meta.modified().ok(),
+        dest: dest.to_path_buf(),
+        dest_len: dest_meta.len(),
+        dest_modified: dest_meta.modified().ok(),
+    };
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(cache) = cache.lock()
+        && let Some((cached_key, equal)) = cache.as_ref()
+        && cached_key == &key
+    {
+        return Ok(BinaryVerification {
+            equal: *equal,
+            compared: false,
+        });
+    }
+    let equal = files_equal(source, dest)?;
+    if let Ok(mut cache) = cache.lock() {
+        *cache = Some((key, equal));
+    }
+    Ok(BinaryVerification {
+        equal,
+        compared: true,
+    })
 }
 
 /// Compare two same-sized binaries without relying on mtimes.
@@ -291,6 +344,16 @@ pub struct McpDiagnostics {
     pub codex_args: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct McpGlobalDiagnostics {
+    process_cwd: Option<PathBuf>,
+    mcp_binary_path: PathBuf,
+    mcp_binary_exists: bool,
+    codex_config_path: Option<PathBuf>,
+    codex_config_root: Option<PathBuf>,
+    codex_document: Result<Option<toml::Table>, String>,
+}
+
 impl McpDiagnostics {
     pub fn to_json(&self) -> Value {
         json!({
@@ -327,28 +390,54 @@ impl McpDiagnostics {
 /// Inspect project-scoped Claude and user-scoped Codex MCP registration without mutating
 /// either config. Missing files are reported as not configured rather than errors.
 pub fn diagnose_mcp(project_root: &Path) -> McpDiagnostics {
+    let global = diagnose_mcp_global();
+    diagnose_mcp_with_global(project_root, &global)
+}
+
+pub fn diagnose_mcp_global() -> McpGlobalDiagnostics {
     let mcp_binary_path = mcp_binary_path();
     let mcp_binary_exists = mcp_binary_available(&mcp_binary_path);
-    let claude_config_path = project_root.join(".mcp.json");
-    let claude = inspect_claude_config(&claude_config_path, project_root);
     let codex_config_root = codex_config_root();
     let codex_config_path = codex_config_root
         .as_ref()
         .map(|root| root.join("config.toml"));
-    let codex = codex_config_path
-        .as_ref()
-        .map(|path| inspect_codex_config(path, project_root))
-        .unwrap_or_else(|| ServerInspection::needs_repair("could not resolve Codex config root"));
-    let status = overall_status(mcp_binary_exists, claude.status, codex.status);
+    let codex_document = match codex_config_path.as_ref() {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(raw) => toml::from_str::<toml::Table>(&raw)
+                .map(Some)
+                .map_err(|error| format!("invalid TOML: {error}")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!("could not read config: {error}")),
+        },
+        None => Err("could not resolve Codex config root".into()),
+    };
+    McpGlobalDiagnostics {
+        process_cwd: std::env::current_dir().ok(),
+        mcp_binary_path,
+        mcp_binary_exists,
+        codex_config_path,
+        codex_config_root,
+        codex_document,
+    }
+}
+
+pub fn diagnose_mcp_with_global(
+    project_root: &Path,
+    global: &McpGlobalDiagnostics,
+) -> McpDiagnostics {
+    let claude_config_path = project_root.join(".mcp.json");
+    let claude = inspect_claude_config(&claude_config_path, project_root);
+    let codex = inspect_codex_document(&global.codex_document, project_root);
+    let status = overall_status(global.mcp_binary_exists, claude.status, codex.status);
 
     McpDiagnostics {
         status,
         project_root: project_root.to_path_buf(),
         board_path: crate::storage::board_store::board_path(project_root),
         board_exists: crate::storage::board_store::board_exists(project_root),
-        process_cwd: std::env::current_dir().ok(),
-        mcp_binary_path,
-        mcp_binary_exists,
+        process_cwd: global.process_cwd.clone(),
+        mcp_binary_path: global.mcp_binary_path.clone(),
+        mcp_binary_exists: global.mcp_binary_exists,
         claude_config_path,
         claude_configured: claude.configured,
         claude_detail: claude.detail,
@@ -356,8 +445,8 @@ pub fn diagnose_mcp(project_root: &Path) -> McpDiagnostics {
         claude_bound_project_root: claude.bound_project_root,
         claude_command: claude.command,
         claude_args: claude.args,
-        codex_config_path,
-        codex_config_root,
+        codex_config_path: global.codex_config_path.clone(),
+        codex_config_root: global.codex_config_root.clone(),
         codex_configured: codex.configured,
         codex_detail: codex.detail,
         codex_status: codex.status,
@@ -457,19 +546,26 @@ fn inspect_claude_config(path: &Path, project_root: &Path) -> ServerInspection {
     )
 }
 
+#[cfg(test)]
 fn inspect_codex_config(path: &Path, project_root: &Path) -> ServerInspection {
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return ServerInspection::missing_config("not installed in Codex config");
-        }
-        Err(error) => {
-            return ServerInspection::needs_repair(format!("could not read config: {error}"));
-        }
+    let document = match std::fs::read_to_string(path) {
+        Ok(raw) => toml::from_str::<toml::Table>(&raw)
+            .map(Some)
+            .map_err(|error| format!("invalid TOML: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("could not read config: {error}")),
     };
-    let document: toml::Table = match toml::from_str(&raw) {
-        Ok(document) => document,
-        Err(error) => return ServerInspection::needs_repair(format!("invalid TOML: {error}")),
+    inspect_codex_document(&document, project_root)
+}
+
+fn inspect_codex_document(
+    document: &Result<Option<toml::Table>, String>,
+    project_root: &Path,
+) -> ServerInspection {
+    let document = match document {
+        Ok(Some(document)) => document,
+        Ok(None) => return ServerInspection::missing_config("not installed in Codex config"),
+        Err(error) => return ServerInspection::needs_repair(error.clone()),
     };
     let Some(server) = document
         .get("mcp_servers")
@@ -767,6 +863,26 @@ mod tests {
         assert!(!needs_refresh(&source, &installed));
         install_stable_binary(&source, &dest_dir).unwrap();
         assert_eq!(fs::read(&installed).unwrap(), b"binary-v1");
+    }
+
+    #[test]
+    fn unchanged_binary_metadata_reuses_comparison_result() {
+        let dir = temp_dir();
+        let source = dir.join("source-mcp");
+        let installed = dir.join("installed-mcp");
+        fs::write(&source, b"same-binary").unwrap();
+        fs::write(&installed, b"same-binary").unwrap();
+        let source_meta = fs::metadata(&source).unwrap();
+        let installed_meta = fs::metadata(&installed).unwrap();
+
+        let first = files_equal_cached(&source, &source_meta, &installed, &installed_meta).unwrap();
+        let second =
+            files_equal_cached(&source, &source_meta, &installed, &installed_meta).unwrap();
+
+        assert!(first.equal);
+        assert!(first.compared);
+        assert!(second.equal);
+        assert!(!second.compared);
     }
 
     #[test]

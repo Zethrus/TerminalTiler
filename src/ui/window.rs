@@ -14,8 +14,8 @@ use gtk::{gdk, gio, glib, pango};
 use sha2::{Digest, Sha256};
 
 use crate::extension::{
-    CompanionVoiceController, RuntimeOptions, VoiceActivationRequest, VoiceControllerStatus,
-    VoiceUiEvent as CompanionVoiceUiEvent,
+    CompanionShutdownReason, CompanionShutdownRequest, CompanionVoiceController, RuntimeOptions,
+    VoiceActivationRequest, VoiceControllerStatus, VoiceUiEvent as CompanionVoiceUiEvent,
 };
 use crate::gtk_shell;
 use crate::logging;
@@ -24,7 +24,7 @@ use crate::model::board::Board;
 use crate::model::board_workspace::BoardLaunchRequest;
 use crate::model::preset::{ApplicationDensity, WorkspacePreset};
 use crate::runtime_control::{
-    ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation,
+    ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation, RuntimeRequestGuard,
     SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue, classify_command, confirmation_for,
 };
 use crate::services::agent_resume::{
@@ -966,8 +966,11 @@ fn dispatch_runtime_operation(
     tabs: &Rc<RefCell<Vec<WorkspaceTab>>>,
     active_tab_id: usize,
     prepared: &Rc<RefCell<HashMap<String, PreparedAction>>>,
+    confirmation_dialogs: &Rc<RefCell<Vec<gtk::Dialog>>>,
     operation: RuntimeOperation,
+    request_guard: &RuntimeRequestGuard,
 ) -> Result<serde_json::Value, RuntimeControlError> {
+    request_guard.ensure_active()?;
     let runtime = active_workspace_runtime(tabs, active_tab_id)
         .ok_or_else(|| RuntimeControlError::NotFound("no focused workspace".into()))?;
     match operation {
@@ -989,6 +992,7 @@ fn dispatch_runtime_operation(
         }
         RuntimeOperation::Focus(request) => {
             ensure_revision(request.expected_revision, runtime.workspace_revision())?;
+            request_guard.commit()?;
             if request.workspace_id != runtime.workspace_id()
                 || !runtime.focus_tile(&request.tile_id)
             {
@@ -1013,6 +1017,7 @@ fn dispatch_runtime_operation(
                 RuntimeSplitAxis::Horizontal => crate::model::layout::SplitAxis::Horizontal,
                 RuntimeSplitAxis::Vertical => crate::model::layout::SplitAxis::Vertical,
             };
+            request_guard.commit()?;
             let Some(tile_id) = runtime.add_terminal_tile_at(&target_tile_id, axis) else {
                 return Err(RuntimeControlError::Internal(
                     "could not create a terminal tile".into(),
@@ -1063,6 +1068,7 @@ fn dispatch_runtime_operation(
                 now.saturating_add(30_000),
                 runtime.workspace_revision(),
             );
+            request_guard.commit()?;
             prepared_actions.insert(action.action_id.clone(), action.clone());
             serde_json::to_value(action)
                 .map_err(|error| RuntimeControlError::Internal(error.to_string()))
@@ -1086,11 +1092,12 @@ fn dispatch_runtime_operation(
                 action.confirmation,
                 crate::runtime_control::ConfirmationRequirement::None
             ))
-            .then(|| confirm_runtime_action(window, &action))
+            .then(|| confirm_runtime_action(window, &action, confirmation_dialogs))
             .flatten();
             if !action.confirmation_matches(confirmation_token.as_deref()) {
                 return Err(RuntimeControlError::ConfirmationRequired);
             }
+            request_guard.commit()?;
             if action.workspace_id != runtime.workspace_id()
                 || !runtime.send_text_to_tile_with_submit(&action.tile_id, action.command(), true)
             {
@@ -1110,6 +1117,7 @@ fn dispatch_runtime_operation(
         }
         RuntimeOperation::Interrupt(request) => {
             ensure_revision(request.expected_revision, runtime.workspace_revision())?;
+            request_guard.commit()?;
             if request.workspace_id != runtime.workspace_id()
                 || !runtime.interrupt_tile(&request.tile_id)
             {
@@ -1127,6 +1135,7 @@ fn dispatch_runtime_operation(
 fn confirm_runtime_action(
     window: &adw::ApplicationWindow,
     action: &PreparedAction,
+    confirmation_dialogs: &Rc<RefCell<Vec<gtk::Dialog>>>,
 ) -> Option<String> {
     let dialog = gtk::Dialog::builder()
         .transient_for(window)
@@ -1186,9 +1195,35 @@ fn confirm_runtime_action(
         dialog.close();
         nested_loop_for_signal.quit();
     });
+    confirmation_dialogs.borrow_mut().push(dialog.clone());
+    let expired = Rc::new(Cell::new(false));
+    let expired_for_timer = expired.clone();
+    let dialog_for_timer = dialog.clone();
+    let remaining = Duration::from_millis(
+        action
+            .expires_at_unix_ms
+            .saturating_sub(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .min(u64::MAX as u128) as u64,
+    );
+    let expiry_source = glib::timeout_add_local(remaining, move || {
+        expired_for_timer.set(true);
+        dialog_for_timer.response(gtk::ResponseType::Cancel);
+        glib::ControlFlow::Break
+    });
     dialog.present();
     entry.grab_focus();
     nested_loop.run();
+    if !expired.get() {
+        expiry_source.remove();
+    }
+    confirmation_dialogs
+        .borrow_mut()
+        .retain(|registered| registered != &dialog);
     response.borrow_mut().take()
 }
 
@@ -1307,26 +1342,69 @@ fn present_with_initial_workspace(
     let next_tab_id = Rc::new(Cell::new(1usize));
     let active_tab_id = Rc::new(Cell::new(0usize));
     let prepared_runtime_actions = Rc::new(RefCell::new(HashMap::<String, PreparedAction>::new()));
+    let runtime_confirmation_dialogs = Rc::new(RefCell::new(Vec::<gtk::Dialog>::new()));
+    let runtime_drain_source = Rc::new(RefCell::new(None::<glib::SourceId>));
 
     {
         let queue = runtime_control_queue.clone();
         let tabs = tabs.clone();
         let active_tab_id = active_tab_id.clone();
         let prepared = prepared_runtime_actions.clone();
+        let confirmation_dialogs = runtime_confirmation_dialogs.clone();
         let window = window.clone();
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            queue.drain(16, |operation| {
+        let source = glib::timeout_add_local(Duration::from_millis(50), move || {
+            queue.drain(16, |operation, request_guard| {
                 dispatch_runtime_operation(
                     &window,
                     &tabs,
                     active_tab_id.get(),
                     &prepared,
+                    &confirmation_dialogs,
                     operation,
+                    request_guard,
                 )
             });
             glib::ControlFlow::Continue
         });
+        *runtime_drain_source.borrow_mut() = Some(source);
     }
+    let runtime_shutdown_started = Rc::new(Cell::new(false));
+    let shutdown_runtime: Rc<dyn Fn(CompanionShutdownReason)> = {
+        let started = runtime_shutdown_started.clone();
+        let queue = runtime_control_queue.clone();
+        let drain_source = runtime_drain_source.clone();
+        let prepared = prepared_runtime_actions.clone();
+        let dialogs = runtime_confirmation_dialogs.clone();
+        let tabs = tabs.clone();
+        let companion = options.companion.clone();
+        Rc::new(move |reason| {
+            if started.replace(true) {
+                return;
+            }
+            queue.close(format!("{reason:?}"));
+            if let Some(source) = drain_source.borrow_mut().take() {
+                source.remove();
+            }
+            for dialog in dialogs.borrow_mut().drain(..) {
+                dialog.response(gtk::ResponseType::Cancel);
+                dialog.close();
+            }
+            prepared.borrow_mut().clear();
+            for runtime in workspace_runtimes(&tabs) {
+                runtime.clear_runtime_event_journal();
+            }
+            if let Some(companion) = companion.as_ref() {
+                companion.shutdown(CompanionShutdownRequest {
+                    reason,
+                    grace_period: if reason == CompanionShutdownReason::ForceQuit {
+                        Duration::from_millis(250)
+                    } else {
+                        Duration::from_secs(2)
+                    },
+                });
+            }
+        })
+    };
     let select_tab: SelectTabHandle = Rc::new(RefCell::new(None));
     let close_tab: TabActionHandle = Rc::new(RefCell::new(None));
     let request_tab_rename: TabActionHandle = Rc::new(RefCell::new(None));
@@ -4050,6 +4128,7 @@ fn present_with_initial_workspace(
         let tray_controller = tray_controller.clone();
         let quit_requested = quit_requested.clone();
         let force_quit_requested = force_quit_requested.clone();
+        let shutdown_runtime = shutdown_runtime.clone();
         let action = gio::SimpleAction::new("quit-app", None);
         action.connect_activate(move |_, _| {
             stats_hub::flush();
@@ -4061,6 +4140,7 @@ fn present_with_initial_workspace(
                 let preference_store = preference_store_for_quit_action.clone();
                 let active_tab_id = active_for_quit_action.clone();
                 let force_quit_requested = force_quit_requested.clone();
+                let shutdown_runtime = shutdown_runtime.clone();
                 dialog_chrome::confirm_destructive_action(
                     &window_for_quit_action,
                     "Quit Application?",
@@ -4075,6 +4155,7 @@ fn present_with_initial_workspace(
                             active_tab_id.get(),
                             &session_store,
                             preference_store.load().terminal_history_lines,
+                            &shutdown_runtime,
                         );
                     },
                 );
@@ -4233,15 +4314,18 @@ fn present_with_initial_workspace(
         let force_quit_requested = force_quit_requested.clone();
         let tray_controller = tray_controller.clone();
         let voice_transcriber = voice_transcriber.clone();
+        let shutdown_runtime = shutdown_runtime.clone();
         window.connect_close_request(move |window| {
             stats_hub::flush();
             if force_quit_requested.replace(false) {
+                shutdown_runtime(CompanionShutdownReason::ForceQuit);
                 voice_transcriber.shutdown();
                 unregister_linux_main_attach_target(window_id);
                 return glib::Propagation::Proceed;
             }
 
-            if !quit_requested.replace(false)
+            let application_quit = quit_requested.replace(false);
+            if !application_quit
                 && current_close_to_background.get()
                 && tray_controller.is_available()
             {
@@ -4259,6 +4343,7 @@ fn present_with_initial_workspace(
                 let preference_store = preference_store_for_window_close.clone();
                 let active_tab_id = active_for_save.clone();
                 let force_quit_requested = force_quit_requested.clone();
+                let shutdown_runtime = shutdown_runtime.clone();
                 dialog_chrome::confirm_destructive_action(
                     &confirm_window,
                     "Quit Application?",
@@ -4273,12 +4358,18 @@ fn present_with_initial_workspace(
                             active_tab_id.get(),
                             &session_store,
                             preference_store.load().terminal_history_lines,
+                            &shutdown_runtime,
                         );
                     },
                 );
                 return glib::Propagation::Stop;
             }
 
+            shutdown_runtime(if application_quit {
+                CompanionShutdownReason::ApplicationQuit
+            } else {
+                CompanionShutdownReason::WindowClosed
+            });
             tray_controller.set_window_hidden(false);
             voice_transcriber.shutdown();
             let runtimes = workspace_runtimes(&tabs_for_save);
@@ -7344,8 +7435,10 @@ fn force_quit_application(
     active_tab_id: usize,
     session_store: &SessionStore,
     terminal_history_lines: u32,
+    shutdown_runtime: &Rc<dyn Fn(CompanionShutdownReason)>,
 ) {
     logging::info("force quitting application window");
+    shutdown_runtime(CompanionShutdownReason::ForceQuit);
     save_application_window_session_state(
         window_id,
         tabs,

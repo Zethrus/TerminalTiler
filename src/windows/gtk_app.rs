@@ -14,16 +14,18 @@ mod imp {
     use sha2::{Digest, Sha256};
 
     use crate::extension::{
-        CompanionVoiceController, ProductIdentity, RuntimeOptions, VoiceActivationRequest,
-        VoiceControllerStatus, VoiceUiEvent as CompanionVoiceUiEvent,
+        CompanionShutdownReason, CompanionShutdownRequest, CompanionVoiceController,
+        ProductIdentity, RuntimeOptions, VoiceActivationRequest, VoiceControllerStatus,
+        VoiceUiEvent as CompanionVoiceUiEvent,
     };
     use crate::logging;
     use crate::model::assets::RestoreLaunchMode;
     use crate::model::layout::DEFAULT_WEB_URL;
     use crate::runtime_control::{
-        ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation, SnapshotRequest,
-        SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue, WorkspaceEventJournal,
-        WorkspaceEventType, WorkspaceSnapshot, classify_command, confirmation_for,
+        ActionResult, PreparedAction, RuntimeControlError, RuntimeOperation, RuntimeRequestGuard,
+        SnapshotRequest, SplitAxis as RuntimeSplitAxis, WorkspaceControlQueue,
+        WorkspaceEventJournal, WorkspaceEventType, WorkspaceSnapshot, classify_command,
+        confirmation_for,
     };
     use crate::services::agent_resume::{
         RestoreStartupOverridesByTab, restore_startup_override_for_tab_tile,
@@ -713,14 +715,19 @@ mod imp {
             window.connect_close_request(move |window| {
                 crate::stats_hub::flush();
                 if force_quit_requested.replace(false) {
+                    shutdown_windows_gtk_shell(
+                        &shell_state,
+                        "force quitting Windows GTK application",
+                        CompanionShutdownReason::ForceQuit,
+                    );
                     tray_controller.shutdown();
                     voice_global_hotkey.borrow_mut().take();
                     voice_transcriber.shutdown();
-                    shutdown_windows_gtk_shell(&shell_state, "force quitting Windows GTK application");
                     return glib::Propagation::Proceed;
                 }
 
-                if !quit_requested.replace(false) && current_close_to_background.get() {
+                let application_quit = quit_requested.replace(false);
+                if !application_quit && current_close_to_background.get() {
                     if tray_controller.hide_window_to_tray() {
                         return glib::Propagation::Stop;
                     }
@@ -746,10 +753,18 @@ mod imp {
                     return glib::Propagation::Stop;
                 }
 
+                shutdown_windows_gtk_shell(
+                    &shell_state,
+                    "closing Windows GTK application",
+                    if application_quit {
+                        CompanionShutdownReason::ApplicationQuit
+                    } else {
+                        CompanionShutdownReason::WindowClosed
+                    },
+                );
                 tray_controller.shutdown();
                 voice_global_hotkey.borrow_mut().take();
                 voice_transcriber.shutdown();
-                shutdown_windows_gtk_shell(&shell_state, "closing Windows GTK application");
                 glib::Propagation::Proceed
             });
         }
@@ -2005,31 +2020,40 @@ mod imp {
         crate::extension::attach_runtime_control(options, port);
 
         let prepared = Rc::new(RefCell::new(HashMap::<String, PreparedAction>::new()));
+        let confirmation_dialogs = Rc::new(RefCell::new(Vec::<gtk::Dialog>::new()));
         let journals = Rc::new(RefCell::new(HashMap::<String, WorkspaceEventJournal>::new()));
         let last_snapshots = Rc::new(RefCell::new(HashMap::<String, WorkspaceSnapshot>::new()));
+        let sources = Rc::new(RefCell::new(Vec::<glib::SourceId>::new()));
         {
+            let queue = queue.clone();
             let window = window.clone();
             let shell_state = shell_state.clone();
             let prepared = prepared.clone();
+            let confirmation_dialogs = confirmation_dialogs.clone();
             let journals = journals.clone();
             let last_snapshots = last_snapshots.clone();
-            glib::timeout_add_local(Duration::from_millis(40), move || {
-                queue.drain(16, |operation| {
+            let source = glib::timeout_add_local(Duration::from_millis(40), move || {
+                queue.drain(16, |operation, request_guard| {
                     dispatch_windows_runtime_operation(
                         &window,
                         &shell_state,
                         &prepared,
                         &journals,
                         &last_snapshots,
+                        &confirmation_dialogs,
                         operation,
+                        request_guard,
                     )
                 });
                 glib::ControlFlow::Continue
             });
+            sources.borrow_mut().push(source);
         }
         {
             let shell_state = shell_state.clone();
-            glib::timeout_add_local(Duration::from_secs(1), move || {
+            let journals = journals.clone();
+            let last_snapshots = last_snapshots.clone();
+            let source = glib::timeout_add_local(Duration::from_secs(1), move || {
                 let Some(preview) = shell_state.voice_target() else {
                     return glib::ControlFlow::Continue;
                 };
@@ -2042,7 +2066,36 @@ mod imp {
                 }
                 glib::ControlFlow::Continue
             });
+            sources.borrow_mut().push(source);
         }
+        let shutdown_started = Rc::new(Cell::new(false));
+        let companion = options.companion.clone();
+        shell_state.set_runtime_shutdown(Rc::new(move |reason| {
+            if shutdown_started.replace(true) {
+                return;
+            }
+            queue.close(format!("{reason:?}"));
+            for source in sources.borrow_mut().drain(..) {
+                source.remove();
+            }
+            prepared.borrow_mut().clear();
+            for dialog in confirmation_dialogs.borrow_mut().drain(..) {
+                dialog.response(gtk::ResponseType::Cancel);
+                dialog.close();
+            }
+            journals.borrow_mut().clear();
+            last_snapshots.borrow_mut().clear();
+            if let Some(companion) = companion.as_ref() {
+                companion.shutdown(CompanionShutdownRequest {
+                    reason,
+                    grace_period: if reason == CompanionShutdownReason::ForceQuit {
+                        Duration::from_millis(250)
+                    } else {
+                        Duration::from_secs(2)
+                    },
+                });
+            }
+        }));
     }
 
     fn dispatch_windows_runtime_operation(
@@ -2051,8 +2104,11 @@ mod imp {
         prepared: &Rc<RefCell<HashMap<String, PreparedAction>>>,
         journals: &Rc<RefCell<HashMap<String, WorkspaceEventJournal>>>,
         last_snapshots: &Rc<RefCell<HashMap<String, WorkspaceSnapshot>>>,
+        confirmation_dialogs: &Rc<RefCell<Vec<gtk::Dialog>>>,
         operation: RuntimeOperation,
+        request_guard: &RuntimeRequestGuard,
     ) -> Result<serde_json::Value, RuntimeControlError> {
+        request_guard.ensure_active()?;
         let preview = shell_state
             .voice_target()
             .ok_or_else(|| RuntimeControlError::NotFound("no focused workspace".into()))?;
@@ -2095,6 +2151,7 @@ mod imp {
                     request.expected_revision,
                     before.workspace_revision,
                 )?;
+                request_guard.commit()?;
                 if request.workspace_id != before.workspace_id
                     || !preview.focus_runtime_tile(&request.tile_id)
                 {
@@ -2132,6 +2189,7 @@ mod imp {
                     RuntimeSplitAxis::Horizontal => crate::model::layout::SplitAxis::Horizontal,
                     RuntimeSplitAxis::Vertical => crate::model::layout::SplitAxis::Vertical,
                 };
+                request_guard.commit()?;
                 let tile_id = preview
                     .add_runtime_terminal_tile_at(&target, axis)
                     .ok_or_else(|| {
@@ -2198,6 +2256,7 @@ mod imp {
                     now.saturating_add(30_000),
                     snapshot.workspace_revision,
                 );
+                request_guard.commit()?;
                 prepared_actions.insert(action.action_id.clone(), action.clone());
                 serde_json::to_value(action)
                     .map_err(|error| RuntimeControlError::Internal(error.to_string()))
@@ -2224,11 +2283,12 @@ mod imp {
                     action.confirmation,
                     crate::runtime_control::ConfirmationRequirement::None
                 ))
-                .then(|| confirm_windows_runtime_action(window, &action))
+                .then(|| confirm_windows_runtime_action(window, &action, confirmation_dialogs))
                 .flatten();
                 if !action.confirmation_matches(confirmation.as_deref()) {
                     return Err(RuntimeControlError::ConfirmationRequired);
                 }
+                request_guard.commit()?;
                 if !preview.send_text_to_runtime_tile(&action.tile_id, action.command(), true) {
                     return Err(RuntimeControlError::NotFound(action.tile_id));
                 }
@@ -2252,6 +2312,7 @@ mod imp {
                     request.expected_revision,
                     before.workspace_revision,
                 )?;
+                request_guard.commit()?;
                 if request.workspace_id != before.workspace_id
                     || !preview.interrupt_runtime_tile(&request.tile_id)
                 {
@@ -2441,6 +2502,7 @@ mod imp {
     fn confirm_windows_runtime_action(
         window: &adw::ApplicationWindow,
         action: &PreparedAction,
+        confirmation_dialogs: &Rc<RefCell<Vec<gtk::Dialog>>>,
     ) -> Option<String> {
         let dialog = gtk::Dialog::builder()
             .transient_for(window)
@@ -2498,9 +2560,30 @@ mod imp {
             dialog.close();
             nested_loop_for_signal.quit();
         });
+        confirmation_dialogs.borrow_mut().push(dialog.clone());
+        let expired = Rc::new(Cell::new(false));
+        let expired_for_timer = expired.clone();
+        let dialog_for_timer = dialog.clone();
+        let remaining = Duration::from_millis(
+            action
+                .expires_at_unix_ms
+                .saturating_sub(current_windows_runtime_time_ms())
+                .min(u64::MAX as u128) as u64,
+        );
+        let expiry_source = glib::timeout_add_local(remaining, move || {
+            expired_for_timer.set(true);
+            dialog_for_timer.response(gtk::ResponseType::Cancel);
+            glib::ControlFlow::Break
+        });
         dialog.present();
         entry.grab_focus();
         nested_loop.run();
+        if !expired.get() {
+            expiry_source.remove();
+        }
+        confirmation_dialogs
+            .borrow_mut()
+            .retain(|registered| registered != &dialog);
         response.borrow_mut().take()
     }
 
@@ -3086,7 +3169,12 @@ mod imp {
         }
     }
 
-    fn shutdown_windows_gtk_shell(shell_state: &WindowsGtkShellState, reason: &str) {
+    fn shutdown_windows_gtk_shell(
+        shell_state: &WindowsGtkShellState,
+        reason: &str,
+        shutdown_reason: CompanionShutdownReason,
+    ) {
+        shell_state.shutdown_runtime(shutdown_reason);
         if shell_state.has_active_processes() {
             logging::info(format!(
                 "Windows GTK shell closing with active terminal runtimes; terminating preview runtimes: {reason}",
@@ -3139,6 +3227,7 @@ mod imp {
         launch_deck_active: Rc<Cell<bool>>,
         session_store: Rc<SessionStore>,
         product: ProductIdentity,
+        runtime_shutdown: Rc<RefCell<Option<Rc<dyn Fn(CompanionShutdownReason)>>>>,
     }
 
     #[derive(Clone)]
@@ -3161,6 +3250,17 @@ mod imp {
                 launch_deck_active: Rc::new(Cell::new(false)),
                 session_store: Rc::new(session_store),
                 product,
+                runtime_shutdown: Rc::new(RefCell::new(None)),
+            }
+        }
+
+        fn set_runtime_shutdown(&self, shutdown: Rc<dyn Fn(CompanionShutdownReason)>) {
+            *self.runtime_shutdown.borrow_mut() = Some(shutdown);
+        }
+
+        fn shutdown_runtime(&self, reason: CompanionShutdownReason) {
+            if let Some(shutdown) = self.runtime_shutdown.borrow().as_ref() {
+                shutdown(reason);
             }
         }
 

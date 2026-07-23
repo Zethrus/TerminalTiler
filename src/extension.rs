@@ -12,7 +12,20 @@ use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 5;
+pub const CORE_EXTENSION_API_VERSION: u32 = 6;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompanionShutdownReason {
+    WindowClosed,
+    ApplicationQuit,
+    ForceQuit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompanionShutdownRequest {
+    pub reason: CompanionShutdownReason,
+    pub grace_period: Duration,
+}
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -609,6 +622,11 @@ pub trait CompanionIntegration: Send + Sync {
     /// Receives the optional Pro voice activation bridge. Core may expose
     /// activation affordances only when this controller is present.
     fn attach_voice_controller(&self, _controller: Arc<dyn CompanionVoiceController>) {}
+
+    /// Stop companion-owned background work within the shared desktop grace
+    /// period. Implementations must be idempotent; Core may encounter more
+    /// than one shutdown signal while windows and the application unwind.
+    fn shutdown(&self, _request: CompanionShutdownRequest) {}
 }
 
 #[cfg(test)]
@@ -704,6 +722,7 @@ mod additive_api_tests {
     struct RecordingCompanion {
         control_attached: Mutex<bool>,
         service: Mutex<Option<Arc<RuntimeMcpService>>>,
+        shutdown_requests: Mutex<Vec<CompanionShutdownRequest>>,
     }
 
     impl CompanionIntegration for RecordingCompanion {
@@ -730,13 +749,17 @@ mod additive_api_tests {
         fn attach_runtime_mcp(&self, service: Arc<RuntimeMcpService>) {
             *self.service.lock().unwrap() = Some(service);
         }
+
+        fn shutdown(&self, request: CompanionShutdownRequest) {
+            self.shutdown_requests.lock().unwrap().push(request);
+        }
     }
 
     #[test]
-    fn runtime_probe_reports_extension_api_v5() {
+    fn runtime_probe_reports_extension_api_v6() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 5);
+        assert_eq!(capabilities.extension_api_version, 6);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -744,7 +767,27 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":5"));
+        assert!(json.contains("\"extension_api_version\":6"));
+    }
+
+    #[test]
+    fn companion_receives_normal_and_forced_shutdown_contracts() {
+        let companion = RecordingCompanion::default();
+        companion.shutdown(CompanionShutdownRequest {
+            reason: CompanionShutdownReason::ApplicationQuit,
+            grace_period: Duration::from_secs(2),
+        });
+        companion.shutdown(CompanionShutdownRequest {
+            reason: CompanionShutdownReason::ForceQuit,
+            grace_period: Duration::from_millis(250),
+        });
+
+        let requests = companion.shutdown_requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].reason, CompanionShutdownReason::ApplicationQuit);
+        assert_eq!(requests[0].grace_period, Duration::from_secs(2));
+        assert_eq!(requests[1].reason, CompanionShutdownReason::ForceQuit);
+        assert_eq!(requests[1].grace_period, Duration::from_millis(250));
     }
 
     #[test]

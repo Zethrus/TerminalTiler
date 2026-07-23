@@ -7,12 +7,14 @@
 //! re-diagnoses. Claude config is project-scoped, so every row can repair it safely; Codex
 //! is a single global entry, so only the active project's Fix touches it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
+use gtk::glib;
 
 use crate::services::agent_config::{self, McpConfigStatus, McpDiagnostics};
 use crate::storage::board_workspace_store::BoardWorkspaceStore;
@@ -25,6 +27,7 @@ type SharedRefresh = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
 // Status labels come from diagnostics as ready, wrong_project_root, missing_config,
 // missing_binary, or needs_repair so agents and users see the same actionable state.
+#[derive(Clone)]
 pub(crate) struct McpHealthPanel {
     pub(crate) widget: gtk::Box,
     overall_badge: StatusBadge,
@@ -34,10 +37,17 @@ pub(crate) struct McpHealthPanel {
     mcp_binary: gtk::Label,
     claude_state: gtk::Label,
     codex_state: gtk::Label,
+    refresh_generation: Rc<Cell<u64>>,
 }
 
 impl McpHealthPanel {
     pub(crate) fn new(project_root: &Path) -> Self {
+        let panel = Self::new_uninitialized();
+        panel.refresh(project_root);
+        panel
+    }
+
+    fn new_uninitialized() -> Self {
         let widget = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(8)
@@ -79,7 +89,7 @@ impl McpHealthPanel {
             widget.append(&detail_row(caption, value));
         }
 
-        let panel = Self {
+        Self {
             widget,
             overall_badge,
             project_root: project_root_label,
@@ -88,14 +98,31 @@ impl McpHealthPanel {
             mcp_binary,
             claude_state,
             codex_state,
-        };
-        panel.refresh(project_root);
-        panel
+            refresh_generation: Rc::new(Cell::new(0)),
+        }
     }
 
     pub(crate) fn refresh(&self, project_root: &Path) {
-        let diagnostics = agent_config::diagnose_mcp(project_root);
-        update_labels(self, &diagnostics);
+        let generation = self.refresh_generation.get().saturating_add(1);
+        self.refresh_generation.set(generation);
+        let project_root = project_root.to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(agent_config::diagnose_mcp(&project_root));
+        });
+        let panel = self.clone();
+        glib::timeout_add_local(Duration::from_millis(20), move || {
+            match receiver.try_recv() {
+                Ok(diagnostics) => {
+                    if panel.refresh_generation.get() == generation {
+                        update_labels(&panel, &diagnostics);
+                    }
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
     }
 }
 
@@ -156,7 +183,7 @@ pub(crate) fn present_modal(
         })
     };
 
-    let active_panel = Rc::new(McpHealthPanel::new(&active_project_root));
+    let active_panel = Rc::new(McpHealthPanel::new_uninitialized());
     let active_fix = icons::labeled_button(
         "Fix",
         icon_name::APPLY,
@@ -222,22 +249,56 @@ pub(crate) fn present_modal(
         let project_list = project_list.clone();
         let toast_overlay = toast_overlay.clone();
         let trigger_refresh = trigger_refresh.clone();
+        let refresh_generation = Rc::new(Cell::new(0_u64));
         move || {
-            active_panel.refresh(&active_project_root);
-            let active_diagnostics = agent_config::diagnose_mcp(&active_project_root);
-            apply_fix_affordance(&active_fix, active_fix_affordance(&active_diagnostics));
             let roots = other_known_project_roots(
                 &active_project_root,
                 &open_project_roots,
                 &board_workspace_store,
             );
-            render_project_rows(
-                &project_list,
-                roots,
-                &active_project_root,
-                &toast_overlay,
-                &trigger_refresh,
-            );
+            let generation = refresh_generation.get().saturating_add(1);
+            refresh_generation.set(generation);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let active_root = active_project_root.clone();
+            std::thread::spawn(move || {
+                let global = agent_config::diagnose_mcp_global();
+                let active = agent_config::diagnose_mcp_with_global(&active_root, &global);
+                let projects = roots
+                    .iter()
+                    .map(|root| agent_config::diagnose_mcp_with_global(root, &global))
+                    .collect::<Vec<_>>();
+                let _ = sender.send((active, projects));
+            });
+            let refresh_generation = refresh_generation.clone();
+            let active_panel = active_panel.clone();
+            let active_fix = active_fix.clone();
+            let project_list = project_list.clone();
+            let active_project_root = active_project_root.clone();
+            let toast_overlay = toast_overlay.clone();
+            let trigger_refresh = trigger_refresh.clone();
+            glib::timeout_add_local(Duration::from_millis(20), move || {
+                match receiver.try_recv() {
+                    Ok((active_diagnostics, projects)) => {
+                        if refresh_generation.get() == generation {
+                            update_labels(&active_panel, &active_diagnostics);
+                            apply_fix_affordance(
+                                &active_fix,
+                                active_fix_affordance(&active_diagnostics),
+                            );
+                            render_project_rows(
+                                &project_list,
+                                projects,
+                                &active_project_root,
+                                &toast_overlay,
+                                &trigger_refresh,
+                            );
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                }
+            });
         }
     });
     *refresh_cell.borrow_mut() = Some(render.clone());
@@ -503,14 +564,14 @@ fn dedupe_project_roots(project_roots: Vec<PathBuf>) -> Vec<PathBuf> {
 
 fn render_project_rows(
     project_list: &gtk::Box,
-    project_roots: Vec<PathBuf>,
+    diagnostics: Vec<McpDiagnostics>,
     active_project_root: &Path,
     toast_overlay: &adw::ToastOverlay,
     trigger_refresh: &Rc<dyn Fn()>,
 ) {
     clear_box(project_list);
 
-    if project_roots.is_empty() {
+    if diagnostics.is_empty() {
         project_list.append(
             &gtk::Label::builder()
                 .label("No other saved or open projects found.")
@@ -521,8 +582,7 @@ fn render_project_rows(
         return;
     }
 
-    for project_root in project_roots {
-        let diagnostics = agent_config::diagnose_mcp(&project_root);
+    for diagnostics in diagnostics {
         project_list.append(&project_row(
             &diagnostics,
             active_project_root,
@@ -661,6 +721,7 @@ fn same_project_path(first: &Path, second: &Path) -> bool {
 
 /// A status pill (colored dot + humanized label) shared by the panel header and the
 /// known-project rows.
+#[derive(Clone)]
 struct StatusBadge {
     root: gtk::Box,
     label: gtk::Label,
