@@ -5200,15 +5200,15 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
             for (group, actions) in groups {
                 lines.push(format!("{group}:"));
                 for action in actions {
-                lines.push(format!(
-                    "- {}{}",
-                    action.label,
-                    action
-                        .detail
-                        .as_deref()
-                        .map(|d| format!(": {d}"))
-                        .unwrap_or_default()
-                ));
+                    lines.push(format!(
+                        "- {}{}",
+                        action.label,
+                        action
+                            .detail
+                            .as_deref()
+                            .map(|d| format!(": {d}"))
+                            .unwrap_or_default()
+                    ));
                 }
             }
             lines.push(String::new());

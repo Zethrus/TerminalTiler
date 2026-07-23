@@ -300,7 +300,7 @@ fn build_row(row: &CompanionRow) -> gtk::Widget {
 /// Partition actions into titled groups, preserving first-seen group order.
 /// Actions without a group fall into the default section so ungrouped
 /// snapshots render exactly as they did before grouping existed.
-fn grouped_actions<'a>(snapshot: &'a CompanionPanelSnapshot) -> Vec<(String, Vec<&'a CompanionAction>)> {
+fn grouped_actions(snapshot: &CompanionPanelSnapshot) -> Vec<(String, Vec<&CompanionAction>)> {
     let mut groups: Vec<(String, Vec<&CompanionAction>)> = Vec::new();
     for action in &snapshot.actions {
         let key = action
@@ -333,7 +333,7 @@ fn append_action_groups(
     // A fully-grouped snapshot with a single group is typically a hero
     // call-to-action (for example "Activate Pro"); the redundant eyebrow
     // heading only adds noise there.
-    let hide_heading = all_grouped && groups.len() == 1;
+    let hide_heading = should_hide_action_group_heading(all_grouped, groups.len());
     for (group, actions) in groups {
         let section = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -369,6 +369,10 @@ fn append_action_groups(
         ));
         content.append(&section);
     }
+}
+
+fn should_hide_action_group_heading(all_grouped: bool, group_count: usize) -> bool {
+    all_grouped && group_count == 1
 }
 
 fn build_action_grid(
@@ -535,23 +539,18 @@ fn invoke_action(
         let parent = window.clone();
         let parent_dialog = dialog.clone();
         let heading = action.label.clone();
-        dialog_chrome::confirm_destructive_action(
-            window,
-            &heading,
-            "This action cannot be undone.",
-            &heading,
-            move || {
-                dispatch_action(
-                    &parent,
-                    &parent_dialog,
-                    companion.clone(),
-                    action.clone(),
-                    CompanionActionInput::default(),
-                    button.clone(),
-                    busy.clone(),
-                );
-            },
-        );
+        let body = destructive_confirmation_copy(&action).to_string();
+        dialog_chrome::confirm_destructive_action(window, &heading, &body, &heading, move || {
+            dispatch_action(
+                &parent,
+                &parent_dialog,
+                companion.clone(),
+                action.clone(),
+                CompanionActionInput::default(),
+                button.clone(),
+                busy.clone(),
+            );
+        });
         return;
     }
     dispatch_action(
@@ -563,6 +562,14 @@ fn invoke_action(
         button,
         busy,
     );
+}
+
+fn destructive_confirmation_copy(action: &CompanionAction) -> &str {
+    action
+        .detail
+        .as_deref()
+        .filter(|detail| !detail.trim().is_empty())
+        .unwrap_or("This action cannot be undone.")
 }
 
 fn present_input_prompt(
@@ -756,28 +763,37 @@ mod tests {
 
     #[test]
     fn grouped_actions_partition_in_first_seen_order() {
-        let mut snapshot = CompanionPanelSnapshot::default();
-        snapshot.actions = vec![
-            CompanionAction::button("sync_now", "Sync now").in_group("General"),
-            CompanionAction::button("voice_enable", "Enable voice control").in_group("Voice Control"),
-            CompanionAction::button("refresh", "Refresh status").in_group("General"),
-            CompanionAction::button("deactivate", "Deactivate").in_group("Danger zone"),
-        ];
+        let snapshot = CompanionPanelSnapshot {
+            actions: vec![
+                CompanionAction::button("sync_now", "Sync now").in_group("General"),
+                CompanionAction::button("voice_enable", "Enable voice control")
+                    .in_group("Voice Control"),
+                CompanionAction::button("refresh", "Refresh status").in_group("General"),
+                CompanionAction::button("deactivate", "Deactivate").in_group("Danger zone"),
+            ],
+            ..CompanionPanelSnapshot::default()
+        };
 
         let groups = grouped_actions(&snapshot);
         let names: Vec<&str> = groups.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, ["General", "Voice Control", "Danger zone"]);
-        let general_ids: Vec<&str> = groups[0].1.iter().map(|action| action.id.as_str()).collect();
+        let general_ids: Vec<&str> = groups[0]
+            .1
+            .iter()
+            .map(|action| action.id.as_str())
+            .collect();
         assert_eq!(general_ids, ["sync_now", "refresh"]);
     }
 
     #[test]
     fn ungrouped_actions_fall_into_default_section() {
-        let mut snapshot = CompanionPanelSnapshot::default();
-        snapshot.actions = vec![
-            CompanionAction::button("refresh", "Refresh status"),
-            CompanionAction::button("sync_now", "Sync now"),
-        ];
+        let snapshot = CompanionPanelSnapshot {
+            actions: vec![
+                CompanionAction::button("refresh", "Refresh status"),
+                CompanionAction::button("sync_now", "Sync now"),
+            ],
+            ..CompanionPanelSnapshot::default()
+        };
 
         let groups = grouped_actions(&snapshot);
         assert_eq!(groups.len(), 1);
@@ -799,6 +815,29 @@ mod tests {
         assert_eq!(action.group.as_deref(), Some("Advanced"));
         assert!(action.detail.is_some());
         assert!(action.input.is_some());
+    }
+
+    #[test]
+    fn a_single_fully_grouped_activation_section_hides_its_heading() {
+        assert!(should_hide_action_group_heading(true, 1));
+        assert!(!should_hide_action_group_heading(true, 2));
+        assert!(!should_hide_action_group_heading(false, 1));
+    }
+
+    #[test]
+    fn destructive_confirmation_prefers_action_detail_with_a_safe_fallback() {
+        let detailed = CompanionAction::button("deactivate", "Deactivate this device")
+            .with_detail("Local Pro features stop, but the account stays active.");
+        assert_eq!(
+            destructive_confirmation_copy(&detailed),
+            "Local Pro features stop, but the account stays active."
+        );
+
+        let generic = CompanionAction::button("delete", "Delete");
+        assert_eq!(
+            destructive_confirmation_copy(&generic),
+            "This action cannot be undone."
+        );
     }
 
     #[derive(Clone)]
@@ -830,6 +869,13 @@ mod tests {
                     format!("dense_action_{index}"),
                     format!("Action {index}: inspect a long account or synchronization setting"),
                 )
+                .in_group(if index < 8 {
+                    "General"
+                } else if index < 16 {
+                    "Voice Control"
+                } else {
+                    "Advanced"
+                })
             })
             .collect();
         CompanionPanelSnapshot {
