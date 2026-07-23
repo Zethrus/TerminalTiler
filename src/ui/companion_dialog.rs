@@ -105,7 +105,7 @@ fn build_companion_view(
     append_section(&content, "Sync", &snapshot.sync_rows);
     append_section(&content, "Devices and teams", &snapshot.device_rows);
     let busy = Rc::new(RefCell::new(HashSet::new()));
-    append_actions_section(&content, window, dialog, companion, snapshot, busy);
+    append_action_groups(&content, window, dialog, companion, snapshot, busy);
 
     let footer = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -297,7 +297,26 @@ fn build_row(row: &CompanionRow) -> gtk::Widget {
     item.upcast()
 }
 
-fn append_actions_section(
+/// Partition actions into titled groups, preserving first-seen group order.
+/// Actions without a group fall into the default section so ungrouped
+/// snapshots render exactly as they did before grouping existed.
+fn grouped_actions<'a>(snapshot: &'a CompanionPanelSnapshot) -> Vec<(String, Vec<&'a CompanionAction>)> {
+    let mut groups: Vec<(String, Vec<&CompanionAction>)> = Vec::new();
+    for action in &snapshot.actions {
+        let key = action
+            .group
+            .clone()
+            .unwrap_or_else(|| "Actions".to_string());
+        if let Some((_, actions)) = groups.iter_mut().find(|(name, _)| *name == key) {
+            actions.push(action);
+        } else {
+            groups.push((key, vec![action]));
+        }
+    }
+    groups
+}
+
+fn append_action_groups(
     content: &gtk::Box,
     window: &adw::ApplicationWindow,
     dialog: &adw::Dialog,
@@ -309,43 +328,57 @@ fn append_actions_section(
         return;
     }
 
-    let section = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(10)
-        .halign(gtk::Align::Fill)
-        .hexpand(true)
-        .css_classes([
-            "config-panel",
-            "settings-section",
-            "companion-section",
-            "companion-actions-section",
-        ])
-        .build();
-    section.append(
-        &gtk::Label::builder()
-            .label("ACTIONS")
-            .halign(gtk::Align::Start)
+    let all_grouped = snapshot.actions.iter().all(|action| action.group.is_some());
+    let groups = grouped_actions(snapshot);
+    // A fully-grouped snapshot with a single group is typically a hero
+    // call-to-action (for example "Activate Pro"); the redundant eyebrow
+    // heading only adds noise there.
+    let hide_heading = all_grouped && groups.len() == 1;
+    for (group, actions) in groups {
+        let section = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(10)
+            .halign(gtk::Align::Fill)
+            .hexpand(true)
             .css_classes([
-                "eyebrow",
-                "settings-section-heading",
-                "companion-section-heading",
+                "config-panel",
+                "settings-section",
+                "companion-section",
+                "companion-actions-section",
             ])
-            .build(),
-    );
-    section.append(&build_action_grid(
-        window, dialog, companion, snapshot, busy,
-    ));
-    content.append(&section);
+            .build();
+        if !hide_heading {
+            section.append(
+                &gtk::Label::builder()
+                    .label(group.to_uppercase())
+                    .halign(gtk::Align::Start)
+                    .css_classes([
+                        "eyebrow",
+                        "settings-section-heading",
+                        "companion-section-heading",
+                    ])
+                    .build(),
+            );
+        }
+        section.append(&build_action_grid(
+            window,
+            dialog,
+            companion.clone(),
+            &actions,
+            busy.clone(),
+        ));
+        content.append(&section);
+    }
 }
 
 fn build_action_grid(
     window: &adw::ApplicationWindow,
     dialog: &adw::Dialog,
     companion: Arc<dyn CompanionIntegration>,
-    snapshot: &CompanionPanelSnapshot,
+    actions: &[&CompanionAction],
     busy: Rc<RefCell<HashSet<String>>>,
 ) -> gtk::FlowBox {
-    let actions = gtk::FlowBox::builder()
+    let grid = gtk::FlowBox::builder()
         .orientation(gtk::Orientation::Horizontal)
         .selection_mode(gtk::SelectionMode::None)
         .activate_on_single_click(false)
@@ -358,12 +391,11 @@ fn build_action_grid(
         .hexpand(true)
         .css_classes(["companion-action-grid"])
         .build();
-    for action in &snapshot.actions {
-        let button =
-            icons::labeled_button(&action.label, action_icon(action), &button_classes(action));
+    for action in actions {
+        let button = build_action_button(action);
         button.set_halign(gtk::Align::Fill);
         button.set_hexpand(true);
-        let action = action.clone();
+        let action = (*action).clone();
         let companion = companion.clone();
         let parent = window.clone();
         let parent_dialog = dialog.clone();
@@ -379,9 +411,49 @@ fn build_action_grid(
                 busy.clone(),
             );
         });
-        actions.append(&button);
+        grid.append(&button);
     }
-    actions
+    grid
+}
+
+fn build_action_button(action: &CompanionAction) -> gtk::Button {
+    let button = gtk::Button::builder().build();
+    for class_name in button_classes(action) {
+        button.add_css_class(class_name);
+    }
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .build();
+    let title = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .halign(gtk::Align::Center)
+        .build();
+    title.append(&icons::image(action_icon(action)));
+    title.append(
+        &gtk::Label::builder()
+            .label(&action.label)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(28)
+            .build(),
+    );
+    body.append(&title);
+    if let Some(detail) = &action.detail {
+        body.append(
+            &gtk::Label::builder()
+                .label(detail)
+                .wrap(true)
+                .max_width_chars(30)
+                .css_classes(["field-hint", "companion-action-detail"])
+                .build(),
+        );
+    }
+    button.set_child(Some(&body));
+    button
 }
 
 fn action_icon(action: &CompanionAction) -> &'static str {
@@ -390,6 +462,16 @@ fn action_icon(action: &CompanionAction) -> &'static str {
         icon_name::WEB
     } else if id.contains("refresh") {
         icon_name::REFRESH
+    } else if id.starts_with("voice") {
+        icon_name::RECORD
+    } else if id.contains("key") || id.contains("activate") {
+        icon_name::SAVE_SYMBOLIC
+    } else if id.contains("conflict") {
+        icon_name::ALERTS
+    } else if id.contains("version") || id.contains("restore") {
+        icon_name::RESTORE
+    } else if id.contains("workspace") {
+        icon_name::WORKSPACES
     } else if id.contains("sync") {
         icon_name::APPLY
     } else if matches!(action.style, CompanionActionStyle::Destructive) {
@@ -447,6 +529,29 @@ fn invoke_action(
     if let Some(input) = action.input.clone() {
         present_input_prompt(window, companion, action, input, busy);
         dialog.close();
+        return;
+    }
+    if matches!(action.style, CompanionActionStyle::Destructive) {
+        let parent = window.clone();
+        let parent_dialog = dialog.clone();
+        let heading = action.label.clone();
+        dialog_chrome::confirm_destructive_action(
+            window,
+            &heading,
+            "This action cannot be undone.",
+            &heading,
+            move || {
+                dispatch_action(
+                    &parent,
+                    &parent_dialog,
+                    companion.clone(),
+                    action.clone(),
+                    CompanionActionInput::default(),
+                    button.clone(),
+                    busy.clone(),
+                );
+            },
+        );
         return;
     }
     dispatch_action(
@@ -648,6 +753,53 @@ fn dispatch_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grouped_actions_partition_in_first_seen_order() {
+        let mut snapshot = CompanionPanelSnapshot::default();
+        snapshot.actions = vec![
+            CompanionAction::button("sync_now", "Sync now").in_group("General"),
+            CompanionAction::button("voice_enable", "Enable voice control").in_group("Voice Control"),
+            CompanionAction::button("refresh", "Refresh status").in_group("General"),
+            CompanionAction::button("deactivate", "Deactivate").in_group("Danger zone"),
+        ];
+
+        let groups = grouped_actions(&snapshot);
+        let names: Vec<&str> = groups.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["General", "Voice Control", "Danger zone"]);
+        let general_ids: Vec<&str> = groups[0].1.iter().map(|action| action.id.as_str()).collect();
+        assert_eq!(general_ids, ["sync_now", "refresh"]);
+    }
+
+    #[test]
+    fn ungrouped_actions_fall_into_default_section() {
+        let mut snapshot = CompanionPanelSnapshot::default();
+        snapshot.actions = vec![
+            CompanionAction::button("refresh", "Refresh status"),
+            CompanionAction::button("sync_now", "Sync now"),
+        ];
+
+        let groups = grouped_actions(&snapshot);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "Actions");
+        assert_eq!(groups[0].1.len(), 2);
+    }
+
+    #[test]
+    fn action_builder_sets_group_detail_and_input() {
+        let action = CompanionAction::button("sync_conflict_resolve", "Resolve conflict")
+            .in_group("Advanced")
+            .with_detail("Pick which side wins for a conflicted object.")
+            .with_input(CompanionTextInput {
+                prompt: "Enter '<object-id> <local|remote>'.".to_string(),
+                placeholder: Some("object-id local".to_string()),
+                secret: false,
+            });
+
+        assert_eq!(action.group.as_deref(), Some("Advanced"));
+        assert!(action.detail.is_some());
+        assert!(action.input.is_some());
+    }
 
     #[derive(Clone)]
     struct DenseCompanion {

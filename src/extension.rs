@@ -12,7 +12,7 @@ use crate::runtime_control::{RuntimeCapabilityAuthorizer, WorkspaceControlPort};
 /// Version of the public extension contract consumed by companion applications.
 ///
 /// Increment this when an extension-facing type or behavior changes incompatibly.
-pub const CORE_EXTENSION_API_VERSION: u32 = 4;
+pub const CORE_EXTENSION_API_VERSION: u32 = 5;
 
 /// Package version of the Core library that implements the extension contract.
 pub const CORE_PACKAGE_VERSION: &str = env!("TERMINALTILER_PACKAGE_VERSION");
@@ -343,6 +343,10 @@ pub struct CompanionAction {
     pub id: String,
     pub label: String,
     pub detail: Option<String>,
+    /// Optional grouping key. Actions sharing a group render together under a
+    /// titled section; `None` renders in the default ungrouped "Actions"
+    /// section, preserving the pre-grouping layout.
+    pub group: Option<String>,
     pub input: Option<CompanionTextInput>,
     pub external_url: Option<String>,
     pub style: CompanionActionStyle,
@@ -355,11 +359,27 @@ impl CompanionAction {
             id: id.into(),
             label: label.into(),
             detail: None,
+            group: None,
             input: None,
             external_url: None,
             style: CompanionActionStyle::Normal,
             timeout: Duration::from_secs(30),
         }
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn in_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    pub fn with_input(mut self, input: CompanionTextInput) -> Self {
+        self.input = Some(input);
+        self
     }
 }
 
@@ -713,10 +733,10 @@ mod additive_api_tests {
     }
 
     #[test]
-    fn runtime_probe_reports_extension_api_v4() {
+    fn runtime_probe_reports_extension_api_v5() {
         let capabilities = runtime_capabilities();
 
-        assert_eq!(capabilities.extension_api_version, 4);
+        assert_eq!(capabilities.extension_api_version, 5);
         assert_eq!(
             capabilities.core_package_version,
             env!("TERMINALTILER_PACKAGE_VERSION")
@@ -724,7 +744,7 @@ mod additive_api_tests {
         assert!(capabilities.mcp);
         assert_eq!(capabilities.voice, cfg!(feature = "voice-cpal"));
         let json = runtime_capabilities_json();
-        assert!(json.contains("\"extension_api_version\":4"));
+        assert!(json.contains("\"extension_api_version\":5"));
     }
 
     #[test]

@@ -5185,8 +5185,21 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
         append_companion_rows(&mut lines, "Sync", &snapshot.sync_rows);
         append_companion_rows(&mut lines, "Devices and teams", &snapshot.device_rows);
         if !snapshot.actions.is_empty() {
-            lines.push("Actions:".to_string());
+            let mut groups: Vec<(String, Vec<&CompanionAction>)> = Vec::new();
             for action in &snapshot.actions {
+                let key = action
+                    .group
+                    .clone()
+                    .unwrap_or_else(|| "Actions".to_string());
+                if let Some((_, actions)) = groups.iter_mut().find(|(name, _)| *name == key) {
+                    actions.push(action);
+                } else {
+                    groups.push((key, vec![action]));
+                }
+            }
+            for (group, actions) in groups {
+                lines.push(format!("{group}:"));
+                for action in actions {
                 lines.push(format!(
                     "- {}{}",
                     action.label,
@@ -5196,6 +5209,7 @@ Please include terminaltiler.log and terminaltiler-session.log when reporting th
                         .map(|d| format!(": {d}"))
                         .unwrap_or_default()
                 ));
+                }
             }
             lines.push(String::new());
             lines.push(
